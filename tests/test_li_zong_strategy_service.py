@@ -7,6 +7,7 @@ import json
 import pandas as pd
 
 from app.services.li_zong_strategy_service import LiZongStrategyService
+from app.services.strategies.li_zong import LiZongParameters
 
 
 AS_OF = "2026-07-21"
@@ -20,6 +21,71 @@ class SnapshotStub:
     def get_symbol_snapshot(self, symbol: str) -> dict:
         self.calls[symbol] += 1
         return deepcopy(self.packets[symbol])
+
+
+class UniverseSnapshotStub(SnapshotStub):
+    def __init__(
+        self,
+        packets: dict[str, dict],
+        items: list[dict],
+        *,
+        as_of_date: str = AS_OF,
+        status: str = "stable",
+        data_version: str = "universe-v1",
+    ):
+        super().__init__(packets)
+        self.items = items
+        self.as_of_date = as_of_date
+        self.status = status
+        self.data_version = data_version
+        self.universe_sync_calls = 0
+        self.symbol_sync_calls: list[str] = []
+        self.failed_symbols: set[str] = set()
+
+    def sync_a_share_universe(self, *, as_of_date: str | None = None) -> dict:
+        self.universe_sync_calls += 1
+        if as_of_date:
+            self.as_of_date = as_of_date
+        return {
+            "run": {"status": self.status, "data_version": self.data_version},
+            "snapshot": self._snapshot(),
+            "published": self.status == "stable",
+            "previous_stable_retained": False,
+        }
+
+    def get_a_share_universe(self) -> dict:
+        return {
+            "status": self.status,
+            "data_version": self.data_version,
+            "snapshot": self._snapshot(),
+        }
+
+    def sync_symbol(self, symbol: str, *, as_of_date: str | None = None) -> dict:
+        self.symbol_sync_calls.append(symbol)
+        if symbol in self.failed_symbols:
+            raise RuntimeError("temporary symbol sync failure")
+        return {
+            "run": {"status": "stable"},
+            "published": True,
+            "previous_stable_retained": False,
+        }
+
+    def _snapshot(self) -> dict:
+        with_market_cap = sum(
+            item.get("total_mv_yi") is not None for item in self.items
+        )
+        return {
+            "as_of_date": self.as_of_date,
+            "items": deepcopy(self.items),
+            "coverage": {
+                "listed": len(self.items),
+                "with_market_cap": with_market_cap,
+                "missing_market_cap": len(self.items) - with_market_cap,
+                "market_cap_coverage_ratio": (
+                    with_market_cap / len(self.items) if self.items else 0.0
+                ),
+            },
+        }
 
 
 def _snapshot_packet(
@@ -211,6 +277,41 @@ def test_service_bootstraps_all_strategy_tables_and_versioned_definition(app):
     assert service.list_strategies()[0]["name"] == "李总策略"
 
 
+def test_process_restart_repairs_stale_background_and_strategy_runs(app):
+    database = app.state.database
+    database.start_background_job("stale-background-job")
+    tushare_run = database.start_tushare_sync_run(
+        job_scope="symbol:000063.SZ",
+        as_of_date=AS_OF,
+        datasets=["daily_basic"],
+    )
+    strategy_run = database.start_strategy_screen_run(
+        strategy_id="li_zong",
+        strategy_version="li_zong_v1",
+        parameter_version="li_zong_v1_default",
+        data_version="stale-run-v1",
+        data_versions={},
+        as_of_date=AS_OF,
+        requested_count=1,
+    )
+
+    repaired = database.repair_interrupted_background_runs()
+
+    assert repaired == {
+        "background_job_runs": 1,
+        "tushare_sync_runs": 1,
+        "strategy_screen_runs": 1,
+    }
+    assert database.latest_background_jobs()[0]["status"] == "failed"
+    assert database.get_tushare_sync_run(tushare_run["id"])["status"] == "failed"
+    assert database.get_strategy_screen_run(strategy_run["id"])["status"] == "failed"
+    assert database.repair_interrupted_background_runs() == {
+        "background_job_runs": 0,
+        "tushare_sync_runs": 0,
+        "strategy_screen_runs": 0,
+    }
+
+
 def test_snapshot_datasets_are_merged_with_adjustment_limit_and_holder_sources(app):
     packet = _snapshot_packet()
     service = LiZongStrategyService(
@@ -371,6 +472,189 @@ def test_non_a_share_and_empty_runs_are_rejected(app):
             raise AssertionError("invalid symbol list should be rejected")
 
 
+def test_universe_batch_prefilters_limits_deep_sync_and_is_idempotent(app):
+    items = [
+        {
+            "symbol": "000001.SZ",
+            "name": "平安银行",
+            "industry": "银行",
+            "market": "主板",
+            "total_mv_yi": 150.0,
+        },
+        {
+            "symbol": "000063.SZ",
+            "name": "中兴通讯",
+            "industry": "通信设备",
+            "market": "主板",
+            "total_mv_yi": 220.0,
+        },
+        {
+            "symbol": "300308.SZ",
+            "name": "中际旭创",
+            "industry": "通信设备",
+            "market": "创业板",
+            "total_mv_yi": 180.0,
+        },
+        {
+            "symbol": "830799.BJ",
+            "name": "艾融软件",
+            "industry": "软件服务",
+            "market": "北交所",
+            "total_mv_yi": None,
+        },
+    ]
+    snapshots = UniverseSnapshotStub(
+        {
+            "600519.SS": _snapshot_packet(
+                symbol="600519.SS",
+                market_cap_yi=2000.0,
+                stock_name="贵州茅台",
+                industry="白酒",
+            ),
+            "000063.SZ": _snapshot_packet(
+                symbol="000063.SZ", market_cap_yi=220.0
+            ),
+            "300308.SZ": _snapshot_packet(
+                symbol="300308.SZ",
+                market_cap_yi=180.0,
+                stock_name="中际旭创",
+                market="创业板",
+            ),
+        },
+        items,
+    )
+    service = LiZongStrategyService(app.state.database, snapshots)
+    service.run_symbols(["600519"])
+
+    first = service.run_universe_batch(batch_size=1)
+    second = service.run_universe_batch(batch_size=1)
+    third = service.run_universe_batch(batch_size=1)
+
+    assert first["selected_symbols"] == ["000063.SZ"]
+    assert first["coverage"]["evaluated_symbols"] == 3
+    assert first["coverage"]["coverage_ratio"] == 0.75
+    assert first["coverage"]["full_market_coverage"] is False
+    assert first["coverage"]["counts"]["total"] == 3
+    assert service.get_candidate("000001")["status"] == "not_qualified"
+    assert service.get_candidate("830799.BJ")["status"] == "data_incomplete"
+    assert second["selected_symbols"] == ["300308.SZ"]
+    assert second["coverage"]["full_market_coverage"] is True
+    assert second["coverage"]["coverage_ratio"] == 1.0
+    assert second["coverage"]["counts"]["total"] == 4
+    assert third["status"] == "completed"
+    assert third["selected_symbols"] == []
+    assert snapshots.symbol_sync_calls == ["000063.SZ", "300308.SZ"]
+    assert snapshots.calls["000001.SZ"] == 0
+    assert snapshots.calls["830799.BJ"] == 0
+    assert _table_count(app.state.database, "strategy_candidate_snapshots") == 5
+
+
+def test_universe_batch_sync_failure_keeps_previous_stable_candidate(app):
+    items = [
+        {
+            "symbol": "000063.SZ",
+            "name": "中兴通讯",
+            "industry": "通信设备",
+            "market": "主板",
+            "total_mv_yi": 220.0,
+        }
+    ]
+    snapshots = UniverseSnapshotStub(
+        {
+            "000063.SZ": _snapshot_packet(
+                symbol="000063.SZ", data_version="stable-before-failure"
+            )
+        },
+        items,
+    )
+    service = LiZongStrategyService(app.state.database, snapshots)
+    first = service.run_universe_batch(batch_size=1)
+    previous = service.get_candidate("000063")
+
+    snapshots.as_of_date = "2026-07-22"
+    snapshots.data_version = "universe-v2"
+    snapshots.failed_symbols.add("000063.SZ")
+    failed = service.run_universe_batch(batch_size=1, as_of_date="2026-07-22")
+    retained = service.get_candidate("000063")
+
+    assert first["coverage"]["full_market_coverage"] is True
+    assert failed["sync_results"] == [
+        {
+            "symbol": "000063.SZ",
+            "status": "unavailable",
+            "error_type": "RuntimeError",
+        }
+    ]
+    assert failed["coverage"]["full_market_coverage"] is False
+    assert failed["coverage"]["evaluated_symbols"] == 0
+    assert retained["id"] == previous["id"]
+    assert retained["data_version"] == "stable-before-failure"
+    assert _table_count(app.state.database, "strategy_candidate_snapshots") == 1
+
+
+def test_unstable_universe_never_publishes_prefilter_candidates(app):
+    items = [
+        {
+            "symbol": "000063.SZ",
+            "name": "中兴通讯",
+            "industry": "通信设备",
+            "market": "主板",
+            "total_mv_yi": None,
+        },
+        {
+            "symbol": "300308.SZ",
+            "name": "中际旭创",
+            "industry": "通信设备",
+            "market": "创业板",
+            "total_mv_yi": None,
+        },
+    ]
+    snapshots = UniverseSnapshotStub({}, items, status="incomplete")
+    service = LiZongStrategyService(app.state.database, snapshots)
+
+    result = service.run_universe_batch(batch_size=2)
+
+    assert result["status"] == "not_ready"
+    assert result["coverage"]["universe_count"] == 2
+    assert result["coverage"]["evaluated_symbols"] == 0
+    assert result["coverage"]["counts"]["total"] == 0
+    assert snapshots.symbol_sync_calls == []
+    assert _table_count(app.state.database, "strategy_candidate_snapshots") == 0
+
+
+def test_legacy_all_missing_prefilter_run_is_quarantined(app):
+    items = [
+        {
+            "symbol": "000063.SZ",
+            "name": "中兴通讯",
+            "industry": "通信设备",
+            "market": "主板",
+            "total_mv_yi": None,
+        }
+    ]
+    snapshots = UniverseSnapshotStub({}, items, status="incomplete")
+    service = LiZongStrategyService(app.state.database, snapshots)
+    stored = service._publish_universe_prefilter(
+        items,
+        universe_data_version="unstable-universe-v1",
+        as_of_date=AS_OF,
+        parameters=LiZongParameters(),
+        universe_count=1,
+        prefiltered_count=0,
+    )
+    assert stored is not None
+    assert len(service.list_candidates()) == 1
+
+    repaired = LiZongStrategyService(app.state.database, snapshots)
+
+    assert repaired.list_candidates() == []
+    latest_run = app.state.database.latest_strategy_screen_run(
+        strategy_id="li_zong", run_scope="universe_prefilter"
+    )
+    assert latest_run["status"] == "failed"
+    assert latest_run["error"] == "unstable_universe_market_cap_snapshot"
+
+
 def test_strategy_api_exposes_published_candidates_rules_and_triggers(app, client):
     user = client.post("/users", json={"name": "Li Zong API User"})
     assert user.status_code == 201
@@ -453,19 +737,43 @@ def test_strategy_api_backfills_snapshot_name_for_legacy_candidate(app, client):
     assert item["industry"] == "银行"
 
 
-def test_strategy_run_api_uses_published_snapshot_and_versions_custom_roe(app, client):
+def test_strategy_run_api_requires_admin_token_and_versions_custom_roe(app, client):
     assert client.post("/users", json={"name": "Li Zong Runner"}).status_code == 201
     app.state.li_zong_strategy.snapshot_service = SnapshotStub(
         {"000063.SZ": _snapshot_packet(data_version="api-v1")}
     )
 
+    request_body = {
+        "symbols": ["000063"],
+        "refresh_data": False,
+        "roe_min_pct": 11,
+    }
+    disabled = client.post(
+        "/v1/stock-strategies/li-zong/runs",
+        json=request_body,
+    )
+    assert disabled.status_code == 403
+    assert client.post(
+        "/v1/stock-strategies/li-zong/universe-runs",
+        json={"batch_size": 1},
+    ).status_code == 403
+
+    latest = client.get("/v1/stock-strategies/li-zong/runs/latest")
+    assert latest.status_code == 200
+    assert latest.json()["coverage"]["full_market_coverage"] is False
+
+    object.__setattr__(app.state.settings, "admin_api_token", "test-admin-token")
+    wrong = client.post(
+        "/v1/stock-strategies/li-zong/runs",
+        json=request_body,
+        headers={"X-Qingshu-Admin-Token": "wrong-token"},
+    )
+    assert wrong.status_code == 403
+
     response = client.post(
         "/v1/stock-strategies/li-zong/runs",
-        json={
-            "symbols": ["000063"],
-            "refresh_data": False,
-            "roe_min_pct": 11,
-        },
+        json=request_body,
+        headers={"X-Qingshu-Admin-Token": "test-admin-token"},
     )
     assert response.status_code == 200
     payload = response.json()
@@ -476,6 +784,7 @@ def test_strategy_run_api_uses_published_snapshot_and_versions_custom_roe(app, c
     rejected = client.post(
         "/v1/stock-strategies/li-zong/runs",
         json={"symbols": ["NVDA"], "refresh_data": False},
+        headers={"X-Qingshu-Admin-Token": "test-admin-token"},
     )
     assert rejected.status_code == 422
 

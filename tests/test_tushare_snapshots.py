@@ -13,9 +13,35 @@ class FakeSnapshotTushareClient:
         self.calls: dict[str, int] = defaultdict(int)
         self.missing: set[str] = set()
         self.fail_trade_cal = False
+        self.empty_daily_basic_dates: set[str] = set()
         self.trade_dates = [
             value.strftime("%Y%m%d")
             for value in pd.bdate_range(end="2026-07-21", periods=420)
+        ]
+        self.stock_basic_rows = [
+            {
+                "ts_code": "000063.SZ",
+                "symbol": "000063",
+                "name": "中兴通讯",
+                "area": "深圳",
+                "industry": "通信设备",
+                "market": "主板",
+                "list_date": "19971118",
+                "exchange": "SZSE",
+                "list_status": "L",
+            }
+        ]
+        self.daily_basic_rows = [
+            {
+                "ts_code": "000063.SZ",
+                "trade_date": self.trade_dates[-1],
+                "turnover_rate": 2.5,
+                "volume_ratio": 1.2,
+                "pe_ttm": 35.0,
+                "pb": 2.2,
+                "total_mv": 1_800_000,
+                "circ_mv": 1_500_000,
+            }
         ]
 
     @staticmethod
@@ -33,23 +59,12 @@ class FakeSnapshotTushareClient:
                 {"cal_date": self.trade_dates, "is_open": [1] * len(self.trade_dates)}
             )
         if api_name == "stock_basic":
-            return pd.DataFrame(
-                [
-                    {
-                        "ts_code": "000063.SZ",
-                        "symbol": "000063",
-                        "name": "中兴通讯",
-                        "area": "深圳",
-                        "industry": "通信设备",
-                        "market": "主板",
-                        "list_date": "19971118",
-                        "exchange": "SZSE",
-                        "list_status": "L",
-                    }
-                ]
-            )
+            return pd.DataFrame(self.stock_basic_rows)
         if api_name == "daily":
-            dates = self.trade_dates[-400:]
+            end_date = str(params.get("end_date") or self.trade_dates[-1])
+            dates = [
+                value for value in self.trade_dates[-400:] if value <= end_date
+            ]
             return pd.DataFrame(
                 [
                     {
@@ -69,20 +84,19 @@ class FakeSnapshotTushareClient:
                 ]
             )
         if api_name == "daily_basic":
-            return pd.DataFrame(
-                [
-                    {
-                        "ts_code": "000063.SZ",
-                        "trade_date": self.trade_dates[-1],
-                        "turnover_rate": 2.5,
-                        "volume_ratio": 1.2,
-                        "pe_ttm": 35.0,
-                        "pb": 2.2,
-                        "total_mv": 1_800_000,
-                        "circ_mv": 1_500_000,
-                    }
-                ]
+            requested_date = str(
+                params.get("trade_date")
+                or params.get("start_date")
+                or self.trade_dates[-1]
             )
+            if requested_date in self.empty_daily_basic_dates:
+                return pd.DataFrame()
+            rows = []
+            for item in self.daily_basic_rows:
+                row = dict(item)
+                row["trade_date"] = requested_date
+                rows.append(row)
+            return pd.DataFrame(rows)
         if api_name == "fina_indicator":
             return pd.DataFrame(
                 [
@@ -98,6 +112,7 @@ class FakeSnapshotTushareClient:
                 ]
             )
         if api_name == "adj_factor":
+            end_date = str(params.get("end_date") or self.trade_dates[-1])
             return pd.DataFrame(
                 [
                     {
@@ -106,9 +121,11 @@ class FakeSnapshotTushareClient:
                         "adj_factor": 1.0,
                     }
                     for trade_date in self.trade_dates[-400:]
+                    if trade_date <= end_date
                 ]
             )
         if api_name == "stk_limit":
+            end_date = str(params.get("end_date") or self.trade_dates[-1])
             return pd.DataFrame(
                 [
                     {
@@ -119,6 +136,7 @@ class FakeSnapshotTushareClient:
                         "down_limit": 27.0,
                     }
                     for trade_date in self.trade_dates[-400:]
+                    if trade_date <= end_date
                 ]
             )
         if api_name in {"top10_holders", "top10_floatholders"}:
@@ -214,6 +232,157 @@ def test_tushare_client_exposes_li_zong_and_financial_dataset_wrappers():
         "index_daily",
     ]
     assert all(params["ts_code"].endswith((".SH", ".SZ")) for _, params in captured)
+
+
+def test_a_share_universe_publishes_traceable_stable_snapshot(app):
+    fake = FakeSnapshotTushareClient()
+    fake.stock_basic_rows = [
+        {
+            "ts_code": "600519.SH",
+            "symbol": "600519",
+            "name": "贵州茅台",
+            "industry": "白酒",
+            "market": "主板",
+            "list_date": "20010827",
+            "exchange": "SSE",
+            "list_status": "L",
+        },
+        {
+            "ts_code": "000063.SZ",
+            "symbol": "000063",
+            "name": "中兴通讯",
+            "industry": "通信设备",
+            "market": "主板",
+            "list_date": "19971118",
+            "exchange": "SZSE",
+            "list_status": "L",
+        },
+        {
+            "ts_code": "830799.BJ",
+            "symbol": "830799",
+            "name": "艾融软件",
+            "industry": "软件服务",
+            "market": "北交所",
+            "list_date": "20200727",
+            "exchange": "BSE",
+            "list_status": "L",
+        },
+    ]
+    fake.daily_basic_rows = [
+        {
+            "ts_code": "600519.SH",
+            "trade_date": fake.trade_dates[-1],
+            "total_mv": 20_000_000,
+            "circ_mv": 20_000_000,
+        },
+        {
+            "ts_code": "000063.SZ",
+            "trade_date": fake.trade_dates[-1],
+            "total_mv": 1_800_000,
+            "circ_mv": 1_500_000,
+        },
+        {
+            "ts_code": "830799.BJ",
+            "trade_date": fake.trade_dates[-1],
+            "total_mv": 120_000,
+            "circ_mv": 100_000,
+        },
+    ]
+    service = TushareSnapshotService(app.state.database, fake)
+
+    first = service.sync_a_share_universe(as_of_date="2026-07-21")
+    second = service.sync_a_share_universe(as_of_date="2026-07-21")
+    published = service.get_a_share_universe()
+
+    assert first["published"] is True
+    assert first["run"]["status"] == "stable"
+    assert first["run"]["data_version"] == second["run"]["data_version"]
+    assert published["status"] == "stable"
+    assert published["snapshot"]["coverage"] == {
+        "listed": 3,
+        "with_market_cap": 3,
+        "missing_market_cap": 0,
+        "market_cap_coverage_ratio": 1.0,
+    }
+    items = {item["ts_code"]: item for item in published["snapshot"]["items"]}
+    assert items["600519.SH"]["symbol"] == "600519.SS"
+    assert items["830799.BJ"]["symbol"] == "830799.BJ"
+    assert items["000063.SZ"]["total_mv_yi"] == 180.0
+    assert items["830799.BJ"]["circ_mv_yi"] == 10.0
+
+
+def test_incomplete_universe_refresh_retains_previous_stable_snapshot(app):
+    fake = FakeSnapshotTushareClient()
+    fake.stock_basic_rows = [
+        {
+            "ts_code": code,
+            "symbol": code[:6],
+            "name": name,
+            "industry": "测试行业",
+            "market": "主板",
+            "list_date": "20200101",
+            "exchange": "SSE" if code.endswith(".SH") else "SZSE",
+            "list_status": "L",
+        }
+        for code, name in (
+            ("600519.SH", "贵州茅台"),
+            ("000063.SZ", "中兴通讯"),
+            ("300308.SZ", "中际旭创"),
+        )
+    ]
+    fake.daily_basic_rows = [
+        {
+            "ts_code": item["ts_code"],
+            "trade_date": fake.trade_dates[-1],
+            "total_mv": 1_800_000,
+            "circ_mv": 1_500_000,
+        }
+        for item in fake.stock_basic_rows
+    ]
+    service = TushareSnapshotService(app.state.database, fake)
+    stable = service.sync_a_share_universe(as_of_date="2026-07-21")
+
+    fake.daily_basic_rows = fake.daily_basic_rows[:1]
+    incomplete = service.sync_a_share_universe(as_of_date="2026-07-21")
+    published = service.get_a_share_universe()
+
+    assert stable["published"] is True
+    assert incomplete["published"] is False
+    assert incomplete["run"]["status"] == "partial"
+    assert incomplete["previous_stable_retained"] is True
+    assert published["status"] == "stable"
+    assert published["data_version"] == stable["run"]["data_version"]
+    assert published["snapshot"]["coverage"]["market_cap_coverage_ratio"] == 1.0
+    assert published["latest_incomplete"]["coverage"] == {
+        "listed": 3,
+        "with_market_cap": 1,
+        "missing_market_cap": 2,
+        "market_cap_coverage_ratio": 0.333333,
+    }
+
+
+def test_preopen_sync_falls_back_to_latest_date_with_daily_basic_data(app):
+    fake = FakeSnapshotTushareClient()
+    latest_calendar_date = fake.trade_dates[-1]
+    previous_completed_date = fake.trade_dates[-2]
+    fake.empty_daily_basic_dates.add(latest_calendar_date)
+    service = TushareSnapshotService(app.state.database, fake)
+
+    universe = service.sync_a_share_universe(as_of_date="2026-07-21")
+    symbol = service.sync_symbol("000063", as_of_date="2026-07-21")
+
+    assert universe["published"] is True
+    assert universe["snapshot"]["as_of_date"] == service._iso_date(
+        previous_completed_date
+    )
+    assert symbol["published"] is True
+    assert symbol["snapshot"]["as_of_date"] == service._iso_date(
+        previous_completed_date
+    )
+    assert symbol["snapshot"]["datasets"]["daily"]["rows"][-1][
+        "trade_date"
+    ] == previous_completed_date
+    assert fake.calls["daily_basic"] == 4
 
 
 def test_symbol_snapshot_publishes_traceable_stable_version(app):

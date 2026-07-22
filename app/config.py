@@ -46,6 +46,9 @@ class Settings:
     tushare_api_url: str = "https://teajoin.com"
     tushare_enabled: bool = False
     tushare_timeout_seconds: int = 20
+    li_zong_universe_batch_size: int = 10
+    li_zong_refresh_seconds: int = 30
+    admin_api_token: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -133,6 +136,13 @@ class Settings:
             ).lower()
             in {"1", "true", "yes"},
             tushare_timeout_seconds=int(os.getenv("TUSHARE_TIMEOUT_SECONDS", "20")),
+            li_zong_universe_batch_size=max(
+                1, int(os.getenv("LI_ZONG_UNIVERSE_BATCH_SIZE", "10"))
+            ),
+            li_zong_refresh_seconds=max(
+                10, int(os.getenv("LI_ZONG_REFRESH_SECONDS", "30"))
+            ),
+            admin_api_token=os.getenv("QINGSHU_ADMIN_API_TOKEN", "").strip(),
         )
 
     def ensure_directories(self) -> None:

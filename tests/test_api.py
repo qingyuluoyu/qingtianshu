@@ -847,6 +847,8 @@ def test_background_status_is_exposed_without_starting_jobs_in_tests(client):
     payload = status.json()
     assert payload["enabled"] is False
     assert payload["running"] is False
+    assert payload["li_zong_worker_running"] is False
+    assert payload["li_zong_refresh_seconds"] == 30
     assert payload["latest_jobs"] == []
 
 

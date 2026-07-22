@@ -30,7 +30,6 @@ from app.services.research_reports import ResearchReportService
 from app.services.research_outcomes import ResearchOutcomeService
 from app.services.tushare_snapshots import TushareSnapshotService
 from app.services.li_zong_strategy_service import LiZongStrategyService
-from app.catalog import normalize_symbol
 from app.utils import utc_now
 
 
@@ -125,10 +124,12 @@ class BackgroundScheduler:
         self.li_zong_strategy = li_zong_strategy
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._li_zong_thread: threading.Thread | None = None
 
     def start(self) -> None:
         if not self.settings.background_jobs_enabled or self.is_running:
             return
+        self.database.repair_interrupted_background_runs()
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._loop,
@@ -136,11 +137,20 @@ class BackgroundScheduler:
             daemon=True,
         )
         self._thread.start()
+        if self._li_zong_enabled:
+            self._li_zong_thread = threading.Thread(
+                target=self._li_zong_loop,
+                name="qingshu-li-zong-worker",
+                daemon=True,
+            )
+            self._li_zong_thread.start()
 
     def stop(self) -> None:
         self._stop.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=10)
+        if self._li_zong_thread and self._li_zong_thread.is_alive():
+            self._li_zong_thread.join(timeout=10)
 
     @property
     def is_running(self) -> bool:
@@ -171,11 +181,12 @@ class BackgroundScheduler:
             "article_uses_hermes": self.settings.background_use_hermes
             and self.settings.hermes_enabled,
             "li_zong_strategy_enabled": bool(
-                self.tushare_snapshots is not None
-                and self.tushare_snapshots.client is not None
-                and self.li_zong_strategy is not None
+                self._li_zong_enabled
             ),
-            "li_zong_refresh_seconds": self.settings.background_fundamentals_refresh_seconds,
+            "li_zong_worker_running": bool(
+                self._li_zong_thread and self._li_zong_thread.is_alive()
+            ),
+            "li_zong_refresh_seconds": self.settings.li_zong_refresh_seconds,
             "latest_jobs": self.database.latest_background_jobs(),
         }
 
@@ -198,13 +209,6 @@ class BackgroundScheduler:
         next_evidence_tasks = 0.0
         next_calibration = 0.0
         next_data_quality = 0.0
-        next_li_zong = (
-            0.0
-            if self.tushare_snapshots is not None
-            and self.tushare_snapshots.client is not None
-            and self.li_zong_strategy is not None
-            else float("inf")
-        )
         while not self._stop.is_set():
             now = time.monotonic()
             if now >= next_market:
@@ -327,18 +331,6 @@ class BackgroundScheduler:
                 next_data_quality = time.monotonic() + max(
                     30, self.settings.background_data_quality_seconds
                 )
-            if (
-                now >= next_li_zong
-                and self.tushare_snapshots is not None
-                and self.tushare_snapshots.client is not None
-                and self.li_zong_strategy is not None
-            ):
-                self._run_job(
-                    "li_zong_strategy_refresh", self._refresh_li_zong_strategy
-                )
-                next_li_zong = time.monotonic() + max(
-                    1800, self.settings.background_fundamentals_refresh_seconds
-                )
             next_due = min(
                 next_market,
                 next_article,
@@ -358,9 +350,21 @@ class BackgroundScheduler:
                 next_market_news,
                 next_evidence_tasks,
                 next_data_quality,
-                next_li_zong,
             )
             self._stop.wait(timeout=max(0.5, min(5.0, next_due - time.monotonic())))
+
+    @property
+    def _li_zong_enabled(self) -> bool:
+        return bool(
+            self.tushare_snapshots is not None
+            and self.tushare_snapshots.client is not None
+            and self.li_zong_strategy is not None
+        )
+
+    def _li_zong_loop(self) -> None:
+        while not self._stop.is_set():
+            self._run_job("li_zong_strategy_refresh", self._refresh_li_zong_strategy)
+            self._stop.wait(timeout=max(10, self.settings.li_zong_refresh_seconds))
 
     def _run_job(self, job_name: str, function: Callable[[], dict[str, Any]]) -> None:
         job_id = self.database.start_background_job(job_name)
@@ -395,55 +399,26 @@ class BackgroundScheduler:
     def _refresh_li_zong_strategy(self) -> dict[str, Any]:
         if self.tushare_snapshots is None or self.li_zong_strategy is None:
             return {"status": "disabled"}
-        symbols: list[str] = []
-        for raw in (
-            *self.settings.default_a_share_symbols,
-            *self.settings.default_research_symbols,
-        ):
-            try:
-                symbol = normalize_symbol(raw)
-            except ValueError:
-                continue
-            if symbol.endswith((".SS", ".SZ")) and symbol not in symbols:
-                symbols.append(symbol)
-        if not symbols:
-            return {"status": "empty", "processed": 0}
-        sync_results = []
-        for symbol in symbols:
-            try:
-                result = self.tushare_snapshots.sync_symbol(symbol)
-                sync_results.append(
-                    {
-                        "symbol": symbol,
-                        "status": (result.get("run") or {}).get("status"),
-                        "published": bool(result.get("published")),
-                        "previous_stable_retained": bool(
-                            result.get("previous_stable_retained")
-                        ),
-                    }
-                )
-            except Exception as exc:
-                sync_results.append(
-                    {
-                        "symbol": symbol,
-                        "status": "unavailable",
-                        "error_type": type(exc).__name__,
-                    }
-                )
-        strategy = self.li_zong_strategy.run_symbols(symbols)
+        strategy = self.li_zong_strategy.run_universe_batch(
+            batch_size=self.settings.li_zong_universe_batch_size
+        )
+        coverage = strategy.get("coverage") or {}
+        counts = coverage.get("counts") or {}
         self.broker.publish(
             {
                 "type": "stock_strategy_updated",
                 "strategy_id": "li_zong",
                 "time": utc_now(),
-                "counts": strategy.get("counts") or {},
+                "counts": counts,
+                "coverage": coverage,
             }
         )
         return {
-            "status": (strategy.get("run") or {}).get("status"),
-            "processed": (strategy.get("counts") or {}).get("processed", 0),
-            "counts": strategy.get("counts") or {},
-            "sync_results": sync_results,
+            "status": strategy.get("status"),
+            "processed": len(strategy.get("selected_symbols") or []),
+            "counts": counts,
+            "coverage": coverage,
+            "sync_results": strategy.get("sync_results") or [],
         }
 
     def _refresh_article(self) -> dict[str, Any]:

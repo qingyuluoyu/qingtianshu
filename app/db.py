@@ -388,6 +388,11 @@ class Database:
                     data_version TEXT NOT NULL,
                     data_versions_json TEXT NOT NULL,
                     as_of_date TEXT,
+                    run_scope TEXT NOT NULL DEFAULT 'symbol_batch',
+                    universe_count INTEGER NOT NULL DEFAULT 0,
+                    prefiltered_count INTEGER NOT NULL DEFAULT 0,
+                    coverage_ratio REAL NOT NULL DEFAULT 0,
+                    warnings_json TEXT NOT NULL DEFAULT '[]',
                     status TEXT NOT NULL
                         CHECK(status IN ('running', 'completed', 'partial', 'failed')),
                     requested_count INTEGER NOT NULL,
@@ -997,6 +1002,36 @@ class Database:
             self._ensure_column(connection, "financial_periods", "eps_diluted", "REAL")
             self._ensure_column(
                 connection, "financial_periods", "total_liabilities", "REAL"
+            )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "run_scope",
+                "TEXT NOT NULL DEFAULT 'symbol_batch'",
+            )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "universe_count",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "prefiltered_count",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "coverage_ratio",
+                "REAL NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "warnings_json",
+                "TEXT NOT NULL DEFAULT '[]'",
             )
             self._backfill_stock_domains(connection)
 
@@ -2570,6 +2605,47 @@ class Database:
                 ),
             )
 
+    def repair_interrupted_background_runs(self) -> dict[str, int]:
+        """Close runs left in `running` when a previous process stopped."""
+
+        finished_at = utc_now()
+        repaired: dict[str, int] = {}
+        with self.connect() as connection:
+            background = connection.execute(
+                """
+                UPDATE background_job_runs
+                SET status = 'failed',
+                    error = COALESCE(error, 'process_restarted_before_completion'),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE status = 'running'
+                """,
+                (finished_at,),
+            )
+            repaired["background_job_runs"] = background.rowcount
+            tushare = connection.execute(
+                """
+                UPDATE tushare_sync_runs
+                SET status = 'failed',
+                    error = COALESCE(error, 'process_restarted_before_completion'),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE status = 'running'
+                """,
+                (finished_at,),
+            )
+            repaired["tushare_sync_runs"] = tushare.rowcount
+            strategy = connection.execute(
+                """
+                UPDATE strategy_screen_runs
+                SET status = 'failed',
+                    error = COALESCE(error, 'process_restarted_before_completion'),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE status = 'running'
+                """,
+                (finished_at,),
+            )
+            repaired["strategy_screen_runs"] = strategy.rowcount
+        return repaired
+
     def latest_background_jobs(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
@@ -2926,6 +3002,11 @@ class Database:
         data_versions: dict[str, str],
         as_of_date: str | None,
         requested_count: int,
+        run_scope: str = "symbol_batch",
+        universe_count: int = 0,
+        prefiltered_count: int = 0,
+        coverage_ratio: float = 0.0,
+        warnings: list[str] | None = None,
     ) -> dict[str, Any]:
         run_id = str(uuid4())
         started_at = utc_now()
@@ -2934,9 +3015,10 @@ class Database:
                 """
                 INSERT INTO strategy_screen_runs(
                     id, strategy_id, strategy_version, parameter_version,
-                    data_version, data_versions_json, as_of_date, status,
-                    requested_count, started_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
+                    data_version, data_versions_json, as_of_date, run_scope,
+                    universe_count, prefiltered_count, coverage_ratio,
+                    warnings_json, status, requested_count, started_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
                 """,
                 (
                     run_id,
@@ -2946,6 +3028,11 @@ class Database:
                     data_version,
                     json_dumps(data_versions),
                     as_of_date,
+                    run_scope,
+                    max(0, int(universe_count)),
+                    max(0, int(prefiltered_count)),
+                    max(0.0, min(float(coverage_ratio), 1.0)),
+                    json_dumps(warnings or []),
                     requested_count,
                     started_at,
                 ),
@@ -2959,6 +3046,8 @@ class Database:
         status: str,
         counts: dict[str, int],
         error: str | None = None,
+        coverage_ratio: float | None = None,
+        warnings: list[str] | None = None,
     ) -> dict[str, Any] | None:
         with self.connect() as connection:
             connection.execute(
@@ -2966,7 +3055,8 @@ class Database:
                 UPDATE strategy_screen_runs
                 SET status = ?, processed_count = ?, qualified_count = ?,
                     triggered_count = ?, incomplete_count = ?,
-                    invalidated_count = ?, error = ?, finished_at = ?
+                    invalidated_count = ?, coverage_ratio = COALESCE(?, coverage_ratio),
+                    warnings_json = COALESCE(?, warnings_json), error = ?, finished_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -2976,6 +3066,12 @@ class Database:
                     counts.get("triggered", 0),
                     counts.get("data_incomplete", 0),
                     counts.get("invalidated", 0),
+                    (
+                        max(0.0, min(float(coverage_ratio), 1.0))
+                        if coverage_ratio is not None
+                        else None
+                    ),
+                    json_dumps(warnings) if warnings is not None else None,
                     error,
                     utc_now(),
                     run_id,
@@ -2989,6 +3085,54 @@ class Database:
                 "SELECT * FROM strategy_screen_runs WHERE id = ?", (run_id,)
             ).fetchone()
         return self._strategy_run_row(row)
+
+    def latest_strategy_screen_run(
+        self,
+        *,
+        strategy_id: str,
+        parameter_version: str | None = None,
+        run_scope: str | None = None,
+    ) -> dict[str, Any] | None:
+        clauses = ["strategy_id = ?"]
+        params: list[Any] = [strategy_id]
+        if parameter_version is not None:
+            clauses.append("parameter_version = ?")
+            params.append(parameter_version)
+        if run_scope is not None:
+            clauses.append("run_scope = ?")
+            params.append(run_scope)
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT * FROM strategy_screen_runs
+                WHERE {' AND '.join(clauses)}
+                ORDER BY started_at DESC, rowid DESC LIMIT 1
+                """,
+                tuple(params),
+            ).fetchone()
+        return self._strategy_run_row(row)
+
+    def repair_unstable_strategy_prefilter_runs(self, strategy_id: str) -> int:
+        """Quarantine prefilter runs produced without any usable market-cap row."""
+
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE strategy_screen_runs
+                SET status = 'failed',
+                    error = COALESCE(error, 'unstable_universe_market_cap_snapshot'),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE strategy_id = ?
+                    AND run_scope = 'universe_prefilter'
+                    AND status <> 'failed'
+                    AND universe_count > 0
+                    AND prefiltered_count = 0
+                    AND processed_count = universe_count
+                    AND incomplete_count = universe_count
+                """,
+                (utc_now(), strategy_id),
+            )
+        return cursor.rowcount
 
     def save_strategy_candidate_snapshot(
         self,
@@ -3096,7 +3240,9 @@ class Database:
         exclude_data_version: str | None = None,
     ) -> dict[str, Any] | None:
         exclude_clause = (
-            "AND data_version <> ?" if exclude_data_version is not None else ""
+            "AND candidates.data_version <> ?"
+            if exclude_data_version is not None
+            else ""
         )
         params: list[Any] = [
             strategy_id,
@@ -3109,11 +3255,16 @@ class Database:
         with self.connect() as connection:
             row = connection.execute(
                 f"""
-                SELECT * FROM strategy_candidate_snapshots
-                WHERE strategy_id = ? AND strategy_version = ?
-                    AND parameter_version = ? AND symbol = ?
+                SELECT candidates.*
+                FROM strategy_candidate_snapshots AS candidates
+                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
+                WHERE candidates.strategy_id = ?
+                    AND candidates.strategy_version = ?
+                    AND candidates.parameter_version = ?
+                    AND candidates.symbol = ?
+                    AND runs.status <> 'failed'
                     {exclude_clause}
-                ORDER BY created_at DESC, rowid DESC LIMIT 1
+                ORDER BY candidates.created_at DESC, candidates.rowid DESC LIMIT 1
                 """,
                 params,
             ).fetchone()
@@ -3141,17 +3292,22 @@ class Database:
                 f"""
                 SELECT candidates.*
                 FROM strategy_candidate_snapshots AS candidates
+                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
                 WHERE candidates.strategy_id = ?
                     AND candidates.strategy_version = ?
                     AND candidates.parameter_version = ?
+                    AND runs.status <> 'failed'
                     {status_clause}
                     AND candidates.id = (
                         SELECT current.id
                         FROM strategy_candidate_snapshots AS current
+                        JOIN strategy_screen_runs AS current_runs
+                            ON current_runs.id = current.run_id
                         WHERE current.strategy_id = candidates.strategy_id
                             AND current.strategy_version = candidates.strategy_version
                             AND current.parameter_version = candidates.parameter_version
                             AND current.symbol = candidates.symbol
+                            AND current_runs.status <> 'failed'
                         ORDER BY current.created_at DESC, current.rowid DESC
                         LIMIT 1
                     )
@@ -3161,6 +3317,121 @@ class Database:
                 params,
             ).fetchall()
         return [self._strategy_candidate_row(row) for row in rows]  # type: ignore[misc]
+
+    def latest_strategy_candidate_dates(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+    ) -> dict[str, str]:
+        states = self.latest_strategy_candidate_states(
+            strategy_id=strategy_id,
+            strategy_version=strategy_version,
+            parameter_version=parameter_version,
+        )
+        return {
+            symbol: str(state["as_of_date"])
+            for symbol, state in states.items()
+        }
+
+    def latest_strategy_candidate_states(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+    ) -> dict[str, dict[str, str]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT candidates.symbol, candidates.as_of_date, candidates.status
+                FROM strategy_candidate_snapshots AS candidates
+                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
+                WHERE candidates.strategy_id = ?
+                    AND candidates.strategy_version = ?
+                    AND candidates.parameter_version = ?
+                    AND runs.status <> 'failed'
+                    AND candidates.id = (
+                        SELECT current.id
+                        FROM strategy_candidate_snapshots AS current
+                        JOIN strategy_screen_runs AS current_runs
+                            ON current_runs.id = current.run_id
+                        WHERE current.strategy_id = candidates.strategy_id
+                            AND current.strategy_version = candidates.strategy_version
+                            AND current.parameter_version = candidates.parameter_version
+                            AND current.symbol = candidates.symbol
+                            AND current_runs.status <> 'failed'
+                        ORDER BY current.created_at DESC, current.rowid DESC
+                        LIMIT 1
+                    )
+                """,
+                (strategy_id, strategy_version, parameter_version),
+            ).fetchall()
+        return {
+            str(row["symbol"]): {
+                "as_of_date": str(row["as_of_date"]),
+                "status": str(row["status"]),
+            }
+            for row in rows
+        }
+
+    def strategy_candidate_summary(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+        minimum_as_of_date: str | None = None,
+    ) -> dict[str, int]:
+        date_clause = "AND candidates.as_of_date >= ?" if minimum_as_of_date else ""
+        params: list[Any] = [strategy_id, strategy_version, parameter_version]
+        if minimum_as_of_date:
+            params.append(minimum_as_of_date)
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN candidates.status = 'qualified' THEN 1 ELSE 0 END) AS qualified,
+                    SUM(CASE WHEN candidates.status = 'triggered' THEN 1 ELSE 0 END) AS triggered,
+                    SUM(CASE WHEN candidates.status = 'not_qualified' THEN 1 ELSE 0 END) AS not_qualified,
+                    SUM(CASE WHEN candidates.status = 'data_incomplete' THEN 1 ELSE 0 END) AS data_incomplete,
+                    SUM(CASE WHEN candidates.status = 'invalidated' THEN 1 ELSE 0 END) AS invalidated
+                FROM strategy_candidate_snapshots AS candidates
+                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
+                WHERE candidates.strategy_id = ?
+                    AND candidates.strategy_version = ?
+                    AND candidates.parameter_version = ?
+                    AND runs.status <> 'failed'
+                    {date_clause}
+                    AND candidates.id = (
+                        SELECT current.id
+                        FROM strategy_candidate_snapshots AS current
+                        JOIN strategy_screen_runs AS current_runs
+                            ON current_runs.id = current.run_id
+                        WHERE current.strategy_id = candidates.strategy_id
+                            AND current.strategy_version = candidates.strategy_version
+                            AND current.parameter_version = candidates.parameter_version
+                            AND current.symbol = candidates.symbol
+                            AND current_runs.status <> 'failed'
+                        ORDER BY current.created_at DESC, current.rowid DESC
+                        LIMIT 1
+                    )
+                """,
+                tuple(params),
+            ).fetchone()
+        return {
+            key: int((row or {})[key] or 0)
+            for key in (
+                "total",
+                "qualified",
+                "triggered",
+                "not_qualified",
+                "data_incomplete",
+                "invalidated",
+            )
+        }
 
     def list_strategy_rule_results(
         self, candidate_snapshot_id: str
@@ -3287,6 +3558,7 @@ class Database:
             return None
         item = dict(row)
         item["data_versions"] = json.loads(item.pop("data_versions_json") or "{}")
+        item["warnings"] = json.loads(item.pop("warnings_json") or "[]")
         return item
 
     @staticmethod

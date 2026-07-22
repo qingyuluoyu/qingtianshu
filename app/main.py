@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import datetime
+import hmac
 from io import BytesIO
 import re
 import time
@@ -264,6 +265,11 @@ class LiZongRunRequest(BaseModel):
     as_of_date: str | None = Field(default=None, pattern=r"^\d{4}-?\d{2}-?\d{2}$")
     refresh_data: bool = True
     roe_min_pct: float | None = Field(default=None, ge=0, le=100)
+
+
+class LiZongUniverseRunRequest(BaseModel):
+    as_of_date: str | None = Field(default=None, pattern=r"^\d{4}-?\d{2}-?\d{2}$")
+    batch_size: int | None = Field(default=None, ge=1, le=200)
 
 
 class ArticleGenerateRequest(BaseModel):
@@ -998,6 +1004,17 @@ def create_app(
         seed_demo_watchlist(user)
         return user
 
+    def require_admin_api(request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        configured = settings.admin_api_token
+        provided = request.headers.get("x-qingshu-admin-token", "")
+        if not configured or not hmac.compare_digest(provided, configured):
+            raise HTTPException(
+                status_code=403,
+                detail="该数据重算操作仅限后台任务或管理员",
+            )
+        return user
+
     def require_user(request: Request, user_id: str) -> dict[str, Any]:
         user = require_session_user(request)
         if user["id"] != user_id:
@@ -1327,7 +1344,7 @@ def create_app(
     def run_li_zong_strategy(
         payload: LiZongRunRequest, request: Request
     ) -> dict[str, Any]:
-        require_session_user(request)
+        require_admin_api(request)
         sync_results: list[dict[str, Any]] = []
         if payload.refresh_data:
             for symbol in payload.symbols:
@@ -1374,6 +1391,30 @@ def create_app(
             "sync_results": sync_results,
         }
 
+    @app.post("/v1/stock-strategies/li-zong/universe-runs")
+    def run_li_zong_universe_batch(
+        payload: LiZongUniverseRunRequest, request: Request
+    ) -> dict[str, Any]:
+        require_admin_api(request)
+        return li_zong_strategy.run_universe_batch(
+            batch_size=payload.batch_size or settings.li_zong_universe_batch_size,
+            as_of_date=payload.as_of_date,
+        )
+
+    @app.get("/v1/stock-strategies/li-zong/runs/latest")
+    def get_latest_li_zong_run(request: Request) -> dict[str, Any]:
+        require_session_user(request)
+        coverage = li_zong_strategy.coverage_packet()
+        return {
+            "strategy_id": "li_zong",
+            "run": coverage.get("latest_run"),
+            "coverage": coverage,
+            "boundary": (
+                "普通用户只能读取后台批任务状态；"
+                "不能从页面触发全市场或逐股多年数据重算。"
+            ),
+        }
+
     @app.get("/v1/stock-strategies/li-zong/candidates")
     def list_li_zong_candidates(
         request: Request,
@@ -1392,7 +1433,7 @@ def create_app(
             _public_li_zong_candidate(item)
             for item in li_zong_strategy.list_candidates(status=status, limit=limit)
         ]
-        counts = {
+        visible_counts = {
             key: sum(item.get("status") == key for item in items)
             for key in (
                 "qualified",
@@ -1406,19 +1447,49 @@ def create_app(
             {str(item.get("as_of_date")) for item in items if item.get("as_of_date")},
             reverse=True,
         )
+        coverage = li_zong_strategy.coverage_packet()
+        has_universe = bool(coverage.get("universe_count"))
+        counts = coverage.get("counts") if has_universe else visible_counts
         return {
             "strategy": li_zong_strategy.get_definition(),
             "status": "ready" if items else "preparing",
             "items": items,
             "counts": counts,
             "data_meta": {
-                "latest_as_of_date": as_of_dates[0] if as_of_dates else None,
-                "evaluated_symbols": len(items),
-                "scope": "published_research_pool",
-                "full_market_coverage": False,
+                "universe_status": coverage.get("status"),
+                "latest_as_of_date": (
+                    coverage.get("as_of_date")
+                    if has_universe
+                    else as_of_dates[0] if as_of_dates else None
+                ),
+                "evaluated_symbols": (
+                    coverage.get("evaluated_symbols") if has_universe else len(items)
+                ),
+                "universe_count": coverage.get("universe_count") or 0,
+                "market_cap_eligible_count": (
+                    coverage.get("market_cap_eligible_count") or 0
+                ),
+                "market_cap_rejected_count": (
+                    coverage.get("market_cap_rejected_count") or 0
+                ),
+                "missing_market_cap_count": (
+                    coverage.get("missing_market_cap_count") or 0
+                ),
+                "remaining_symbols": coverage.get("remaining_symbols") or 0,
+                "coverage_ratio": coverage.get("coverage_ratio") or 0,
+                "scope": (
+                    coverage.get("scope")
+                    if has_universe
+                    else "published_research_pool"
+                ),
+                "full_market_coverage": bool(
+                    coverage.get("full_market_coverage")
+                ),
+                "latest_run": coverage.get("latest_run"),
             },
             "boundary": (
-                "当前页面读取后台已发布的研究池快照；全市场批处理仍在建设中。"
+                "当前页面只读取后台已发布快照；全市场名单先执行市值预筛，"
+                "其余多年ROE、股东和量价证据由后台分批补齐。"
                 "候选不构成推荐或交易建议。"
             ),
         }

@@ -76,6 +76,7 @@ class LiZongStrategyService:
         self.database = database
         self.snapshot_service = snapshot_service
         self._ensure_definition()
+        self.database.repair_unstable_strategy_prefilter_runs(STRATEGY_ID)
 
     def list_strategies(self) -> list[dict[str, Any]]:
         return [
@@ -110,6 +111,11 @@ class LiZongStrategyService:
         symbols: Sequence[str],
         *,
         parameters: Mapping[str, Any] | LiZongParameters | None = None,
+        run_scope: str = "symbol_batch",
+        universe_count: int = 0,
+        prefiltered_count: int = 0,
+        coverage_ratio: float = 0.0,
+        warnings: list[str] | None = None,
     ) -> dict[str, Any]:
         canonical_symbols = self._canonical_symbols(symbols)
         params = LiZongParameters.from_value(parameters)
@@ -150,6 +156,11 @@ class LiZongStrategyService:
             data_versions=data_versions,
             as_of_date=max(as_of_dates) if as_of_dates else self._today(),
             requested_count=len(canonical_symbols),
+            run_scope=run_scope,
+            universe_count=universe_count,
+            prefiltered_count=prefiltered_count,
+            coverage_ratio=coverage_ratio,
+            warnings=warnings,
         )
 
         items: list[dict[str, Any]] = []
@@ -216,6 +227,8 @@ class LiZongStrategyService:
             status=run_status,
             counts=counts,
             error=json.dumps(errors, ensure_ascii=False, sort_keys=True) if errors else None,
+            coverage_ratio=coverage_ratio,
+            warnings=warnings,
         )
         return {
             "run": finished,
@@ -227,6 +240,362 @@ class LiZongStrategyService:
                 "本服务不创建持仓、交易、订单或收益承诺。"
             ),
         }
+
+    def run_universe_batch(
+        self,
+        *,
+        batch_size: int = 5,
+        as_of_date: str | None = None,
+        parameters: Mapping[str, Any] | LiZongParameters | None = None,
+    ) -> dict[str, Any]:
+        """Incrementally cover the full A-share universe in background batches."""
+
+        params = LiZongParameters.from_value(parameters)
+        self._save_parameter_version(params)
+        size = max(1, min(int(batch_size), 200))
+        universe_sync = self.snapshot_service.sync_a_share_universe(
+            as_of_date=as_of_date
+        )
+        universe_packet = self.snapshot_service.get_a_share_universe()
+        snapshot = universe_packet.get("snapshot")
+        universe_items = list((snapshot or {}).get("items") or [])
+        universe_as_of = str((snapshot or {}).get("as_of_date") or self._today())
+        if universe_packet.get("status") != "stable" or not universe_items:
+            return {
+                "status": "not_ready",
+                "universe_sync": universe_sync,
+                "coverage": self.coverage_packet(universe_packet),
+                "boundary": (
+                    "全市场名单与最近完整交易日市值尚未达到稳定发布门槛；"
+                    "本轮不会生成预筛结果，也不会逐股拉取多年数据。"
+                ),
+            }
+
+        universe_count = len(universe_items)
+        eligible_items: list[dict[str, Any]] = []
+        prefilter_items: list[dict[str, Any]] = []
+        for item in universe_items:
+            market_cap = item.get("total_mv_yi")
+            target = (
+                eligible_items
+                if market_cap is not None
+                and float(market_cap) > params.market_cap_min_yi
+                else prefilter_items
+            )
+            target.append(item)
+        current_dates = self.database.latest_strategy_candidate_dates(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=params.parameter_version,
+        )
+        prefilter_pending = [
+            item
+            for item in prefilter_items
+            if current_dates.get(str(item.get("symbol"))) != universe_as_of
+        ]
+        prefilter_result = self._publish_universe_prefilter(
+            prefilter_pending,
+            universe_data_version=str(universe_packet.get("data_version") or "unknown"),
+            as_of_date=universe_as_of,
+            parameters=params,
+            universe_count=universe_count,
+            prefiltered_count=len(eligible_items),
+        )
+
+        current_dates = self.database.latest_strategy_candidate_dates(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=params.parameter_version,
+        )
+        pending_eligible = [
+            item
+            for item in eligible_items
+            if current_dates.get(str(item.get("symbol"))) != universe_as_of
+        ]
+        pending_eligible.sort(
+            key=lambda item: (
+                -float(item.get("total_mv_yi") or 0),
+                str(item.get("symbol") or ""),
+            )
+        )
+        selected = pending_eligible[:size]
+        sync_results: list[dict[str, Any]] = []
+        for item in selected:
+            symbol = str(item["symbol"])
+            try:
+                result = self.snapshot_service.sync_symbol(
+                    symbol, as_of_date=universe_as_of
+                )
+                sync_results.append(
+                    {
+                        "symbol": symbol,
+                        "status": (result.get("run") or {}).get("status"),
+                        "published": bool(result.get("published")),
+                        "previous_stable_retained": bool(
+                            result.get("previous_stable_retained")
+                        ),
+                    }
+                )
+            except Exception as exc:
+                sync_results.append(
+                    {
+                        "symbol": symbol,
+                        "status": "unavailable",
+                        "error_type": type(exc).__name__,
+                    }
+                )
+
+        batch_result: dict[str, Any] | None = None
+        if selected:
+            coverage_before = self.coverage_packet(universe_packet)
+            warnings = self._universe_warnings(
+                universe_packet, pending_eligible=len(pending_eligible)
+            )
+            batch_result = self.run_symbols(
+                [str(item["symbol"]) for item in selected],
+                parameters=params,
+                run_scope="universe_batch",
+                universe_count=universe_count,
+                prefiltered_count=len(eligible_items),
+                coverage_ratio=float(coverage_before.get("coverage_ratio") or 0),
+                warnings=warnings,
+            )
+
+        coverage = self.coverage_packet(universe_packet)
+        active_run = (batch_result or prefilter_result or {}).get("run")
+        if active_run:
+            counts = (batch_result or prefilter_result or {}).get("counts") or {}
+            active_run = self.database.finish_strategy_screen_run(
+                str(active_run["id"]),
+                status=(
+                    "completed"
+                    if coverage.get("full_market_coverage")
+                    else "partial"
+                ),
+                counts=counts,
+                coverage_ratio=float(coverage.get("coverage_ratio") or 0),
+                warnings=self._universe_warnings(
+                    universe_packet,
+                    pending_eligible=int(coverage.get("remaining_symbols") or 0),
+                ),
+            )
+        return {
+            "status": (
+                "completed" if coverage.get("full_market_coverage") else "partial"
+            ),
+            "run": active_run,
+            "universe_sync": universe_sync,
+            "prefilter": prefilter_result,
+            "batch": batch_result,
+            "sync_results": sync_results,
+            "selected_symbols": [str(item["symbol"]) for item in selected],
+            "coverage": coverage,
+            "boundary": (
+                "全市场名单与市值先批量发布；只有市值规则通过的股票才分批补齐"
+                "多年ROE、股东和量价数据。页面始终读取已发布快照。"
+            ),
+        }
+
+    def coverage_packet(
+        self, universe_packet: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        getter = getattr(self.snapshot_service, "get_a_share_universe", None)
+        packet = (
+            universe_packet
+            if universe_packet is not None
+            else getter()
+            if callable(getter)
+            else {"status": "not_ready", "snapshot": None}
+        )
+        snapshot = packet.get("snapshot") or {}
+        items = list(snapshot.get("items") or [])
+        as_of_date = snapshot.get("as_of_date")
+        params = LiZongParameters()
+        universe_symbols = {str(item.get("symbol")) for item in items}
+        eligible_count = sum(
+            item.get("total_mv_yi") is not None
+            and float(item["total_mv_yi"]) > params.market_cap_min_yi
+            for item in items
+        )
+        missing_market_cap = sum(
+            item.get("total_mv_yi") is None for item in items
+        )
+        candidate_states = self.database.latest_strategy_candidate_states(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=params.parameter_version,
+        )
+        evaluated_states = (
+            {
+                symbol: state
+                for symbol, state in candidate_states.items()
+                if symbol in universe_symbols
+                and (
+                    not as_of_date
+                    or state.get("as_of_date") == str(as_of_date)
+                )
+            }
+            if packet.get("status") == "stable"
+            else {}
+        )
+        universe_count = len(items)
+        evaluated_count = len(evaluated_states)
+        coverage_ratio = evaluated_count / universe_count if universe_count else 0.0
+        counts = {
+            "total": evaluated_count,
+            "qualified": 0,
+            "triggered": 0,
+            "not_qualified": 0,
+            "data_incomplete": 0,
+            "invalidated": 0,
+        }
+        for state in evaluated_states.values():
+            status = str(state.get("status") or "")
+            if status in counts and status != "total":
+                counts[status] += 1
+        latest_run = self.database.latest_strategy_screen_run(
+            strategy_id=STRATEGY_ID,
+            parameter_version=params.parameter_version,
+        )
+        return {
+            "status": packet.get("status") or "not_ready",
+            "as_of_date": as_of_date,
+            "data_version": packet.get("data_version"),
+            "universe_count": universe_count,
+            "market_cap_eligible_count": eligible_count,
+            "market_cap_rejected_count": max(
+                0, universe_count - eligible_count - missing_market_cap
+            ),
+            "missing_market_cap_count": missing_market_cap,
+            "evaluated_symbols": evaluated_count,
+            "remaining_symbols": max(0, universe_count - evaluated_count),
+            "coverage_ratio": round(coverage_ratio, 6),
+            "full_market_coverage": bool(
+                packet.get("status") == "stable"
+                and universe_count
+                and evaluated_count == universe_count
+            ),
+            "counts": counts,
+            "latest_run": latest_run,
+            "scope": "full_market_incremental",
+            "boundary": (
+                "覆盖率表示当期全市场股票已得到明确规则状态的比例；"
+                "data_incomplete 也计入已评估，但不会进入候选或触发池。"
+            ),
+        }
+
+    def _publish_universe_prefilter(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        universe_data_version: str,
+        as_of_date: str,
+        parameters: LiZongParameters,
+        universe_count: int,
+        prefiltered_count: int,
+    ) -> dict[str, Any] | None:
+        if not items:
+            return None
+        data_versions = {
+            str(item["symbol"]): self._fingerprint(
+                {
+                    "universe_data_version": universe_data_version,
+                    "symbol": item["symbol"],
+                    "total_mv_yi": item.get("total_mv_yi"),
+                }
+            )
+            for item in items
+        }
+        run = self.database.start_strategy_screen_run(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=parameters.parameter_version,
+            data_version=self._fingerprint(data_versions),
+            data_versions=data_versions,
+            as_of_date=as_of_date,
+            requested_count=len(items),
+            run_scope="universe_prefilter",
+            universe_count=universe_count,
+            prefiltered_count=prefiltered_count,
+        )
+        counts = {
+            "processed": 0,
+            "qualified": 0,
+            "triggered": 0,
+            "data_incomplete": 0,
+            "invalidated": 0,
+        }
+        stored_items: list[dict[str, Any]] = []
+        for item in items:
+            symbol = str(item["symbol"])
+            market_cap = item.get("total_mv_yi")
+            evaluation = deterministic_li_zong_v1(
+                {
+                    "symbol": symbol,
+                    "as_of_date": as_of_date,
+                    "daily": [],
+                    "roe_history": [],
+                    "shareholders": [],
+                    "daily_basic": {
+                        "trade_date": as_of_date,
+                        "total_mv_yi": market_cap,
+                        "source": "Tushare Pro:a_share_universe",
+                    },
+                },
+                parameters=parameters,
+            )
+            evaluation["stock_basic"] = {
+                "name": item.get("name"),
+                "industry": item.get("industry"),
+                "market": item.get("market"),
+            }
+            previous = self.database.latest_strategy_candidate_snapshot(
+                strategy_id=STRATEGY_ID,
+                strategy_version=STRATEGY_VERSION,
+                parameter_version=parameters.parameter_version,
+                symbol=symbol,
+                exclude_data_version=data_versions[symbol],
+            )
+            stored_status = self._stored_status(evaluation["status"], previous)
+            candidate, _ = self.database.save_strategy_candidate_snapshot(
+                run_id=str(run["id"]),
+                strategy_id=STRATEGY_ID,
+                strategy_version=STRATEGY_VERSION,
+                parameter_version=parameters.parameter_version,
+                data_version=data_versions[symbol],
+                symbol=symbol,
+                as_of_date=as_of_date,
+                status=stored_status,
+                evaluation=evaluation,
+                previous_status=previous.get("status") if previous else None,
+            )
+            stored_items.append(candidate)
+            counts["processed"] += 1
+            if candidate["status"] in counts:
+                counts[candidate["status"]] += 1
+        finished = self.database.finish_strategy_screen_run(
+            str(run["id"]), status="partial", counts=counts
+        )
+        return {"run": finished, "items": stored_items, "counts": counts}
+
+    @staticmethod
+    def _universe_warnings(
+        universe_packet: dict[str, Any], *, pending_eligible: int
+    ) -> list[str]:
+        snapshot = universe_packet.get("snapshot") or {}
+        coverage = snapshot.get("coverage") or {}
+        warnings: list[str] = []
+        if universe_packet.get("status") != "stable":
+            warnings.append("全市场名单或市值覆盖尚未达到稳定发布门槛。")
+        if coverage.get("missing_market_cap"):
+            warnings.append(
+                f"{coverage['missing_market_cap']} 只股票缺少当日总市值，按 data_incomplete 保存。"
+            )
+        if pending_eligible:
+            warnings.append(
+                f"仍有 {pending_eligible} 只市值预筛股票等待补齐多年ROE、股东与量价数据。"
+            )
+        return warnings
 
     def list_candidates(
         self,
@@ -606,7 +975,7 @@ class LiZongStrategyService:
         seen: set[str] = set()
         for raw in symbols:
             canonical = normalize_symbol(str(raw))
-            if not re.fullmatch(r"\d{6}\.(?:SZ|SS)", canonical):
+            if not re.fullmatch(r"\d{6}\.(?:SZ|SS|BJ)", canonical):
                 raise ValueError("李总策略首版仅支持A股股票")
             if canonical not in seen:
                 seen.add(canonical)

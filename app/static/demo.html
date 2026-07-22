@@ -1643,7 +1643,7 @@
             <div class="li-zong-stats">
               <div class="li-zong-stat"><span>策略版本</span><strong id="liZongVersion">—</strong></div>
               <div class="li-zong-stat"><span>数据交易日</span><strong id="liZongDate">—</strong></div>
-              <div class="li-zong-stat"><span>当前研究池</span><strong id="liZongCoverage">—</strong></div>
+              <div class="li-zong-stat"><span>全市场覆盖</span><strong id="liZongCoverage">—</strong></div>
               <div class="li-zong-stat"><span>候选</span><strong id="liZongQualified">—</strong></div>
               <div class="li-zong-stat"><span>今日触发</span><strong id="liZongTriggered">—</strong></div>
               <div class="li-zong-stat"><span>数据待补</span><strong id="liZongIncomplete">—</strong></div>
@@ -2369,11 +2369,24 @@
       const definition = payload?.strategy || {};
       $("liZongVersion").textContent = definition.current_version || definition.version?.version || "li_zong_v1";
       $("liZongDate").textContent = meta.latest_as_of_date || "待发布";
-      $("liZongCoverage").textContent = `${meta.evaluated_symbols || 0} 只`;
+      const evaluated = Number(meta.evaluated_symbols || 0);
+      const universe = Number(meta.universe_count || 0);
+      const stableUniverse = meta.universe_status === "stable";
+      const coveragePct = universe ? `${(Number(meta.coverage_ratio || 0) * 100).toFixed(1)}%` : "";
+      $("liZongCoverage").textContent = universe ? `${evaluated}/${universe}` : `${evaluated} 只`;
+      $("liZongCoverage").title = universe
+        ? `覆盖率 ${coveragePct}；市值条件预筛通过 ${meta.market_cap_eligible_count || 0} 只；仍待处理 ${meta.remaining_symbols || 0} 只`
+        : "当前尚未发布全市场名单快照";
       $("liZongQualified").textContent = counts.qualified ?? 0;
       $("liZongTriggered").textContent = counts.triggered ?? 0;
       $("liZongIncomplete").textContent = counts.data_incomplete ?? 0;
-      $("liZongState").textContent = payload?.status === "ready" ? "研究数据已就绪" : "首批快照准备中";
+      $("liZongState").textContent = meta.full_market_coverage
+        ? "全市场规则状态已发布"
+        : universe && stableUniverse
+          ? `后台分批处理中 · 已覆盖 ${coveragePct}`
+          : universe
+            ? "等待最近完整交易日市值快照"
+          : payload?.status === "ready" ? "研究池数据已就绪" : "首批快照准备中";
       document.querySelectorAll("[data-li-zong-filter]").forEach(button => button.classList.toggle("active", button.dataset.liZongFilter === state.liZongFilter));
 
       const filtered = items.filter(item => item.status === state.liZongFilter);

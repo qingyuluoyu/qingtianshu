@@ -50,6 +50,7 @@ class TushareSnapshotService:
         "top10_holders",
         "top10_floatholders",
     }
+    UNIVERSE_MIN_MARKET_CAP_COVERAGE = 0.95
 
     def __init__(self, database: Database, client: Any | None):
         self.database = database
@@ -83,10 +84,21 @@ class TushareSnapshotService:
             trade_dates = self._open_trade_dates(frames["trade_cal"], requested_as_of)
             if not trade_dates:
                 raise ValueError("没有可用的完整交易日")
-            latest_trade_date = trade_dates[-1]
-            history_dates = trade_dates[-400:]
-            history_start = history_dates[0]
             ts_code = self._to_tushare_symbol(canonical)
+            (
+                latest_trade_date,
+                frames["daily_basic"],
+                daily_basic_error,
+            ) = self._latest_daily_basic(trade_dates, ts_code=ts_code)
+            if daily_basic_error:
+                issues.append(
+                    {"dataset": "daily_basic", "error_type": daily_basic_error}
+                )
+            completed_trade_dates = [
+                value for value in trade_dates if value <= latest_trade_date
+            ]
+            history_dates = completed_trade_dates[-400:]
+            history_start = history_dates[0]
             query_specs = {
                 "stock_basic": {
                     "ts_code": ts_code,
@@ -102,15 +114,6 @@ class TushareSnapshotService:
                     "fields": (
                         "ts_code,trade_date,open,high,low,close,pre_close,"
                         "change,pct_chg,vol,amount"
-                    ),
-                },
-                "daily_basic": {
-                    "ts_code": ts_code,
-                    "start_date": latest_trade_date,
-                    "end_date": latest_trade_date,
-                    "fields": (
-                        "ts_code,trade_date,turnover_rate,volume_ratio,pe_ttm,"
-                        "pb,total_mv,circ_mv"
                     ),
                 },
                 "fina_indicator": {
@@ -206,6 +209,8 @@ class TushareSnapshotService:
                 },
             }
             for dataset, params in query_specs.items():
+                if dataset in frames:
+                    continue
                 try:
                     frames[dataset] = self._query(dataset, **params)
                 except Exception as exc:
@@ -401,6 +406,222 @@ class TushareSnapshotService:
             ),
         }
 
+    def sync_a_share_universe(
+        self, *, as_of_date: str | None = None
+    ) -> dict[str, Any]:
+        """Publish the listed A-share universe and latest market-cap prefilter."""
+
+        if self.client is None:
+            raise TushareSnapshotUnavailable("Tushare 数据同步尚未配置")
+        as_of = self._parse_as_of_date(as_of_date)
+        requested_as_of = as_of.strftime("%Y%m%d")
+        calendar_start = (as_of - timedelta(days=60)).strftime("%Y%m%d")
+        sync_run = self.database.start_tushare_sync_run(
+            job_scope="universe:a_share",
+            as_of_date=as_of.isoformat(),
+            datasets=["trade_cal", "stock_basic", "daily_basic"],
+        )
+        try:
+            trade_cal = self._query(
+                "trade_cal",
+                exchange="SSE",
+                start_date=calendar_start,
+                end_date=requested_as_of,
+                is_open="1",
+                fields="exchange,cal_date,is_open,pretrade_date",
+            )
+            trade_dates = self._open_trade_dates(trade_cal, requested_as_of)
+            if not trade_dates:
+                raise ValueError("没有可用的完整交易日")
+            stock_basic = self._query(
+                "stock_basic",
+                exchange="",
+                list_status="L",
+                fields=(
+                    "ts_code,symbol,name,area,industry,market,list_date,"
+                    "exchange,list_status"
+                ),
+            )
+            latest_trade_date, daily_basic, daily_basic_error = (
+                self._latest_daily_basic(trade_dates)
+            )
+            if stock_basic.empty:
+                raise ValueError("股票基础名单为空")
+
+            basics = stock_basic.copy().drop_duplicates("ts_code", keep="last")
+            valuations = (
+                daily_basic.copy().drop_duplicates("ts_code", keep="last")
+                if not daily_basic.empty and "ts_code" in daily_basic
+                else pd.DataFrame()
+            )
+            if not valuations.empty:
+                merged = basics.merge(
+                    valuations,
+                    on="ts_code",
+                    how="left",
+                    suffixes=("", "_daily_basic"),
+                )
+            else:
+                merged = basics
+
+            items: list[dict[str, Any]] = []
+            for _, row in merged.iterrows():
+                ts_code = str(row.get("ts_code") or "").strip().upper()
+                try:
+                    symbol = self._from_tushare_symbol(ts_code)
+                    normalize_symbol(symbol)
+                except ValueError:
+                    continue
+                total_mv = pd.to_numeric(row.get("total_mv"), errors="coerce")
+                total_mv_yi = (
+                    round(float(total_mv) / 10_000.0, 4)
+                    if pd.notna(total_mv)
+                    else None
+                )
+                items.append(
+                    {
+                        "symbol": symbol,
+                        "ts_code": ts_code,
+                        "name": str(row.get("name") or symbol),
+                        "industry": str(row.get("industry") or "") or None,
+                        "market": str(row.get("market") or "") or None,
+                        "exchange": str(row.get("exchange") or "") or None,
+                        "list_date": self._iso_date(row.get("list_date")),
+                        "trade_date": self._iso_date(
+                            row.get("trade_date") or latest_trade_date
+                        ),
+                        "total_mv_yi": total_mv_yi,
+                        "circ_mv_yi": self._wan_to_yi(row.get("circ_mv")),
+                        "pe_ttm": self._optional_number(row.get("pe_ttm")),
+                        "pb": self._optional_number(row.get("pb")),
+                        "turnover_rate": self._optional_number(
+                            row.get("turnover_rate")
+                        ),
+                        "volume_ratio": self._optional_number(
+                            row.get("volume_ratio")
+                        ),
+                        "source": "Tushare Pro stock_basic + daily_basic",
+                    }
+                )
+            items.sort(key=lambda item: item["symbol"])
+            listed = len(items)
+            with_market_cap = sum(
+                item.get("total_mv_yi") is not None for item in items
+            )
+            coverage_ratio = with_market_cap / listed if listed else 0.0
+            generated_at = utc_now()
+            combined = {
+                "method": "tushare_a_share_universe_v1",
+                "as_of_date": self._iso_date(latest_trade_date),
+                "generated_at": generated_at,
+                "items": items,
+                "coverage": {
+                    "listed": listed,
+                    "with_market_cap": with_market_cap,
+                    "missing_market_cap": listed - with_market_cap,
+                    "market_cap_coverage_ratio": round(coverage_ratio, 6),
+                },
+                "issues": (
+                    [
+                        {
+                            "dataset": "daily_basic",
+                            "error_type": daily_basic_error,
+                        }
+                    ]
+                    if daily_basic_error
+                    else []
+                ),
+                "boundary": (
+                    "全市场名单和市值只用于李总策略第一层确定性预筛；"
+                    "通过市值条件不代表进入候选池，仍需多年ROE、股东和量价证据。"
+                ),
+            }
+            data_version = self._fingerprint(
+                {
+                    "method": combined["method"],
+                    "as_of_date": combined["as_of_date"],
+                    "items": items,
+                }
+            )
+            stable = bool(listed) and (
+                coverage_ratio >= self.UNIVERSE_MIN_MARKET_CAP_COVERAGE
+            )
+            dataset = "a_share_universe" if stable else "a_share_universe_incomplete"
+            self.database.save_tushare_dataset_snapshot(
+                dataset=dataset,
+                scope_key="all",
+                as_of_date=combined["as_of_date"],
+                report_period=None,
+                source_updated_at=generated_at,
+                sync_run_id=str(sync_run["id"]),
+                data_version=data_version,
+                data_status="stable" if stable else "incomplete",
+                payload=combined,
+            )
+            previous = self.database.latest_tushare_dataset_snapshot(
+                "a_share_universe", "all"
+            )
+            finished = self.database.finish_tushare_sync_run(
+                str(sync_run["id"]),
+                status="stable" if stable else "partial",
+                data_version=data_version,
+                summary={
+                    **combined["coverage"],
+                    "as_of_date": combined["as_of_date"],
+                    "published": stable,
+                    "issues": combined["issues"],
+                },
+            )
+            return {
+                "run": self._public_run(finished),
+                "snapshot": combined,
+                "published": stable,
+                "previous_stable_retained": bool(not stable and previous),
+            }
+        except Exception as exc:
+            previous = self.database.latest_tushare_dataset_snapshot(
+                "a_share_universe", "all"
+            )
+            failed = self.database.finish_tushare_sync_run(
+                str(sync_run["id"]),
+                status="failed",
+                data_version=None,
+                summary={"previous_stable_retained": previous is not None},
+                error=type(exc).__name__,
+            )
+            return {
+                "run": self._public_run(failed),
+                "snapshot": (previous or {}).get("payload"),
+                "published": False,
+                "previous_stable_retained": previous is not None,
+            }
+
+    def get_a_share_universe(self) -> dict[str, Any]:
+        stable = self.database.latest_tushare_dataset_snapshot(
+            "a_share_universe", "all"
+        )
+        incomplete = self.database.latest_tushare_dataset_snapshot(
+            "a_share_universe_incomplete", "all", stable_only=False
+        )
+        if stable is None and incomplete is None:
+            return {
+                "status": "not_ready",
+                "snapshot": None,
+                "boundary": "尚未发布A股全市场名单与市值快照。",
+            }
+        selected = stable or incomplete
+        return {
+            "status": "stable" if stable is not None else "incomplete",
+            "data_version": selected.get("data_version") if selected else None,
+            "snapshot": selected.get("payload") if selected else None,
+            "latest_incomplete": (
+                incomplete.get("payload") if incomplete is not None else None
+            ),
+            "boundary": (
+                "全市场市值预筛是后台数据准备步骤；普通用户只读取已发布状态。"
+            ),
+        }
+
     def _query(self, api_name: str, **params: Any) -> pd.DataFrame:
         try:
             result = self.client.query(api_name, **params)
@@ -413,6 +634,29 @@ class TushareSnapshotService:
         if isinstance(result, pd.DataFrame):
             return result.copy()
         return pd.DataFrame(result or [])
+
+    def _latest_daily_basic(
+        self, trade_dates: list[str], *, ts_code: str | None = None
+    ) -> tuple[str, pd.DataFrame, str | None]:
+        latest_trade_date = trade_dates[-1]
+        fields = (
+            "ts_code,trade_date,turnover_rate,volume_ratio,pe_ttm,"
+            "pb,total_mv,circ_mv"
+        )
+        for trade_date in reversed(trade_dates[-5:]):
+            params: dict[str, Any] = {
+                "trade_date": trade_date,
+                "fields": fields,
+            }
+            if ts_code:
+                params["ts_code"] = ts_code
+            try:
+                frame = self._query("daily_basic", **params)
+            except Exception as exc:
+                return latest_trade_date, pd.DataFrame(), type(exc).__name__
+            if not frame.empty:
+                return trade_date, frame, None
+        return latest_trade_date, pd.DataFrame(), None
 
     @staticmethod
     def _open_trade_dates(frame: pd.DataFrame, as_of: str) -> list[str]:
@@ -490,6 +734,20 @@ class TushareSnapshotService:
         if callable(converter):
             return str(converter(symbol))
         return symbol[:-3] + ".SH" if symbol.endswith(".SS") else symbol
+
+    @staticmethod
+    def _from_tushare_symbol(symbol: str) -> str:
+        return symbol[:-3] + ".SS" if symbol.endswith(".SH") else symbol
+
+    @staticmethod
+    def _optional_number(value: Any) -> float | None:
+        number = pd.to_numeric(value, errors="coerce")
+        return round(float(number), 6) if pd.notna(number) else None
+
+    @classmethod
+    def _wan_to_yi(cls, value: Any) -> float | None:
+        number = cls._optional_number(value)
+        return round(number / 10_000.0, 4) if number is not None else None
 
     @staticmethod
     def _parse_as_of_date(value: str | None) -> date:
