@@ -1,0 +1,1162 @@
+from __future__ import annotations
+
+from typing import Any
+
+from app.catalog import RESEARCH_TARGETS, normalize_symbol
+from app.db import Database
+from app.utils import utc_now
+
+
+class DeepStockResearchService:
+    """Persist one guided stock-research space per user and security."""
+
+    WORKFLOW_VERSION = "guided_deep_stock_v1"
+    STAGES = (
+        {
+            "key": "original_thesis",
+            "label": "原始研究逻辑",
+            "description": "先记录用户为什么关注这家公司，以及最初依赖哪些事实。",
+            "question": "你最初为什么关注这家公司？请写出最重要的两三个事实和你最担心的反例。",
+        },
+        {
+            "key": "company_industry",
+            "label": "公司与行业",
+            "description": "核验业务结构、收入与毛利来源、行业位置和竞争约束。",
+            "question": "请基于已取得的业务与行业证据，解释这家公司靠什么赚钱、行业位置如何，哪些环节仍缺证。",
+        },
+        {
+            "key": "financial_cashflow",
+            "label": "财务与现金流",
+            "description": "比较同类报告期的增长、利润率、营运资金与现金流质量。",
+            "question": "请拆解这家公司最新财报的利润与现金流，区分机械影响、公司原文解释和未确认因果。",
+        },
+        {
+            "key": "valuation_peers",
+            "label": "估值与同行",
+            "description": "使用固定同行与一致口径比较，不输出目标价。",
+            "question": "请比较这家公司与固定同行的估值和经营差异，说明口径、样本边界和不能下结论的部分。",
+        },
+        {
+            "key": "events_sentiment",
+            "label": "事件与情绪",
+            "description": "整理公告、监管文件、新闻与社区样本，区分强弱证据。",
+            "question": "请梳理近期重要事件和情绪分歧，区分官方披露、媒体线索与社区弱证据。",
+        },
+        {
+            "key": "counterevidence",
+            "label": "反方证据",
+            "description": "主动寻找与原逻辑冲突的事实，而不是只补强看多或看空叙事。",
+            "question": "只看反方证据：哪些事实最可能推翻当前研究逻辑？哪些只是价格波动而不是基本面反证？",
+        },
+        {
+            "key": "invalidation_next",
+            "label": "失效条件与下一证据",
+            "description": "把未决问题变成可持续跟踪的证据任务和失效条件。",
+            "question": "请总结当前研究逻辑的失效条件、仍未解决的证据缺口，以及下一次最值得核验的事实。",
+        },
+    )
+
+    _THESIS_TERMS = ("原逻辑", "关注理由", "最初", "看好", "担心", "因为")
+    _INVALIDATION_TERMS = (
+        "失效",
+        "证伪",
+        "推翻",
+        "下一步",
+        "下一证据",
+        "还要验证",
+        "需要核验",
+        "观察条件",
+    )
+    COVERAGE_DIMENSIONS = (
+        ("company_operating", "公司经营"),
+        ("financial_quality", "财务质量"),
+        ("industry_relative", "行业与相对表现"),
+        ("valuation", "估值"),
+        ("technical_state", "技术状态"),
+        ("risk_events", "风险事件"),
+    )
+    STAGE_COVERAGE_GATES = {
+        "company_industry": ("company_operating",),
+        "financial_cashflow": ("financial_quality",),
+        "valuation_peers": ("valuation", "industry_relative"),
+        "events_sentiment": ("risk_events",),
+        "counterevidence": ("risk_events",),
+        "invalidation_next": ("risk_events",),
+    }
+    COVERAGE_STATUS_RANK = {
+        "unavailable": 0,
+        "insufficient": 1,
+        "partial": 2,
+        "sufficient": 3,
+    }
+    EVIDENCE_PERSISTED_RUN_STATUSES = {"completed", "preview"}
+    STAGE_ADVANCING_RUN_STATUSES = {"completed"}
+
+    def __init__(self, database: Database):
+        self.database = database
+
+    def list_sessions(self, user_id: str, limit: int = 50) -> dict[str, Any]:
+        items = [
+            self._public_session(item)
+            for item in self.database.list_deep_stock_sessions(user_id, limit=limit)
+        ]
+        return {
+            "method": self.WORKFLOW_VERSION,
+            "items": items,
+            "summary": {
+                "total": len(items),
+                "completed": sum(item["status"] == "completed" for item in items),
+                "active": sum(item["status"] == "active" for item in items),
+            },
+        }
+
+    def get_or_create(
+        self,
+        user_id: str,
+        symbol: str,
+        conversation_id: str | None = None,
+    ) -> dict[str, Any]:
+        canonical = normalize_symbol(symbol)
+        existing = self.database.get_deep_stock_session(user_id, canonical)
+        bound_conversation = None
+        if conversation_id:
+            bound_conversation = self.database.get_conversation(
+                user_id, conversation_id
+            )
+            if (
+                bound_conversation is None
+                or bound_conversation.get("status") != "active"
+            ):
+                raise ValueError("要绑定的研究对话不存在或已归档")
+        elif existing:
+            bound_conversation = self.database.get_conversation(
+                user_id, str(existing["conversation_id"])
+            )
+            if bound_conversation and bound_conversation.get("status") != "active":
+                bound_conversation = None
+        if bound_conversation is None:
+            display_name = self._display_name(user_id, canonical)
+            bound_conversation = self.database.create_conversation(
+                user_id, f"个股研究｜{display_name}"
+            )
+
+        report = self.database.latest_research_report(canonical)
+        name = self._display_name(user_id, canonical)
+        if existing is None:
+            watchlist = self.database.get_watchlist_item(user_id, canonical)
+            thesis = str((watchlist or {}).get("thesis") or "").strip()
+            stages = self._new_stages(thesis)
+            evidence_modules: dict[str, Any] = {}
+            if thesis:
+                evidence_modules["original_thesis"] = {
+                    "source": "watchlist_thesis",
+                    "summary": thesis,
+                    "updated_at": utc_now(),
+                }
+            unresolved = self._report_unresolved(report)
+        else:
+            stages = list(existing.get("stages") or [])
+            evidence_modules = dict(existing.get("evidence_modules") or {})
+            unresolved = self._dedupe(
+                [
+                    *(existing.get("unresolved_items") or []),
+                    *self._report_unresolved(report),
+                ]
+            )
+        stages = self._normalize_stage_statuses(stages)
+        status = (
+            "completed"
+            if stages and all(item.get("status") == "completed" for item in stages)
+            else "active"
+        )
+        next_question = self._next_question(stages, name)
+        session = self.database.save_deep_stock_session(
+            user_id=user_id,
+            symbol=canonical,
+            name=name,
+            conversation_id=str(bound_conversation["id"]),
+            workflow_version=self.WORKFLOW_VERSION,
+            status=status,
+            stages=stages,
+            evidence_modules=evidence_modules,
+            unresolved_items=unresolved[:12],
+            next_question=next_question,
+            latest_run_id=(existing or {}).get("latest_run_id"),
+            latest_report_id=(report or {}).get("id"),
+            completed_at=(existing or {}).get("completed_at")
+            or (utc_now() if status == "completed" else None),
+        )
+        latest_run_id = session.get("latest_run_id")
+        if existing and latest_run_id:
+            latest_run = self.database.get_run(str(latest_run_id), user_id)
+            if (
+                latest_run
+                and latest_run.get("status")
+                in self.EVIDENCE_PERSISTED_RUN_STATUSES
+            ):
+                input_data = latest_run.get("input") or {}
+                reconciled = self.observe_chat(
+                    user_id=user_id,
+                    conversation_id=str(session["conversation_id"]),
+                    symbol=canonical,
+                    intent=str(latest_run.get("intent") or "stock_research"),
+                    message=str(input_data.get("message") or ""),
+                    run=latest_run,
+                    evidence=latest_run.get("evidence") or {},
+                )
+                if reconciled is not None:
+                    return reconciled
+        return self._public_session(session)
+
+    def get(self, user_id: str, symbol: str) -> dict[str, Any] | None:
+        canonical = normalize_symbol(symbol)
+        session = self.database.get_deep_stock_session(user_id, canonical)
+        return self._public_session(session) if session else None
+
+    def evidence_coverage_packet(
+        self,
+        evidence: dict[str, Any],
+        *,
+        intent: str | None = None,
+    ) -> dict[str, Any]:
+        """Expose the PRD's six evidence dimensions to the research Agent."""
+
+        coverage = self._coverage_dimensions(evidence, intent=intent)
+        counts = {
+            status: sum(
+                item["coverage_status"] == status for item in coverage.values()
+            )
+            for status in ("sufficient", "partial", "insufficient", "unavailable")
+        }
+        return {
+            "dimensions": list(coverage.values()),
+            "summary": {
+                **counts,
+                "total": len(coverage),
+                "refresh_attention": 0,
+            },
+            "tasks": self._coverage_tasks(coverage),
+            "boundary": (
+                "六维覆盖只表示当前已取得证据的完整程度；"
+                "不构成公司评分、投资评级或买卖信号。"
+            ),
+        }
+
+    def observe_chat(
+        self,
+        *,
+        user_id: str,
+        conversation_id: str,
+        symbol: str | None,
+        intent: str,
+        message: str,
+        run: dict[str, Any],
+        evidence: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        session = self.database.get_deep_stock_session_by_conversation(
+            user_id, conversation_id
+        )
+        if session is None:
+            return None
+        if symbol and normalize_symbol(symbol) != session["symbol"]:
+            return self._public_session(session)
+
+        stages = list(session.get("stages") or [])
+        evidence_modules = dict(session.get("evidence_modules") or {})
+        unresolved = list(session.get("unresolved_items") or [])
+        run_status = str(run.get("status") or "")
+        run_id = run.get("id")
+        now = utc_now()
+        coverage_override = self._coverage_from_modules(evidence_modules)
+        if run_status not in self.EVIDENCE_PERSISTED_RUN_STATUSES:
+            unresolved.append(
+                "最近一轮研究未通过完整模型与输出校验，因此没有推进研究阶段。"
+            )
+        else:
+            unresolved = [
+                item
+                for item in unresolved
+                if item
+                != "最近一轮研究未通过完整模型与输出校验，因此没有推进研究阶段。"
+            ]
+            coverage = self._coverage_dimensions(evidence, intent=intent)
+            if run_status in self.STAGE_ADVANCING_RUN_STATUSES:
+                completed = self._completed_stage_modules(
+                    intent=intent,
+                    message=message,
+                    evidence=evidence,
+                )
+                for stage in stages:
+                    key = str(stage.get("key"))
+                    modules = completed.get(key)
+                    if not modules or stage.get("status") == "completed":
+                        continue
+                    stage.update(
+                        {
+                            "status": "completed",
+                            "completed_at": now,
+                            "run_id": run_id,
+                            "evidence_modules": modules,
+                            "coverage_gate": {
+                                dimension: coverage[dimension]["coverage_status"]
+                                for dimension in self.STAGE_COVERAGE_GATES.get(key, ())
+                            },
+                        }
+                    )
+                    evidence_modules[key] = {
+                        "run_id": run_id,
+                        "intent": intent,
+                        "modules": modules,
+                        "updated_at": now,
+                    }
+            coverage_override = self._merge_coverage_snapshot(
+                previous=coverage_override,
+                current=coverage,
+                run_id=str(run_id or ""),
+                intent=intent,
+                observed_at=now,
+            )
+            evidence_modules["_coverage_snapshot"] = {
+                "dimensions": list(coverage_override.values()),
+                "updated_at": now,
+                "run_id": run_id,
+                "intent": intent,
+            }
+            evidence_modules["_coverage_history"] = self._append_coverage_history(
+                evidence_modules.get("_coverage_history"),
+                coverage_override,
+                run_id=str(run_id or ""),
+                intent=intent,
+                observed_at=now,
+            )
+            unresolved.extend(
+                self._evidence_unresolved(evidence, include_coverage=False)
+            )
+            coverage_labels = {
+                label for _, label in self.COVERAGE_DIMENSIONS
+            }
+            unresolved = [
+                item
+                for item in unresolved
+                if not any(
+                    str(item).startswith(f"{label}：")
+                    or str(item).startswith(f"证据覆盖｜{label}：")
+                    for label in coverage_labels
+                )
+            ]
+            unresolved.extend(
+                f"证据覆盖｜{task['label']}：{task['next_step']}"
+                for task in self._coverage_tasks(coverage_override)
+            )
+
+        stages = self._normalize_stage_statuses(stages)
+        status = (
+            "completed"
+            if stages and all(item.get("status") == "completed" for item in stages)
+            else "active"
+        )
+        report = self.database.latest_research_report(str(session["symbol"]))
+        saved = self.database.save_deep_stock_session(
+            user_id=user_id,
+            symbol=str(session["symbol"]),
+            name=str(session["name"]),
+            conversation_id=conversation_id,
+            workflow_version=self.WORKFLOW_VERSION,
+            status=status,
+            stages=stages,
+            evidence_modules=evidence_modules,
+            unresolved_items=self._dedupe(unresolved)[-12:],
+            next_question=self._next_question(stages, str(session["name"])),
+            latest_run_id=run_id or session.get("latest_run_id"),
+            latest_report_id=(report or {}).get("id")
+            or session.get("latest_report_id"),
+            completed_at=utc_now() if status == "completed" else None,
+        )
+        return self._public_session(
+            saved,
+            evidence_override=evidence,
+            coverage_override=coverage_override or None,
+        )
+
+    def _new_stages(self, thesis: str) -> list[dict[str, Any]]:
+        now = utc_now()
+        stages = []
+        for index, definition in enumerate(self.STAGES, start=1):
+            completed = definition["key"] == "original_thesis" and bool(thesis)
+            stages.append(
+                {
+                    **definition,
+                    "index": index,
+                    "status": "completed" if completed else "pending",
+                    "completed_at": now if completed else None,
+                    "run_id": None,
+                    "evidence_modules": ["watchlist_thesis"] if completed else [],
+                }
+            )
+        return self._normalize_stage_statuses(stages)
+
+    def _completed_stage_modules(
+        self, *, intent: str, message: str, evidence: dict[str, Any]
+    ) -> dict[str, list[str]]:
+        completed: dict[str, list[str]] = {}
+        coverage = self._coverage_dimensions(evidence, intent=intent)
+
+        def gate(stage_key: str) -> bool:
+            required = self.STAGE_COVERAGE_GATES.get(stage_key, ())
+            return all(
+                coverage[key]["coverage_status"] == "sufficient"
+                for key in required
+            )
+
+        if any(term in message for term in self._THESIS_TERMS):
+            completed["original_thesis"] = ["user_statement"]
+
+        company_modules = self._present_modules(
+            evidence, ("business_structure", "research_frame")
+        )
+        if intent == "business_structure" and self._packet_available(evidence):
+            company_modules = ["business_structure"]
+        if (
+            intent in {"stock_research", "business_structure"}
+            and company_modules
+            and gate("company_industry")
+        ):
+            completed["company_industry"] = company_modules
+
+        financial_modules = self._present_modules(
+            evidence, ("fundamentals", "earnings_quality", "financial_drivers")
+        )
+        if intent in {"earnings_quality", "financial_drivers"} and self._packet_available(
+            evidence
+        ):
+            financial_modules = [intent]
+        if intent in {
+            "stock_research",
+            "earnings_quality",
+            "financial_drivers",
+        } and financial_modules and gate("financial_cashflow"):
+            completed["financial_cashflow"] = financial_modules
+
+        valuation_modules = self._present_modules(
+            evidence, ("peer_comparison", "analyst_expectations")
+        )
+        if intent == "analyst_expectations" and self._packet_available(evidence):
+            valuation_modules = ["analyst_expectations"]
+        if (
+            intent in {"stock_research", "analyst_expectations"}
+            and valuation_modules
+            and gate("valuation_peers")
+        ):
+            completed["valuation_peers"] = valuation_modules
+
+        event_modules = self._present_modules(
+            evidence,
+            ("event_timeline", "a_share_information", "global_information"),
+        )
+        if intent == "event_timeline" and self._packet_available(evidence):
+            event_modules = ["event_timeline"]
+        if (
+            intent in {"stock_research", "event_timeline"}
+            and event_modules
+            and gate("events_sentiment")
+        ):
+            completed["events_sentiment"] = event_modules
+
+        counter_modules = self._present_modules(
+            evidence, ("evidence_debate", "analysis_board")
+        )
+        if (
+            intent == "stock_research"
+            and counter_modules
+            and self._counterevidence_sufficient(evidence)
+            and gate("counterevidence")
+        ):
+            completed["counterevidence"] = counter_modules
+
+        if any(term in message for term in self._INVALIDATION_TERMS):
+            invalidation_modules = self._present_modules(
+                evidence,
+                (
+                    "research_frame",
+                    "analysis_board",
+                    "conditional_outlook",
+                    "evidence_debate",
+                ),
+            )
+            if (
+                invalidation_modules
+                and self._invalidation_sufficient(evidence)
+                and gate("invalidation_next")
+            ):
+                completed["invalidation_next"] = invalidation_modules
+        return completed
+
+    def _coverage_dimensions(
+        self, evidence: dict[str, Any], *, intent: str | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """Build the PRD's six evidence dimensions without model scoring."""
+
+        def packet(key: str) -> dict[str, Any]:
+            value = evidence.get(key)
+            return value if isinstance(value, dict) else {}
+
+        def has_any(value: dict[str, Any], keys: tuple[str, ...]) -> bool:
+            return any(value.get(key) not in (None, {}, [], "") for key in keys)
+
+        def dimension(
+            key: str,
+            *,
+            sources: list[str],
+            sufficient: bool,
+            partial: bool,
+            attempted: bool,
+            missing_items: list[str],
+            as_of: list[str] | None = None,
+        ) -> tuple[str, dict[str, Any]]:
+            status = (
+                "sufficient"
+                if sufficient
+                else "partial"
+                if partial
+                else "insufficient"
+                if attempted
+                else "unavailable"
+            )
+            label = dict(self.COVERAGE_DIMENSIONS)[key]
+            return key, {
+                "key": key,
+                "label": label,
+                "coverage_status": status,
+                "sources": self._dedupe(sources),
+                "missing_items": [] if status == "sufficient" else missing_items,
+                "as_of": self._dedupe(as_of or []),
+            }
+
+        business = packet("business_structure")
+        research_frame = packet("research_frame")
+        direct_business = intent == "business_structure" and self._packet_available(
+            evidence
+        )
+        business_content = direct_business or has_any(
+            business,
+            ("rows", "dimensions", "key_changes", "business_profile", "anchor_report_date"),
+        )
+        company_sources = []
+        if business_content:
+            company_sources.append("主营与业务结构")
+        if research_frame:
+            company_sources.append("公司研究框架")
+        company = dimension(
+            "company_operating",
+            sources=company_sources,
+            sufficient=business_content,
+            partial=bool(research_frame),
+            attempted=bool(business),
+            missing_items=["需要可核验的主营构成、收入或毛利来源证据。"],
+            as_of=[
+                str(value)
+                for value in (
+                    business.get("anchor_report_date"),
+                    business.get("latest_fetched_at"),
+                )
+                if value
+            ],
+        )
+
+        fundamentals = packet("fundamentals")
+        earnings = packet("earnings_quality")
+        drivers = packet("financial_drivers")
+        direct_financial = intent in {"earnings_quality", "financial_drivers"} and self._packet_available(
+            evidence
+        )
+        fundamental_content = has_any(
+            fundamentals,
+            ("summary", "financial_periods", "statements", "valuation"),
+        )
+        earnings_content = has_any(
+            earnings,
+            ("factors", "supports", "contradictions", "report_period"),
+        )
+        driver_content = has_any(
+            drivers,
+            (
+                "confirmed_mechanical_drivers",
+                "plausible_clues",
+                "company_explanations",
+                "unresolved_causes",
+                "report_period",
+            ),
+        )
+        financial_source_count = sum(
+            (fundamental_content, earnings_content, driver_content)
+        )
+        financial = dimension(
+            "financial_quality",
+            sources=[
+                label
+                for present, label in (
+                    (fundamental_content, "结构化财务"),
+                    (earnings_content, "盈利质量"),
+                    (driver_content, "利润与现金流驱动"),
+                    (direct_financial, "专项财务分析"),
+                )
+                if present
+            ],
+            sufficient=direct_financial or financial_source_count >= 2,
+            partial=financial_source_count == 1,
+            attempted=bool(fundamentals or earnings or drivers),
+            missing_items=["需要同类报告期财务、利润质量和现金流证据交叉核验。"],
+            as_of=self._collect_dates(
+                fundamentals,
+                earnings,
+                drivers,
+                keys=("report_period", "report_date", "notice_date", "fetched_at"),
+            ),
+        )
+
+        peers = packet("peer_comparison")
+        peer_operating = (
+            peers.get("operating_comparison")
+            if isinstance(peers.get("operating_comparison"), dict)
+            else {}
+        )
+        expectations = packet("analyst_expectations")
+        peer_content = has_any(peers, ("metrics", "peers")) or has_any(
+            peer_operating, ("metrics", "peers", "coverage")
+        )
+        expectation_industry = bool(
+            expectations.get("industry")
+            or expectations.get("industry_index")
+            or expectations.get("latest_reports")
+        )
+        direct_expectations = intent == "analyst_expectations" and self._packet_available(
+            evidence
+        )
+        industry = dimension(
+            "industry_relative",
+            sources=[
+                label
+                for present, label in (
+                    (peer_content, "固定同行比较"),
+                    (expectation_industry, "行业与分析师覆盖"),
+                    (direct_expectations, "分析师预期专项"),
+                )
+                if present
+            ],
+            sufficient=peer_content,
+            partial=expectation_industry or direct_expectations,
+            attempted=bool(peers or expectations),
+            missing_items=["需要固定同行或同日行业相对表现证据。"],
+            as_of=self._collect_dates(
+                peers,
+                expectations,
+                keys=("report_period", "market_timestamp", "fetched_at"),
+            ),
+        )
+
+        valuation_packet = (
+            fundamentals.get("valuation")
+            if isinstance(fundamentals.get("valuation"), dict)
+            else {}
+        )
+        valuation_content = has_any(
+            valuation_packet,
+            ("price", "pe_ttm", "pb", "market_cap", "market_timestamp"),
+        )
+        peer_valuation_content = has_any(peers, ("metrics", "peers"))
+        valuation = dimension(
+            "valuation",
+            sources=[
+                label
+                for present, label in (
+                    (valuation_content, "当前估值截面"),
+                    (peer_valuation_content, "固定同行估值"),
+                )
+                if present
+            ],
+            sufficient=valuation_content and peer_valuation_content,
+            partial=valuation_content or peer_valuation_content,
+            attempted=bool(valuation_packet or peers),
+            missing_items=["需要当前估值与固定同行一致口径比较。"],
+            as_of=self._collect_dates(
+                valuation_packet,
+                peers,
+                keys=("market_timestamp", "report_period", "fetched_at"),
+            ),
+        )
+
+        metrics = packet("metrics")
+        technical_fields = (
+            "return_20d_pct",
+            "ma20",
+            "rsi_14",
+            "macd_histogram",
+            "atr_14_pct",
+            "volume_ratio_5_20",
+            "volatility_20d_annualized_pct",
+            "max_drawdown_60d_pct",
+        )
+        technical_count = sum(metrics.get(key) is not None for key in technical_fields)
+        has_price = metrics.get("latest_close") is not None
+        technical = dimension(
+            "technical_state",
+            sources=["完整日线与技术指标"] if has_price else [],
+            sufficient=has_price and technical_count >= 2,
+            partial=has_price,
+            attempted=bool(metrics),
+            missing_items=["需要最近完整日线及至少两项技术结构指标。"],
+            as_of=[
+                str(value)
+                for value in (
+                    packet("provenance").get("market_timestamp"),
+                    metrics.get("market_timestamp"),
+                )
+                if value
+            ],
+        )
+
+        timeline = packet("event_timeline")
+        information = packet("a_share_information")
+        global_information = packet("global_information")
+        debate = packet("evidence_debate")
+        direct_event = intent == "event_timeline" and self._packet_available(evidence)
+        event_content = direct_event or has_any(timeline, ("events", "sources")) or any(
+            information.get(key) for key in ("announcements", "news", "social_posts")
+        ) or bool(global_information.get("news"))
+        debate_content = self._counterevidence_sufficient(evidence)
+        risk = dimension(
+            "risk_events",
+            sources=[
+                label
+                for present, label in (
+                    (event_content, "公告、新闻与事件"),
+                    (debate_content, "反方证据与风险委员会"),
+                )
+                if present
+            ],
+            sufficient=event_content,
+            partial=debate_content,
+            attempted=bool(timeline or information or global_information or debate),
+            missing_items=["需要事件证据与反方风险证据同时覆盖。"],
+            as_of=self._collect_dates(
+                timeline,
+                information,
+                global_information,
+                keys=("market_timestamp", "published_at", "fetched_at", "generated_at"),
+            ),
+        )
+
+        return dict((company, financial, industry, valuation, technical, risk))
+
+    @staticmethod
+    def _collect_dates(
+        *packets: dict[str, Any], keys: tuple[str, ...]
+    ) -> list[str]:
+        dates: list[str] = []
+        for packet in packets:
+            for key in keys:
+                value = packet.get(key)
+                if value not in (None, "", [], {}):
+                    dates.append(str(value))
+        return dates
+
+    @staticmethod
+    def _counterevidence_sufficient(evidence: dict[str, Any]) -> bool:
+        debate = evidence.get("evidence_debate") or {}
+        if not isinstance(debate, dict):
+            return False
+        return bool(
+            debate.get("bear_case")
+            or debate.get("risk_committee")
+            or debate.get("manager_view")
+        )
+
+    @staticmethod
+    def _invalidation_sufficient(evidence: dict[str, Any]) -> bool:
+        outlook = evidence.get("conditional_outlook") or {}
+        frame = evidence.get("research_frame") or {}
+        return bool(
+            (isinstance(outlook, dict) and (
+                outlook.get("scenarios")
+                or outlook.get("invalidation")
+                or outlook.get("conditions")
+                or outlook.get("label")
+            ))
+            and (
+                (isinstance(frame, dict) and frame.get("missing_information") is not None)
+                or DeepStockResearchService._counterevidence_sufficient(evidence)
+            )
+        )
+
+    @staticmethod
+    def _packet_available(evidence: dict[str, Any]) -> bool:
+        return bool(evidence) and evidence.get("status") not in {
+            "unavailable",
+            "missing",
+            "failed",
+        }
+
+    @staticmethod
+    def _present_modules(
+        evidence: dict[str, Any], keys: tuple[str, ...]
+    ) -> list[str]:
+        present = []
+        for key in keys:
+            value = evidence.get(key)
+            if value in (None, {}, [], ""):
+                continue
+            if isinstance(value, dict) and value.get("status") in {
+                "unavailable",
+                "missing",
+                "failed",
+            }:
+                continue
+            present.append(key)
+        return present
+
+    def _normalize_stage_statuses(
+        self, stages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        normalized = []
+        active_assigned = False
+        definitions = {item["key"]: item for item in self.STAGES}
+        for index, stage in enumerate(stages, start=1):
+            key = str(stage.get("key"))
+            definition = definitions.get(key, {})
+            item = {
+                **definition,
+                **stage,
+                "index": index,
+            }
+            if item.get("status") != "completed":
+                item["status"] = "in_progress" if not active_assigned else "pending"
+                active_assigned = True
+            normalized.append(item)
+        return normalized
+
+    def _public_session(
+        self,
+        session: dict[str, Any] | None,
+        *,
+        evidence_override: dict[str, Any] | None = None,
+        coverage_override: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        if session is None:
+            raise ValueError("个股研究会话不存在")
+        stages = list(session.get("stages") or [])
+        completed = sum(item.get("status") == "completed" for item in stages)
+        current = next(
+            (item for item in stages if item.get("status") == "in_progress"), None
+        )
+        report = self.database.latest_research_report(str(session["symbol"]))
+        restored_coverage = self._coverage_from_modules(
+            dict(session.get("evidence_modules") or {})
+        )
+        if coverage_override is not None:
+            coverage = coverage_override
+        elif restored_coverage:
+            coverage = restored_coverage
+        else:
+            coverage_evidence = (
+                dict(evidence_override)
+                if evidence_override is not None
+                else self._session_coverage_evidence(session, report)
+            )
+            coverage = self._coverage_dimensions(coverage_evidence)
+        coverage_counts = {
+            status: sum(
+                item["coverage_status"] == status for item in coverage.values()
+            )
+            for status in ("sufficient", "partial", "insufficient", "unavailable")
+        }
+        refresh_attention = sum(
+            bool(item.get("last_observed_status"))
+            and item.get("last_observed_status") != item.get("coverage_status")
+            for item in coverage.values()
+        )
+        coverage_tasks = self._coverage_tasks(coverage)
+        coverage_history = list(
+            (session.get("evidence_modules") or {}).get("_coverage_history") or []
+        )
+        conversation = self.database.get_conversation(
+            str(session["user_id"]), str(session["conversation_id"])
+        )
+        return {
+            **session,
+            "progress": {
+                "completed": completed,
+                "total": len(stages),
+                "percent": round(completed / len(stages) * 100) if stages else 0,
+            },
+            "current_stage": current,
+            "conversation": {
+                "id": session["conversation_id"],
+                "title": (conversation or {}).get("title"),
+                "message_count": (conversation or {}).get("message_count", 0),
+            },
+            "latest_report": self._public_report(report),
+            "evidence_coverage": {
+                "dimensions": list(coverage.values()),
+                "summary": {
+                    **coverage_counts,
+                    "total": len(coverage),
+                    "refresh_attention": refresh_attention,
+                },
+                "boundary": (
+                    "六维覆盖只表示当前已取得证据的完整程度；"
+                    "不构成公司评分、投资评级或买卖信号。"
+                ),
+            },
+            "coverage_tasks": coverage_tasks,
+            "coverage_history": coverage_history[-20:],
+        }
+
+    def _coverage_from_modules(
+        self, evidence_modules: dict[str, Any]
+    ) -> dict[str, dict[str, Any]]:
+        snapshot = evidence_modules.get("_coverage_snapshot") or {}
+        dimensions = snapshot.get("dimensions") if isinstance(snapshot, dict) else []
+        if not isinstance(dimensions, list):
+            return {}
+        restored = {
+            str(item.get("key")): dict(item)
+            for item in dimensions
+            if isinstance(item, dict) and item.get("key")
+        }
+        return {
+            key: restored[key]
+            for key, _ in self.COVERAGE_DIMENSIONS
+            if key in restored
+        }
+
+    def _merge_coverage_snapshot(
+        self,
+        *,
+        previous: dict[str, dict[str, Any]],
+        current: dict[str, dict[str, Any]],
+        run_id: str,
+        intent: str,
+        observed_at: str,
+    ) -> dict[str, dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        for key, label in self.COVERAGE_DIMENSIONS:
+            candidate = dict(
+                current.get(key)
+                or {
+                    "key": key,
+                    "label": label,
+                    "coverage_status": "unavailable",
+                    "sources": [],
+                    "missing_items": ["尚未取得可核验证据。"],
+                    "as_of": [],
+                }
+            )
+            prior = dict(previous.get(key) or {})
+            current_status = str(candidate.get("coverage_status") or "unavailable")
+            prior_status = str(prior.get("coverage_status") or "unavailable")
+            if (
+                prior
+                and self.COVERAGE_STATUS_RANK.get(prior_status, 0)
+                > self.COVERAGE_STATUS_RANK.get(current_status, 0)
+            ):
+                item = prior
+                item["last_observed_status"] = current_status
+                item["last_observed_at"] = observed_at
+                item["last_observed_run_id"] = run_id or None
+                item["last_observed_intent"] = intent
+            else:
+                item = candidate
+                item.update(
+                    {
+                        "updated_at": observed_at,
+                        "run_id": run_id or None,
+                        "intent": intent,
+                        "last_observed_status": current_status,
+                        "last_observed_at": observed_at,
+                        "last_observed_run_id": run_id or None,
+                        "last_observed_intent": intent,
+                    }
+                )
+            merged[key] = item
+        return merged
+
+    def _append_coverage_history(
+        self,
+        existing: Any,
+        coverage: dict[str, dict[str, Any]],
+        *,
+        run_id: str,
+        intent: str,
+        observed_at: str,
+    ) -> list[dict[str, Any]]:
+        history = [dict(item) for item in (existing or []) if isinstance(item, dict)]
+        previous_statuses = dict((history[-1] or {}).get("statuses") or {}) if history else {}
+        statuses = {
+            key: item.get("coverage_status") for key, item in coverage.items()
+        }
+        changes = [
+            {
+                "key": key,
+                "label": dict(self.COVERAGE_DIMENSIONS)[key],
+                "from": previous_statuses.get(key),
+                "to": status,
+            }
+            for key, status in statuses.items()
+            if previous_statuses.get(key) != status
+        ]
+        history.append(
+            {
+                "observed_at": observed_at,
+                "run_id": run_id or None,
+                "intent": intent,
+                "statuses": statuses,
+                "changes": changes,
+            }
+        )
+        return history[-20:]
+
+    def _coverage_tasks(
+        self, coverage: dict[str, dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        tasks: list[dict[str, Any]] = []
+        for key, label in self.COVERAGE_DIMENSIONS:
+            item = coverage.get(key) or {}
+            status = str(item.get("coverage_status") or "unavailable")
+            observed_status = str(item.get("last_observed_status") or status)
+            if status == "sufficient" and observed_status == status:
+                continue
+            retained = status == "sufficient" and observed_status != status
+            missing = item.get("missing_items") or []
+            next_step = (
+                f"已有历史证据被保留，但最近一次刷新仅达到“{observed_status}”；需要重新核验数据时间和来源。"
+                if retained
+                else str(missing[0])
+                if missing
+                else "继续补充该维度的可核验证据。"
+            )
+            tasks.append(
+                {
+                    "id": f"coverage:{key}",
+                    "key": key,
+                    "label": label,
+                    "title": f"补齐{label}证据" if not retained else f"重新确认{label}证据",
+                    "status": "pending_data" if status in {"unavailable", "insufficient"} or retained else "watching",
+                    "coverage_status": status,
+                    "last_observed_status": observed_status,
+                    "next_step": next_step,
+                    "updated_at": item.get("updated_at") or item.get("last_observed_at"),
+                }
+            )
+        return tasks
+
+    def _session_coverage_evidence(
+        self,
+        session: dict[str, Any],
+        report: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        evidence = dict((report or {}).get("evidence") or {})
+        latest_run_id = session.get("latest_run_id")
+        if not latest_run_id:
+            return evidence
+        run = self.database.get_run(str(latest_run_id), str(session["user_id"]))
+        if not run or run.get("status") != "completed":
+            return evidence
+        run_evidence = run.get("evidence") or {}
+        if not isinstance(run_evidence, dict):
+            return evidence
+        intent = str(run.get("intent") or "")
+        if intent == "stock_research":
+            return dict(run_evidence)
+        specialized_keys = {
+            "business_structure": "business_structure",
+            "earnings_quality": "earnings_quality",
+            "financial_drivers": "financial_drivers",
+            "analyst_expectations": "analyst_expectations",
+            "event_timeline": "event_timeline",
+        }
+        target_key = specialized_keys.get(intent)
+        if target_key:
+            evidence[target_key] = dict(run_evidence)
+        return evidence
+
+    @staticmethod
+    def _public_report(report: dict[str, Any] | None) -> dict[str, Any] | None:
+        if report is None:
+            return None
+        return {
+            "id": report.get("id"),
+            "symbol": report.get("symbol"),
+            "name": report.get("name"),
+            "title": report.get("title"),
+            "summary": report.get("summary"),
+            "body": report.get("body"),
+            "status": report.get("status"),
+            "generated_at": report.get("generated_at"),
+            "market_timestamp": report.get("market_timestamp"),
+        }
+
+    def _display_name(self, user_id: str, symbol: str) -> str:
+        watchlist = self.database.get_watchlist_item(user_id, symbol) or {}
+        report = self.database.latest_research_report(symbol) or {}
+        return str(
+            watchlist.get("name")
+            or RESEARCH_TARGETS.get(symbol, {}).get("name")
+            or report.get("name")
+            or symbol
+        )
+
+    def _next_question(
+        self, stages: list[dict[str, Any]], name: str | None = None
+    ) -> str:
+        current = next(
+            (item for item in stages if item.get("status") != "completed"), None
+        )
+        if current:
+            question = str(
+                current.get("question") or "请继续补充当前阶段的研究证据。"
+            )
+            return f"关于{name}：{question}" if name else question
+        return "七个研究阶段已经完成。后续对话将继续复核新证据与原逻辑是否变化。"
+
+    def _report_unresolved(self, report: dict[str, Any] | None) -> list[str]:
+        return self._evidence_unresolved((report or {}).get("evidence") or {})
+
+    def _evidence_unresolved(
+        self,
+        evidence: dict[str, Any],
+        *,
+        include_coverage: bool = True,
+    ) -> list[str]:
+        items = [
+            str(item)
+            for item in (
+                (evidence.get("research_frame") or {}).get("missing_information")
+                or []
+            )
+            if item
+        ]
+        for module in (evidence.get("analysis_board") or {}).get("modules") or []:
+            if module.get("status") not in {"ready", "available", "complete"}:
+                label = module.get("label")
+                if label:
+                    items.append(f"{label}仍需补充可核验证据。")
+        if include_coverage:
+            for dimension in self._coverage_dimensions(evidence).values():
+                if dimension["coverage_status"] == "sufficient":
+                    continue
+                missing = dimension.get("missing_items") or []
+                if missing:
+                    items.append(f"{dimension['label']}：{missing[0]}")
+        return self._dedupe(items)
+
+    @staticmethod
+    def _dedupe(items: list[Any]) -> list[str]:
+        result = []
+        seen = set()
+        for item in items:
+            text = str(item).strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+        return result
