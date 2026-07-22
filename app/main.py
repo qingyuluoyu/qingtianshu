@@ -83,6 +83,7 @@ from app.services.observation_tasks import (
 from app.services.stock_workspace import StockWorkspaceService
 from app.services.tushare_snapshots import TushareSnapshotService
 from app.services.li_zong_strategy_service import LiZongStrategyService
+from app.services.today_overview import TodayOverviewService
 from app.services.calibration import OutlookCalibrationService
 from app.services.fundamentals import FundamentalsService
 from app.services.earnings_quality import EarningsQualityService
@@ -837,7 +838,11 @@ def create_app(
         snapshot_ttl_seconds=settings.market_cache_seconds,
     )
     tushare_snapshots = TushareSnapshotService(database, resolved_tushare_client)
-    li_zong_strategy = LiZongStrategyService(database, tushare_snapshots)
+    li_zong_strategy = LiZongStrategyService(
+        database,
+        tushare_snapshots,
+        fundamentals_provider=a_share_fundamentals_provider,
+    )
     stock_workspace = StockWorkspaceService(
         database,
         deep_stock,
@@ -845,6 +850,14 @@ def create_app(
         research_actions,
         observation_tasks=observation_tasks,
         li_zong_strategy=li_zong_strategy,
+    )
+    today_overview = TodayOverviewService(
+        database,
+        analysis,
+        observation_tasks,
+        research_actions,
+        research_tracking,
+        structured_ai,
     )
     event_broker = EventBroker()
     agent_streams = AgentStreamBroker()
@@ -928,6 +941,7 @@ def create_app(
     app.state.stock_screener = stock_screener
     app.state.tushare_snapshots = tushare_snapshots
     app.state.li_zong_strategy = li_zong_strategy
+    app.state.today_overview = today_overview
     app.state.event_broker = event_broker
     app.state.agent_streams = agent_streams
     app.state.background = background
@@ -2087,6 +2101,12 @@ def create_app(
     @app.get("/markets/breadth")
     def market_breadth() -> dict[str, Any]:
         return analysis.market_breadth()
+
+    @app.get("/api/v1/today/overview", include_in_schema=False)
+    @app.get("/v1/today/overview")
+    def get_today_overview(request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        return today_overview.get_overview(user["id"])
 
     @app.get("/a-share/{symbol}/information")
     def get_a_share_information(symbol: str) -> dict[str, Any]:

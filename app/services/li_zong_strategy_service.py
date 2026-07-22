@@ -65,16 +65,24 @@ INSTITUTION_MARKERS = (
 
 
 class LiZongStrategyService:
-    """Run and persist Li Zong v1 against published Tushare snapshots only."""
+    """Run Li Zong v1 on published snapshots with traceable data fallbacks."""
+
+    ROE_FALLBACK_VERSION = "eastmoney_reported_roe_v1"
 
     SUBSCRIPTION_BOUNDARY = (
         "用户策略订阅、通知偏好和提醒渠道暂未在本服务持久化；"
         "当前只发布公共候选与触发事实，后续由独立用户订阅层关联。"
     )
 
-    def __init__(self, database: Database, snapshot_service: Any):
+    def __init__(
+        self,
+        database: Database,
+        snapshot_service: Any,
+        fundamentals_provider: Any | None = None,
+    ):
         self.database = database
         self.snapshot_service = snapshot_service
+        self.fundamentals_provider = fundamentals_provider
         self._ensure_definition()
         self.database.repair_unstable_strategy_prefilter_runs(STRATEGY_ID)
 
@@ -134,10 +142,26 @@ class LiZongStrategyService:
                 }
                 packet_errors[symbol] = type(exc).__name__
 
-        data_versions = {
-            symbol: self._packet_data_version(symbol, packet)
-            for symbol, packet in packets.items()
-        }
+        supplemental_roe: dict[str, list[dict[str, Any]]] = {}
+        roe_fallback_attempted: dict[str, bool] = {}
+        for symbol, packet in packets.items():
+            rows, attempted = self._supplemental_roe_rows(symbol, packet, params)
+            supplemental_roe[symbol] = rows
+            roe_fallback_attempted[symbol] = attempted
+
+        data_versions: dict[str, str] = {}
+        for symbol, packet in packets.items():
+            packet_version = self._packet_data_version(symbol, packet)
+            if roe_fallback_attempted[symbol]:
+                data_versions[symbol] = self._fingerprint(
+                    {
+                        "packet_data_version": packet_version,
+                        "roe_fallback_version": self.ROE_FALLBACK_VERSION,
+                        "supplemental_roe": supplemental_roe[symbol],
+                    }
+                )
+            else:
+                data_versions[symbol] = packet_version
         as_of_dates = [
             value
             for value in (self._packet_as_of(packet) for packet in packets.values())
@@ -178,7 +202,12 @@ class LiZongStrategyService:
             stock_basic = self._packet_stock_basic(packet)
             try:
                 evaluation = deterministic_li_zong_v1(
-                    self._build_input(symbol, packet), parameters=params
+                    self._build_input(
+                        symbol,
+                        packet,
+                        supplemental_roe_rows=supplemental_roe[symbol],
+                    ),
+                    parameters=params,
                 )
                 evaluation = self._enforce_incomplete_boundary(evaluation, packet)
             except Exception as exc:
@@ -191,6 +220,9 @@ class LiZongStrategyService:
                     evaluation,
                     "策略输入转换失败，已按 data_incomplete 保存，未进入候选或触发池。",
                 )
+            if roe_fallback_attempted[symbol]:
+                evaluation["roe_fallback_version"] = self.ROE_FALLBACK_VERSION
+                evaluation["roe_fallback_rows"] = len(supplemental_roe[symbol])
             evaluation["evaluation_depth"] = "full_rules"
             evaluation["stock_basic"] = stock_basic
 
@@ -356,6 +388,25 @@ class LiZongStrategyService:
                 or {}
             )
             != "full_rules"
+            or (
+                self.fundamentals_provider is not None
+                and self._roe_rule_incomplete(
+                    (
+                        previous_states.get(str(item.get("symbol"))) or {}
+                    ).get("result")
+                    or {}
+                )
+                and str(
+                    (
+                        (
+                            previous_states.get(str(item.get("symbol"))) or {}
+                        ).get("result")
+                        or {}
+                    ).get("roe_fallback_version")
+                    or ""
+                )
+                != self.ROE_FALLBACK_VERSION
+            )
         ]
         pending_eligible.sort(
             key=lambda item: (
@@ -1121,7 +1172,13 @@ class LiZongStrategyService:
                 "parameter_version 已存在且参数不同；请创建新的参数版本，不能覆盖历史口径"
             )
 
-    def _build_input(self, symbol: str, packet: dict[str, Any]) -> dict[str, Any]:
+    def _build_input(
+        self,
+        symbol: str,
+        packet: dict[str, Any],
+        *,
+        supplemental_roe_rows: Sequence[Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         snapshot = packet.get("snapshot") or {}
         datasets = snapshot.get("datasets") or {}
         daily = self._dataset_frame(datasets, "daily")
@@ -1177,6 +1234,11 @@ class LiZongStrategyService:
         roe = self._dataset_frame(datasets, "fina_indicator")
         if not roe.empty:
             roe["source"] = self._dataset_source(datasets, "fina_indicator")
+        if supplemental_roe_rows:
+            roe = pd.concat(
+                [roe, pd.DataFrame(list(supplemental_roe_rows))],
+                ignore_index=True,
+            )
         daily_basic = self._dataset_frame(datasets, "daily_basic")
         if not daily_basic.empty:
             daily_basic["source"] = self._dataset_source(datasets, "daily_basic")
@@ -1189,6 +1251,118 @@ class LiZongStrategyService:
             "shareholders": shareholders,
             "daily_basic": daily_basic,
         }
+
+    def _supplemental_roe_rows(
+        self,
+        symbol: str,
+        packet: dict[str, Any],
+        parameters: LiZongParameters,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        if self.fundamentals_provider is None:
+            return [], False
+        snapshot = packet.get("snapshot") or {}
+        datasets = snapshot.get("datasets") or {}
+        direct = self._dataset_frame(datasets, "fina_indicator")
+        missing_periods = self._missing_roe_periods(
+            direct,
+            as_of_date=str(snapshot.get("as_of_date") or self._today()),
+            required_years=parameters.required_annual_roe_years,
+        )
+        if not missing_periods:
+            return [], False
+        try:
+            payload = self.fundamentals_provider.fetch_financial_periods(
+                symbol, limit=20
+            )
+        except Exception:
+            return [], True
+        rows: list[dict[str, Any]] = []
+        as_of = self._parse_date(snapshot.get("as_of_date"))
+        for period in payload.get("periods") or []:
+            report_date = self._parse_date(period.get("report_date"))
+            notice_date = self._parse_date(period.get("notice_date"))
+            roe = pd.to_numeric(period.get("roe_weighted_pct"), errors="coerce")
+            if (
+                report_date is None
+                or report_date.isoformat() not in missing_periods
+                or notice_date is None
+                or (as_of is not None and notice_date > as_of)
+                or pd.isna(roe)
+            ):
+                continue
+            rows.append(
+                {
+                    "ts_code": symbol,
+                    "ann_date": notice_date.isoformat(),
+                    "end_date": report_date.isoformat(),
+                    "roe": float(roe),
+                    "roe_waa": float(roe),
+                    "source": period.get("source")
+                    or payload.get("source")
+                    or "Eastmoney F10 Main Financial Data",
+                    "source_url": period.get("source_url"),
+                    "fallback_reason": "Tushare fina_indicator 缺少该年度ROE",
+                }
+            )
+        rows.sort(key=lambda item: str(item.get("end_date") or ""), reverse=True)
+        return rows, True
+
+    @classmethod
+    def _missing_roe_periods(
+        cls,
+        frame: pd.DataFrame,
+        *,
+        as_of_date: str,
+        required_years: int,
+    ) -> set[str]:
+        if frame.empty or required_years <= 0:
+            return set()
+        period_column = next(
+            (column for column in ("end_date", "report_period") if column in frame),
+            None,
+        )
+        announcement_column = next(
+            (column for column in ("ann_date", "announcement_date") if column in frame),
+            None,
+        )
+        roe_column = next(
+            (column for column in ("roe", "roe_pct") if column in frame), None
+        )
+        if not period_column or not announcement_column or not roe_column:
+            return set()
+        as_of = cls._parse_date(as_of_date)
+        annual: dict[str, float] = {}
+        annual_years: set[int] = set()
+        for _, row in frame.iterrows():
+            period = cls._parse_date(row.get(period_column))
+            announced = cls._parse_date(row.get(announcement_column))
+            if (
+                period is None
+                or (period.month, period.day) != (12, 31)
+                or announced is None
+                or (as_of is not None and announced > as_of)
+            ):
+                continue
+            annual_years.add(period.year)
+            number = pd.to_numeric(row.get(roe_column), errors="coerce")
+            if pd.notna(number):
+                annual[period.isoformat()] = float(number)
+        if not annual_years:
+            return set()
+        latest_year = max(annual_years)
+        required = {
+            f"{year}-12-31"
+            for year in range(latest_year, latest_year - required_years, -1)
+        }
+        return required - set(annual)
+
+    @staticmethod
+    def _roe_rule_incomplete(result: Mapping[str, Any]) -> bool:
+        return any(
+            rule.get("rule_id") == "LZ-F-02"
+            and rule.get("status") == "data_incomplete"
+            for rule in result.get("rule_results") or []
+        )
 
     def _enforce_incomplete_boundary(
         self, evaluation: dict[str, Any], packet: dict[str, Any]

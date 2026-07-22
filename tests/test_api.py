@@ -594,6 +594,15 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'aria-label="个股研究"' in page.text
     assert 'aria-label="复盘中心"' in page.text
     assert 'aria-label="个人中心"' in page.text
+    assert 'id="todayOverviewGrid"' in page.text
+    assert 'api("/v1/today/overview")' in page.text
+    assert "function renderTodayOverview(data)" in page.text
+    assert '$("todayOverviewGrid").hidden = !insightsVisible' in page.text
+    open_stock = page.text[page.text.index("async function openDeepStockSymbol(symbol)") :]
+    assert "state.pendingDeepStockSymbol = symbol" in open_stock
+    assert open_stock.index("select.value = symbol") < open_stock.index(
+        'activateWorkspace("deep_stock")'
+    )
     assert page.text.count('class="nav-item') == 6
     assert page.text.index('data-page="watchlist"') < page.text.index(
         'data-page="deep_stock"'
@@ -746,6 +755,29 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert send_chat.index('$("sendButton").disabled = true') < send_chat.index(
         "privateStream = connectPrivateAgentStream(requestId, pending)"
     )
+
+
+def test_today_overview_requires_session_and_returns_independent_components(client):
+    assert client.get("/v1/today/overview").status_code == 401
+    create_user(client, "Today Alice")
+
+    response = client.get("/v1/today/overview")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["contract_version"] == "today_overview_v1"
+    assert payload["session"]["key"] in {
+        "pre_market",
+        "intraday",
+        "post_market",
+        "non_trading_day",
+        "unknown",
+    }
+    assert len(payload["market"]["indices"]) == 4
+    assert payload["priority_items"]["total_visible"] <= 5
+    assert payload["personalized"]["coverage"]["event_whitelist_complete"] is False
+    assert payload["coverage"]["status"] in {"ready", "partial"}
+    assert "不构成买卖" in payload["boundary"]
 
 
 def test_conversation_quality_endpoint_is_user_isolated(app):

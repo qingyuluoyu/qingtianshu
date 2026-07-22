@@ -289,6 +289,17 @@ def _roe_rule(
             "report_period": report_period,
             "roe_pct": _json_number(row.get("_roe")),
             "announcement_date": row.get("_ann") if pd.notna(row.get("_ann")) else None,
+            "source": row.get("source") if pd.notna(row.get("source")) else None,
+            "source_url": (
+                row.get("source_url")
+                if pd.notna(row.get("source_url"))
+                else None
+            ),
+            "fallback_reason": (
+                row.get("fallback_reason")
+                if pd.notna(row.get("fallback_reason"))
+                else None
+            ),
         }
         for report_period, row in selected.iterrows()
     ]

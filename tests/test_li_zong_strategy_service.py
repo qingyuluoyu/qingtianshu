@@ -675,6 +675,67 @@ def test_listing_age_does_not_assume_pre_listing_roe_is_unavailable(app):
     assert candidate["result"]["evaluation_depth"] == "full_rules"
 
 
+def test_missing_tushare_annual_roe_uses_reported_eastmoney_fallback(app):
+    packet = _snapshot_packet(symbol="300033.SZ", stock_name="同花顺")
+    packet["snapshot"]["datasets"]["fina_indicator"]["rows"] = [
+        row
+        for row in packet["snapshot"]["datasets"]["fina_indicator"]["rows"]
+        if row["end_date"] != "20221231"
+    ]
+
+    class FundamentalsStub:
+        def __init__(self):
+            self.calls = 0
+
+        def fetch_financial_periods(self, symbol: str, limit: int = 8):
+            self.calls += 1
+            assert symbol == "300033.SZ"
+            assert limit == 20
+            return {
+                "source": "Eastmoney F10 Main Financial Data",
+                "periods": [
+                    {
+                        "report_date": "2022-12-31",
+                        "notice_date": "2023-02-28",
+                        "roe_weighted_pct": 25.55,
+                        "source": "Eastmoney F10 Main Financial Data",
+                        "source_url": "https://example.test/eastmoney-f10",
+                    },
+                    {
+                        "report_date": "2023-12-31",
+                        "notice_date": "2024-02-27",
+                        "roe_weighted_pct": 999.0,
+                        "source": "Eastmoney F10 Main Financial Data",
+                    },
+                ],
+            }
+
+    provider = FundamentalsStub()
+    service = LiZongStrategyService(
+        app.state.database,
+        SnapshotStub({"300033.SZ": packet}),
+        fundamentals_provider=provider,
+    )
+
+    result = service.run_symbols(["300033.SZ"])
+
+    assert provider.calls == 1
+    candidate = result["items"][0]
+    rule = next(
+        item for item in candidate["rule_results"] if item["rule_id"] == "LZ-F-02"
+    )
+    assert rule["status"] == "passed"
+    assert "Eastmoney F10 Main Financial Data" in rule["source"]
+    actual = {item["report_period"]: item for item in rule["actual_value"]}
+    assert actual["2022-12-31"]["roe_pct"] == 25.55
+    assert actual["2022-12-31"]["source"] == "Eastmoney F10 Main Financial Data"
+    assert actual["2022-12-31"]["source_url"] == "https://example.test/eastmoney-f10"
+    assert actual["2022-12-31"]["fallback_reason"] == "Tushare fina_indicator 缺少该年度ROE"
+    assert actual["2023-12-31"]["roe_pct"] == 12.0
+    assert candidate["result"]["roe_fallback_version"] == service.ROE_FALLBACK_VERSION
+    assert candidate["result"]["roe_fallback_rows"] == 1
+
+
 def test_universe_batch_prefers_prior_complete_data_before_larger_market_cap(app):
     items = [
         {
