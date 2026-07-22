@@ -150,14 +150,17 @@
     .deep-stage-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; }
     .deep-stage { min-width: 0; padding: 13px; border: 1px solid rgba(255,255,255,.065); border-radius: 13px; background: rgba(255,255,255,.025); }
     .deep-stage.in_progress { border-color: rgba(112,167,255,.32); background: rgba(112,167,255,.07); }
+    .deep-stage.needs_review { border-color: rgba(244,184,93,.38); background: rgba(244,184,93,.08); }
     .deep-stage.completed { border-color: rgba(85,219,182,.2); background: rgba(85,219,182,.055); }
     .deep-stage-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .deep-stage-index { color: var(--green); font-size: 10px; font-weight: 760; }
     .deep-stage-state { padding: 3px 6px; border-radius: 999px; color: var(--muted); background: rgba(255,255,255,.05); font-size: 8px; }
     .deep-stage.completed .deep-stage-state { color: #bff4e5; background: rgba(85,219,182,.1); }
     .deep-stage.in_progress .deep-stage-state { color: #cfe0ff; background: rgba(112,167,255,.11); }
+    .deep-stage.needs_review .deep-stage-state { color: #ffe0a6; background: rgba(244,184,93,.14); }
     .deep-stage-title { margin-top: 8px; font-size: 12px; font-weight: 720; }
     .deep-stage-copy { margin-top: 5px; color: var(--muted); font-size: 10px; line-height: 1.65; }
+    .deep-stage-review { margin-top: 7px; color: #c38a34; font-size: 9px; line-height: 1.55; }
     .deep-stage-action { display: block; margin-top: 9px; color: #4d7fd7; font-size: 9px; }
     .deep-stock-card { padding: 15px; border: 1px solid rgba(255,255,255,.065); border-radius: 14px; background: rgba(255,255,255,.025); }
     .deep-stock-card-title { font-size: 12px; font-weight: 720; }
@@ -852,6 +855,7 @@
     .deep-stock-track span { background: linear-gradient(90deg,#3478f6,#62a6ff); }
     .deep-stage.completed { border-color: #bfe3d3; background: #f3fbf7; }
     .deep-stage.in_progress { border-color: #bfd2ff; background: #f3f7ff; }
+    .deep-stage.needs_review { border-color: #f0d39f; background: #fff9ee; }
     .deep-stock-overview { background: #f5f8fc; }
     .deep-overview-shell { gap: 10px; }
     .deep-quote-card { grid-template-columns: minmax(280px,1.2fr) repeat(4,minmax(104px,.42fr)); }
@@ -5417,7 +5421,7 @@
     }
 
     function deepStageStateLabel(status) {
-      return {completed: "已完成", in_progress: "当前阶段", pending: "待研究"}[status] || "待研究";
+      return {completed: "已完成", needs_review: "待复核", in_progress: "当前阶段", pending: "待研究"}[status] || "待研究";
     }
 
     function renderDeepStock(session) {
@@ -5460,8 +5464,10 @@
       const progressValue = document.createElement("div"); progressValue.className = "deep-stock-progress-value"; progressValue.textContent = `研究流程 ${session.progress?.completed || 0}/${session.progress?.total || 7}`;
       const progressMeta = document.createElement("div"); progressMeta.className = "deep-stock-progress-meta";
       progressMeta.textContent = session.current_stage
-        ? `当前：${session.current_stage.label} · 绑定对话已有 ${session.conversation?.message_count || 0} 条消息`
-        : "七个阶段已完成，后续继续复核新增证据";
+        ? `${session.current_stage.status === "needs_review" ? "待复核" : "当前"}：${session.current_stage.label} · 绑定对话已有 ${session.conversation?.message_count || 0} 条消息`
+        : (session.progress?.completed >= session.progress?.total
+          ? "七个阶段已完成，后续继续复核新增证据"
+          : `仍有 ${(session.progress?.total || 7) - (session.progress?.completed || 0)} 个阶段待研究或复核`);
       progressIdentity.append(progressValue, progressMeta);
       const continueButton = document.createElement("button"); continueButton.type = "button"; continueButton.className = "btn primary"; continueButton.textContent = "继续深聊";
       continueButton.addEventListener("click", () => { void continueDeepStockConversation(); });
@@ -5479,6 +5485,9 @@
         head.append(index, status);
         const title = document.createElement("div"); title.className = "deep-stage-title"; title.textContent = item.label;
         const copy = document.createElement("div"); copy.className = "deep-stage-copy"; copy.textContent = item.description;
+        const review = document.createElement("div"); review.className = "deep-stage-review";
+        review.textContent = (item.review_reasons || [])[0] || "";
+        review.hidden = item.status !== "needs_review" || !review.textContent;
         const action = document.createElement("span"); action.className = "deep-stage-action"; action.textContent = "点击进入该阶段对话 →";
         card.tabIndex = 0; card.setAttribute("role", "button"); card.setAttribute("aria-label", `${item.label}：进入该阶段对话`);
         card.addEventListener("click", () => { void continueDeepStockConversation(item.question); });
@@ -5488,7 +5497,7 @@
             void continueDeepStockConversation(item.question);
           }
         });
-        card.append(head, title, copy, action); stages.appendChild(card);
+        card.append(head, title, copy, review, action); stages.appendChild(card);
       }
       main.append(progress, stages);
 
