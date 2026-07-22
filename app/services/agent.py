@@ -11,7 +11,7 @@ from statistics import mean, pstdev
 import subprocess
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 from zoneinfo import ZoneInfo
 
 from app.config import PROJECT_ROOT, Settings
@@ -114,7 +114,9 @@ _PRIVATE_OPERATIONAL_OUTPUT_PATTERNS = (
     ),
     re.compile(
         r"(?:数据源|行情源|主源|备用源|上游|降级|缓存(?:命中|回退)?|"
-        r"接口(?:失败|错误)|请求失败|不可用|内部任务|job_name|ProxyError|WAF|HTTP\s*429)",
+        r"接口(?:失败|错误)|请求失败|不可用|内部任务|job_name|ProxyError|WAF|"
+        r"HTTP\s*[45]\d\d|usage limit|billing cycle|quota|purchase extra usage|"
+        r"upgrade your plan|kimi\.com/code)",
         re.IGNORECASE,
     ),
     re.compile(
@@ -2922,6 +2924,10 @@ data_incomplete 还是 invalidated。not_qualified 不是候选，data_incomplet
 表示此前状态已被新数据推翻。优先列出明确未通过规则、数据不完整规则、反方证据和下一步核验；
 不得因为部分规则通过就把股票写成候选。规则实际值、阈值、证据日期和报告期只能引用证据包。
 
+selection_mode=symbol_comparison 时，必须逐只回答 requested_symbols 中的股票，不能退化为只说明全市场
+覆盖率。每只股票至少说明当前中文状态、明确未通过规则或数据不完整规则及其 limitations；若某只股票
+尚无快照，必须单独说明尚未形成可用结果。全市场覆盖与深度进度作为共同背景只说明一次。
+
 “介入/触发”只表示进入重点关注和人工复核，不是买入、仓位或交易建议。正文不使用 Markdown 表格，
 证券代码使用 internal_symbol，不展示 Tushare 的 .SH 后缀。
 面向普通用户时，状态只使用“已触发、已进入候选、未通过、数据不完整、状态已失效”等中文，
@@ -3127,6 +3133,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 )
                 answer = _normalize_relative_event_dates(answer)
                 answer = self._normalize_li_zong_scope_answer(
+                    answer, prompt_evidence
+                )
+                answer = self._normalize_li_zong_symbol_answer(
                     answer, prompt_evidence
                 )
                 if intent == "stock_research":
@@ -6805,6 +6814,24 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         return f"{summary}\n\n{cleaned}" if cleaned else summary
 
     @staticmethod
+    def _normalize_li_zong_symbol_answer(
+        answer: str, evidence: dict[str, Any]
+    ) -> str:
+        if (
+            ((evidence.get("profile") or {}).get("key") != "li_zong")
+            or evidence.get("selection_mode") != "symbol_comparison"
+        ):
+            return answer
+        preview = AgentService._render_li_zong_preview(evidence)
+        cleaned = str(answer or "").strip()
+        if any(
+            pattern.search(cleaned)
+            for pattern in _PRIVATE_OPERATIONAL_OUTPUT_PATTERNS
+        ):
+            return preview
+        return f"{preview}\n\n{cleaned}" if cleaned else preview
+
+    @staticmethod
     def _render_li_zong_preview(evidence: dict[str, Any]) -> str:
         items = list(evidence.get("items") or [])
         data_meta = evidence.get("data_meta") or {}
@@ -6828,13 +6855,85 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             "该策略只生成研究候选和人工复核触发，不构成买卖建议。"
         )
 
-        if evidence.get("selection_mode") == "symbol_check":
+        if evidence.get("selection_mode") in {"symbol_check", "symbol_comparison"}:
             if not items:
                 return (
                     f"截至 {trade_date}，该股票尚未形成可用的李总策略快照。"
                     f"{coverage_text}尚待深度处理的股票不能推断为通过或不通过。\n\n"
                     f"{boundary}"
                 )
+            if evidence.get("selection_mode") == "symbol_comparison":
+                lines = [coverage_text]
+                missing_symbols = list(evidence.get("missing_requested_symbols") or [])
+                if missing_symbols:
+                    lines.append(
+                        "尚无策略快照：" + "、".join(missing_symbols) + "。"
+                    )
+                for item in items:
+                    status = str(item.get("status") or "data_incomplete")
+                    rules = list(item.get("rule_results") or [])
+                    failed = [
+                        rule for rule in rules if rule.get("status") == "failed"
+                    ]
+                    incomplete = [
+                        rule
+                        for rule in rules
+                        if rule.get("status") == "data_incomplete"
+                    ]
+                    detail_parts: list[str] = []
+                    if failed:
+                        detail_parts.append(
+                            "明确未通过："
+                            + "；".join(
+                                rule_labels.get(
+                                    str(rule.get("rule_id")),
+                                    str(rule.get("rule_id") or ""),
+                                )
+                                for rule in failed[:5]
+                            )
+                        )
+                    if incomplete:
+                        detail_parts.append(
+                            "数据缺口："
+                            + "；".join(
+                                (
+                                    rule_labels.get(
+                                        str(rule.get("rule_id")),
+                                        str(rule.get("rule_id") or ""),
+                                    )
+                                    + (
+                                        "（"
+                                        + "；".join(
+                                            AgentService._li_zong_public_limitations(
+                                                rule.get("limitations") or []
+                                            )
+                                        )
+                                        + "）"
+                                        if rule.get("limitations")
+                                        else ""
+                                    )
+                                )
+                                for rule in incomplete[:6]
+                            )
+                        )
+                    top_limitations = AgentService._li_zong_public_limitations(
+                        item.get("limitations") or []
+                    )
+                    if top_limitations:
+                        detail_parts.append("边界：" + "；".join(top_limitations[:3]))
+                    details = "。".join(detail_parts) or "逐规则证据已完整发布。"
+                    lines.append(
+                        f"{item.get('name')}（{item.get('internal_symbol')}）："
+                        f"{status_labels.get(status, '状态待核验')}。{details}"
+                    )
+                lines.extend(
+                    [
+                        "这些状态只说明确定性规则当前能否判断，不代表未来涨跌。",
+                        boundary,
+                    ]
+                )
+                return "\n\n".join(lines)
+
             item = items[0]
             status = str(item.get("status") or "data_incomplete")
             rules = list(item.get("rule_results") or [])
@@ -6850,7 +6949,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             ]
             lines = [
                 f"{item.get('name')}（{item.get('internal_symbol')}）截至 {item.get('as_of_date') or trade_date} 的李总策略状态："
-                f"{status_labels.get(status, status)}。",
+                f"{status_labels.get(status, '状态待核验')}。",
                 f"候选规则已有 {passed_count}/{len(candidate_rules) or 9} 项通过。{coverage_text}",
             ]
             if failed:
@@ -6897,7 +6996,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         else:
             lines.append(f"当前共有 {len(items)} 只已发布研究候选：")
             for index, item in enumerate(items[:10], start=1):
-                label = status_labels.get(str(item.get("status")), str(item.get("status")))
+                label = status_labels.get(str(item.get("status")), "状态待核验")
                 reasons = "；".join(
                     str(value) for value in (item.get("matched_reasons") or [])[:3]
                 )
@@ -6908,6 +7007,37 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             lines.append("选择其中一只后，应进入股票研究空间核验逐规则证据、反方证据和失效条件。")
         lines.append(boundary)
         return "\n\n".join(lines)
+
+    @staticmethod
+    def _li_zong_public_limitations(values: Iterable[Any]) -> list[str]:
+        replacements = {
+            "data_incomplete": "数据不完整",
+            "not_qualified": "未满足候选规则",
+            "invalidated": "原状态已失效",
+            "qualified": "进入候选池",
+            "triggered": "触发人工复核",
+        }
+        cleaned: list[str] = []
+        for value in values:
+            text = str(value or "").strip()
+            if not text:
+                continue
+            text = text.replace(
+                "关键数据集或规则窗口不完整，服务层强制保持 data_incomplete",
+                "关键数据集或规则窗口不完整，当前暂不能形成完整判断",
+            )
+            for internal, public in replacements.items():
+                text = re.sub(rf"\b{re.escape(internal)}\b", public, text)
+            text = text.rstrip("。；;，, ")
+            if text and text not in cleaned:
+                cleaned.append(text)
+        if any("按数据不完整处理" in text for text in cleaned):
+            cleaned = [
+                text
+                for text in cleaned
+                if not text.startswith("关键数据集或规则窗口不完整")
+            ]
+        return cleaned
 
     @staticmethod
     def _render_preview(evidence: dict[str, Any]) -> str:

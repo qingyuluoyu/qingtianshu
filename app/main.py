@@ -80,6 +80,7 @@ from app.services.observation_tasks import (
     ObservationTaskService,
     ObservationTaskVersionConflict,
 )
+from app.services.stock_assets import StockAssetListService
 from app.services.stock_workspace import StockWorkspaceService
 from app.services.tushare_snapshots import TushareSnapshotService
 from app.services.li_zong_strategy_service import LiZongStrategyService
@@ -851,6 +852,7 @@ def create_app(
         observation_tasks=observation_tasks,
         li_zong_strategy=li_zong_strategy,
     )
+    stock_assets = StockAssetListService(database, stock_workspace)
     today_overview = TodayOverviewService(
         database,
         analysis,
@@ -938,6 +940,7 @@ def create_app(
     app.state.structured_ai = structured_ai
     app.state.observation_tasks = observation_tasks
     app.state.stock_workspace = stock_workspace
+    app.state.stock_assets = stock_assets
     app.state.stock_screener = stock_screener
     app.state.tushare_snapshots = tushare_snapshots
     app.state.li_zong_strategy = li_zong_strategy
@@ -1627,6 +1630,11 @@ def create_app(
             return stock_workspace.get_workspace(user["id"], symbol)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/v1/stock-workspaces")
+    def list_my_stock_workspaces(request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        return stock_assets.list_assets(user["id"])
 
     @app.get("/v1/stocks/{symbol}/workspace/evidence")
     def get_my_stock_workspace_evidence(
@@ -2938,6 +2946,27 @@ def create_app(
                 .get("market_drivers", {})
                 .get("market_key")
             )
+            research_targets: list[dict[str, str]] = []
+            if response_intent == "stock_screen":
+                screen_evidence = evidence_payload or {}
+                requested_targets = list(
+                    screen_evidence.get("requested_symbols") or []
+                )
+                if not requested_targets and screen_evidence.get("requested_symbol"):
+                    requested_targets = [screen_evidence["requested_symbol"]]
+                item_targets = {
+                    str(item.get("internal_symbol") or item.get("symbol")): item
+                    for item in screen_evidence.get("items") or []
+                    if item.get("internal_symbol") or item.get("symbol")
+                }
+                for target_symbol in requested_targets[:10]:
+                    target = item_targets.get(str(target_symbol)) or {}
+                    research_targets.append(
+                        {
+                            "symbol": str(target_symbol),
+                            "name": str(target.get("name") or target_symbol),
+                        }
+                    )
             evidence_sources = _build_visible_evidence_sources(evidence_payload)
             assistant_message = database.add_conversation_message(
                 user_id=user_id,
@@ -2952,6 +2981,7 @@ def create_app(
                     "knowledge_sources": sources,
                     "market_sources": market_sources,
                     "evidence_sources": evidence_sources,
+                    "research_targets": research_targets,
                     "structured_answer": structured_answer,
                     "model_tier": model_tier,
                     "stock_screen_profile": (
@@ -3028,12 +3058,23 @@ def create_app(
         elif li_zong_query and upload is None:
             intent = "stock_screen"
             coverage = li_zong_strategy.coverage_packet()
-            if symbol is not None:
-                try:
-                    candidates = [li_zong_strategy.get_candidate(symbol)]
-                except ValueError:
-                    candidates = []
-                selection_mode = "symbol_check"
+            requested_symbols = li_zong_strategy.resolve_universe_mentions(message)
+            if symbol is not None and symbol not in requested_symbols:
+                requested_symbols.insert(0, symbol)
+            if requested_symbols:
+                candidates = []
+                for requested in requested_symbols:
+                    try:
+                        candidates.append(li_zong_strategy.get_candidate(requested))
+                    except ValueError:
+                        candidates.append(None)
+                selection_mode = (
+                    "symbol_check"
+                    if len(requested_symbols) == 1
+                    else "symbol_comparison"
+                )
+                if len(requested_symbols) == 1:
+                    symbol = requested_symbols[0]
             else:
                 candidates = li_zong_strategy.list_actionable_candidates(limit=50)
                 selection_mode = "candidate_pool"
@@ -3085,11 +3126,32 @@ def create_app(
                 )
             if selection_mode == "symbol_check" and not public_items:
                 warnings.append("该股票尚未形成可用的李总策略快照。")
+            missing_requested_symbols = (
+                [
+                    requested
+                    for requested, candidate in zip(requested_symbols, candidates)
+                    if candidate is None
+                ]
+                if requested_symbols
+                else []
+            )
+            if missing_requested_symbols:
+                warnings.append(
+                    "以下股票尚未形成可用的李总策略快照："
+                    + "、".join(missing_requested_symbols)
+                    + "。"
+                )
+            strategy_counts = coverage.get("counts") or {}
+            actionable_candidate_count = int(
+                strategy_counts.get("qualified") or 0
+            ) + int(strategy_counts.get("triggered") or 0)
             evidence = {
                 "type": "stock_screen",
                 "status": (
                     "ready"
-                    if selection_mode == "symbol_check" and public_items
+                    if selection_mode in {"symbol_check", "symbol_comparison"}
+                    and requested_symbols
+                    and len(public_items) == len(requested_symbols)
                     else "complete"
                     if selection_mode == "candidate_pool"
                     and full_coverage
@@ -3103,7 +3165,13 @@ def create_app(
                     "description": "基本面、股性、量价与盘后触发的确定性规则。",
                 },
                 "selection_mode": selection_mode,
-                "requested_symbol": symbol,
+                "requested_symbol": (
+                    requested_symbols[0]
+                    if len(requested_symbols) == 1
+                    else None
+                ),
+                "requested_symbols": requested_symbols,
+                "missing_requested_symbols": missing_requested_symbols,
                 "items": public_items,
                 "data_meta": {
                     "universe_status": coverage.get("status"),
@@ -3138,7 +3206,7 @@ def create_app(
                         coverage.get("deep_data_incomplete_symbols") or 0
                     ),
                     "deep_check_complete": deep_complete,
-                    "actionable_candidate_count": len(public_items),
+                    "actionable_candidate_count": actionable_candidate_count,
                 },
                 "user_question": message,
                 "warnings": warnings,

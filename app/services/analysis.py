@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 import math
 from statistics import mean, pstdev, stdev
 from typing import Any
@@ -1673,7 +1673,9 @@ class MarketAnalysisService:
             detail = str(failures[-1]) if failures else "没有可用日线"
             raise ProviderError(f"指数日线不可用：{detail}")
 
-        def freshness(history: dict[str, Any]) -> tuple[datetime, bool]:
+        def freshness(
+            history: dict[str, Any],
+        ) -> tuple[date, bool, bool, int, datetime]:
             raw = str(history.get("market_timestamp") or "")
             try:
                 timestamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
@@ -1681,7 +1683,14 @@ class MarketAnalysisService:
                     timestamp = timestamp.replace(tzinfo=timezone.utc)
             except ValueError:
                 timestamp = datetime.min.replace(tzinfo=timezone.utc)
-            return timestamp, not bool(history.get("is_stale"))
+            point_count = len(history.get("points") or [])
+            return (
+                timestamp.date(),
+                not bool(history.get("is_stale")),
+                point_count >= 2,
+                point_count,
+                timestamp,
+            )
 
         return max(histories, key=freshness)
 

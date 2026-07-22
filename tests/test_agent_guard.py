@@ -575,6 +575,111 @@ def test_li_zong_scope_normalization_replaces_legacy_coverage_with_deep_progress
     assert "这个0只只代表当前已深度处理范围" in normalized
 
 
+def test_li_zong_multi_symbol_normalization_hides_provider_quota_error():
+    evidence = {
+        "type": "stock_screen",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "symbol_comparison",
+        "requested_symbols": ["001391.SZ"],
+        "items": [
+            {
+                "name": "国货航",
+                "internal_symbol": "001391.SZ",
+                "status": "data_incomplete",
+                "as_of_date": "2026-07-22",
+                "rule_results": [
+                    {
+                        "rule_id": "LZ-C-01",
+                        "status": "data_incomplete",
+                        "limitations": ["最近一年完整交易日不足。"],
+                    }
+                ],
+                "limitations": ["上市后量价历史预判未达到策略最小窗口。"],
+            }
+        ],
+        "strategy": {
+            "version": {
+                "rules": [
+                    {"rule_id": "LZ-C-01", "label": "近一年至少6次收盘涨停"}
+                ]
+            }
+        },
+        "data_meta": {
+            "latest_completed_trade_date": "2026-07-22",
+            "universe_count": 5530,
+            "evaluated_symbols": 5300,
+            "coverage_ratio": 5300 / 5530,
+            "deep_check_eligible_count": 1169,
+            "deep_processed_symbols": 896,
+            "deep_remaining_symbols": 273,
+            "deep_processing_ratio": 896 / 1169,
+            "history_insufficient_count": 47,
+            "history_unknown_count": 153,
+            "actionable_candidate_count": 0,
+            "deep_check_complete": False,
+        },
+        "boundary": "不构成买卖建议。",
+    }
+    raw_error = (
+        "HTTP 403: You've reached your usage limit for this billing cycle. "
+        "Upgrade your plan: https://www.kimi.com/code/#pricing"
+    )
+
+    normalized = AgentService._normalize_li_zong_symbol_answer(
+        raw_error, evidence
+    )
+
+    assert "国货航（001391.SZ）" in normalized
+    assert "HTTP 403" not in normalized
+    assert "kimi.com" not in normalized
+
+
+def test_li_zong_multi_symbol_preview_hides_internal_status_and_cleans_punctuation():
+    evidence = {
+        "type": "stock_screen",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "symbol_comparison",
+        "requested_symbols": ["600777.SS"],
+        "items": [
+            {
+                "name": "新潮能源",
+                "internal_symbol": "600777.SS",
+                "status": "data_incomplete",
+                "rule_results": [],
+                "limitations": [
+                    "已存在明确不通过规则，同时仍有数据缺口；在关键缺口补齐前按数据不完整处理。",
+                    "关键数据集或规则窗口不完整，服务层强制保持 data_incomplete。",
+                ],
+            }
+        ],
+        "strategy": {"version": {"rules": []}},
+        "data_meta": {
+            "latest_completed_trade_date": "2026-07-22",
+            "universe_count": 5530,
+            "evaluated_symbols": 5350,
+            "coverage_ratio": 5350 / 5530,
+            "deep_check_eligible_count": 1169,
+            "deep_processed_symbols": 912,
+            "deep_remaining_symbols": 257,
+            "deep_processing_ratio": 912 / 1169,
+            "history_insufficient_count": 47,
+            "history_unknown_count": 153,
+            "actionable_candidate_count": 0,
+            "deep_check_complete": False,
+        },
+        "boundary": "不构成买卖建议。",
+    }
+
+    preview = AgentService._render_li_zong_preview(evidence)
+
+    assert "新潮能源（600777.SS）" in preview
+    assert "data_incomplete" not in preview
+    assert "not_qualified" not in preview
+    assert "服务层强制" not in preview
+    assert "。；" not in preview
+    assert preview.count("按数据不完整处理") == 1
+
+
 def test_prompt_evidence_and_output_guard_hide_provider_operations():
     evidence = {
         "type": "market_brief",

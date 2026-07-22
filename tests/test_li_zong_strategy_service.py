@@ -675,6 +675,108 @@ def test_listing_age_does_not_assume_pre_listing_roe_is_unavailable(app):
     assert candidate["result"]["evaluation_depth"] == "full_rules"
 
 
+def test_history_precheck_uses_a_share_calendar_buffer_for_380_rows(app):
+    service = LiZongStrategyService(app.state.database, SnapshotStub({}))
+    item = {
+        "symbol": "001391.SZ",
+        "list_date": "20241230",
+        "total_mv_yi": 528.0,
+    }
+
+    check = service._history_precheck(
+        item,
+        as_of_date="2026-07-22",
+        parameters=LiZongParameters(),
+    )
+
+    assert check["status"] == "insufficient"
+    assert check["listing_age_days"] == 569
+    assert check["required_trading_calendar_days"] > check["listing_age_days"]
+
+
+def test_universe_batch_replaces_same_day_full_result_after_history_recheck(app):
+    item = {
+        "symbol": "001391.SZ",
+        "name": "国货航",
+        "industry": "仓储物流",
+        "market": "主板",
+        "list_date": "19971118",
+        "total_mv_yi": 528.0,
+    }
+    snapshots = UniverseSnapshotStub(
+        {"001391.SZ": _snapshot_packet(symbol="001391.SZ")},
+        [item],
+        as_of_date="2026-07-22",
+    )
+    service = LiZongStrategyService(app.state.database, snapshots)
+    first = service.run_universe_batch(batch_size=1, as_of_date="2026-07-22")
+    assert first["selected_symbols"] == ["001391.SZ"]
+
+    item["list_date"] = "20241230"
+    second = service.run_universe_batch(batch_size=1, as_of_date="2026-07-22")
+
+    assert second["selected_symbols"] == []
+    assert snapshots.symbol_sync_calls == ["001391.SZ"]
+    candidate = service.get_candidate("001391.SZ")
+    assert candidate["result"]["evaluation_depth"] == "history_precheck"
+    assert candidate["result"]["history_precheck"]["status"] == "insufficient"
+
+
+def test_price_history_incomplete_detection_is_limited_to_price_rules(app):
+    service = LiZongStrategyService(app.state.database, SnapshotStub({}))
+
+    assert service._price_history_rule_incomplete(
+        {"rule_results": [{"rule_id": "LZ-VP-01", "status": "data_incomplete"}]}
+    )
+    assert not service._price_history_rule_incomplete(
+        {"rule_results": [{"rule_id": "LZ-F-02", "status": "data_incomplete"}]}
+    )
+
+
+def test_force_incomplete_rewrites_conflicting_not_qualified_limitation(app):
+    service = LiZongStrategyService(app.state.database, SnapshotStub({}))
+
+    result = service._force_incomplete(
+        {
+            "status": "not_qualified",
+            "candidate_qualified": False,
+            "triggered_rule_ids": [],
+            "limitations": [
+                "已存在明确不通过规则，同时仍有数据缺口；当前状态按 not_qualified 处理。"
+            ],
+        },
+        "关键数据集或规则窗口不完整。",
+    )
+
+    assert result["status"] == "data_incomplete"
+    assert "not_qualified" not in " ".join(result["limitations"])
+    assert "按数据不完整处理" in result["limitations"][0]
+    assert len(result["limitations"]) == 1
+
+
+def test_enforce_incomplete_boundary_uses_public_limitation_text(app):
+    service = LiZongStrategyService(app.state.database, SnapshotStub({}))
+    packet = {
+        "status": "partial",
+        "snapshot": {"data_status": "partial", "coverage": {"missing": ["daily"]}},
+    }
+    evaluation = {
+        "status": "not_qualified",
+        "candidate_qualified": False,
+        "triggered_rule_ids": [],
+        "limitations": [],
+        "rule_results": [],
+    }
+
+    result = service._enforce_incomplete_boundary(evaluation, packet)
+
+    assert result["status"] == "data_incomplete"
+    assert result["limitations"] == [
+        "关键数据集或规则窗口不完整，当前暂不能形成完整判断。"
+    ]
+    assert "data_incomplete" not in " ".join(result["limitations"])
+
+
 def test_missing_tushare_annual_roe_uses_reported_eastmoney_fallback(app):
     packet = _snapshot_packet(symbol="300033.SZ", stock_name="同花顺")
     packet["snapshot"]["datasets"]["fina_indicator"]["rows"] = [
@@ -822,7 +924,7 @@ def test_universe_batch_sync_failure_keeps_previous_stable_candidate(app):
     assert failed["coverage"]["full_market_coverage"] is False
     assert failed["coverage"]["evaluated_symbols"] == 0
     assert retained["id"] == previous["id"]
-    assert retained["data_version"] == "stable-before-failure"
+    assert retained["data_version"] == previous["data_version"]
     assert _table_count(app.state.database, "strategy_candidate_snapshots") == 1
 
 
@@ -1127,3 +1229,80 @@ def test_agent_li_zong_pool_excludes_failed_stocks_and_followup_keeps_context(
     assert followup_payload["evidence"]["requested_symbol"] == "000001.SZ"
     assert followup_payload["evidence"]["items"][0]["status"] == "not_qualified"
     assert "不是当前候选" in followup_payload["answer"]
+
+
+def test_agent_li_zong_resolves_multiple_universe_company_names(app, client):
+    assert client.post(
+        "/users", json={"name": "Li Zong Multi Symbol User"}
+    ).status_code == 201
+    recent = {
+        "symbol": "001391.SZ",
+        "name": "国货航",
+        "industry": "仓储物流",
+        "market": "主板",
+        "list_date": "20241230",
+        "total_mv_yi": 528.0,
+    }
+    suspended = {
+        "symbol": "600777.SS",
+        "name": "新潮能源",
+        "industry": "石油开采",
+        "market": "主板",
+        "list_date": "19961121",
+        "total_mv_yi": 278.0,
+    }
+    packet = _snapshot_packet(
+        symbol="600777.SS",
+        stock_name="新潮能源",
+        industry="石油开采",
+    )
+    for dataset in ("daily", "adj_factor", "stk_limit"):
+        packet["snapshot"]["datasets"][dataset]["rows"] = packet["snapshot"][
+            "datasets"
+        ][dataset]["rows"][-350:]
+    snapshots = UniverseSnapshotStub(
+        {"600777.SS": packet},
+        [recent, suspended],
+        as_of_date="2026-07-22",
+    )
+    app.state.li_zong_strategy.snapshot_service = snapshots
+    app.state.li_zong_strategy.run_universe_batch(
+        batch_size=1, as_of_date="2026-07-22"
+    )
+
+    response = client.post(
+        "/me/chat",
+        json={
+            "message": (
+                "李总策略为什么把国货航标记为量价历史不足？"
+                "新潮能源为什么仍然数据不完整？"
+            ),
+            "execute_agent": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["evidence"]["selection_mode"] == "symbol_comparison"
+    assert payload["evidence"]["requested_symbols"] == [
+        "001391.SZ",
+        "600777.SS",
+    ]
+    assert [item["name"] for item in payload["evidence"]["items"]] == [
+        "国货航",
+        "新潮能源",
+    ]
+    assert "国货航（001391.SZ）" in payload["answer"]
+    assert "上市后量价历史预判未达到" in payload["answer"]
+    assert "新潮能源（600777.SS）" in payload["answer"]
+    assert "完整交易日不足" in payload["answer"]
+    conversation = client.get(
+        f"/me/conversations/{payload['conversation_id']}"
+    ).json()
+    assistant = next(
+        item for item in reversed(conversation["messages"]) if item["role"] == "assistant"
+    )
+    assert assistant["metadata"]["research_targets"] == [
+        {"symbol": "001391.SZ", "name": "国货航"},
+        {"symbol": "600777.SS", "name": "新潮能源"},
+    ]

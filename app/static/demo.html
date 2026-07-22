@@ -126,7 +126,7 @@
     .article-item-title { font-size: 14px; font-weight: 700; line-height: 1.45; }
     .article-item-time { color: var(--muted); font-size: 10px; white-space: nowrap; }
     .article-item-summary { grid-column: 1 / -1; color: #aebfc3; font-size: 11px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-    .workspace-page[hidden], .research-page-panel[hidden], #homeFocus[hidden], #liveSection[hidden], #marketDashboard[hidden], #insightSection[hidden], #insightAsk[hidden], #agentSection[hidden], #knowledgePanel[hidden], #deepStockPanel[hidden], #productNotice[hidden] { display: none !important; }
+    .workspace-page[hidden], .research-page-panel[hidden], #homeFocus[hidden], #todayOverviewGrid[hidden], #liveSection[hidden], #marketDashboard[hidden], #insightSection[hidden], #insightAsk[hidden], #agentSection[hidden], #knowledgePanel[hidden], #deepStockPanel[hidden], #productNotice[hidden] { display: none !important; }
     .insight-ask { margin-top: 14px; padding: 14px 16px; }
     .insight-ask-copy { color: var(--muted); font-size: 10px; line-height: 1.55; }
     .insight-ask-form { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 9px; margin-top: 9px; }
@@ -763,6 +763,8 @@
     .watchlist-tabs { display: flex; gap: 4px; padding: 0 14px; border-bottom: 1px solid var(--line); }
     .watchlist-tabs button { border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); padding: 13px 11px; font-size: 14px; }
     .watchlist-tabs button.active { color: var(--blue); border-color: var(--blue); font-weight: 700; }
+    .watchlist-secondary-filter { display: flex; align-items: center; gap: 7px; margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .watchlist-secondary-filter select { border: 1px solid var(--line); border-radius: 8px; background: #fff; color: #52647c; padding: 6px 8px; }
     .watchlist-table { padding: 0 14px 8px; }
     .watchlist-table-head, .watchlist-stock-row { display: grid; grid-template-columns: minmax(120px,1fr) 76px 64px 72px minmax(115px,1.1fr) 76px; gap: 6px; align-items: center; }
     .watchlist-table-head { padding: 12px 10px; color: #7d899a; font-size: 12px; border-bottom: 1px solid var(--line); }
@@ -771,7 +773,14 @@
     .watchlist-stock-name { color: #263650; font-size: 15px; font-weight: 760; }
     .watchlist-stock-symbol { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
     .watchlist-stock-reason { color: #5e6f85; font-size: 12px; line-height: 1.58; }
-    .watchlist-stock-actions { display: flex; gap: 5px; justify-content: flex-end; }
+    .watchlist-asset-state { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+    .watchlist-asset-state select { max-width: 100%; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: #53647b; padding: 5px 6px; font-size: 11px; }
+    .watchlist-asset-state small { color: #8793a4; font-size: 10px; line-height: 1.35; }
+    .watchlist-asset-meta { display: flex; gap: 5px; margin-top: 5px; flex-wrap: wrap; }
+    .watchlist-asset-tag { padding: 3px 6px; border-radius: 999px; color: #60728b; background: #edf2f8; font-size: 9px; }
+    .watchlist-asset-tag.paused { color: #9a6815; background: #fff5dc; }
+    .watchlist-asset-tag.waiting { color: #356dcc; background: #edf4ff; }
+    .watchlist-stock-actions { display: flex; gap: 5px; justify-content: flex-end; flex-wrap: wrap; }
     .icon-button { border: 1px solid var(--line); border-radius: 7px; background: #fff; color: #718198; padding: 5px 7px; }
     .icon-button:hover { color: var(--blue); border-color: #afc6f5; }
     .icon-button.danger:hover { color: var(--red); border-color: #f1b8bd; }
@@ -1239,7 +1248,7 @@
     .watchlist-tabs { overflow-x: auto; }
     .watchlist-tabs button { flex-shrink: 0; }
     .watchlist-table { overflow-x: auto; }
-    .watchlist-table-head, .watchlist-stock-row { min-width: 960px; grid-template-columns: minmax(140px,.9fr) 100px 90px minmax(170px,1.05fr) minmax(190px,1.15fr) 92px 130px; gap: 8px; }
+    .watchlist-table-head, .watchlist-stock-row { min-width: 0; grid-template-columns: minmax(120px,.75fr) 105px 88px minmax(150px,1.05fr) minmax(150px,1fr) 145px; gap: 6px; }
     .watchlist-stock-row { cursor: pointer; }
     .watchlist-stock-actions .icon-button { padding: 6px 7px; font-size: 11px; white-space: nowrap; }
     .watchlist-quote-cell strong { display: block; }
@@ -1367,6 +1376,11 @@
       .agent-research-actions { order: 2; }
       .agent-research-actions .btn { flex: 1; }
       .agent-research-process { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      .watchlist-tabs { align-items: center; }
+      .watchlist-secondary-filter { margin-left: 8px; }
+      .watchlist-table-head, .watchlist-stock-row { min-width: 0; grid-template-columns: minmax(0,1fr) auto; }
+      .watchlist-stock-row > :not(:first-child):not(.watchlist-stock-actions) { grid-column: 1 / -1; }
+      .watchlist-stock-actions { grid-column: 1 / -1; justify-content: flex-start; }
     }
 
     @media (max-width: 1400px) {
@@ -1860,7 +1874,7 @@
           <div class="panel-head">
             <div>
               <div class="panel-title">我的关注</div>
-              <div class="panel-subtitle">集中查看自选股行情、关注理由、研究状态与基础图表</div>
+              <div class="panel-subtitle">把候选、关注与持仓组织为长期研究资产；判断、变化、任务和历史不会因结束跟踪而丢失</div>
             </div>
             <button id="addWatchlist" class="btn primary">＋ 添加关注</button>
           </div>
@@ -1876,16 +1890,25 @@
             <div class="watchlist-table-card">
               <div class="watchlist-tabs">
                 <button class="active" type="button" data-watchlist-filter="all">全部</button>
-                <button type="button" data-watchlist-filter="risk_review">风险复核</button>
-                <button type="button" data-watchlist-filter="priority_research">优先研究</button>
-                <button type="button" data-watchlist-filter="pending_review">待补证</button>
-                <button type="button" data-watchlist-filter="observe">持续观察</button>
+                <button type="button" data-watchlist-filter="holding">持仓</button>
+                <button type="button" data-watchlist-filter="watching">关注</button>
+                <button type="button" data-watchlist-filter="ended">已结束</button>
+                <label class="watchlist-secondary-filter">进一步筛选
+                  <select id="watchlistSecondaryFilter" aria-label="按优先级或跟踪状态筛选研究资产">
+                    <option value="all">全部状态</option>
+                    <option value="high">高优先级</option>
+                    <option value="normal">普通优先级</option>
+                    <option value="low">低优先级</option>
+                    <option value="paused">暂停跟踪</option>
+                    <option value="waiting_data">等待数据</option>
+                  </select>
+                </label>
               </div>
-              <div id="watchlist" class="watchlist-table"><div class="empty">正在读取自选股…</div></div>
+              <div id="watchlist" class="watchlist-table"><div class="empty">正在读取股票研究资产…</div></div>
             </div>
             <aside class="watchlist-side">
               <section class="watchlist-summary-card">
-                <div class="watchlist-side-head">关注概览</div>
+                <div class="watchlist-side-head">研究资产概览</div>
                 <div id="watchlistOverviewStats" class="watchlist-overview-stats"><div class="empty">正在汇总…</div></div>
                 <div id="watchlistStatusDistribution" class="watchlist-status-wrap"></div>
               </section>
@@ -1894,9 +1917,9 @@
                 <div id="watchlistTasks" class="watchlist-task-list"><div class="empty">正在建立任务清单…</div></div>
               </section>
             </aside>
-            <section id="watchlistDetail" class="watchlist-detail"><div class="empty">选择一只股票查看分时、日线和周线</div></section>
+            <section id="watchlistDetail" class="watchlist-detail"><div class="empty">选择一项研究资产查看分时、日线和周线</div></section>
           </div>
-          <div id="watchlistSource" class="source-note">每个用户拥有独立的自选股、关注理由与记忆。</div>
+          <div id="watchlistSource" class="source-note">关系、优先级、跟踪状态和正式判断按用户隔离保存；结束跟踪不会删除原研究空间。</div>
         </section>
 
         <section id="deepStockPanel" class="panel research-page-panel deep-stock-panel" hidden>
@@ -2189,12 +2212,14 @@
       conversations: [],
       conversationMessages: [],
       watchlist: [],
+      stockAssets: [],
       researchActions: [],
       researchActionSummary: {},
       researchReports: [],
       selectedWatchlistSymbol: null,
       watchlistTimeframe: "intraday",
       watchlistFilter: "all",
+      watchlistSecondaryFilter: "all",
       editingWatchlistSymbol: null,
       knowledge: [],
       knowledgeSummary: {},
@@ -2419,7 +2444,7 @@
         agent: ["AI 研究", "连续对话、历史研究、自动 K 线与证据链"],
         screening: ["AI 研究 · 透明选股", "用确定性规则生成可解释研究候选，再进入个股空间继续核验"],
         deep_stock: ["个股研究", "围绕一只股票持续保存判断、变化、证据、任务、对话和报告"],
-        watchlist: ["我的关注", "按研究状态管理自选股、下一动作与分时/日线/周线"],
+        watchlist: ["我的关注", "按关系、优先级和跟踪状态管理长期股票研究资产"],
         knowledge: ["资料库", "集中查看通用研究资料与个人资料，并管理可被 Agent 检索的内容"],
         review: ["复盘中心", "跟踪研究结论、后续验证与风险变化"],
         account: ["个人中心", "查看个人空间、研究资产、资料用量与真实服务状态"]
@@ -2481,7 +2506,12 @@
       });
       let payload;
       try { payload = await response.json(); } catch { payload = {}; }
-      if (!response.ok) throw new Error(payload.detail || `请求失败：${response.status}`);
+      if (!response.ok) {
+        const error = new Error(payload.detail || `请求失败：${response.status}`);
+        error.status = response.status;
+        error.payload = payload;
+        throw error;
+      }
       return payload;
     }
 
@@ -2994,13 +3024,14 @@
     }
 
     function watchlistQuote(item) {
-      const current = item.current_quote || {};
+      const current = item.current_quote || item.quote || {};
       const change = current.pct_change ?? item.metrics?.return_1d_pct;
       return {
         price: current.price ?? item.latest_bar?.close ?? item.metrics?.latest_close,
         change,
         label: current.label || "最近收盘",
-        marketTimestamp: current.market_timestamp || item.market_timestamp
+        marketTimestamp: current.market_timestamp || item.market_timestamp,
+        status: current.status || item.status
       };
     }
 
@@ -3214,6 +3245,9 @@
             const result = await api(`/v1/ai-writebacks/${encodeURIComponent(candidate.id)}/confirm`, {method: "POST"});
             applyStatus(result.status || "confirmed");
             await loadWatchlist();
+            if (candidate.symbol && $("deepStockSymbol")?.value === candidate.symbol) {
+              await loadDeepStockOverview(candidate.symbol);
+            }
           } catch (error) {
             status.textContent = error.message || "暂时无法确认这份判断草稿。";
             confirm.disabled = false; reject.disabled = false;
@@ -3983,32 +4017,41 @@
         : "只显示当前用户空间中的关注与研究状态。";
     }
 
+    function stockAssetRelationMeta(relationType) {
+      return {
+        holding: {label: "持仓研究", color: "#e0525a"},
+        watching: {label: "关注研究", color: "#3478f6"},
+        ended: {label: "已结束", color: "#9aa6b5"}
+      }[relationType] || {label: "研究资产", color: "#9aa6b5"};
+    }
+
     function renderWatchlistOverview(reportMap) {
       const stats = $("watchlistOverviewStats"); stats.innerHTML = "";
-      const priorityCount = state.researchActions.filter(item => ["risk_review", "priority_research"].includes(item.research_status)).length;
-      const pendingCount = state.researchActions.reduce((sum, item) => sum + (item.actions || []).filter(action => action.status === "pending_data").length, 0);
-      const reportCount = state.watchlist.filter(item => reportMap.has(item.symbol)).length;
-      for (const [label, value] of [["关注股票", state.watchlist.length], ["优先复核", priorityCount], ["待补证项", pendingCount], ["已有报告", reportCount]]) {
+      const assets = state.stockAssets || [];
+      const activeCount = assets.filter(item => item.relation_type !== "ended").length;
+      const pausedCount = assets.filter(item => item.tracking_status === "paused" && item.relation_type !== "ended").length;
+      const pendingCount = assets.reduce((sum, item) => sum + Number(item.open_task_count || 0), 0);
+      for (const [label, value] of [["研究资产", assets.length], ["持续跟踪", activeCount - pausedCount], ["暂停跟踪", pausedCount], ["待处理任务", pendingCount]]) {
         const card = document.createElement("div"); card.className = "watchlist-overview-stat";
         const labelNode = document.createElement("span"); labelNode.textContent = label;
         const valueNode = document.createElement("strong"); valueNode.textContent = value;
         card.append(labelNode, valueNode); stats.appendChild(card);
       }
       const distribution = $("watchlistStatusDistribution"); distribution.innerHTML = "";
-      const statuses = ["risk_review", "priority_research", "pending_review", "observe"];
-      const counts = statuses.map(status => state.researchActions.filter(item => item.research_status === status).length);
+      const statuses = ["holding", "watching", "ended"];
+      const counts = statuses.map(status => assets.filter(item => item.relation_type === status).length);
       const total = Math.max(1, counts.reduce((sum, value) => sum + value, 0));
       let cursor = 0;
       const stops = statuses.map((status, index) => {
         const start = cursor; cursor += counts[index] / total * 100;
-        return `${researchStatusMeta(status).color} ${start}% ${cursor}%`;
+        return `${stockAssetRelationMeta(status).color} ${start}% ${cursor}%`;
       });
       if (!counts.some(Boolean)) stops.splice(0, stops.length, "#dfe5ed 0 100%");
       const ring = document.createElement("div"); ring.className = "watchlist-status-ring"; ring.style.background = `conic-gradient(${stops.join(",")})`;
-      const ringValue = document.createElement("strong"); ringValue.textContent = state.watchlist.length; ring.appendChild(ringValue);
+      const ringValue = document.createElement("strong"); ringValue.textContent = assets.length; ring.appendChild(ringValue);
       const legend = document.createElement("div"); legend.className = "watchlist-status-legend";
       statuses.forEach((status, index) => {
-        const meta = researchStatusMeta(status);
+        const meta = stockAssetRelationMeta(status);
         const item = document.createElement("div"); item.className = "watchlist-status-item";
         const dot = document.createElement("i"); dot.style.background = meta.color;
         const label = document.createElement("span"); label.textContent = meta.label;
@@ -4066,8 +4109,66 @@
       const submit = form.querySelector('button[type="submit"]'); if (submit) submit.textContent = "保存";
     }
 
-    function renderWatchlist(data, reports = [], actionsPacket = {}) {
-      state.watchlist = data.items || [];
+    async function updateStockAssetRelation(item, changes = {}) {
+      if (!item?.workspace_id || !item?.version) {
+        $("watchlistSource").textContent = "这项研究资产正在完成版本化迁移，暂时不能修改关系状态。";
+        return;
+      }
+      const relationType = changes.relation_type || item.relation_type || "watching";
+      const restoringEndedSpace = item.relation_type === "ended" && relationType !== "ended";
+      const trackingStatus = relationType === "ended"
+        ? "paused"
+        : (changes.tracking_status || (restoringEndedSpace ? "active" : item.tracking_status) || "active");
+      const payload = {
+        base_version: item.version,
+        relation_type: relationType,
+        priority: relationType === "watching" ? (changes.priority || item.priority || "normal") : null,
+        tracking_status: trackingStatus,
+        workflow_status: relationType === "ended" ? "idle" : (item.workflow_status || "idle"),
+        attention_tags: item.attention_tags || []
+      };
+      try {
+        await api(`/v1/stocks/${encodeURIComponent(item.symbol)}/relation`, {method: "PATCH", body: JSON.stringify(payload)});
+        await loadWatchlist();
+      } catch (error) {
+        $("watchlistSource").textContent = error?.status === 409
+          ? "这项研究资产已在其他页面更新，列表已刷新；系统没有覆盖新版本。"
+          : (error?.message || "研究资产状态暂未保存，请稍后重试。");
+        if (error?.status === 409) await loadWatchlist();
+      }
+    }
+
+    function renderWatchlist(data, reports = [], actionsPacket = {}, assetsPacket = null) {
+      const briefItems = data.items || [];
+      const briefMap = new Map(briefItems.map(item => [item.symbol, item]));
+      const rawAssets = assetsPacket?.items?.length
+        ? assetsPacket.items
+        : briefItems.map(item => ({
+            ...item,
+            workspace_id: null,
+            version: null,
+            relation_type: "watching",
+            priority: "normal",
+            tracking_status: "active",
+            workflow_status: "idle",
+            attention_tags: [],
+            active_thesis: item.thesis ? {summary: item.thesis, version: 1} : null,
+            open_task_count: 0
+          }));
+      state.stockAssets = rawAssets.map(asset => {
+        const brief = briefMap.get(asset.symbol) || {};
+        const quote = asset.quote || {};
+        return {
+          ...brief,
+          ...asset,
+          current_quote: brief.current_quote || quote,
+          latest_bar: brief.latest_bar,
+          metrics: brief.metrics,
+          status: quote.status || brief.status,
+          thesis: asset.active_thesis?.summary || asset.active_thesis?.reason_text || brief.thesis || null
+        };
+      });
+      state.watchlist = state.stockAssets.filter(item => item.relation_type !== "ended");
       state.researchReports = reports;
       state.researchActions = actionsPacket.items || [];
       state.researchActionSummary = actionsPacket.summary || {};
@@ -4075,10 +4176,17 @@
       const container = $("watchlist"); container.innerHTML = "";
       const reportMap = new Map(reports.map(item => [item.symbol, item]));
       const actionMap = new Map(state.researchActions.map(item => [item.symbol, item]));
-      const visibleItems = state.watchlist.filter(item => state.watchlistFilter === "all" || actionMap.get(item.symbol)?.research_status === state.watchlistFilter);
+      const visibleItems = state.stockAssets.filter(item => {
+        const primaryMatch = state.watchlistFilter === "all" || item.relation_type === state.watchlistFilter;
+        const secondaryMatch = state.watchlistSecondaryFilter === "all"
+          || (state.watchlistSecondaryFilter === "paused" && item.tracking_status === "paused" && item.relation_type !== "ended")
+          || (state.watchlistSecondaryFilter === "waiting_data" && item.workflow_status === "waiting_data")
+          || item.priority === state.watchlistSecondaryFilter;
+        return primaryMatch && secondaryMatch;
+      });
       if (visibleItems.length) {
         const head = document.createElement("div"); head.className = "watchlist-table-head";
-        for (const label of ["股票 / 代码", "最新行情", "研究状态", "关注理由", "下一动作", "最近更新", "操作"]) {
+        for (const label of ["股票 / 代码", "关系与跟踪", "最新行情", "当前判断", "下一事项", "操作"]) {
           const cell = document.createElement("span"); cell.textContent = label; head.appendChild(cell);
         }
         container.appendChild(head);
@@ -4092,43 +4200,81 @@
         const identity = document.createElement("div");
         const name = document.createElement("div"); name.className = "watchlist-stock-name"; name.textContent = item.name || item.symbol;
         const symbol = document.createElement("span"); symbol.className = "watchlist-stock-symbol"; symbol.textContent = item.symbol;
-        identity.append(name, symbol);
+        const identityMeta = document.createElement("div"); identityMeta.className = "watchlist-asset-meta";
+        for (const label of [item.market, item.position_snapshot?.available ? "持仓事实已配置" : item.relation_type === "holding" ? "持仓事实待配置" : "研究空间已保存"].filter(Boolean)) {
+          const tag = document.createElement("span"); tag.className = "watchlist-asset-tag"; tag.textContent = label; identityMeta.appendChild(tag);
+        }
+        identity.append(name, symbol, identityMeta);
+
+        const relation = document.createElement("div"); relation.className = "watchlist-asset-state";
+        const relationSelect = document.createElement("select"); relationSelect.setAttribute("aria-label", `${item.name || item.symbol}关系状态`);
+        for (const [value, label] of [["watching", "关注研究"], ["holding", "持仓研究"], ["ended", "已结束"]]) {
+          const option = document.createElement("option"); option.value = value; option.textContent = label; option.selected = item.relation_type === value; relationSelect.appendChild(option);
+        }
+        relationSelect.disabled = !item.workspace_id || !item.version;
+        relationSelect.addEventListener("click", event => event.stopPropagation());
+        relationSelect.addEventListener("change", event => {
+          event.stopPropagation();
+          if (relationSelect.value === "ended" && !window.confirm("结束跟踪后，这只股票会移到“已结束”，原判断、任务和历史仍会保留。确定继续吗？")) {
+            relationSelect.value = item.relation_type || "watching";
+            return;
+          }
+          void updateStockAssetRelation(item, {relation_type: relationSelect.value});
+        });
+        relation.appendChild(relationSelect);
+        if (item.relation_type === "watching") {
+          const prioritySelect = document.createElement("select"); prioritySelect.setAttribute("aria-label", `${item.name || item.symbol}关注优先级`);
+          for (const [value, label] of [["high", "高优先级"], ["normal", "普通优先级"], ["low", "低优先级"]]) {
+            const option = document.createElement("option"); option.value = value; option.textContent = label; option.selected = (item.priority || "normal") === value; prioritySelect.appendChild(option);
+          }
+          prioritySelect.disabled = !item.workspace_id || !item.version;
+          prioritySelect.addEventListener("click", event => event.stopPropagation());
+          prioritySelect.addEventListener("change", event => { event.stopPropagation(); void updateStockAssetRelation(item, {priority: prioritySelect.value}); });
+          relation.appendChild(prioritySelect);
+        }
+        const tracking = document.createElement("small"); tracking.textContent = item.relation_type === "ended" ? "历史与判断继续保留" : item.tracking_status === "paused" ? "已暂停跟踪" : item.workflow_status === "waiting_data" ? "等待数据" : "跟踪中"; relation.appendChild(tracking);
 
         const quote = document.createElement("div"); quote.className = "watchlist-quote-cell";
         const quoteData = watchlistQuote(item);
         const latest = document.createElement("strong"); latest.textContent = numeric(quoteData.price);
-        const change = document.createElement("span"); change.className = tone(quoteData.change); change.textContent = item.status === "available" ? `${pct(quoteData.change)} · ${quoteData.label}` : "行情更新中";
+        const change = document.createElement("span"); change.className = tone(quoteData.change); change.textContent = quoteData.price != null ? `${pct(quoteData.change)} · ${quoteData.label}` : "行情更新中";
         quote.append(latest, change);
 
         const actionItem = actionMap.get(item.symbol);
-        const meta = researchStatusMeta(actionItem?.research_status);
-        const status = document.createElement("span"); status.className = `research-status-badge ${actionItem?.research_status || "observe"}`; status.textContent = meta.label;
-        const reason = document.createElement("div"); reason.className = "watchlist-stock-reason"; reason.textContent = item.thesis || "尚未记录关注理由";
+        const reason = document.createElement("div"); reason.className = "watchlist-stock-reason"; reason.textContent = item.thesis || "尚未形成正式判断；可进入股票研究空间补充。";
+        if (item.active_thesis?.version) reason.title = `正式判断版本 ${item.active_thesis.version}`;
         const primaryAction = primaryResearchAction(actionItem);
-        const next = document.createElement("div"); next.className = "watchlist-next-action"; next.textContent = primaryAction?.next_step || actionItem?.headline || "继续观察行情与新增证据";
-        const updated = document.createElement("div"); updated.className = "watchlist-updated"; updated.textContent = readableTime(quoteData.marketTimestamp || actionItem?.data_as_of || item.latest_change?.created_at || item.market_timestamp);
+        const next = document.createElement("div"); next.className = "watchlist-next-action"; next.textContent = item.next_action?.next_step || item.next_action?.title || primaryAction?.next_step || actionItem?.headline || item.latest_change?.summary || "继续观察行情与新增证据";
+        next.title = `${Number(item.open_task_count || 0)} 项待处理 · 更新 ${readableTime(quoteData.marketTimestamp || item.latest_change?.created_at || actionItem?.data_as_of || item.market_timestamp)}`;
 
         const report = reportMap.get(item.symbol);
         const actions = document.createElement("div"); actions.className = "watchlist-stock-actions";
-        const reportButton = document.createElement("button"); reportButton.type = "button"; reportButton.className = "icon-button"; reportButton.textContent = report ? "分析" : "研究";
-        reportButton.title = report ? "阅读服务器预生成分析" : "进入股票研究空间";
-        reportButton.addEventListener("click", event => { event.stopPropagation(); if (report) void openResearchReport(item.symbol, reportButton); else void openDeepStockSymbol(item.symbol); });
-        const editButton = document.createElement("button"); editButton.type = "button"; editButton.className = "icon-button"; editButton.textContent = "编辑"; editButton.title = `编辑 ${item.name || item.symbol}`;
-        editButton.addEventListener("click", event => { event.stopPropagation(); startEditWatchlist(item); });
-        const deleteButton = document.createElement("button"); deleteButton.type = "button"; deleteButton.className = "icon-button danger"; deleteButton.textContent = "删除"; deleteButton.title = `删除 ${item.name || item.symbol}`;
-        deleteButton.addEventListener("click", event => { event.stopPropagation(); void deleteWatchlistItem(item); });
-        actions.append(reportButton, editButton, deleteButton);
-        row.append(identity, quote, status, reason, next, updated, actions);
+        const researchButton = document.createElement("button"); researchButton.type = "button"; researchButton.className = "icon-button"; researchButton.textContent = "进入研究";
+        researchButton.title = `进入 ${item.name || item.symbol} 的长期研究空间`;
+        researchButton.addEventListener("click", event => { event.stopPropagation(); void openDeepStockSymbol(item.symbol); });
+        actions.appendChild(researchButton);
+        if (report) {
+          const reportButton = document.createElement("button"); reportButton.type = "button"; reportButton.className = "icon-button"; reportButton.textContent = "最新报告";
+          reportButton.addEventListener("click", event => { event.stopPropagation(); void openResearchReport(item.symbol, reportButton); });
+          actions.appendChild(reportButton);
+        }
+        if (item.relation_type !== "ended") {
+          const trackingButton = document.createElement("button"); trackingButton.type = "button"; trackingButton.className = "icon-button"; trackingButton.textContent = item.tracking_status === "paused" ? "恢复跟踪" : "暂停跟踪";
+          trackingButton.disabled = !item.workspace_id || !item.version;
+          trackingButton.addEventListener("click", event => { event.stopPropagation(); void updateStockAssetRelation(item, {tracking_status: item.tracking_status === "paused" ? "active" : "paused"}); });
+          actions.appendChild(trackingButton);
+        }
+        row.append(identity, relation, quote, reason, next, actions);
         row.addEventListener("click", () => { void loadWatchlistDetail(item, state.watchlistTimeframe); });
         row.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void loadWatchlistDetail(item, state.watchlistTimeframe); } });
         container.appendChild(row);
       }
-      if (!state.watchlist.length) {
-        container.innerHTML = '<div class="empty">还没有关注股票。点击右上角“添加关注”即可开始。</div>';
+      if (!state.stockAssets.length) {
+        container.innerHTML = '<div class="empty">还没有股票研究资产。点击右上角“添加关注”，或从透明选股保存一条候选线索。</div>';
         $("watchlistDetail").innerHTML = '<div class="empty">添加股票后可查看分时、日线和周线</div>';
         state.selectedWatchlistSymbol = null;
       } else if (!visibleItems.length) {
-        container.innerHTML = '<div class="empty">这个研究状态下暂时没有股票。</div>';
+        container.innerHTML = '<div class="empty">当前关系和状态筛选下没有研究资产。</div>';
       } else {
         const selected = visibleItems.find(item => item.symbol === state.selectedWatchlistSymbol) || visibleItems[0];
         if (state.selectedWatchlistSymbol !== selected.symbol) void loadWatchlistDetail(selected, state.watchlistTimeframe);
@@ -4139,7 +4285,8 @@
       renderHomeFocus();
       renderAccountCenter();
       const coverage = data.coverage || {};
-      $("watchlistSource").textContent = `已更新 ${coverage.available || 0}/${coverage.requested || 0} 只关注股票；研究状态来自行情、报告、证据变化与资料缺口，不代表买卖建议。`;
+      const summary = assetsPacket?.summary || {};
+      $("watchlistSource").textContent = `共 ${summary.total ?? state.stockAssets.length} 项研究资产；持仓 ${summary.holding ?? state.stockAssets.filter(item => item.relation_type === "holding").length}、关注 ${summary.watching ?? state.stockAssets.filter(item => item.relation_type === "watching").length}、已结束 ${summary.ended ?? state.stockAssets.filter(item => item.relation_type === "ended").length}。当前跟踪行情可用 ${coverage.available || 0}/${coverage.requested || state.watchlist.length}；结束跟踪不会删除判断和历史。`;
     }
 
     function aggregateWeekly(points = []) {
@@ -4313,10 +4460,13 @@
     }
 
     function inferDiagnosisSymbol(data, question = "") {
-      const direct = data?.evidence?.symbol || data?.evidence?.item?.symbol || data?.symbol;
+      const direct = data?.evidence?.symbol || data?.evidence?.item?.symbol || data?.evidence?.requested_symbol || data?.symbol;
       if (direct) return String(direct);
       const tracked = data?.evidence?.events || data?.evidence?.items;
-      if (Array.isArray(tracked) && tracked.length === 1 && tracked[0]?.symbol) return String(tracked[0].symbol);
+      if (Array.isArray(tracked) && tracked.length === 1) {
+        const trackedSymbol = tracked[0]?.internal_symbol || tracked[0]?.symbol;
+        if (trackedSymbol) return String(trackedSymbol);
+      }
       const sixDigits = String(question).match(/(?<!\d)(\d{6})(?!\d)/);
       if (sixDigits) return sixDigits[1];
       const aliases = [
@@ -4331,6 +4481,24 @@
       const candidate = ticker[1];
       const marketTerms = new Set(["A", "AI", "ETF", "GDP", "CPI", "RSI", "MACD", "IPO", "PMI", "KOSPI", "XAU"]);
       return marketTerms.has(candidate) ? null : candidate;
+    }
+
+    function diagnosisResearchTargets(data) {
+      const explicit = data?.researchTargets || data?.research_targets || data?.metadata?.research_targets;
+      const targets = [];
+      const push = item => {
+        const symbol = String(item?.symbol || item?.internal_symbol || "").trim();
+        if (!symbol || targets.some(target => target.symbol === symbol)) return;
+        targets.push({symbol, name: String(item?.name || symbol).trim() || symbol});
+      };
+      if (Array.isArray(explicit)) explicit.forEach(push);
+      if (targets.length) return targets;
+      const evidence = data?.evidence || {};
+      if (!["symbol_check", "symbol_comparison"].includes(evidence.selection_mode)) return targets;
+      const bySymbol = new Map((evidence.items || []).map(item => [String(item.internal_symbol || item.symbol || ""), item]));
+      const requested = evidence.requested_symbols || (evidence.requested_symbol ? [evidence.requested_symbol] : []);
+      requested.forEach(symbol => push(bySymbol.get(String(symbol)) || {symbol}));
+      return targets;
     }
 
     function renderDiagnosisChart({title, meta, price, change, points, metrics = []}) {
@@ -4418,7 +4586,42 @@
       }
     }
 
+    function renderMultiStockDiagnosis(targets) {
+      const names = targets.map(item => item.name || item.symbol);
+      setAgentContextCollapsed(false);
+      $("diagnosisContext").hidden = false;
+      $("diagnosisTitle").textContent = `${names.join("、")} · 多股比较`;
+      $("diagnosisMeta").textContent = `本轮同时研究 ${targets.length} 只股票；继续指定其中一只，可加载对应日 K 线。`;
+      $("diagnosisPrice").textContent = "—";
+      $("diagnosisChange").className = "diagnosis-change flat";
+      $("diagnosisChange").textContent = "—";
+      const metricsNode = $("diagnosisMetrics");
+      metricsNode.innerHTML = "";
+      [
+        {label: "研究模式", value: "多股比较"},
+        {label: "研究对象", value: `${targets.length} 只`},
+        {label: "行情联动", value: "指定单只后展示"}
+      ].forEach(item => {
+        const card = document.createElement("div"); card.className = "diagnosis-metric";
+        const label = document.createElement("div"); label.className = "diagnosis-metric-label"; label.textContent = item.label;
+        const value = document.createElement("div"); value.className = "diagnosis-metric-value"; value.textContent = item.value;
+        card.append(label, value); metricsNode.appendChild(card);
+      });
+      const canvas = $("diagnosisKline");
+      canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+      renderAgentResearchContext();
+    }
+
     async function maybeUpdateDiagnosis(data, question = "") {
+      const targets = diagnosisResearchTargets(data);
+      if (targets.length > 1) {
+        renderMultiStockDiagnosis(targets);
+        return;
+      }
+      if (targets.length === 1) {
+        await loadStockDiagnosis(targets[0].symbol);
+        return;
+      }
       const symbol = inferDiagnosisSymbol(data, question);
       if (symbol) {
         await loadStockDiagnosis(symbol);
@@ -4433,7 +4636,20 @@
       const lastAssistant = [...messages].reverse().find(item => item.role === "assistant");
       const lastUser = [...messages].reverse().find(item => item.role === "user");
       const metadata = lastAssistant?.metadata || {};
-      const context = {symbol: metadata.symbol, market_key: metadata.market_key};
+      const context = {
+        symbol: metadata.symbol,
+        market_key: metadata.market_key,
+        research_targets: metadata.research_targets || metadata.researchTargets || []
+      };
+      const targets = diagnosisResearchTargets(context);
+      if (targets.length > 1) {
+        renderMultiStockDiagnosis(targets);
+        return;
+      }
+      if (targets.length === 1) {
+        await loadStockDiagnosis(targets[0].symbol);
+        return;
+      }
       const symbol = inferDiagnosisSymbol(context, lastUser?.content || "");
       if (symbol) {
         await loadStockDiagnosis(symbol);
@@ -4478,7 +4694,7 @@
 
     function renderAShareIndices(data) {
       const container = $("aShareIndexCards"); container.innerHTML = "";
-      const order = ["000001.SS", "399001.SZ", "399006.SZ", "000300.SS"];
+      const order = ["000001.SS", "399001.SZ", "399006.SZ", "000688.SS"];
       const indexMap = new Map((data.indices || []).map(item => [item.symbol, item]));
       const items = order.map(symbol => indexMap.get(symbol)).filter(Boolean);
       for (const item of items) {
@@ -4678,14 +4894,18 @@
     async function loadWatchlist() {
       if (!state.user) return;
       try {
-        const watchlist = await api("/me/watchlist/brief");
-        const [reportsResult, actionsResult] = await Promise.allSettled([
+        const [watchlistResult, assetsResult, reportsResult, actionsResult] = await Promise.allSettled([
+          api("/me/watchlist/brief"),
+          api("/v1/stock-workspaces"),
           api("/research-reports?limit=20"),
           api("/me/research-actions")
         ]);
+        if (watchlistResult.status !== "fulfilled") throw watchlistResult.reason;
+        const watchlist = watchlistResult.value;
+        const assets = assetsResult.status === "fulfilled" ? assetsResult.value : null;
         const reports = reportsResult.status === "fulfilled" ? reportsResult.value.items || [] : [];
         const actions = actionsResult.status === "fulfilled" ? actionsResult.value : {items: [], summary: {}};
-        renderWatchlist(watchlist, reports, actions);
+        renderWatchlist(watchlist, reports, actions, assets);
       } catch (error) { $("watchlistSource").textContent = "自选股正在更新"; }
     }
 
@@ -5484,13 +5704,13 @@
       const thesisCard = document.createElement("section"); thesisCard.className = "stock-workspace-card primary";
       const thesisHead = document.createElement("div"); thesisHead.className = "stock-workspace-card-head";
       const thesisTitle = document.createElement("div"); thesisTitle.className = "stock-workspace-card-title"; thesisTitle.textContent = "当前研究判断";
-      const thesisMeta = document.createElement("span"); thesisMeta.className = "stock-workspace-card-meta"; thesisMeta.textContent = watchItem?.thesis ? "由你确认" : researchEntry ? "筛选线索待确认" : "待你确认";
+      const thesisMeta = document.createElement("span"); thesisMeta.className = "stock-workspace-card-meta"; thesisMeta.textContent = workspace?.thesis?.summary ? `由你确认 · 版本 ${workspace.thesis.version || 1}` : researchEntry ? "筛选线索待确认" : "待你确认";
       thesisHead.append(thesisTitle, thesisMeta);
       const judgmentLayout = document.createElement("div"); judgmentLayout.className = "stock-judgment-layout";
       const judgmentMain = document.createElement("div"); judgmentMain.className = "stock-judgment-main";
       const judgmentLabel = document.createElement("div"); judgmentLabel.className = "stock-judgment-label"; judgmentLabel.textContent = "研究主线";
       const thesisCopy = document.createElement("div"); thesisCopy.className = "stock-workspace-copy";
-      thesisCopy.textContent = watchItem?.thesis || (researchEntry
+      thesisCopy.textContent = workspace?.thesis?.summary || watchItem?.thesis || (researchEntry
         ? [
             `你从“${researchEntry.source_label || "研究候选筛选"}”进入研究空间。`,
             (researchEntry.matched_reasons || []).length ? `已保存的候选理由：${researchEntry.matched_reasons.slice(0, 4).join("；")}。` : "",
@@ -5515,7 +5735,7 @@
       });
       systemObservation.append(systemTitle, observationList); judgmentLayout.append(judgmentMain, systemObservation);
       const thesisActions = document.createElement("div"); thesisActions.className = "stock-workspace-actions";
-      const editThesis = document.createElement("button"); editThesis.type = "button"; editThesis.className = "btn"; editThesis.textContent = watchItem ? "编辑当前判断" : "加入关注并记录判断";
+      const editThesis = document.createElement("button"); editThesis.type = "button"; editThesis.className = "btn"; editThesis.textContent = workspace?.relation?.in_watchlist ? "编辑当前判断" : "加入关注并记录判断";
       editThesis.addEventListener("click", () => {
         editThesis.hidden = true;
         thesisCopy.hidden = true;
@@ -5524,9 +5744,10 @@
         textarea.className = "insight-question";
         textarea.setAttribute("aria-label", `${name}当前判断`);
         textarea.placeholder = "写下为什么关注、主要观察什么，以及什么变化会让你重新判断";
-        textarea.value = watchItem?.thesis || "";
+        textarea.value = workspace?.thesis?.summary || watchItem?.thesis || "";
+        let editBaseVersion = Number(workspace?.thesis?.version || 0);
         const status = document.createElement("div"); status.className = "stock-thesis-status";
-        status.textContent = "保存后，这段判断会进入你的个人资料库，并成为后续 Agent 对话的优先上下文。";
+        status.textContent = `保存会创建正式判断版本 ${editBaseVersion + 1}，原版本继续保留；如果其他页面已更新，系统不会静默覆盖。`;
         const editorActions = document.createElement("div"); editorActions.className = "stock-thesis-editor-actions";
         const save = document.createElement("button"); save.type = "button"; save.className = "btn primary"; save.textContent = "保存当前判断";
         const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "取消";
@@ -5537,19 +5758,41 @@
           if (!thesis) { status.textContent = "请先写下当前判断，或点击取消返回。"; textarea.focus(); return; }
           save.disabled = true; cancel.disabled = true; status.textContent = "正在保存并同步个人上下文…";
           try {
-            const saved = await api("/me/watchlist", {
+            if (!workspace?.relation?.workspace_id) {
+              await api("/me/watchlist", {
+                method: "POST",
+                body: JSON.stringify({ symbol, name: name === symbol ? null : name, market: currency === "USD" ? "美股" : "A股", thesis: null })
+              });
+              editBaseVersion = 0;
+            }
+            const draft = await api(`/v1/stocks/${encodeURIComponent(symbol)}/theses`, {
               method: "POST",
-              body: JSON.stringify({ symbol, name: name === symbol ? null : name, market: currency === "USD" ? "美股" : "A股", thesis })
+              body: JSON.stringify({
+                reason_text: thesis,
+                watch_items: workspace?.thesis?.watch_items || [],
+                recheck_conditions: workspace?.thesis?.recheck_conditions || [],
+                source: "user",
+                base_version: editBaseVersion
+              })
             });
-            const existing = state.watchlist.find(item => item.symbol === saved.symbol);
-            if (existing) Object.assign(existing, saved);
-            else state.watchlist.push(saved);
+            await api(`/v1/stocks/${encodeURIComponent(symbol)}/theses/${encodeURIComponent(draft.id)}/confirm`, {method: "POST"});
             closeEditor();
-            await loadDeepStockOverview(symbol);
             await loadWatchlist();
+            await loadDeepStockOverview(symbol);
           } catch (error) {
             save.disabled = false; cancel.disabled = false;
-            status.textContent = error?.message || "当前判断暂未保存，请稍后重试。";
+            if (error?.status === 409) {
+              try {
+                const latestWorkspace = await api(`/v1/stocks/${encodeURIComponent(symbol)}/workspace`);
+                editBaseVersion = Number(latestWorkspace?.thesis?.version || 0);
+                const latestText = latestWorkspace?.thesis?.summary || "当前没有正式判断";
+                status.textContent = `正式判断已在其他页面更新到版本 ${editBaseVersion}。系统没有覆盖它；请对照最新判断后再次保存：${latestText}`;
+              } catch {
+                status.textContent = error?.message || "正式判断已经更新，系统没有覆盖新版本。请刷新后重试。";
+              }
+            } else {
+              status.textContent = error?.message || "当前判断暂未保存，请稍后重试。";
+            }
           }
         });
         editorActions.append(save, cancel); editor.append(textarea, status, editorActions);
@@ -6781,6 +7024,7 @@
           structured_answer: data.structured_answer || null,
           intent: data.intent,
           status: data.status,
+          researchTargets: diagnosisResearchTargets(data),
           symbol: inferDiagnosisSymbol(data, question),
           marketKey: inferDiagnosisMarketKey(data, question)
         };
@@ -6964,6 +7208,10 @@
       document.querySelectorAll("[data-watchlist-filter]").forEach(item => item.classList.toggle("active", item === button));
       void loadWatchlist();
     }));
+    $("watchlistSecondaryFilter").addEventListener("change", event => {
+      state.watchlistSecondaryFilter = event.currentTarget.value || "all";
+      void loadWatchlist();
+    });
     $("globalSearch").addEventListener("keydown", event => {
       if (event.key !== "Enter" || event.isComposing) return;
       event.preventDefault();

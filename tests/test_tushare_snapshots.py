@@ -416,7 +416,7 @@ def test_symbol_snapshot_publishes_traceable_stable_version(app):
         "optional_available": 6,
         "optional_missing": [],
     }
-    assert snapshot["datasets"]["daily"]["row_count"] == 520
+    assert snapshot["datasets"]["daily"]["row_count"] == 620
     assert snapshot["datasets"]["fina_indicator"]["report_period"] == "2025-12-31"
     assert snapshot["datasets"]["stk_limit"]["source"] == "Tushare Pro"
     assert snapshot["datasets"]["income"]["report_period"] == "2025-12-31"

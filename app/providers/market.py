@@ -321,6 +321,7 @@ class TencentChinaIndexProvider:
         "000001.SS": {"quote_symbol": "sh000001", "name": "上证综指", "exchange": "SSE"},
         "399001.SZ": {"quote_symbol": "sz399001", "name": "深证成指", "exchange": "SZSE"},
         "399006.SZ": {"quote_symbol": "sz399006", "name": "创业板指", "exchange": "SZSE"},
+        "000688.SS": {"quote_symbol": "sh000688", "name": "科创50", "exchange": "SSE"},
         "000300.SS": {"quote_symbol": "sh000300", "name": "沪深300", "exchange": "SSE"},
         "000905.SS": {"quote_symbol": "sh000905", "name": "中证500", "exchange": "SSE"},
     }

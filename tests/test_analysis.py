@@ -232,6 +232,73 @@ def test_index_history_prefers_fresher_china_fallback():
     assert history["metrics"]["latest_close"] == 4739.23
 
 
+def test_index_history_prefers_complete_same_day_history_over_one_point_quote():
+    class OnePointProvider:
+        def fetch_history(self, symbol: str, range_name: str = "1y"):
+            return {
+                "symbol": symbol,
+                "points": [
+                    {
+                        "timestamp": "2026-07-22T07:00:00+00:00",
+                        "open": 1860.0,
+                        "high": 1861.0,
+                        "low": 1850.0,
+                        "close": 1860.0,
+                        "volume": 1,
+                    }
+                ],
+                "source": "single point quote",
+                "market_timestamp": "2026-07-22T07:00:00+00:00",
+                "fetched_at": "2026-07-22T07:01:00+00:00",
+                "coverage": {"points": 1},
+                "warnings": [],
+            }
+
+    class CompleteChinaProvider:
+        def supports(self, symbol: str) -> bool:
+            return symbol == "000688.SS"
+
+        def fetch_history(self, symbol: str, range_name: str = "1y"):
+            return {
+                "symbol": symbol,
+                "points": [
+                    {
+                        "timestamp": "2026-07-21T01:30:00+00:00",
+                        "open": 1800.0,
+                        "high": 1830.0,
+                        "low": 1790.0,
+                        "close": 1820.0,
+                        "volume": 1,
+                    },
+                    {
+                        "timestamp": "2026-07-22T01:30:00+00:00",
+                        "open": 1840.0,
+                        "high": 1870.0,
+                        "low": 1830.0,
+                        "close": 1860.0,
+                        "volume": 1,
+                    },
+                ],
+                "source": "complete daily history",
+                "market_timestamp": "2026-07-22T01:30:00+00:00",
+                "fetched_at": "2026-07-22T07:01:00+00:00",
+                "coverage": {"points": 2},
+                "warnings": [],
+            }
+
+    service = MarketAnalysisService(
+        None,
+        OnePointProvider(),
+        _NextDaySectorProvider(),
+        china_index_provider=CompleteChinaProvider(),
+    )
+
+    history = service.get_index_history("000688.SS", range_name="3mo")
+
+    assert history["source"] == "complete daily history"
+    assert history["metrics"]["return_1d_pct"] == 2.1978
+
+
 def test_current_quote_snapshot_uses_latest_complete_close_as_intraday_base():
     history = {
         "timezone": "Asia/Shanghai",
@@ -310,7 +377,7 @@ def test_market_brief_excludes_cross_date_indices_and_sectors_from_state():
         "market_key": "china",
     }
     assert brief["date_alignment"]["status"] == "partial_alignment"
-    assert brief["date_alignment"]["aligned_indices"] == 4
+    assert brief["date_alignment"]["aligned_indices"] == 5
     assert brief["date_alignment"]["sector_status"] == "cross_date_excluded"
     assert brief["hot_sectors"]["same_date_as_analysis_target"] is False
     mismatched = next(
@@ -319,7 +386,7 @@ def test_market_brief_excludes_cross_date_indices_and_sectors_from_state():
     assert mismatched["market_date"] == "2026-07-20"
     assert mismatched["analysis_eligibility"] == "cross_date_excluded"
     assert brief["market_state"]["label"] == "偏强"
-    assert brief["market_state"]["aligned_index_count"] == 4
+    assert brief["market_state"]["aligned_index_count"] == 5
     assert brief["market_state"]["whole_market_breadth_available"] is True
 
 
@@ -339,7 +406,7 @@ def test_market_brief_uses_newer_index_session_before_previous_day_breadth():
         "market_key": "china",
     }
     assert brief["date_alignment"]["status"] == "same_market_date"
-    assert brief["date_alignment"]["aligned_indices"] == 5
+    assert brief["date_alignment"]["aligned_indices"] == 6
     assert brief["date_alignment"]["sector_status"] == "same_market_date"
     assert brief["date_alignment"]["breadth_status"] == "cross_date_excluded"
     assert brief["hot_sectors"]["analysis_eligibility"] == "same_market_date"

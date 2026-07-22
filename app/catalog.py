@@ -7,6 +7,7 @@ INDEX_CATALOG = [
     {"symbol": "000001.SS", "name": "上证综指", "region": "中国", "group": "china"},
     {"symbol": "399001.SZ", "name": "深证成指", "region": "中国", "group": "china"},
     {"symbol": "399006.SZ", "name": "创业板指", "region": "中国", "group": "china"},
+    {"symbol": "000688.SS", "name": "科创50", "region": "中国", "group": "china"},
     {"symbol": "000300.SS", "name": "沪深300", "region": "中国", "group": "china"},
     {"symbol": "000905.SS", "name": "中证500", "region": "中国", "group": "china"},
     {"symbol": "^HSI", "name": "恒生指数", "region": "中国香港", "group": "hong_kong"},

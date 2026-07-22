@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from app.catalog import INDEX_BY_SYMBOL
 from app.db import Database
 from app.providers.market import (
     CSIIndustryIndexProvider,
@@ -30,6 +31,15 @@ class FakeResponse:
 
     def json(self):
         return self.payload
+
+
+def test_star_50_is_a_first_class_china_index():
+    assert INDEX_BY_SYMBOL["000688.SS"]["name"] == "科创50"
+    assert TencentChinaIndexProvider.SYMBOLS["000688.SS"] == {
+        "quote_symbol": "sh000688",
+        "name": "科创50",
+        "exchange": "SSE",
+    }
 
 
 def test_yahoo_provider_parses_and_caches(tmp_path: Path):

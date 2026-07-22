@@ -578,6 +578,8 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "AI 图像研究" in page.text
     assert 'api("/me/uploads/images"' in page.text
     assert 'api("/me/conversations?limit=100")' in page.text
+    assert "function diagnosisResearchTargets(data)" in page.text
+    assert "多股比较" in page.text
     assert "function visibleConversationItems(items = [])" in page.text
     assert 'item.quality_scope !== "evaluation"' in page.text
     assert 'api("/me/knowledge")' in page.text
@@ -595,7 +597,9 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'aria-label="复盘中心"' in page.text
     assert 'aria-label="个人中心"' in page.text
     assert 'id="todayOverviewGrid"' in page.text
+    assert "#todayOverviewGrid[hidden]" in page.text
     assert 'api("/v1/today/overview")' in page.text
+    assert 'api("/v1/stock-workspaces")' in page.text
     assert "function renderTodayOverview(data)" in page.text
     assert '$("todayOverviewGrid").hidden = !insightsVisible' in page.text
     open_stock = page.text[page.text.index("async function openDeepStockSymbol(symbol)") :]
@@ -603,6 +607,15 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert open_stock.index("select.value = symbol") < open_stock.index(
         'activateWorkspace("deep_stock")'
     )
+    assert 'const order = ["000001.SS", "399001.SZ", "399006.SZ", "000688.SS"]' in page.text
+    assert "error.status = response.status" in page.text
+    thesis_editor = page.text[
+        page.text.index('const editThesis = document.createElement("button")') :
+        page.text.index('const researchMap = document.createElement("section")')
+    ]
+    assert '/v1/stocks/${encodeURIComponent(symbol)}/theses' in thesis_editor
+    assert "base_version: editBaseVersion" in thesis_editor
+    assert "正式判断已在其他页面更新" in thesis_editor
     assert page.text.count('class="nav-item') == 6
     assert page.text.index('data-page="watchlist"') < page.text.index(
         'data-page="deep_stock"'
@@ -610,6 +623,14 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'data-page="screening" aria-label="选股研究"' not in page.text
     assert 'data-open-page="screening"' in page.text
     assert 'id="accountPanel"' in page.text
+    assert 'data-watchlist-filter="holding"' in page.text
+    assert 'data-watchlist-filter="watching"' in page.text
+    assert 'data-watchlist-filter="ended"' in page.text
+    assert 'id="watchlistSecondaryFilter"' in page.text
+    assert "async function updateStockAssetRelation(" in page.text
+    assert "base_version: item.version" in page.text
+    assert "结束跟踪不会删除判断和历史" in page.text
+    assert 'deleteButton.textContent = "删除"' not in page.text
     assert "function renderAccountCenter()" in page.text
     assert 'year: "numeric", month: "2-digit", day: "2-digit"' in page.text
     assert "内部 MVP 暂未启用计费" in page.text
@@ -656,7 +677,8 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "stock-system-observation-list" in page.text
     assert 'stock-workspace-item${interactive ? " interactive" : ""}' in page.text
     assert "保存当前判断" in page.text
-    assert "保存后，这段判断会进入你的个人资料库" in page.text
+    assert "保存会创建正式判断版本" in page.text
+    assert "系统不会静默覆盖" in page.text
     assert 'data-stock-space-tab="overview"' in page.text
     assert 'data-stock-space-tab="ai"' in page.text
     assert 'data-stock-space-tab="evidence"' in page.text

@@ -4,6 +4,7 @@ from dataclasses import asdict
 from datetime import date, datetime
 import hashlib
 import json
+import math
 import re
 from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
@@ -68,6 +69,16 @@ class LiZongStrategyService:
     """Run Li Zong v1 on published snapshots with traceable data fallbacks."""
 
     ROE_FALLBACK_VERSION = "eastmoney_reported_roe_v1"
+    PRICE_HISTORY_WINDOW_VERSION = "market_days_700_v1"
+    INCOMPLETE_BOUNDARY_VERSION = "data_incomplete_v2"
+    PRICE_HISTORY_RULE_IDS = {
+        "LZ-C-01",
+        "LZ-C-02",
+        "LZ-C-03",
+        "LZ-C-04",
+        "LZ-VP-01",
+        "LZ-VP-02",
+    }
 
     SUBSCRIPTION_BOUNDARY = (
         "用户策略订阅、通知偏好和提醒渠道暂未在本服务持久化；"
@@ -152,16 +163,19 @@ class LiZongStrategyService:
         data_versions: dict[str, str] = {}
         for symbol, packet in packets.items():
             packet_version = self._packet_data_version(symbol, packet)
+            version_payload: dict[str, Any] = {
+                "packet_data_version": packet_version,
+                "price_history_window_version": self.PRICE_HISTORY_WINDOW_VERSION,
+                "incomplete_boundary_version": self.INCOMPLETE_BOUNDARY_VERSION,
+            }
             if roe_fallback_attempted[symbol]:
-                data_versions[symbol] = self._fingerprint(
+                version_payload.update(
                     {
-                        "packet_data_version": packet_version,
                         "roe_fallback_version": self.ROE_FALLBACK_VERSION,
                         "supplemental_roe": supplemental_roe[symbol],
                     }
                 )
-            else:
-                data_versions[symbol] = packet_version
+            data_versions[symbol] = self._fingerprint(version_payload)
         as_of_dates = [
             value
             for value in (self._packet_as_of(packet) for packet in packets.values())
@@ -223,6 +237,12 @@ class LiZongStrategyService:
             if roe_fallback_attempted[symbol]:
                 evaluation["roe_fallback_version"] = self.ROE_FALLBACK_VERSION
                 evaluation["roe_fallback_rows"] = len(supplemental_roe[symbol])
+            evaluation["price_history_window_version"] = (
+                self.PRICE_HISTORY_WINDOW_VERSION
+            )
+            evaluation["incomplete_boundary_version"] = (
+                self.INCOMPLETE_BOUNDARY_VERSION
+            )
             evaluation["evaluation_depth"] = "full_rules"
             evaluation["stock_basic"] = stock_basic
 
@@ -360,6 +380,23 @@ class LiZongStrategyService:
             item
             for item in history_insufficient_items
             if current_dates.get(str(item.get("symbol"))) != universe_as_of
+            or self._evaluation_depth(
+                (
+                    previous_states.get(str(item.get("symbol"))) or {}
+                ).get("result")
+                or {}
+            )
+            != "history_precheck"
+            or (
+                (
+                    (
+                        previous_states.get(str(item.get("symbol"))) or {}
+                    ).get("result")
+                    or {}
+                ).get("history_precheck")
+                or {}
+            )
+            != (item.get("history_precheck") or {})
         ]
         history_result = self._publish_universe_history_incomplete(
             history_pending,
@@ -406,6 +443,43 @@ class LiZongStrategyService:
                     or ""
                 )
                 != self.ROE_FALLBACK_VERSION
+            )
+            or (
+                self._price_history_rule_incomplete(
+                    (
+                        previous_states.get(str(item.get("symbol"))) or {}
+                    ).get("result")
+                    or {}
+                )
+                and str(
+                    (
+                        (
+                            previous_states.get(str(item.get("symbol"))) or {}
+                        ).get("result")
+                        or {}
+                    ).get("price_history_window_version")
+                    or ""
+                )
+                != self.PRICE_HISTORY_WINDOW_VERSION
+            )
+            or (
+                str(
+                    (
+                        previous_states.get(str(item.get("symbol"))) or {}
+                    ).get("status")
+                    or ""
+                )
+                == "data_incomplete"
+                and str(
+                    (
+                        (
+                            previous_states.get(str(item.get("symbol"))) or {}
+                        ).get("result")
+                        or {}
+                    ).get("incomplete_boundary_version")
+                    or ""
+                )
+                != self.INCOMPLETE_BOUNDARY_VERSION
             )
         ]
         pending_eligible.sort(
@@ -673,6 +747,58 @@ class LiZongStrategyService:
             ),
         }
 
+    def resolve_universe_mentions(
+        self, message: str, *, limit: int = 5
+    ) -> list[str]:
+        """Resolve multiple A-share codes or company names from the stable universe."""
+
+        text = str(message or "").strip()
+        if not text:
+            return []
+        getter = getattr(self.snapshot_service, "get_a_share_universe", None)
+        if not callable(getter):
+            return []
+        packet = getter()
+        items = list(((packet.get("snapshot") or {}).get("items") or []))
+        known_symbols = {
+            str(item.get("symbol") or ""): item
+            for item in items
+            if item.get("symbol")
+        }
+        matches: list[tuple[int, int, str]] = []
+        for match in re.finditer(
+            r"(?<!\d)(\d{6})(?:\.(SH|SS|SZ|BJ))?(?!\d)",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            raw = match.group(1)
+            suffix = str(match.group(2) or "").upper()
+            if suffix:
+                raw = f"{raw}.{suffix}"
+            try:
+                symbol = normalize_symbol(raw)
+            except ValueError:
+                continue
+            if symbol in known_symbols:
+                matches.append((match.start(), -len(match.group(0)), symbol))
+
+        folded = text.casefold()
+        for symbol, item in known_symbols.items():
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            position = folded.find(name.casefold())
+            if position >= 0:
+                matches.append((position, -len(name), symbol))
+
+        resolved: list[str] = []
+        for _, _, symbol in sorted(matches):
+            if symbol not in resolved:
+                resolved.append(symbol)
+            if len(resolved) >= max(1, min(int(limit), 10)):
+                break
+        return resolved
+
     def _publish_universe_prefilter(
         self,
         items: list[dict[str, Any]],
@@ -895,7 +1021,13 @@ class LiZongStrategyService:
             parameters.adjusted_high_window_days
             + parameters.volume_baseline_days,
         )
-        required_trading_calendar_days = int(required_trading_days * 7 / 5) + 30
+        # A-share trading calendars average roughly 242 open days per year.
+        # Use that market-specific ratio plus a small holiday buffer instead
+        # of a weekday-only estimate, which let 377-row recent listings slip
+        # into an expensive deep sync that could never satisfy 380 rows.
+        required_trading_calendar_days = (
+            math.ceil(required_trading_days * 365.2425 / 242) + 7
+        )
         required_roe_calendar_days = parameters.required_annual_roe_years * 365
         listed = cls._parse_date(item.get("list_date"))
         as_of = cls._parse_date(as_of_date)
@@ -982,6 +1114,14 @@ class LiZongStrategyService:
         }
         return set(statuses) == set(CANDIDATE_RULE_IDS) and all(
             status in {"passed", "failed"} for status in statuses.values()
+        )
+
+    @classmethod
+    def _price_history_rule_incomplete(cls, result: Mapping[str, Any]) -> bool:
+        return any(
+            str(rule.get("rule_id") or "") in cls.PRICE_HISTORY_RULE_IDS
+            and str(rule.get("status") or "") == "data_incomplete"
+            for rule in result.get("rule_results") or []
         )
 
     @staticmethod
@@ -1384,7 +1524,7 @@ class LiZongStrategyService:
         if missing_rule_data or snapshot_incomplete:
             return self._force_incomplete(
                 evaluation,
-                "关键数据集或规则窗口不完整，服务层强制保持 data_incomplete。",
+                "关键数据集或规则窗口不完整，当前暂不能形成完整判断。",
             )
         return evaluation
 
@@ -1396,7 +1536,23 @@ class LiZongStrategyService:
         result["status"] = "data_incomplete"
         result["candidate_qualified"] = False
         result["triggered_rule_ids"] = []
-        result["limitations"] = [*(result.get("limitations") or []), limitation]
+        limitations = []
+        rewrote_conflicting_status = False
+        for value in result.get("limitations") or []:
+            text = str(value)
+            if "当前状态按 not_qualified 处理" in text:
+                text = (
+                    "已存在明确不通过规则，同时仍有数据缺口；"
+                    "在关键缺口补齐前按数据不完整处理。"
+                )
+                rewrote_conflicting_status = True
+            limitations.append(text)
+        if not (
+            rewrote_conflicting_status
+            and limitation.startswith("关键数据集或规则窗口不完整")
+        ):
+            limitations.append(limitation)
+        result["limitations"] = list(dict.fromkeys(limitations))
         return result
 
     @staticmethod

@@ -22,6 +22,7 @@ class TushareSnapshotService:
     """Publish traceable per-symbol Tushare snapshots without replacing stable data."""
 
     METHOD = "tushare_symbol_snapshot_v1"
+    SYMBOL_HISTORY_MARKET_DAYS = 700
     DATASETS = (
         "trade_cal",
         "stock_basic",
@@ -98,9 +99,12 @@ class TushareSnapshotService:
                 value for value in trade_dates if value <= latest_trade_date
             ]
             # The strategy needs up to 380 actual stock observations. Request a
-            # wider market-calendar buffer so long suspensions do not turn a
-            # mature listing into an avoidable short-history snapshot.
-            history_dates = completed_trade_dates[-520:]
+            # substantially wider market-calendar buffer so a mature listing
+            # with a long suspension can still contribute enough tradable rows
+            # without adding another Tushare call.
+            history_dates = completed_trade_dates[
+                -self.SYMBOL_HISTORY_MARKET_DAYS :
+            ]
             history_start = history_dates[0]
             query_specs = {
                 "stock_basic": {
