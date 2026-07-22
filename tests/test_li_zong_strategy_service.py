@@ -97,6 +97,7 @@ def _snapshot_packet(
     stock_name: str = "中兴通讯",
     industry: str = "通信设备",
     market: str = "主板",
+    list_date: str = "19971118",
 ) -> dict:
     dates = pd.bdate_range(end=AS_OF, periods=400)
     limit_indices = {-200, -199, -150, -100, -50, -5}
@@ -160,6 +161,7 @@ def _snapshot_packet(
                     "name": stock_name,
                     "industry": industry,
                     "market": market,
+                    "list_date": list_date,
                 }
             ],
         ),
@@ -352,6 +354,7 @@ def test_run_persists_candidate_rules_and_one_non_duplicate_trigger(app):
         "name": "中兴通讯",
         "industry": "通信设备",
         "market": "主板",
+        "list_date": "1997-11-18",
     }
     assert first["items"][0]["new_trigger_event_ids"]
     assert second["items"][0]["id"] == first["items"][0]["id"]
@@ -547,6 +550,176 @@ def test_universe_batch_prefilters_limits_deep_sync_and_is_idempotent(app):
     assert snapshots.calls["000001.SZ"] == 0
     assert snapshots.calls["830799.BJ"] == 0
     assert _table_count(app.state.database, "strategy_candidate_snapshots") == 5
+
+
+def test_universe_batch_skips_recent_listing_and_reports_real_deep_progress(app):
+    items = [
+        {
+            "symbol": "301626.SZ",
+            "name": "近期上市大市值样本",
+            "industry": "测试行业",
+            "market": "创业板",
+            "list_date": "20250701",
+            "total_mv_yi": 5_000.0,
+        },
+        {
+            "symbol": "000063.SZ",
+            "name": "中兴通讯",
+            "industry": "通信设备",
+            "market": "主板",
+            "list_date": "19971118",
+            "total_mv_yi": 220.0,
+        },
+    ]
+    snapshots = UniverseSnapshotStub(
+        {"000063.SZ": _snapshot_packet(symbol="000063.SZ")}, items
+    )
+    service = LiZongStrategyService(app.state.database, snapshots)
+
+    result = service.run_universe_batch(batch_size=1)
+
+    assert result["selected_symbols"] == ["000063.SZ"]
+    assert snapshots.symbol_sync_calls == ["000063.SZ"]
+    assert snapshots.calls["301626.SZ"] == 0
+    recent = service.get_candidate("301626.SZ")
+    assert recent["status"] == "data_incomplete"
+    assert recent["result"]["evaluation_depth"] == "history_precheck"
+    assert recent["result"]["history_precheck"]["status"] == "insufficient"
+    assert "上市后量价历史预判未达到" in " ".join(
+        recent["result"]["limitations"]
+    )
+    coverage = result["coverage"]
+    assert coverage["universe_count"] == 2
+    assert coverage["history_insufficient_count"] == 1
+    assert coverage["deep_check_eligible_count"] == 1
+    assert coverage["deep_processed_symbols"] == 1
+    assert coverage["deep_remaining_symbols"] == 0
+    assert coverage["deep_check_complete"] is True
+
+
+def test_universe_batch_requeues_same_day_legacy_history_precheck_for_deep_rules(
+    app,
+):
+    item = {
+        "symbol": "601728.SS",
+        "name": "中国电信",
+        "industry": "通信服务",
+        "market": "主板",
+        "list_date": "20250701",
+        "total_mv_yi": 5_000.0,
+    }
+    snapshots = UniverseSnapshotStub({}, [item])
+    service = LiZongStrategyService(app.state.database, snapshots)
+
+    first = service.run_universe_batch(batch_size=1)
+    assert first["selected_symbols"] == []
+    assert service.get_candidate("601728.SS")["result"]["evaluation_depth"] == (
+        "history_precheck"
+    )
+
+    item["list_date"] = "20210820"
+    snapshots.packets["601728.SS"] = _snapshot_packet(
+        symbol="601728.SS",
+        data_version="telecom-full-history",
+        stock_name="中国电信",
+    )
+    second = service.run_universe_batch(batch_size=1)
+
+    check = service._history_precheck(
+        item,
+        as_of_date=AS_OF,
+        parameters=LiZongParameters(),
+    )
+    assert check["status"] == "unknown"
+    assert "上市日期不能证明上市前年度ROE不可得" in check["reasons"][0]
+    assert second["selected_symbols"] == ["601728.SS"]
+    assert snapshots.symbol_sync_calls == ["601728.SS"]
+    assert service.get_candidate("601728.SS")["result"]["evaluation_depth"] == (
+        "full_rules"
+    )
+
+
+def test_listing_age_does_not_assume_pre_listing_roe_is_unavailable(app):
+    items = [
+        {
+            "symbol": "601728.SS",
+            "name": "中国电信",
+            "industry": "通信服务",
+            "market": "主板",
+            "list_date": "20210820",
+            "total_mv_yi": 5_000.0,
+        }
+    ]
+    snapshots = UniverseSnapshotStub(
+        {
+            "601728.SS": _snapshot_packet(
+                symbol="601728.SS",
+                stock_name="中国电信",
+                industry="通信服务",
+                market_cap_yi=5_000.0,
+            )
+        },
+        items,
+    )
+    service = LiZongStrategyService(app.state.database, snapshots)
+
+    result = service.run_universe_batch(batch_size=1, as_of_date="2026-07-22")
+
+    assert result["selected_symbols"] == ["601728.SS"]
+    assert snapshots.symbol_sync_calls == ["601728.SS"]
+    coverage = result["coverage"]
+    assert coverage["history_insufficient_count"] == 0
+    assert coverage["history_unknown_count"] == 1
+    assert coverage["deep_check_eligible_count"] == 1
+    candidate = service.get_candidate("601728.SS")
+    assert candidate["result"]["evaluation_depth"] == "full_rules"
+
+
+def test_universe_batch_prefers_prior_complete_data_before_larger_market_cap(app):
+    items = [
+        {
+            "symbol": "300308.SZ",
+            "name": "中际旭创",
+            "industry": "通信设备",
+            "market": "创业板",
+            "list_date": "20120921",
+            "total_mv_yi": 1_000.0,
+        },
+        {
+            "symbol": "000063.SZ",
+            "name": "中兴通讯",
+            "industry": "通信设备",
+            "market": "主板",
+            "list_date": "19971118",
+            "total_mv_yi": 220.0,
+        },
+    ]
+    snapshots = UniverseSnapshotStub(
+        {
+            "000063.SZ": _snapshot_packet(
+                symbol="000063.SZ", data_version="prior-complete"
+            ),
+            "300308.SZ": _snapshot_packet(
+                symbol="300308.SZ",
+                data_version="new-large-cap",
+                stock_name="中际旭创",
+                market="创业板",
+            ),
+        },
+        items,
+    )
+    service = LiZongStrategyService(app.state.database, snapshots)
+    service.run_symbols(["000063.SZ"])
+    snapshots.as_of_date = "2026-07-22"
+    snapshots.data_version = "universe-v2"
+    snapshots.packets["000063.SZ"]["data_version"] = "refreshed-complete"
+    snapshots.packets["000063.SZ"]["snapshot"]["as_of_date"] = "2026-07-22"
+    snapshots.packets["300308.SZ"]["snapshot"]["as_of_date"] = "2026-07-22"
+
+    result = service.run_universe_batch(batch_size=1, as_of_date="2026-07-22")
+
+    assert result["selected_symbols"] == ["000063.SZ"]
+    assert snapshots.symbol_sync_calls == ["000063.SZ"]
 
 
 def test_universe_batch_sync_failure_keeps_previous_stable_candidate(app):

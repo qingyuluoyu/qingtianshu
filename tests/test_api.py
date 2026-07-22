@@ -590,6 +590,22 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "市场环境" in page.text
     assert 'aria-label="今日观察"' in page.text
     assert 'aria-label="AI研究"' in page.text
+    assert 'aria-label="我的关注"' in page.text
+    assert 'aria-label="个股研究"' in page.text
+    assert 'aria-label="复盘中心"' in page.text
+    assert 'aria-label="个人中心"' in page.text
+    assert page.text.count('class="nav-item') == 6
+    assert page.text.index('data-page="watchlist"') < page.text.index(
+        'data-page="deep_stock"'
+    ) < page.text.index('data-page="agent"')
+    assert 'data-page="screening" aria-label="选股研究"' not in page.text
+    assert 'data-open-page="screening"' in page.text
+    assert 'id="accountPanel"' in page.text
+    assert "function renderAccountCenter()" in page.text
+    assert 'year: "numeric", month: "2-digit", day: "2-digit"' in page.text
+    assert "内部 MVP 暂未启用计费" in page.text
+    assert 'data.type === "stock_strategy_updated"' in page.text
+    assert "财务历史待实查" in page.text
     assert ".sidebar .nav-text { display: inline; }" in page.text
     assert 'data-page="knowledge"' in page.text
     assert 'aria-label="资料库"' in page.text

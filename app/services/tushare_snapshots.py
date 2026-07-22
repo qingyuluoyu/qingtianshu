@@ -64,7 +64,7 @@ class TushareSnapshotService:
         canonical = normalize_symbol(symbol)
         as_of = self._parse_as_of_date(as_of_date)
         requested_as_of = as_of.strftime("%Y%m%d")
-        calendar_start = (as_of - timedelta(days=800)).strftime("%Y%m%d")
+        calendar_start = (as_of - timedelta(days=1100)).strftime("%Y%m%d")
         sync_run = self.database.start_tushare_sync_run(
             job_scope=f"symbol:{canonical}",
             as_of_date=as_of.isoformat(),
@@ -97,7 +97,10 @@ class TushareSnapshotService:
             completed_trade_dates = [
                 value for value in trade_dates if value <= latest_trade_date
             ]
-            history_dates = completed_trade_dates[-400:]
+            # The strategy needs up to 380 actual stock observations. Request a
+            # wider market-calendar buffer so long suspensions do not turn a
+            # mature listing into an avoidable short-history snapshot.
+            history_dates = completed_trade_dates[-520:]
             history_start = history_dates[0]
             query_specs = {
                 "stock_basic": {
@@ -407,13 +410,45 @@ class TushareSnapshotService:
         }
 
     def sync_a_share_universe(
-        self, *, as_of_date: str | None = None
+        self, *, as_of_date: str | None = None, force: bool = False
     ) -> dict[str, Any]:
         """Publish the listed A-share universe and latest market-cap prefilter."""
 
+        as_of = self._parse_as_of_date(as_of_date)
+        previous_stable = self.database.latest_tushare_dataset_snapshot(
+            "a_share_universe", "all"
+        )
+        if (
+            not force
+            and previous_stable is not None
+            and self._universe_snapshot_matches_request(
+                previous_stable.get("payload") or {}, as_of
+            )
+        ):
+            snapshot = previous_stable.get("payload") or {}
+            return {
+                "run": {
+                    "id": previous_stable.get("sync_run_id"),
+                    "job_scope": "universe:a_share",
+                    "status": "stable",
+                    "as_of_date": snapshot.get("as_of_date"),
+                    "data_version": previous_stable.get("data_version"),
+                    "summary": {
+                        **(snapshot.get("coverage") or {}),
+                        "as_of_date": snapshot.get("as_of_date"),
+                        "published": True,
+                        "reused": True,
+                    },
+                    "started_at": previous_stable.get("created_at"),
+                    "finished_at": previous_stable.get("created_at"),
+                },
+                "snapshot": snapshot,
+                "published": True,
+                "previous_stable_retained": False,
+                "reused": True,
+            }
         if self.client is None:
             raise TushareSnapshotUnavailable("Tushare 数据同步尚未配置")
-        as_of = self._parse_as_of_date(as_of_date)
         requested_as_of = as_of.strftime("%Y%m%d")
         calendar_start = (as_of - timedelta(days=60)).strftime("%Y%m%d")
         sync_run = self.database.start_tushare_sync_run(
@@ -512,6 +547,7 @@ class TushareSnapshotService:
             generated_at = utc_now()
             combined = {
                 "method": "tushare_a_share_universe_v1",
+                "requested_as_of_date": as_of.isoformat(),
                 "as_of_date": self._iso_date(latest_trade_date),
                 "generated_at": generated_at,
                 "items": items,
@@ -577,6 +613,7 @@ class TushareSnapshotService:
                 "snapshot": combined,
                 "published": stable,
                 "previous_stable_retained": bool(not stable and previous),
+                "reused": False,
             }
         except Exception as exc:
             previous = self.database.latest_tushare_dataset_snapshot(
@@ -594,6 +631,7 @@ class TushareSnapshotService:
                 "snapshot": (previous or {}).get("payload"),
                 "published": False,
                 "previous_stable_retained": previous is not None,
+                "reused": False,
             }
 
     def get_a_share_universe(self) -> dict[str, Any]:
@@ -755,6 +793,16 @@ class TushareSnapshotService:
             text = str(value).strip().replace("-", "")
             return datetime.strptime(text, "%Y%m%d").date()
         return datetime.now(ZoneInfo("Asia/Shanghai")).date()
+
+    @staticmethod
+    def _universe_snapshot_matches_request(
+        snapshot: dict[str, Any], requested_as_of: date
+    ) -> bool:
+        requested = requested_as_of.isoformat()
+        stored_request = str(snapshot.get("requested_as_of_date") or "").strip()
+        if stored_request:
+            return stored_request == requested
+        return str(snapshot.get("as_of_date") or "").strip() == requested
 
     @staticmethod
     def _iso_date(value: Any) -> str | None:

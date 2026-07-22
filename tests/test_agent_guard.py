@@ -455,17 +455,32 @@ def test_li_zong_partial_preview_does_not_claim_full_market_has_no_candidates():
             "remaining_symbols": 1130,
             "coverage_ratio": 4400 / 5530,
             "full_market_coverage": False,
+            "deep_check_eligible_count": 1200,
+            "deep_processed_symbols": 70,
+            "deep_remaining_symbols": 1130,
+            "deep_processing_ratio": 70 / 1200,
+            "history_insufficient_count": 180,
+            "history_unknown_count": 20,
+            "deep_check_complete": False,
+            "actionable_candidate_count": 0,
         },
         "boundary": "只生成研究候选和人工复核触发，不构成买卖建议。",
     }
 
     answer = AgentService._render_preview(evidence)
 
-    assert "已评估 4400/5530" in answer
-    assert "仍有 1130 只待处理" in answer
-    assert "当前已评估范围内尚无" in answer
-    assert "不能推断尚未处理" in answer
-    assert "全市场规则计算已经完成" not in answer
+    assert "全市场名单为 5530 只" in answer
+    assert "4400/5530 只已形成市值预筛或规则状态" in answer
+    assert "不是深度规则完成率" in answer
+    assert "可深度核验 1200 只" in answer
+    assert "已深度处理 70/1200 只" in answer
+    assert "上市后量价历史不足" in answer
+    assert "财务历史已经完整" in answer
+    assert "当前已深度处理范围内尚无" in answer
+    assert "不能推断尚待深度处理" in answer
+    assert "这个0只只代表当前已深度处理范围" in answer
+    assert "不构成买卖建议" in answer
+    assert "全市场深度规则计算已经完成" not in answer
 
 
 def test_li_zong_guard_rejects_invented_review_cycle_and_rule_bottleneck():
@@ -482,6 +497,14 @@ def test_li_zong_guard_rejects_invented_review_cycle_and_rule_bottleneck():
             "remaining_symbols": 1066,
             "coverage_ratio": 4464 / 5530,
             "full_market_coverage": False,
+            "deep_check_eligible_count": 1200,
+            "deep_processed_symbols": 134,
+            "deep_remaining_symbols": 1066,
+            "deep_processing_ratio": 134 / 1200,
+            "history_insufficient_count": 180,
+            "history_unknown_count": 20,
+            "deep_check_complete": False,
+            "actionable_candidate_count": 0,
         },
     }
     answer = (
@@ -491,6 +514,7 @@ def test_li_zong_guard_rejects_invented_review_cycle_and_rule_bottleneck():
         "尤其连续五年ROE与近十日涨停同时满足的股票极少。\n"
         "下一步按T+3周期复核候选池。"
     )
+    answer = AgentService._normalize_li_zong_scope_answer(answer, evidence)
 
     guard = AgentService._validate_model_output(answer, evidence)
 
@@ -508,6 +532,47 @@ def test_li_zong_guard_rejects_invented_review_cycle_and_rule_bottleneck():
     assert "当前已评估范围内没有候选" in repaired_answer
     assert "极少" not in repaired_answer
     assert "T+3" not in repaired_answer
+
+
+def test_li_zong_scope_normalization_replaces_legacy_coverage_with_deep_progress():
+    evidence = {
+        "type": "stock_screen",
+        "status": "partial",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "candidate_pool",
+        "items": [],
+        "data_meta": {
+            "latest_completed_trade_date": "2026-07-22",
+            "universe_count": 5530,
+            "evaluated_symbols": 5090,
+            "remaining_symbols": 440,
+            "coverage_ratio": 5090 / 5530,
+            "full_market_coverage": False,
+            "deep_check_eligible_count": 1016,
+            "deep_processed_symbols": 576,
+            "deep_remaining_symbols": 440,
+            "deep_processing_ratio": 576 / 1016,
+            "history_insufficient_count": 200,
+            "history_unknown_count": 154,
+            "deep_check_complete": False,
+            "actionable_candidate_count": 0,
+        },
+    }
+    legacy = (
+        "李总策略数据交易日为 2026-07-22；当前已评估 5090/5530 只"
+        "（92.0%），仍有 440 只待处理。\n\n"
+        "当前已评估范围内尚无股票进入候选池或触发池。"
+    )
+
+    normalized = AgentService._normalize_li_zong_scope_answer(legacy, evidence)
+
+    assert "全市场名单为 5530 只" in normalized
+    assert "已深度处理 576/1016 只" in normalized
+    assert "上市后量价历史不足" in normalized
+    assert "154 只股票不能仅凭上市日期确认五年ROE是否可得" in normalized
+    assert "当前已评估 5090/5530" not in normalized
+    assert "不是深度规则完成率" in normalized
+    assert "这个0只只代表当前已深度处理范围" in normalized
 
 
 def test_prompt_evidence_and_output_guard_hide_provider_operations():

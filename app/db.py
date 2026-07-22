@@ -3439,11 +3439,12 @@ class Database:
         strategy_id: str,
         strategy_version: str,
         parameter_version: str,
-    ) -> dict[str, dict[str, str]]:
+    ) -> dict[str, dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT candidates.symbol, candidates.as_of_date, candidates.status
+                SELECT candidates.symbol, candidates.as_of_date, candidates.status,
+                       candidates.result_json
                 FROM strategy_candidate_snapshots AS candidates
                 JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
                 WHERE candidates.strategy_id = ?
@@ -3470,6 +3471,7 @@ class Database:
             str(row["symbol"]): {
                 "as_of_date": str(row["as_of_date"]),
                 "status": str(row["status"]),
+                "result": json.loads(str(row["result_json"] or "{}")),
             }
             for row in rows
         }

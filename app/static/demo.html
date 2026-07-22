@@ -1230,6 +1230,33 @@
     .watchlist-add-form.editing { background: #fff8e9; }
     .watchlist-add-form input[readonly] { color: #7d8998; background: #eef2f7; }
 
+    .research-mode-switch { display: inline-flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid #dbe3ee; border-radius: 999px; background: #f4f7fb; }
+    .research-mode-button { border: 0; border-radius: 999px; padding: 6px 10px; color: #6d7c91; background: transparent; font-size: 10px; white-space: nowrap; }
+    .research-mode-button.active { color: #fff; background: #3478f6; box-shadow: 0 3px 10px rgba(52,120,246,.18); }
+    .research-mode-button:focus-visible { outline: 2px solid #9dbbff; outline-offset: 2px; }
+
+    .account-page { min-height: calc(100dvh - 118px); }
+    .account-content { display: grid; gap: 14px; padding: 18px; background: #f6f8fc; }
+    .account-hero { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 20px; border: 1px solid #dfe6f0; border-radius: 16px; background: linear-gradient(135deg,#fff 0%,#f1f6ff 100%); }
+    .account-identity { display: flex; align-items: center; gap: 14px; min-width: 0; }
+    .account-avatar { flex-shrink: 0; display: grid; width: 48px; height: 48px; place-items: center; border-radius: 15px; color: #fff; background: linear-gradient(135deg,#3478f6,#7057d9); font-size: 20px; font-weight: 800; box-shadow: 0 8px 20px rgba(52,120,246,.2); }
+    .account-name { color: #24364f; font-size: 18px; font-weight: 780; }
+    .account-meta { margin-top: 5px; color: #748297; font-size: 11px; line-height: 1.55; }
+    .account-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+    .account-metric-grid { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 10px; }
+    .account-metric { padding: 15px; border: 1px solid #dfe6f0; border-radius: 13px; background: #fff; }
+    .account-metric span { color: #7b889b; font-size: 11px; }
+    .account-metric strong { display: block; margin-top: 7px; color: #284c85; font-size: 22px; }
+    .account-section-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; align-items: start; }
+    .account-card { min-width: 0; padding: 16px; border: 1px solid #dfe6f0; border-radius: 14px; background: #fff; }
+    .account-card-title { color: #293a52; font-size: 13px; font-weight: 760; }
+    .account-card-copy { margin-top: 5px; color: #8290a2; font-size: 10px; line-height: 1.55; }
+    .account-list { display: grid; gap: 0; margin-top: 12px; }
+    .account-row { display: grid; grid-template-columns: 92px minmax(0,1fr); gap: 10px; padding: 10px 0; border-top: 1px solid #edf1f6; font-size: 11px; line-height: 1.5; }
+    .account-row span { color: #8390a1; }
+    .account-row strong { min-width: 0; overflow-wrap: anywhere; color: #40516a; font-weight: 650; text-align: right; }
+    .account-boundary { padding: 12px 14px; border: 1px solid #dbe6f8; border-radius: 12px; color: #61738c; background: #f1f6ff; font-size: 10px; line-height: 1.65; }
+
     /* AI research workspace: conversation first, evidence and tools remain inspectable. */
     .agent-head-actions { display: flex; align-items: center; gap: 7px; }
     .agent-view-toggle { border: 1px solid #d9e2ef; border-radius: 999px; padding: 6px 9px; color: #62738b; background: #fff; font-size: 10px; white-space: nowrap; }
@@ -1303,6 +1330,8 @@
       body.agent-page #agentSection .panel-head { grid-column: 1; grid-row: 1; }
       body.agent-page #agentSection .agent-research-bar { grid-column: 1; grid-row: 2; }
       body.agent-page #agentSection .conversation-switcher { display: block; grid-column: 1; grid-row: 3; }
+      .account-metric-grid { grid-template-columns: repeat(3,minmax(0,1fr)); }
+      .account-section-grid { grid-template-columns: 1fr; }
       body.agent-page #agentSection .diagnosis-context { grid-column: 1; grid-row: 4; max-height: 190px; margin: 8px 14px 0; }
       body.agent-page #agentSection .agent-context-tabs { position: sticky; top: 0; z-index: 1; }
       body.agent-page #agentSection .diagnosis-kline { height: 88px; }
@@ -1352,6 +1381,9 @@
       .stock-research-map-actions { justify-content: flex-start; }
       .stock-research-map-grid { grid-template-columns: 1fr; }
       .evidence-coverage-grid { grid-template-columns: 1fr; }
+      .account-hero { align-items: flex-start; flex-direction: column; }
+      .account-actions { justify-content: flex-start; }
+      .account-metric-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
       .breadth-ring::after { width: 70px; height: 70px; }
       .sector-table { overflow-x: auto; }
       .sector-table-head, .sector-rotation-row { min-width: 610px; }
@@ -1387,11 +1419,11 @@
       <div class="nav-label">工作台</div>
       <nav class="sidebar-nav">
         <button class="nav-item primary-entry active" data-page="insights" aria-label="今日观察" title="今日观察"><span class="nav-icon">◈</span><span class="nav-text">今日观察</span></button>
-        <button class="nav-item primary-entry" data-page="agent" aria-label="AI研究" title="AI研究"><span class="nav-icon">✦</span><span class="nav-text">AI研究</span></button>
-        <button class="nav-item primary-entry" data-page="screening" aria-label="选股研究" title="选股研究"><span class="nav-icon">⌁</span><span class="nav-text">选股研究</span></button>
+        <button class="nav-item primary-entry" data-page="watchlist" aria-label="我的关注" title="我的关注"><span class="nav-icon">☆</span><span class="nav-text">我的关注</span></button>
         <button class="nav-item primary-entry" data-page="deep_stock" aria-label="个股研究" title="个股研究"><span class="nav-icon">◎</span><span class="nav-text">个股研究</span></button>
-        <button class="nav-item" data-page="watchlist" aria-label="我的关注" title="我的关注"><span class="nav-icon">☆</span><span class="nav-text">我的关注</span></button>
+        <button class="nav-item primary-entry" data-page="agent" aria-label="AI研究" title="AI研究"><span class="nav-icon">✦</span><span class="nav-text">AI研究</span></button>
         <button class="nav-item" data-page="review" aria-label="复盘中心" title="复盘中心"><span class="nav-icon">◇</span><span class="nav-text">复盘中心</span></button>
+        <button class="nav-item" data-page="account" aria-label="个人中心" title="个人中心"><span class="nav-icon">○</span><span class="nav-text">个人中心</span></button>
       </nav>
       <div class="sidebar-spacer"></div>
       <button class="sidebar-resource-btn" data-page="knowledge" type="button" aria-label="资料库"><span>▤</span> 全部资料</button>
@@ -1678,6 +1710,10 @@
               <div class="panel-title">选股研究</div>
               <div class="panel-subtitle">先用透明规则缩小研究范围，再进入个股空间核验财务、公告、反证与风险；不提供黑盒荐股榜</div>
             </div>
+            <div class="research-mode-switch" role="tablist" aria-label="AI研究模式">
+              <button class="research-mode-button" type="button" role="tab" aria-selected="false" data-open-page="agent">对话研究</button>
+              <button class="research-mode-button active" type="button" role="tab" aria-selected="true" data-open-page="screening">透明选股</button>
+            </div>
           </div>
           <section class="li-zong-panel" aria-labelledby="liZongTitle">
             <div class="li-zong-head">
@@ -1691,7 +1727,11 @@
             <div class="li-zong-stats">
               <div class="li-zong-stat"><span>策略版本</span><strong id="liZongVersion">—</strong></div>
               <div class="li-zong-stat"><span>数据交易日</span><strong id="liZongDate">—</strong></div>
-              <div class="li-zong-stat"><span>全市场覆盖</span><strong id="liZongCoverage">—</strong></div>
+              <div class="li-zong-stat"><span>全市场名单</span><strong id="liZongUniverse">—</strong></div>
+              <div class="li-zong-stat"><span>可深度核验</span><strong id="liZongDeepEligible">—</strong></div>
+              <div class="li-zong-stat"><span>深度处理进度</span><strong id="liZongCoverage">—</strong></div>
+              <div class="li-zong-stat"><span>量价历史不足</span><strong id="liZongHistoryInsufficient">—</strong></div>
+              <div class="li-zong-stat"><span>财务历史待实查</span><strong id="liZongHistoryUnknown">—</strong></div>
               <div class="li-zong-stat"><span>候选</span><strong id="liZongQualified">—</strong></div>
               <div class="li-zong-stat"><span>今日触发</span><strong id="liZongTriggered">—</strong></div>
               <div class="li-zong-stat"><span>数据待补</span><strong id="liZongIncomplete">—</strong></div>
@@ -1853,6 +1893,67 @@
           </section>
         </section>
 
+        <section id="accountPanel" class="panel research-page-panel account-page" hidden>
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">个人中心</div>
+              <div class="panel-subtitle">查看当前个人空间、研究资产、资料与服务状态；只展示真实数据</div>
+            </div>
+          </div>
+          <div class="account-content">
+            <section class="account-hero">
+              <div class="account-identity">
+                <div id="accountAvatar" class="account-avatar">清</div>
+                <div>
+                  <div id="accountName" class="account-name">正在读取个人空间</div>
+                  <div id="accountMeta" class="account-meta">会话和研究数据只在当前用户空间中恢复。</div>
+                </div>
+              </div>
+              <div class="account-actions">
+                <button class="btn" type="button" data-open-page="knowledge">管理资料库</button>
+                <button class="btn primary" type="button" data-open-page="agent">进入 AI 研究</button>
+              </div>
+            </section>
+            <section class="account-metric-grid" aria-label="个人研究用量">
+              <article class="account-metric"><span>关注股票</span><strong id="accountWatchlistCount">0</strong></article>
+              <article class="account-metric"><span>股票研究空间</span><strong id="accountStockSpaceCount">0</strong></article>
+              <article class="account-metric"><span>历史研究对话</span><strong id="accountConversationCount">0</strong></article>
+              <article class="account-metric"><span>资料库文档</span><strong id="accountKnowledgeCount">0</strong></article>
+              <article class="account-metric"><span>待处理研究项</span><strong id="accountPendingCount">0</strong></article>
+            </section>
+            <section class="account-section-grid">
+              <article class="account-card">
+                <div class="account-card-title">账户与会话</div>
+                <div class="account-card-copy">当前为单设备匿名个人空间，不冒充正式账号系统。</div>
+                <div class="account-list">
+                  <div class="account-row"><span>用户标识</span><strong id="accountUserId">—</strong></div>
+                  <div class="account-row"><span>创建时间</span><strong id="accountCreatedAt">—</strong></div>
+                  <div class="account-row"><span>会话有效期</span><strong id="accountSessionExpires">—</strong></div>
+                </div>
+              </article>
+              <article class="account-card">
+                <div class="account-card-title">研究资产</div>
+                <div class="account-card-copy">这些数量来自当前用户的真实关注、对话、资料和长期股票空间。</div>
+                <div class="account-list">
+                  <div class="account-row"><span>研究模式</span><strong id="accountResearchMode">—</strong></div>
+                  <div class="account-row"><span>数据健康</span><strong id="accountDataHealth">—</strong></div>
+                  <div class="account-row"><span>后台刷新</span><strong id="accountBackgroundJobs">—</strong></div>
+                </div>
+              </article>
+              <article class="account-card">
+                <div class="account-card-title">隐私、用量与版本</div>
+                <div class="account-card-copy">生产账号、多设备恢复、导出、账户删除和 BYOK 属于后续版本。</div>
+                <div class="account-list">
+                  <div class="account-row"><span>隐私边界</span><strong>个人上下文按用户隔离</strong></div>
+                  <div class="account-row"><span>会员与额度</span><strong>内部 MVP 暂未启用计费</strong></div>
+                  <div class="account-row"><span>密钥管理</span><strong>Hermes 从运行环境读取</strong></div>
+                </div>
+              </article>
+            </section>
+            <div class="account-boundary">当前页面不展示虚构会员、青豆、付费档位或账户安全能力。仅当后端已有真实对象和可验证流程时，才会增加相应操作。</div>
+          </div>
+        </section>
+
         <section id="knowledgePanel" class="panel" hidden>
           <div class="panel-head">
             <div>
@@ -1892,6 +1993,10 @@
               <div id="agentSubtitle" class="panel-subtitle">连续对话 · 实时证据 · 个人资料 · 金融研究工具</div>
             </div>
             <div class="agent-head-actions">
+              <div class="research-mode-switch" role="tablist" aria-label="AI研究模式">
+                <button class="research-mode-button active" type="button" role="tab" aria-selected="true" data-open-page="agent">对话研究</button>
+                <button class="research-mode-button" type="button" role="tab" aria-selected="false" data-open-page="screening">透明选股</button>
+              </div>
               <button id="agentProcessToggle" class="agent-view-toggle" type="button">查看研究过程</button>
               <button id="agentContextToggle" class="agent-view-toggle" type="button">展开金融侧栏</button>
               <span id="agentMode" class="status-pill">研究模式</span>
@@ -2264,11 +2369,12 @@
       const pages = {
         insights: ["今日观察", "全球行情、A股全景、行业轮动与个人研究脉冲"],
         agent: ["AI 研究", "连续对话、历史研究、自动 K 线与证据链"],
-        screening: ["选股研究", "用确定性规则生成可解释研究候选，再进入个股空间继续核验"],
+        screening: ["AI 研究 · 透明选股", "用确定性规则生成可解释研究候选，再进入个股空间继续核验"],
         deep_stock: ["个股研究", "围绕一只股票持续保存判断、变化、证据、任务、对话和报告"],
         watchlist: ["我的关注", "按研究状态管理自选股、下一动作与分时/日线/周线"],
         knowledge: ["资料库", "集中查看通用研究资料与个人资料，并管理可被 Agent 检索的内容"],
-        review: ["复盘中心", "跟踪研究结论、后续验证与风险变化"]
+        review: ["复盘中心", "跟踪研究结论、后续验证与风险变化"],
+        account: ["个人中心", "查看个人空间、研究资产、资料用量与真实服务状态"]
       };
       if (!pages[page]) page = "insights";
       state.workspacePage = page;
@@ -2282,6 +2388,7 @@
       $("stockScreenerPanel").hidden = page !== "screening";
       $("deepStockPanel").hidden = page !== "deep_stock";
       $("knowledgePanel").hidden = page !== "knowledge";
+      $("accountPanel").hidden = page !== "account";
       $("agentSection").hidden = page !== "agent";
       $("methodSection").hidden = page !== "review";
       $("productNotice").hidden = page === "agent" || page === "review";
@@ -2289,8 +2396,9 @@
       document.body.classList.toggle("review-page", page === "review");
       $("workspaceTitle").textContent = pages[page][0];
       $("workspaceSubtitle").textContent = pages[page][1];
+      const activeNavigationPage = page === "screening" ? "agent" : page;
       for (const button of document.querySelectorAll(".nav-item[data-page]")) {
-        button.classList.toggle("active", button.dataset.page === page);
+        button.classList.toggle("active", button.dataset.page === activeNavigationPage);
       }
       updateAgentMode();
       if (page === "agent" && state.conversationMessages.length) {
@@ -2308,6 +2416,7 @@
         if (symbol) void loadDeepStockOverview(symbol);
       }
       if (page === "knowledge") void loadKnowledge();
+      if (page === "account") renderAccountCenter();
       window.scrollTo({top: 0, behavior: "smooth"});
     }
 
@@ -2421,17 +2530,26 @@
       const universe = Number(meta.universe_count || 0);
       const stableUniverse = meta.universe_status === "stable";
       const coveragePct = universe ? `${(Number(meta.coverage_ratio || 0) * 100).toFixed(1)}%` : "";
-      $("liZongCoverage").textContent = universe ? `${evaluated}/${universe}` : `${evaluated} 只`;
+      const deepEligible = Number(meta.deep_check_eligible_count ?? meta.market_cap_eligible_count ?? 0);
+      const deepProcessed = Number(meta.deep_processed_symbols ?? 0);
+      const deepRemaining = Number(meta.deep_remaining_symbols ?? Math.max(0, deepEligible - deepProcessed));
+      const deepPct = deepEligible ? `${(Number(meta.deep_processing_ratio || 0) * 100).toFixed(1)}%` : "100.0%";
+      $("liZongUniverse").textContent = universe ? `${universe} 只` : "—";
+      $("liZongUniverse").title = universe ? `当期已有 ${evaluated}/${universe} 只形成预筛或规则状态，名单状态覆盖 ${coveragePct}` : "当前尚未发布全市场名单快照";
+      $("liZongDeepEligible").textContent = universe ? `${deepEligible} 只` : "—";
+      $("liZongHistoryInsufficient").textContent = universe ? `${Number(meta.history_insufficient_count || 0)} 只` : "—";
+      $("liZongHistoryUnknown").textContent = universe ? `${Number(meta.history_unknown_count || 0)} 只` : "—";
+      $("liZongCoverage").textContent = deepEligible ? `${deepProcessed}/${deepEligible}` : "0/0";
       $("liZongCoverage").title = universe
-        ? `覆盖率 ${coveragePct}；市值条件预筛通过 ${meta.market_cap_eligible_count || 0} 只；仍待处理 ${meta.remaining_symbols || 0} 只`
+        ? `真实深度处理进度 ${deepPct}；仍待深度处理 ${deepRemaining} 只；已完成完整规则判断 ${meta.deep_decisive_symbols || 0} 只；深度处理后仍有缺口 ${meta.deep_data_incomplete_symbols || 0} 只`
         : "当前尚未发布全市场名单快照";
       $("liZongQualified").textContent = counts.qualified ?? 0;
       $("liZongTriggered").textContent = counts.triggered ?? 0;
       $("liZongIncomplete").textContent = counts.data_incomplete ?? 0;
-      $("liZongState").textContent = meta.full_market_coverage
-        ? "全市场规则状态已发布"
+      $("liZongState").textContent = meta.full_market_coverage && meta.deep_check_complete
+        ? "全市场预筛与深度处理已完成"
         : universe && stableUniverse
-          ? `后台分批处理中 · 已覆盖 ${coveragePct}`
+          ? `后台分批处理中 · 深度处理 ${deepPct}`
           : universe
             ? "等待最近完整交易日市值快照"
           : payload?.status === "ready" ? "研究池数据已就绪" : "首批快照准备中";
@@ -3240,6 +3358,7 @@
       }
       switcher.value = state.conversationId || "";
       renderAgentResearchContext();
+      renderAccountCenter();
     }
 
     async function loadConversations(openLatest = false, activatePage = false) {
@@ -3395,6 +3514,7 @@
         container.appendChild(row);
       }
       if (!container.children.length) container.innerHTML = '<div class="empty">没有符合当前筛选条件的资料。</div>';
+      renderAccountCenter();
     }
 
     async function loadKnowledge() {
@@ -3488,6 +3608,7 @@
       }
       state.user = user;
       $("userStatus").textContent = `个人空间 · ${user.name}`;
+      renderAccountCenter();
     }
 
     function renderImageAttachment() {
@@ -3592,6 +3713,37 @@
       $("homeFocusCopy").textContent = `${marketCopy}${breadthCopy}${researchCopy}`;
     }
 
+    function renderAccountCenter() {
+      if (!$("accountPanel")) return;
+      const user = state.user || {};
+      const pendingCount = state.researchActions.reduce((sum, item) => sum + (item.actions || []).filter(action => ["triggered", "pending_data", "watching"].includes(action.status)).length, 0);
+      const healthSummary = state.health?.data_health?.summary || {};
+      const background = state.health?.background_jobs || {};
+      const userName = user.name || "个人研究空间";
+      $("accountAvatar").textContent = userName.trim().slice(0, 1) || "清";
+      $("accountName").textContent = userName;
+      $("accountMeta").textContent = user.created_at
+        ? `个人空间创建于 ${readableTime(user.created_at)} · 当前数据只按该用户恢复`
+        : "会话和研究数据只在当前用户空间中恢复。";
+      $("accountWatchlistCount").textContent = state.watchlist.length;
+      $("accountStockSpaceCount").textContent = state.deepStockSessions.length;
+      $("accountConversationCount").textContent = state.conversations.length;
+      $("accountKnowledgeCount").textContent = state.knowledge.length;
+      $("accountPendingCount").textContent = pendingCount;
+      $("accountUserId").textContent = user.id ? `${String(user.id).slice(0, 8)}…` : "—";
+      $("accountCreatedAt").textContent = user.created_at ? readableTime(user.created_at) : "—";
+      $("accountSessionExpires").textContent = user.session_expires_at
+        ? new Intl.DateTimeFormat("zh-CN", {year: "numeric", month: "2-digit", day: "2-digit"}).format(new Date(user.session_expires_at))
+        : "当前会话中";
+      $("accountResearchMode").textContent = state.health?.hermes_enabled ? "Hermes AI 研究已启用" : "确定性研究模式";
+      $("accountDataHealth").textContent = healthSummary.total
+        ? `${healthSummary.healthy || 0}/${healthSummary.total} 数据集健康`
+        : "正在检查数据";
+      $("accountBackgroundJobs").textContent = background.running
+        ? "后台刷新正常运行"
+        : (background.enabled ? "后台刷新正在启动" : "当前未启用");
+    }
+
     function prepareAgentQuestion(question) {
       activateWorkspace("agent");
       startNewConversation(false);
@@ -3629,6 +3781,7 @@
     async function loadHealth() {
       state.health = await api("/health");
       renderSystemHealth(state.health.data_health);
+      renderAccountCenter();
       $("useHermes").disabled = !state.health.hermes_enabled;
       $("useHermes").checked = Boolean(state.health.hermes_enabled);
       $("useHermesLabel").hidden = !state.health.hermes_enabled;
@@ -3880,6 +4033,7 @@
       renderWatchlistTasks();
       renderWatchlistPulse();
       renderHomeFocus();
+      renderAccountCenter();
       const coverage = data.coverage || {};
       $("watchlistSource").textContent = `已更新 ${coverage.available || 0}/${coverage.requested || 0} 只关注股票；研究状态来自行情、报告、证据变化与资料缺口，不代表买卖建议。`;
     }
@@ -5692,6 +5846,7 @@
       try {
         const data = await api("/me/deep-stock?limit=50");
         state.deepStockSessions = data.items || [];
+        renderAccountCenter();
         refreshDeepStockSymbolOptions();
         if (!state.deepStock && state.deepStockSessions.length) {
           $("deepStockSymbol").value = state.deepStockSessions[0].symbol;
@@ -6407,6 +6562,9 @@
             if (state.workspacePage === "review") loadResearchMethod();
           }
           if (data.type === "evidence_tasks_updated" && state.workspacePage === "review") loadResearchMethod();
+          if (data.type === "stock_strategy_updated" && data.strategy_id === "li_zong") {
+            if (state.workspacePage === "screening") void loadLiZongStrategy();
+          }
           if (data.type === "agent_progress" && data.request_id) {
             const request = state.pendingAgentRequests.get(data.request_id);
             const pending = request?.node || request;

@@ -1486,6 +1486,36 @@ def create_app(
                 "missing_market_cap_count": (
                     coverage.get("missing_market_cap_count") or 0
                 ),
+                "deep_check_eligible_count": (
+                    coverage.get("deep_check_eligible_count") or 0
+                ),
+                "history_insufficient_count": (
+                    coverage.get("history_insufficient_count") or 0
+                ),
+                "history_unknown_count": (
+                    coverage.get("history_unknown_count") or 0
+                ),
+                "deep_processed_symbols": (
+                    coverage.get("deep_processed_symbols") or 0
+                ),
+                "deep_remaining_symbols": (
+                    coverage.get("deep_remaining_symbols") or 0
+                ),
+                "deep_processing_ratio": (
+                    coverage.get("deep_processing_ratio") or 0
+                ),
+                "deep_decisive_symbols": (
+                    coverage.get("deep_decisive_symbols") or 0
+                ),
+                "deep_data_incomplete_symbols": (
+                    coverage.get("deep_data_incomplete_symbols") or 0
+                ),
+                "decisive_status_count": (
+                    coverage.get("decisive_status_count") or 0
+                ),
+                "decisive_coverage_ratio": (
+                    coverage.get("decisive_coverage_ratio") or 0
+                ),
                 "remaining_symbols": coverage.get("remaining_symbols") or 0,
                 "coverage_ratio": coverage.get("coverage_ratio") or 0,
                 "scope": (
@@ -1496,11 +1526,15 @@ def create_app(
                 "full_market_coverage": bool(
                     coverage.get("full_market_coverage")
                 ),
+                "deep_check_complete": bool(
+                    coverage.get("deep_check_complete")
+                ),
                 "latest_run": coverage.get("latest_run"),
             },
             "boundary": (
-                "当前页面只读取后台已发布快照；全市场名单先执行市值预筛，"
-                "其余多年ROE、股东和量价证据由后台分批补齐。"
+                "当前页面只读取后台已发布快照；全市场名单先执行市值与上市历史"
+                "预筛，历史明确不足的股票不发起逐股深度请求，其余股票再分批补齐"
+                "多年ROE、股东和量价证据。"
                 "候选不构成推荐或交易建议。"
             ),
         }
@@ -2993,19 +3027,41 @@ def create_app(
             if not universe_count:
                 evaluated = max(evaluated, len(public_items))
             full_coverage = bool(coverage.get("full_market_coverage"))
+            deep_eligible = int(coverage.get("deep_check_eligible_count") or 0)
+            deep_processed = int(coverage.get("deep_processed_symbols") or 0)
+            deep_complete = bool(coverage.get("deep_check_complete"))
+            history_insufficient = int(
+                coverage.get("history_insufficient_count") or 0
+            )
+            history_unknown = int(coverage.get("history_unknown_count") or 0)
             warnings: list[str] = []
             if coverage.get("status") != "stable":
                 warnings.append("全市场名单和市值快照尚未达到稳定发布门槛。")
             elif not full_coverage:
                 warnings.append(
-                    f"当前已完成 {evaluated}/{universe_count} 只股票的规则状态；"
+                    f"当前已有 {evaluated}/{universe_count} 只股票形成预筛或规则状态；"
                     "未处理股票不能推断为通过或不通过。"
+                )
+            if coverage.get("status") == "stable" and not deep_complete:
+                warnings.append(
+                    f"当前已深度处理 {deep_processed}/{deep_eligible} 只可核验股票；"
+                    "尚未深度处理的股票不能推断为通过或不通过。"
+                )
+            if history_insufficient:
+                warnings.append(
+                    f"另有 {history_insufficient} 只市值达标股票因上市后量价历史不足，"
+                    "已明确标记为数据不完整，未消耗逐股深度请求。"
+                )
+            if history_unknown:
+                warnings.append(
+                    f"另有 {history_unknown} 只股票不能仅凭上市日期确认五年ROE是否可得，"
+                    "已纳入深度查询，不代表财务历史已经完整。"
                 )
             if selection_mode == "candidate_pool" and not public_items:
                 warnings.append(
                     "当前已评估范围内尚无进入候选池或触发池的股票。"
-                    if not full_coverage
-                    else "本期全市场规则计算完成，尚无股票进入候选池或触发池。"
+                    if not (full_coverage and deep_complete)
+                    else "本期全市场预筛与深度处理完成，尚无股票进入候选池或触发池。"
                 )
             if selection_mode == "symbol_check" and not public_items:
                 warnings.append("该股票尚未形成可用的李总策略快照。")
@@ -3015,7 +3071,9 @@ def create_app(
                     "ready"
                     if selection_mode == "symbol_check" and public_items
                     else "complete"
-                    if selection_mode == "candidate_pool" and full_coverage
+                    if selection_mode == "candidate_pool"
+                    and full_coverage
+                    and deep_complete
                     else "partial"
                 ),
                 "strategy": li_zong_strategy.get_definition(),
@@ -3043,6 +3101,23 @@ def create_app(
                     "remaining_symbols": int(coverage.get("remaining_symbols") or 0),
                     "coverage_ratio": float(coverage.get("coverage_ratio") or 0),
                     "full_market_coverage": full_coverage,
+                    "deep_check_eligible_count": deep_eligible,
+                    "history_insufficient_count": history_insufficient,
+                    "history_unknown_count": history_unknown,
+                    "deep_processed_symbols": deep_processed,
+                    "deep_remaining_symbols": int(
+                        coverage.get("deep_remaining_symbols") or 0
+                    ),
+                    "deep_processing_ratio": float(
+                        coverage.get("deep_processing_ratio") or 0
+                    ),
+                    "deep_decisive_symbols": int(
+                        coverage.get("deep_decisive_symbols") or 0
+                    ),
+                    "deep_data_incomplete_symbols": int(
+                        coverage.get("deep_data_incomplete_symbols") or 0
+                    ),
+                    "deep_check_complete": deep_complete,
                     "actionable_candidate_count": len(public_items),
                 },
                 "user_question": message,

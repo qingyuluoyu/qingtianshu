@@ -1406,6 +1406,9 @@ _STOCK_OBSERVATION_WINDOW_LABEL = "个股观察周期只能使用研究计划已
 _LI_ZONG_RULE_BOTTLENECK_LABEL = (
     "缺少逐规则汇总统计时不能推断李总策略的主要瓶颈或规则稀缺度"
 )
+_LI_ZONG_COVERAGE_CONFLATION_LABEL = (
+    "李总策略名单预筛覆盖不能冒充深度规则完成率"
+)
 _STOCK_DISCLOSURE_DATE_LABEL = "缺少披露日历证据时不能预测下一份报告日期"
 _STOCK_REPORT_DATE_CONFLICT_LABEL = "财报公告日期必须与结构化报告一致"
 _STOCK_DRAWDOWN_WINDOW_LABEL = "最大回撤观察窗口必须与确定性指标一致"
@@ -1633,6 +1636,25 @@ def _has_li_zong_rule_bottleneck_overclaim(
         _LI_ZONG_RULE_BOTTLENECK_RE.search(clause)
         and _LI_ZONG_RULE_TERM_RE.search(clause)
         for clause in re.split(r"[。；\n]", answer)
+    )
+
+
+def _has_li_zong_coverage_conflation(
+    answer: str, evidence: dict[str, Any]
+) -> bool:
+    if (
+        ((evidence.get("profile") or {}).get("key") != "li_zong")
+        or evidence.get("selection_mode") != "candidate_pool"
+    ):
+        return False
+    has_legacy_coverage = bool(
+        re.search(
+            r"已评估\s*[\d,]+\s*/\s*[\d,]+\s*只[^。；\n]{0,80}待处理",
+            answer,
+        )
+    )
+    return has_legacy_coverage and not any(
+        term in answer for term in ("深度处理", "深度核验", "深度规则完成率")
     )
 
 
@@ -2888,9 +2910,12 @@ unresolved 是尚未解决的风险或缺口，不能把 unresolved 写成已经
 
 这是确定性策略状态查询，不是普通截面筛选。selection_mode=candidate_pool 时，items 只包含
 真正进入 qualified 或 triggered 状态的股票；不得把 not_qualified、data_incomplete、invalidated
-或尚未处理的股票称为候选。必须先说明数据交易日、已评估数/全市场数、覆盖率和剩余待处理数。
-若 full_market_coverage=false，只能说“当前已评估范围内”的候选情况，不得推断未处理股票，也不得
-宣称全市场没有候选。没有 items 时要区分“当前已评估范围内尚无候选”和“全市场完成后无候选”。
+或尚未处理的股票称为候选。必须先分别说明数据交易日、全市场名单数、可深度核验数、深度处理
+进度、上市后量价历史不足数、财务历史待实际核验数和当前候选数。evaluated_symbols/coverage_ratio 只表示已有市值预筛或规则状态
+的名单比例，不是深度规则完成率；深度进度只能使用 deep_processed_symbols/deep_check_eligible_count。
+若 deep_check_complete=false，只能说“当前已深度处理范围内”的候选情况，不得推断尚待深度处理
+的股票，也不得宣称全市场没有候选。没有 items 时要区分“当前已深度处理范围内尚无候选”和
+“全市场深度处理完成后无候选”。
 
 selection_mode=symbol_check 时，必须直接回答该股票是 triggered、qualified、not_qualified、
 data_incomplete 还是 invalidated。not_qualified 不是候选，data_incomplete 不能判断通过，invalidated
@@ -2902,8 +2927,8 @@ data_incomplete 还是 invalidated。not_qualified 不是候选，data_incomplet
 面向普通用户时，状态只使用“已触发、已进入候选、未通过、数据不完整、状态已失效”等中文，
 不要直接输出 triggered、qualified、not_qualified、data_incomplete、invalidated、selection_mode、
 profile key 或策略内部版本标识。默认使用中文规则名称；只有用户明确要求规则编号时才展示 LZ 编号。
-全市场待处理数只允许使用 remaining_symbols。市值门槛达标数量属于全市场预筛统计，和待处理队列
-不是同一口径，绝不能把市值达标数量写成“仍待处理、仍在队列或尚未评估”的股票数量。
+全市场名单未形成状态数只允许使用 remaining_symbols；深度待处理数只允许使用 deep_remaining_symbols。
+市值门槛达标数量、名单状态覆盖率和深度处理进度不是同一口径，绝不能互相替代。
 除非证据明确提供逐规则汇总统计，否则不能猜测哪条规则是主要瓶颈、最严格，或声称满足某几条
 规则的股票“极少”。不得为候选池自行增加 T+3、T+5 等复核周期；下一步只写完成剩余评估、
 查询具体股票规则证据，或核验证据日期与报告期。
@@ -3101,6 +3126,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     prompt_evidence,
                 )
                 answer = _normalize_relative_event_dates(answer)
+                answer = self._normalize_li_zong_scope_answer(
+                    answer, prompt_evidence
+                )
                 if intent == "stock_research":
                     answer = _normalize_stock_research_number_precision(answer)
                 output_guard = self._validate_model_output(
@@ -3989,6 +4017,10 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             unsupported_market_inferences.append(
                 _LI_ZONG_RULE_BOTTLENECK_LABEL
             )
+        if _has_li_zong_coverage_conflation(answer, evidence):
+            unsupported_market_inferences.append(
+                _LI_ZONG_COVERAGE_CONFLATION_LABEL
+            )
         if (
             evidence.get("type") != "market_brief"
             and evidence.get("symbol")
@@ -4709,6 +4741,11 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 _LI_ZONG_RULE_BOTTLENECK_LABEL
                 in unsupported_market_inferences
                 and _has_li_zong_rule_bottleneck_overclaim(line, evidence)
+            )
+            line_has_unsupported_inference = line_has_unsupported_inference or (
+                _LI_ZONG_COVERAGE_CONFLATION_LABEL
+                in unsupported_market_inferences
+                and _has_li_zong_coverage_conflation(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
                 _STOCK_DISCLOSURE_DATE_LABEL
@@ -6692,6 +6729,82 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 """
 
     @staticmethod
+    def _li_zong_scope_summary(evidence: dict[str, Any]) -> str:
+        data_meta = evidence.get("data_meta") or {}
+        trade_date = data_meta.get("latest_completed_trade_date") or "待确认"
+        universe = int(data_meta.get("universe_count") or 0)
+        evaluated = int(data_meta.get("evaluated_symbols") or 0)
+        remaining = int(data_meta.get("remaining_symbols") or 0)
+        coverage_ratio = float(data_meta.get("coverage_ratio") or 0)
+        deep_eligible_value = data_meta.get("deep_check_eligible_count")
+        deep_processed = int(data_meta.get("deep_processed_symbols") or 0)
+        deep_remaining = int(data_meta.get("deep_remaining_symbols") or 0)
+        deep_ratio = float(data_meta.get("deep_processing_ratio") or 0)
+        history_insufficient = int(
+            data_meta.get("history_insufficient_count") or 0
+        )
+        history_unknown = int(data_meta.get("history_unknown_count") or 0)
+        candidate_count = int(
+            data_meta.get("actionable_candidate_count")
+            if data_meta.get("actionable_candidate_count") is not None
+            else len(evidence.get("items") or [])
+        )
+
+        lines = [f"李总策略数据交易日为 {trade_date}。"]
+        if universe:
+            lines.append(f"全市场名单为 {universe} 只。")
+            lines.append(
+                f"其中 {evaluated}/{universe} 只已形成市值预筛或规则状态"
+                f"（{coverage_ratio * 100:.1f}%）；这个比例不是深度规则完成率。"
+            )
+        if deep_eligible_value is not None:
+            deep_eligible = int(deep_eligible_value or 0)
+            lines.append(
+                f"可深度核验 {deep_eligible} 只，已深度处理 "
+                f"{deep_processed}/{deep_eligible} 只（{deep_ratio * 100:.1f}%），"
+                f"仍有 {deep_remaining} 只等待深度核验。"
+            )
+            lines.append(
+                f"另有 {history_insufficient} 只市值达标股票因上市后量价历史不足，"
+                "已标记为数据不完整，未发起逐股深度请求。"
+            )
+            if history_unknown:
+                lines.append(
+                    f"另有 {history_unknown} 只股票不能仅凭上市日期确认五年ROE是否可得，"
+                    "已纳入深度查询，不代表财务历史已经完整。"
+                )
+        elif universe:
+            lines.append(f"仍有 {remaining} 只尚未形成预筛或规则状态。")
+        lines.append(f"当前已发布候选或触发共 {candidate_count} 只。")
+        if candidate_count == 0 and not data_meta.get("deep_check_complete"):
+            lines.append(
+                "这个0只只代表当前已深度处理范围，不能推断剩余股票也不满足规则。"
+            )
+        lines.append("候选只用于研究复核，不构成买卖建议。")
+        return "".join(lines)
+
+    @staticmethod
+    def _normalize_li_zong_scope_answer(
+        answer: str, evidence: dict[str, Any]
+    ) -> str:
+        if (
+            ((evidence.get("profile") or {}).get("key") != "li_zong")
+            or evidence.get("selection_mode") != "candidate_pool"
+        ):
+            return answer
+        summary = AgentService._li_zong_scope_summary(evidence)
+        cleaned = re.sub(
+            r"(?:李总策略数据交易日为\s*\d{4}-\d{2}-\d{2}[；;]\s*|"
+            r"截至\s*\d{4}-\d{2}-\d{2}[，,]\s*)?"
+            r"当前已评估\s*[\d,]+\s*/\s*[\d,]+\s*只"
+            r"[^。！？\n]{0,120}待处理[。！？]?",
+            "",
+            answer,
+        )
+        cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+        return f"{summary}\n\n{cleaned}" if cleaned else summary
+
+    @staticmethod
     def _render_li_zong_preview(evidence: dict[str, Any]) -> str:
         items = list(evidence.get("items") or [])
         data_meta = evidence.get("data_meta") or {}
@@ -6709,16 +6822,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             "data_incomplete": "关键数据不完整，暂不能判断通过",
             "invalidated": "此前候选状态已被新数据推翻",
         }
-        evaluated = int(data_meta.get("evaluated_symbols") or 0)
-        universe = int(data_meta.get("universe_count") or 0)
-        remaining = int(data_meta.get("remaining_symbols") or 0)
-        coverage_ratio = float(data_meta.get("coverage_ratio") or 0)
-        coverage_text = (
-            f"已评估 {evaluated}/{universe} 只（{coverage_ratio * 100:.1f}%），"
-            f"仍有 {remaining} 只待处理"
-            if universe
-            else f"已发布 {evaluated} 只股票的规则状态"
-        )
+        coverage_text = AgentService._li_zong_scope_summary(evidence)
         trade_date = data_meta.get("latest_completed_trade_date") or "待确认"
         boundary = evidence.get("boundary") or (
             "该策略只生成研究候选和人工复核触发，不构成买卖建议。"
@@ -6728,7 +6832,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             if not items:
                 return (
                     f"截至 {trade_date}，该股票尚未形成可用的李总策略快照。"
-                    f"当前全市场{coverage_text}，未处理状态不能推断为通过或不通过。\n\n"
+                    f"{coverage_text}尚待深度处理的股票不能推断为通过或不通过。\n\n"
                     f"{boundary}"
                 )
             item = items[0]
@@ -6747,7 +6851,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             lines = [
                 f"{item.get('name')}（{item.get('internal_symbol')}）截至 {item.get('as_of_date') or trade_date} 的李总策略状态："
                 f"{status_labels.get(status, status)}。",
-                f"候选规则已有 {passed_count}/{len(candidate_rules) or 9} 项通过；{coverage_text}。",
+                f"候选规则已有 {passed_count}/{len(candidate_rules) or 9} 项通过。{coverage_text}",
             ]
             if failed:
                 lines.append(
@@ -6779,14 +6883,16 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             )
             return "\n\n".join(lines)
 
-        lines = [f"李总策略数据交易日为 {trade_date}；当前{coverage_text}。"]
+        lines = [coverage_text]
         if not items:
-            if data_meta.get("full_market_coverage"):
-                lines.append("本期全市场规则计算已经完成，尚无股票进入候选池或触发池。")
+            if data_meta.get("full_market_coverage") and data_meta.get(
+                "deep_check_complete"
+            ):
+                lines.append("本期全市场深度规则计算已经完成，尚无股票进入候选池或触发池。")
             else:
                 lines.append(
-                    "当前已评估范围内尚无股票进入候选池或触发池；"
-                    "这不能推断尚未处理的股票也不满足规则。"
+                    "当前已深度处理范围内尚无股票进入候选池或触发池；"
+                    "这不能推断尚待深度处理的股票也不满足规则。"
                 )
         else:
             lines.append(f"当前共有 {len(items)} 只已发布研究候选：")

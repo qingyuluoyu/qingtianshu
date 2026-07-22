@@ -16,7 +16,7 @@ class FakeSnapshotTushareClient:
         self.empty_daily_basic_dates: set[str] = set()
         self.trade_dates = [
             value.strftime("%Y%m%d")
-            for value in pd.bdate_range(end="2026-07-21", periods=420)
+            for value in pd.bdate_range(end="2026-07-21", periods=620)
         ]
         self.stock_basic_rows = [
             {
@@ -61,9 +61,12 @@ class FakeSnapshotTushareClient:
         if api_name == "stock_basic":
             return pd.DataFrame(self.stock_basic_rows)
         if api_name == "daily":
+            start_date = str(params.get("start_date") or self.trade_dates[0])
             end_date = str(params.get("end_date") or self.trade_dates[-1])
             dates = [
-                value for value in self.trade_dates[-400:] if value <= end_date
+                value
+                for value in self.trade_dates
+                if start_date <= value <= end_date
             ]
             return pd.DataFrame(
                 [
@@ -112,6 +115,7 @@ class FakeSnapshotTushareClient:
                 ]
             )
         if api_name == "adj_factor":
+            start_date = str(params.get("start_date") or self.trade_dates[0])
             end_date = str(params.get("end_date") or self.trade_dates[-1])
             return pd.DataFrame(
                 [
@@ -120,11 +124,12 @@ class FakeSnapshotTushareClient:
                         "trade_date": trade_date,
                         "adj_factor": 1.0,
                     }
-                    for trade_date in self.trade_dates[-400:]
-                    if trade_date <= end_date
+                    for trade_date in self.trade_dates
+                    if start_date <= trade_date <= end_date
                 ]
             )
         if api_name == "stk_limit":
+            start_date = str(params.get("start_date") or self.trade_dates[0])
             end_date = str(params.get("end_date") or self.trade_dates[-1])
             return pd.DataFrame(
                 [
@@ -135,8 +140,8 @@ class FakeSnapshotTushareClient:
                         "up_limit": 33.0,
                         "down_limit": 27.0,
                     }
-                    for trade_date in self.trade_dates[-400:]
-                    if trade_date <= end_date
+                    for trade_date in self.trade_dates
+                    if start_date <= trade_date <= end_date
                 ]
             )
         if api_name in {"top10_holders", "top10_floatholders"}:
@@ -295,8 +300,13 @@ def test_a_share_universe_publishes_traceable_stable_snapshot(app):
     published = service.get_a_share_universe()
 
     assert first["published"] is True
+    assert first["reused"] is False
+    assert second["reused"] is True
     assert first["run"]["status"] == "stable"
     assert first["run"]["data_version"] == second["run"]["data_version"]
+    assert fake.calls["trade_cal"] == 1
+    assert fake.calls["stock_basic"] == 1
+    assert fake.calls["daily_basic"] == 1
     assert published["status"] == "stable"
     assert published["snapshot"]["coverage"] == {
         "listed": 3,
@@ -343,7 +353,9 @@ def test_incomplete_universe_refresh_retains_previous_stable_snapshot(app):
     stable = service.sync_a_share_universe(as_of_date="2026-07-21")
 
     fake.daily_basic_rows = fake.daily_basic_rows[:1]
-    incomplete = service.sync_a_share_universe(as_of_date="2026-07-21")
+    incomplete = service.sync_a_share_universe(
+        as_of_date="2026-07-21", force=True
+    )
     published = service.get_a_share_universe()
 
     assert stable["published"] is True
@@ -404,7 +416,7 @@ def test_symbol_snapshot_publishes_traceable_stable_version(app):
         "optional_available": 6,
         "optional_missing": [],
     }
-    assert snapshot["datasets"]["daily"]["row_count"] == 400
+    assert snapshot["datasets"]["daily"]["row_count"] == 520
     assert snapshot["datasets"]["fina_indicator"]["report_period"] == "2025-12-31"
     assert snapshot["datasets"]["stk_limit"]["source"] == "Tushare Pro"
     assert snapshot["datasets"]["income"]["report_period"] == "2025-12-31"
