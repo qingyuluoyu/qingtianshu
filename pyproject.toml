@@ -1,0 +1,30 @@
+[project]
+name = "qingshu-agent-demo"
+version = "0.1.0"
+description = "Backend-first financial research Agent demo powered by deterministic evidence and Hermes."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "requests>=2.31",
+  "pydantic>=2.8",
+  "exchange-calendars>=4.5,<5",
+  "numpy>=1.26,<2",
+  "pandas>=2,<3",
+  "xlrd>=2,<3",
+  "pillow>=10,<12",
+  "python-multipart>=0.0.9",
+  "python-dotenv>=1.0",
+  "tushare>=1.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "httpx>=0.27",
+  "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

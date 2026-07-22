@@ -1,0 +1,911 @@
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, time as clock_time, timedelta
+import math
+import threading
+import time
+from typing import Any, Mapping
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+
+from app.providers.tushare import TushareProviderError
+from app.utils import utc_now
+
+
+class StockScreenerUnavailable(RuntimeError):
+    """Raised when the deterministic screening dataset cannot be built."""
+
+
+PROFILE_DEFINITIONS: dict[str, dict[str, Any]] = {
+    "quality": {
+        "label": "经营改善候选",
+        "description": "先约束市值和估值口径，再核验最新财报中的营收、净利润与 ROE 是否同时为正。",
+        "sort_rule": "按最新财报营收同比从高到低排列；不计算综合分。",
+        "defaults": {
+            "min_market_cap_yi": 50.0,
+            "min_pe_ttm": 0.01,
+            "max_pe_ttm": 80.0,
+            "min_pb": 0.01,
+            "max_pb": 10.0,
+            "min_revenue_yoy": 0.0,
+            "min_net_profit_yoy": 0.0,
+            "min_roe": 0.0,
+        },
+    },
+    "trend": {
+        "label": "相对行业增强候选",
+        "description": "筛选近 5 日、20 日均为正，且近 20 日跑赢所属行业样本均值的股票。",
+        "sort_rule": "按近 20 日相对行业超额收益从高到低排列；不计算综合分。",
+        "defaults": {
+            "min_market_cap_yi": 30.0,
+            "min_return_5d": 0.0,
+            "min_return_20d": 0.0,
+            "min_industry_excess_20d": 0.0,
+            "min_volume_ratio": 0.8,
+            "max_turnover_rate": 25.0,
+        },
+    },
+    "value": {
+        "label": "估值约束观察候选",
+        "description": "用正 PE、PB、市值和流动性做透明约束；命中不等于价值低估。",
+        "sort_rule": "按 PE TTM 从低到高排列；不计算综合分。",
+        "defaults": {
+            "min_market_cap_yi": 50.0,
+            "min_pe_ttm": 0.01,
+            "max_pe_ttm": 25.0,
+            "min_pb": 0.01,
+            "max_pb": 3.0,
+            "min_turnover_rate": 0.2,
+        },
+    },
+    "pullback": {
+        "label": "回撤后待复核候选",
+        "description": "寻找近 20 日回撤、近 5 日暂时企稳且交易活跃度达到门槛的高风险观察样本。",
+        "sort_rule": "按近 5 日收益从高到低排列；不计算综合分。",
+        "defaults": {
+            "min_market_cap_yi": 30.0,
+            "min_return_5d": 0.0,
+            "min_return_20d": -20.0,
+            "max_return_20d": -2.0,
+            "min_volume_ratio": 0.8,
+            "max_turnover_rate": 25.0,
+        },
+    },
+}
+
+
+FILTER_LABELS = {
+    "min_market_cap_yi": "总市值下限",
+    "max_market_cap_yi": "总市值上限",
+    "min_pe_ttm": "PE TTM 下限",
+    "max_pe_ttm": "PE TTM 上限",
+    "min_pb": "PB 下限",
+    "max_pb": "PB 上限",
+    "min_turnover_rate": "换手率下限",
+    "max_turnover_rate": "换手率上限",
+    "min_volume_ratio": "量比下限",
+    "min_return_5d": "近 5 日收益下限",
+    "min_return_20d": "近 20 日收益下限",
+    "max_return_20d": "近 20 日收益上限",
+    "min_industry_excess_20d": "近 20 日行业超额下限",
+    "min_revenue_yoy": "营收同比下限",
+    "min_net_profit_yoy": "净利润同比下限",
+    "min_roe": "ROE 下限",
+}
+
+
+NUMERIC_COLUMN_BY_FILTER = {
+    "min_market_cap_yi": "total_mv_yi",
+    "max_market_cap_yi": "total_mv_yi",
+    "min_pe_ttm": "pe_ttm",
+    "max_pe_ttm": "pe_ttm",
+    "min_pb": "pb",
+    "max_pb": "pb",
+    "min_turnover_rate": "turnover_rate",
+    "max_turnover_rate": "turnover_rate",
+    "min_volume_ratio": "volume_ratio",
+    "min_return_5d": "return_5d_pct",
+    "min_return_20d": "return_20d_pct",
+    "max_return_20d": "return_20d_pct",
+    "min_industry_excess_20d": "industry_excess_20d_pct",
+}
+
+
+FINANCIAL_FILTERS = {
+    "min_revenue_yoy": "revenue_yoy",
+    "min_net_profit_yoy": "net_profit_yoy",
+    "min_roe": "roe",
+}
+
+
+class StockScreenerService:
+    """Transparent A-share candidate screening backed by deterministic data."""
+
+    def __init__(
+        self,
+        client: Any | None,
+        *,
+        snapshot_ttl_seconds: int = 300,
+        finance_ttl_seconds: int = 6 * 3600,
+        finance_workers: int = 6,
+    ) -> None:
+        self.client = client
+        self.snapshot_ttl_seconds = max(30, snapshot_ttl_seconds)
+        self.finance_ttl_seconds = max(300, finance_ttl_seconds)
+        self.finance_workers = max(1, min(int(finance_workers), 8))
+        self._snapshot: tuple[float, pd.DataFrame, dict[str, Any]] | None = None
+        self._finance_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def profiles() -> list[dict[str, Any]]:
+        return [
+            {
+                "key": key,
+                "label": value["label"],
+                "description": value["description"],
+                "sort_rule": value["sort_rule"],
+                "default_filters": dict(value["defaults"]),
+            }
+            for key, value in PROFILE_DEFINITIONS.items()
+        ]
+
+    def screen(
+        self,
+        *,
+        profile: str = "quality",
+        max_results: int = 12,
+        market: str = "all",
+        filters: Mapping[str, Any] | None = None,
+        force_refresh: bool = False,
+    ) -> dict[str, Any]:
+        if self.client is None:
+            raise StockScreenerUnavailable("选股数据尚未就绪，请稍后重试")
+        if profile not in PROFILE_DEFINITIONS:
+            raise ValueError("不支持的选股模板")
+        if market not in {"all", "sh", "sz", "bj", "main", "gem", "star"}:
+            raise ValueError("不支持的股票范围")
+        max_results = max(1, min(int(max_results), 30))
+
+        profile_definition = PROFILE_DEFINITIONS[profile]
+        effective_filters = dict(profile_definition["defaults"])
+        for key, value in (filters or {}).items():
+            if value is None:
+                continue
+            if key not in FILTER_LABELS and key not in {
+                "industry",
+                "exclude_st",
+                "min_listed_days",
+            }:
+                raise ValueError(f"不支持的筛选字段：{key}")
+            effective_filters[key] = value
+        effective_filters.setdefault("exclude_st", True)
+        effective_filters.setdefault("min_listed_days", 180)
+
+        frame, snapshot_meta = self._load_snapshot(force_refresh=force_refresh)
+        working = frame.copy()
+        input_count = len(working)
+        working = self._apply_universe_rules(
+            working,
+            market=market,
+            filters=effective_filters,
+            latest_trade_date=snapshot_meta["latest_completed_trade_date"],
+        )
+        common_count = len(working)
+        working = self._apply_numeric_filters(working, effective_filters)
+        market_rule_count = len(working)
+
+        needs_financial_filter = profile == "quality" or any(
+            key in effective_filters for key in FINANCIAL_FILTERS
+        )
+        if needs_financial_filter:
+            pool_size = min(40, max(24, max_results * 2))
+            working = self._diverse_financial_pool(working, pool_size)
+        else:
+            working = self._sort_frame(working, profile).head(max_results * 2)
+
+        finance_packets = self._load_financials_many(
+            [str(value) for value in working.get("ts_code", pd.Series(dtype=str)).tolist()]
+        )
+
+        if needs_financial_filter:
+            working = self._apply_financial_filters(
+                working, finance_packets, effective_filters
+            )
+        working = self._sort_frame(working, profile).head(max_results)
+
+        items = [
+            self._build_item(row, profile, finance_packets.get(str(row["ts_code"]), {}))
+            for _, row in working.iterrows()
+        ]
+        report_periods = sorted(
+            {
+                str(item["financials"].get("report_period"))
+                for item in items
+                if item["financials"].get("report_period")
+            },
+            reverse=True,
+        )
+        data_meta = {
+            **snapshot_meta,
+            "generated_at": utc_now(),
+            "financial_report_periods": report_periods,
+            "financial_data_note": "财务指标按各公司最新已取得报告期展示，不与行情交易日混用。",
+            "financial_candidate_pool_note": (
+                "财务逐股补齐范围先按行业分散，再按成交额和市值确定；"
+                "这是首轮研究候选池，不代表全市场财务排名。"
+            ),
+            "cache_hit": bool(snapshot_meta.get("cache_hit")),
+        }
+        warnings: list[str] = []
+        if items and any(item["missing_fields"] for item in items):
+            warnings.append("部分候选的财务或估值字段不完整，缺失项已逐只列出。")
+        if not items:
+            warnings.append("当前没有股票同时满足全部规则；可放宽一项条件后重新筛选。")
+
+        return {
+            "type": "stock_screen",
+            "status": "ready" if items else "empty",
+            "profile": {
+                "key": profile,
+                "label": profile_definition["label"],
+                "description": profile_definition["description"],
+                "sort_rule": profile_definition["sort_rule"],
+            },
+            "market": market,
+            "rules": self._rules(effective_filters),
+            "effective_filters": effective_filters,
+            "data_meta": data_meta,
+            "universe": {
+                "listed_input": input_count,
+                "after_common_rules": common_count,
+                "after_market_rules": market_rule_count,
+                "financials_checked": len(finance_packets),
+                "matched": len(items),
+            },
+            "items": items,
+            "warnings": warnings,
+            "boundary": "这是可解释的研究候选筛选，不构成推荐、评级、目标价或交易建议。",
+        }
+
+    def _query(self, api_name: str, **params: Any) -> pd.DataFrame:
+        try:
+            result = self.client.query(api_name, **params)
+        except TushareProviderError:
+            raise
+        except Exception as exc:
+            raise TushareProviderError(
+                f"Tushare 接口 {api_name} 调用失败：{type(exc).__name__}"
+            ) from exc
+        if isinstance(result, pd.DataFrame):
+            return result.copy()
+        return pd.DataFrame(result or [])
+
+    def _load_snapshot(
+        self, *, force_refresh: bool
+    ) -> tuple[pd.DataFrame, dict[str, Any]]:
+        now_monotonic = time.monotonic()
+        with self._lock:
+            if (
+                not force_refresh
+                and self._snapshot is not None
+                and now_monotonic - self._snapshot[0] < self.snapshot_ttl_seconds
+            ):
+                return self._snapshot[1].copy(), {
+                    **self._snapshot[2],
+                    "cache_hit": True,
+                }
+
+        try:
+            frame, meta = self._build_snapshot()
+        except (TushareProviderError, ValueError, KeyError) as exc:
+            raise StockScreenerUnavailable(
+                "选股数据正在准备中，请稍后重试"
+            ) from exc
+        if frame.empty:
+            raise StockScreenerUnavailable("当前没有可用于筛选的完整市场数据")
+        with self._lock:
+            self._snapshot = (now_monotonic, frame.copy(), dict(meta))
+        return frame, {**meta, "cache_hit": False}
+
+    def _build_snapshot(self) -> tuple[pd.DataFrame, dict[str, Any]]:
+        now_cn = datetime.now(ZoneInfo("Asia/Shanghai"))
+        calendar_end = now_cn.date()
+        calendar_start = calendar_end - timedelta(days=120)
+        calendar = self._query(
+            "trade_cal",
+            exchange="SSE",
+            start_date=calendar_start.strftime("%Y%m%d"),
+            end_date=calendar_end.strftime("%Y%m%d"),
+            is_open="1",
+            fields="exchange,cal_date,is_open,pretrade_date",
+        )
+        if calendar.empty or "cal_date" not in calendar:
+            raise ValueError("交易日历为空")
+        open_mask = (
+            pd.to_numeric(calendar["is_open"], errors="coerce").fillna(0) == 1
+            if "is_open" in calendar
+            else pd.Series(True, index=calendar.index)
+        )
+        open_dates = sorted(
+            {
+                self._date_string(value)
+                for value in calendar.loc[open_mask, "cal_date"].tolist()
+                if self._date_string(value)
+            }
+        )
+        today = now_cn.strftime("%Y%m%d")
+        if now_cn.time() < clock_time(15, 10):
+            open_dates = [value for value in open_dates if value < today]
+        else:
+            open_dates = [value for value in open_dates if value <= today]
+        if len(open_dates) < 21:
+            raise ValueError("交易日历不足 21 个交易日")
+
+        latest_date: str | None = None
+        latest_daily = pd.DataFrame()
+        latest_index = -1
+        for candidate in reversed(open_dates[-6:]):
+            candidate_daily = self._query(
+                "daily",
+                trade_date=candidate,
+                fields="ts_code,trade_date,open,high,low,close,pre_close,pct_chg,vol,amount",
+            )
+            if not candidate_daily.empty:
+                latest_date = candidate
+                latest_daily = candidate_daily
+                latest_index = open_dates.index(candidate)
+                break
+        if latest_date is None or latest_index < 20:
+            raise ValueError("没有找到足够历史的完整日线")
+
+        date_5d = open_dates[latest_index - 5]
+        date_20d = open_dates[latest_index - 20]
+        daily_5d = self._query(
+            "daily", trade_date=date_5d, fields="ts_code,trade_date,close"
+        )
+        daily_20d = self._query(
+            "daily", trade_date=date_20d, fields="ts_code,trade_date,close"
+        )
+        daily_basic = self._query(
+            "daily_basic",
+            trade_date=latest_date,
+            fields=(
+                "ts_code,trade_date,turnover_rate,volume_ratio,pe_ttm,pb,ps_ttm,"
+                "total_mv,circ_mv"
+            ),
+        )
+        stock_basic = self._query(
+            "stock_basic",
+            exchange="",
+            list_status="L",
+            fields="ts_code,symbol,name,area,industry,market,list_date,exchange",
+        )
+        required = {
+            "latest daily": (latest_daily, {"ts_code", "close"}),
+            "5-day daily": (daily_5d, {"ts_code", "close"}),
+            "20-day daily": (daily_20d, {"ts_code", "close"}),
+            "daily basic": (daily_basic, {"ts_code"}),
+            "stock basic": (stock_basic, {"ts_code", "name"}),
+        }
+        for label, (data, columns) in required.items():
+            if data.empty or not columns.issubset(data.columns):
+                raise ValueError(f"{label} 字段不完整")
+
+        latest = latest_daily.copy()
+        latest = latest.rename(
+            columns={
+                "close": "latest_close",
+                "pct_chg": "pct_change",
+                "vol": "volume",
+            }
+        )
+        base_5 = daily_5d[["ts_code", "close"]].rename(
+            columns={"close": "close_5d_base"}
+        )
+        base_20 = daily_20d[["ts_code", "close"]].rename(
+            columns={"close": "close_20d_base"}
+        )
+        frame = stock_basic.merge(latest, on="ts_code", how="inner")
+        frame = frame.merge(base_5, on="ts_code", how="left")
+        frame = frame.merge(base_20, on="ts_code", how="left")
+        frame = frame.merge(daily_basic, on="ts_code", how="left", suffixes=("", "_basic"))
+        numeric_columns = [
+            "latest_close",
+            "pct_change",
+            "amount",
+            "volume",
+            "close_5d_base",
+            "close_20d_base",
+            "turnover_rate",
+            "volume_ratio",
+            "pe_ttm",
+            "pb",
+            "ps_ttm",
+            "total_mv",
+            "circ_mv",
+        ]
+        for column in numeric_columns:
+            if column in frame:
+                frame[column] = pd.to_numeric(frame[column], errors="coerce")
+            else:
+                frame[column] = math.nan
+        frame["return_5d_pct"] = (
+            (frame["latest_close"] / frame["close_5d_base"] - 1.0) * 100.0
+        )
+        frame["return_20d_pct"] = (
+            (frame["latest_close"] / frame["close_20d_base"] - 1.0) * 100.0
+        )
+        frame["total_mv_yi"] = frame["total_mv"] / 10_000.0
+        frame["circ_mv_yi"] = frame["circ_mv"] / 10_000.0
+        if "industry" not in frame:
+            frame["industry"] = "未分类"
+        frame["industry"] = frame["industry"].fillna("未分类").replace("", "未分类")
+        frame["industry_avg_return_20d_pct"] = frame.groupby("industry")[
+            "return_20d_pct"
+        ].transform("mean")
+        frame["industry_excess_20d_pct"] = (
+            frame["return_20d_pct"] - frame["industry_avg_return_20d_pct"]
+        )
+        frame["internal_symbol"] = frame["ts_code"].map(self._internal_symbol)
+        frame["trade_date"] = latest_date
+
+        return frame, {
+            "source": "Tushare Pro",
+            "latest_completed_trade_date": self._iso_date(latest_date),
+            "return_5d_base_date": self._iso_date(date_5d),
+            "return_20d_base_date": self._iso_date(date_20d),
+            "snapshot_built_at": utc_now(),
+            "price_basis": "最近完整交易日日线",
+            "valuation_basis": "与最近完整交易日对齐的 daily_basic 截面",
+        }
+
+    def _apply_universe_rules(
+        self,
+        frame: pd.DataFrame,
+        *,
+        market: str,
+        filters: Mapping[str, Any],
+        latest_trade_date: str,
+    ) -> pd.DataFrame:
+        result = frame.copy()
+        if bool(filters.get("exclude_st", True)):
+            result = result[
+                ~result["name"].fillna("").astype(str).str.upper().str.contains("ST")
+            ]
+        minimum_days = int(filters.get("min_listed_days", 180) or 0)
+        if minimum_days > 0 and "list_date" in result:
+            latest = pd.Timestamp(latest_trade_date)
+            listed = pd.to_datetime(result["list_date"].astype(str), errors="coerce")
+            result = result[(latest - listed).dt.days >= minimum_days]
+        code = result["ts_code"].astype(str)
+        if market == "sh":
+            result = result[code.str.endswith(".SH")]
+        elif market == "sz":
+            result = result[code.str.endswith(".SZ")]
+        elif market == "bj":
+            result = result[code.str.endswith(".BJ")]
+        elif market == "gem":
+            result = result[code.str.match(r"^(?:300|301)")]
+        elif market == "star":
+            result = result[code.str.startswith("688")]
+        elif market == "main":
+            result = result[
+                code.str.match(r"^(?:000|001|002|003|600|601|603|605)")
+            ]
+        industry = str(filters.get("industry") or "").strip()
+        if industry:
+            result = result[
+                result["industry"].fillna("").astype(str).str.contains(
+                    industry, case=False, regex=False
+                )
+            ]
+        return result[
+            result["latest_close"].notna()
+            & result["return_5d_pct"].notna()
+            & result["return_20d_pct"].notna()
+        ]
+
+    @staticmethod
+    def _apply_numeric_filters(
+        frame: pd.DataFrame, filters: Mapping[str, Any]
+    ) -> pd.DataFrame:
+        result = frame.copy()
+        for key, column in NUMERIC_COLUMN_BY_FILTER.items():
+            if key not in filters or filters[key] is None:
+                continue
+            threshold = float(filters[key])
+            if key.startswith("min_"):
+                result = result[result[column].notna() & (result[column] >= threshold)]
+            else:
+                result = result[result[column].notna() & (result[column] <= threshold)]
+        return result
+
+    @staticmethod
+    def _diverse_financial_pool(frame: pd.DataFrame, limit: int) -> pd.DataFrame:
+        if frame.empty:
+            return frame
+        ordered = frame.sort_values(
+            ["amount", "total_mv_yi", "ts_code"],
+            ascending=[False, False, True],
+            na_position="last",
+        )
+        diversified = ordered.groupby("industry", sort=False, group_keys=False).head(3)
+        if len(diversified) < limit:
+            selected = set(diversified["ts_code"].astype(str))
+            remainder = ordered[~ordered["ts_code"].astype(str).isin(selected)]
+            diversified = pd.concat(
+                [diversified, remainder.head(limit - len(diversified))],
+                ignore_index=True,
+            )
+        return diversified.head(limit).copy()
+
+    def _load_financials(self, ts_code: str) -> dict[str, Any]:
+        now_monotonic = time.monotonic()
+        with self._lock:
+            cached = self._finance_cache.get(ts_code)
+            if cached:
+                cached_ttl = (
+                    self.finance_ttl_seconds
+                    if cached[1].get("status") == "available"
+                    else 30
+                )
+                if now_monotonic - cached[0] < cached_ttl:
+                    return dict(cached[1])
+        try:
+            frame = self._query(
+                "fina_indicator",
+                ts_code=ts_code,
+                start_date=(datetime.now().date() - timedelta(days=800)).strftime(
+                    "%Y%m%d"
+                ),
+                fields=(
+                    "ts_code,ann_date,end_date,roe,grossprofit_margin,netprofit_margin,"
+                    "debt_to_assets,tr_yoy,or_yoy,q_sales_yoy,netprofit_yoy,"
+                    "q_netprofit_yoy,q_dtprofit_yoy"
+                ),
+            )
+        except TushareProviderError:
+            packet = {"status": "unavailable"}
+        else:
+            packet = self._financial_packet(frame)
+        # Successful reports are durable for several hours. A transient
+        # provider failure must never become a long-lived evidence gap.
+        if packet.get("status") == "available":
+            with self._lock:
+                self._finance_cache[ts_code] = (now_monotonic, dict(packet))
+        return packet
+
+    def _load_financials_many(
+        self, ts_codes: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        unique_codes = list(dict.fromkeys(ts_codes))
+        if not unique_codes:
+            return {}
+        if self.finance_workers == 1 or len(unique_codes) == 1:
+            return {code: self._load_financials(code) for code in unique_codes}
+        packets: dict[str, dict[str, Any]] = {}
+        with ThreadPoolExecutor(
+            max_workers=min(self.finance_workers, len(unique_codes)),
+            thread_name_prefix="qingshu-finance",
+        ) as executor:
+            futures = {
+                executor.submit(self._load_financials, code): code
+                for code in unique_codes
+            }
+            for future in as_completed(futures):
+                code = futures[future]
+                try:
+                    packets[code] = future.result()
+                except Exception:
+                    packets[code] = {"status": "unavailable"}
+        # Concurrent calls keep the page responsive, but a provider may
+        # throttle an isolated request. Retry only failed symbols once in a
+        # calmer sequential pass so temporary transport errors are not shown
+        # to users as missing company evidence.
+        for code in unique_codes:
+            if packets.get(code, {}).get("status") == "available":
+                continue
+            packets[code] = self._load_financials(code)
+        return packets
+
+    @classmethod
+    def _financial_packet(cls, frame: pd.DataFrame) -> dict[str, Any]:
+        if frame.empty:
+            return {"status": "unavailable"}
+        data = frame.copy()
+        for column in ("end_date", "ann_date"):
+            if column not in data:
+                data[column] = ""
+        data = data.sort_values(["end_date", "ann_date"], ascending=False)
+        row = data.iloc[0]
+
+        def first_number(*columns: str) -> float | None:
+            for column in columns:
+                if column not in row.index:
+                    continue
+                value = cls._number(row.get(column))
+                if value is not None:
+                    return value
+            return None
+
+        packet = {
+            "status": "available",
+            "report_period": cls._iso_date(row.get("end_date")),
+            "announcement_date": cls._iso_date(row.get("ann_date")),
+            "revenue_yoy": first_number(
+                "tr_yoy", "or_yoy", "q_sales_yoy", "revenue_yoy"
+            ),
+            "net_profit_yoy": first_number(
+                "netprofit_yoy", "q_netprofit_yoy", "q_dtprofit_yoy"
+            ),
+            "roe": first_number("roe"),
+            "gross_margin": first_number("grossprofit_margin"),
+            "net_margin": first_number("netprofit_margin"),
+            "debt_to_assets": first_number("debt_to_assets"),
+        }
+        available = sum(
+            packet.get(key) is not None
+            for key in (
+                "revenue_yoy",
+                "net_profit_yoy",
+                "roe",
+                "gross_margin",
+                "net_margin",
+                "debt_to_assets",
+            )
+        )
+        packet["coverage_status"] = (
+            "sufficient" if available >= 5 else "partial" if available else "unavailable"
+        )
+        return packet
+
+    @staticmethod
+    def _apply_financial_filters(
+        frame: pd.DataFrame,
+        packets: Mapping[str, Mapping[str, Any]],
+        filters: Mapping[str, Any],
+    ) -> pd.DataFrame:
+        if frame.empty:
+            return frame
+        result = frame.copy()
+        for field in FINANCIAL_FILTERS.values():
+            result[field] = result["ts_code"].map(
+                lambda code: StockScreenerService._number(
+                    packets.get(str(code), {}).get(field)
+                )
+            )
+        keep: list[bool] = []
+        for _, row in result.iterrows():
+            packet = packets.get(str(row["ts_code"]), {})
+            matched = True
+            for filter_name, field in FINANCIAL_FILTERS.items():
+                if filter_name not in filters or filters[filter_name] is None:
+                    continue
+                value = StockScreenerService._number(packet.get(field))
+                if value is None or value < float(filters[filter_name]):
+                    matched = False
+                    break
+            keep.append(matched)
+        return result.loc[keep].copy()
+
+    @staticmethod
+    def _sort_frame(frame: pd.DataFrame, profile: str) -> pd.DataFrame:
+        if frame.empty:
+            return frame
+        if profile == "trend":
+            columns, ascending = ["industry_excess_20d_pct", "ts_code"], [False, True]
+        elif profile == "value":
+            columns, ascending = ["pe_ttm", "pb", "ts_code"], [True, True, True]
+        elif profile == "pullback":
+            columns, ascending = ["return_5d_pct", "ts_code"], [False, True]
+        else:
+            if "revenue_yoy" in frame:
+                columns, ascending = ["revenue_yoy", "ts_code"], [False, True]
+            else:
+                # The preliminary pool has no model-produced score and uses
+                # liquidity only as a stable tiebreaker before finance is read.
+                columns, ascending = ["amount", "ts_code"], [False, True]
+        return frame.sort_values(columns, ascending=ascending, na_position="last")
+
+    def _build_item(
+        self, row: pd.Series, profile: str, financials: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        industry = str(row.get("industry") or "未分类")
+        metrics = {
+            "latest_close": self._number(row.get("latest_close")),
+            "pct_change": self._number(row.get("pct_change")),
+            "return_5d_pct": self._number(row.get("return_5d_pct")),
+            "return_20d_pct": self._number(row.get("return_20d_pct")),
+            "industry_avg_return_20d_pct": self._number(
+                row.get("industry_avg_return_20d_pct")
+            ),
+            "industry_excess_20d_pct": self._number(
+                row.get("industry_excess_20d_pct")
+            ),
+            "pe_ttm": self._number(row.get("pe_ttm")),
+            "pb": self._number(row.get("pb")),
+            "ps_ttm": self._number(row.get("ps_ttm")),
+            "total_mv_yi": self._number(row.get("total_mv_yi")),
+            "circ_mv_yi": self._number(row.get("circ_mv_yi")),
+            "turnover_rate_pct": self._number(row.get("turnover_rate")),
+            "volume_ratio": self._number(row.get("volume_ratio")),
+        }
+        clean_financials = {
+            key: value
+            for key, value in dict(financials).items()
+            if key != "status" or value != "unavailable"
+        }
+        financial_fields = (
+            "revenue_yoy",
+            "net_profit_yoy",
+            "roe",
+            "gross_margin",
+            "net_margin",
+            "debt_to_assets",
+        )
+        not_applicable_fields: list[str] = []
+        if any(term in industry for term in ("银行", "保险", "证券", "多元金融")):
+            # Financial institutions do not use industrial-company gross
+            # profit presentation. Treating a structurally absent gross margin
+            # as a data failure would mislead users.
+            not_applicable_fields.append("gross_margin")
+        missing_fields = [
+            key
+            for key, value in {**metrics, **clean_financials}.items()
+            if key in {*metrics.keys(), *financial_fields}
+            and value is None
+            and key not in not_applicable_fields
+        ]
+        if not financials or financials.get("status") == "unavailable":
+            missing_fields.extend(
+                key
+                for key in financial_fields
+                if key not in missing_fields and key not in not_applicable_fields
+            )
+            clean_financials = {
+                "status": "unavailable",
+                "coverage_status": "unavailable",
+            }
+        reasons = self._matched_reasons(profile, metrics, clean_financials)
+        financial_coverage = str(
+            clean_financials.get("coverage_status") or "unavailable"
+        )
+        return {
+            "ts_code": str(row.get("ts_code") or ""),
+            "internal_symbol": str(row.get("internal_symbol") or ""),
+            "name": str(row.get("name") or ""),
+            "industry": industry,
+            "market": str(row.get("market") or row.get("exchange") or "A股"),
+            "list_date": self._iso_date(row.get("list_date")),
+            "metrics": metrics,
+            "financials": clean_financials,
+            "coverage_status": {
+                "market_and_trend": "sufficient",
+                "valuation": (
+                    "sufficient"
+                    if metrics["pe_ttm"] is not None and metrics["pb"] is not None
+                    else "partial"
+                ),
+                "financial_quality": financial_coverage,
+            },
+            "matched_reasons": reasons,
+            "missing_fields": sorted(set(missing_fields)),
+            "not_applicable_fields": not_applicable_fields,
+            "limitations": [
+                "阶段收益基于完整日线，不是盘中信号。",
+                "行业相对表现使用同一 Tushare 行业标签下股票的简单均值，不代表官方行业指数。",
+                "最新财务指标可能来自不同报告期，比较前需核对报告期和公告日。",
+            ],
+        }
+
+    @staticmethod
+    def _matched_reasons(
+        profile: str,
+        metrics: Mapping[str, Any],
+        financials: Mapping[str, Any],
+    ) -> list[str]:
+        def fmt(value: Any) -> str:
+            number = StockScreenerService._number(value)
+            return "—" if number is None else f"{number:.2f}"
+
+        if profile == "quality":
+            return [
+                f"最新财报营收同比 {fmt(financials.get('revenue_yoy'))}%",
+                f"最新财报净利润同比 {fmt(financials.get('net_profit_yoy'))}%",
+                f"最新财报 ROE {fmt(financials.get('roe'))}%",
+            ]
+        if profile == "trend":
+            return [
+                f"近 5 日收益 {fmt(metrics.get('return_5d_pct'))}%",
+                f"近 20 日收益 {fmt(metrics.get('return_20d_pct'))}%",
+                f"近 20 日相对所属行业样本均值 {fmt(metrics.get('industry_excess_20d_pct'))} 个百分点",
+            ]
+        if profile == "value":
+            return [
+                f"PE TTM {fmt(metrics.get('pe_ttm'))}",
+                f"PB {fmt(metrics.get('pb'))}",
+                f"总市值 {fmt(metrics.get('total_mv_yi'))} 亿元；命中估值约束不等于低估",
+            ]
+        return [
+            f"近 20 日收益 {fmt(metrics.get('return_20d_pct'))}%",
+            f"近 5 日收益 {fmt(metrics.get('return_5d_pct'))}%",
+            f"量比 {fmt(metrics.get('volume_ratio'))}；仅表示活跃度，仍需复核回撤原因",
+        ]
+
+    @staticmethod
+    def _rules(filters: Mapping[str, Any]) -> list[dict[str, Any]]:
+        rules: list[dict[str, Any]] = []
+        if filters.get("exclude_st", True):
+            rules.append(
+                {
+                    "field": "股票状态",
+                    "operator": "排除",
+                    "value": "ST / *ST",
+                    "reason": "降低特殊处理和退市风险对首轮研究候选的干扰。",
+                }
+            )
+        rules.append(
+            {
+                "field": "上市时长",
+                "operator": ">=",
+                "value": int(filters.get("min_listed_days", 180)),
+                "unit": "自然日",
+                "reason": "减少新股短历史和定价剧烈波动造成的阶段收益偏差。",
+            }
+        )
+        for key, label in FILTER_LABELS.items():
+            if key not in filters or filters[key] is None:
+                continue
+            unit = "%" if any(
+                token in key
+                for token in ("return", "turnover", "revenue", "profit", "roe")
+            ) else "亿元" if "market_cap" in key else None
+            rules.append(
+                {
+                    "field": label,
+                    "operator": ">=" if key.startswith("min_") else "<=",
+                    "value": float(filters[key]),
+                    **({"unit": unit} if unit else {}),
+                    "reason": "用户可见、可修改的确定性筛选条件。",
+                }
+            )
+        if filters.get("industry"):
+            rules.append(
+                {
+                    "field": "行业",
+                    "operator": "包含",
+                    "value": str(filters["industry"]),
+                    "reason": "按 Tushare 股票基础信息中的行业标签筛选。",
+                }
+            )
+        return rules
+
+    @staticmethod
+    def _number(value: Any) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(number):
+            return None
+        return round(number, 4)
+
+    @staticmethod
+    def _date_string(value: Any) -> str:
+        text = str(value or "").strip().replace("-", "")
+        return text[:8] if len(text) >= 8 and text[:8].isdigit() else ""
+
+    @classmethod
+    def _iso_date(cls, value: Any) -> str | None:
+        text = cls._date_string(value)
+        if not text:
+            return None
+        return f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+
+    @staticmethod
+    def _internal_symbol(ts_code: Any) -> str:
+        value = str(ts_code or "").strip().upper()
+        return value[:-3] + ".SS" if value.endswith(".SH") else value

@@ -1,0 +1,30 @@
+services:
+  qingshu-agent:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      QINGSHU_DATA_DIR: /data
+      BACKGROUND_JOBS_ENABLED: "true"
+      BACKGROUND_MARKET_REFRESH_SECONDS: "30"
+      BACKGROUND_ARTICLE_CHECK_SECONDS: "1800"
+      BACKGROUND_INFO_REFRESH_SECONDS: "600"
+      BACKGROUND_USE_HERMES: "false"
+      HERMES_ENABLED: "false"
+    volumes:
+      - qingshu-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  qingshu-data:
