@@ -3033,7 +3033,13 @@
           }
           if (data.type === "agent_delta" && data.draft) {
             context.draft = data.draft;
-            renderStreamingDraft(pending, context.draft);
+            renderStreamingDraft(
+              pending,
+              context.draft,
+              data.is_unverified === false
+                ? "证据校验完成 · 正在保存最终答案"
+                : "AI 实时生成中（草稿） · 完成证据校验前内容可能调整"
+            );
           }
           if (data.type === "agent_stream_status" && data.label) {
             if (context.draft) renderStreamingDraft(pending, context.draft, data.label);
@@ -3157,6 +3163,7 @@
       renderDiagnosisPlaceholder();
       renderConversationList(state.conversations);
       clearImageAttachment();
+      $("chatInput").value = "";
       if (state.workspacePage === "agent") $("chatInput").focus();
     }
 

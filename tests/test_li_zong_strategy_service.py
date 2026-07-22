@@ -828,3 +828,68 @@ def test_trigger_enters_stock_workspace_and_agent_uses_strategy_evidence(app, cl
     assert evidence["profile"]["key"] == "li_zong"
     assert evidence["items"][0]["status"] == "triggered"
     assert len(evidence["items"][0]["rule_results"]) == 12
+
+
+def test_agent_li_zong_pool_excludes_failed_stocks_and_followup_keeps_context(
+    app, client
+):
+    assert client.post("/users", json={"name": "Li Zong Chat User"}).status_code == 201
+    app.state.li_zong_strategy.snapshot_service = SnapshotStub(
+        {
+            "000063.SZ": _snapshot_packet(triggered=True, data_version="chat-triggered"),
+            "000001.SZ": _snapshot_packet(
+                symbol="000001.SZ",
+                data_version="chat-rejected",
+                market_cap_yi=100.0,
+                stock_name="平安银行",
+                industry="银行",
+            ),
+        }
+    )
+    app.state.li_zong_strategy.run_symbols(["000063", "000001"])
+
+    pool = client.post(
+        "/me/chat",
+        json={
+            "message": "用李总策略帮我选股，当前有哪些候选？",
+            "execute_agent": False,
+        },
+    )
+    assert pool.status_code == 200
+    pool_payload = pool.json()
+    assert pool_payload["evidence"]["selection_mode"] == "candidate_pool"
+    assert "market_cap_eligible_count" not in pool_payload["evidence"]["data_meta"]
+    assert [item["internal_symbol"] for item in pool_payload["evidence"]["items"]] == [
+        "000063.SZ"
+    ]
+    assert pool_payload["evidence"]["items"][0]["status"] == "triggered"
+    assert "平安银行" not in pool_payload["answer"]
+    assert "1 只已发布研究候选" in pool_payload["answer"]
+
+    rejected = client.post(
+        "/me/chat",
+        json={
+            "message": "000001.SZ在李总策略里通过了吗？",
+            "execute_agent": False,
+        },
+    )
+    assert rejected.status_code == 200
+    rejected_payload = rejected.json()
+    assert rejected_payload["evidence"]["selection_mode"] == "symbol_check"
+    assert rejected_payload["evidence"]["items"][0]["status"] == "not_qualified"
+    assert "不是当前候选" in rejected_payload["answer"]
+
+    followup = client.post(
+        "/me/chat",
+        json={
+            "conversation_id": rejected_payload["conversation_id"],
+            "message": "为什么没有进入候选？",
+            "execute_agent": False,
+        },
+    )
+    assert followup.status_code == 200
+    followup_payload = followup.json()
+    assert followup_payload["evidence"]["profile"]["key"] == "li_zong"
+    assert followup_payload["evidence"]["requested_symbol"] == "000001.SZ"
+    assert followup_payload["evidence"]["items"][0]["status"] == "not_qualified"
+    assert "不是当前候选" in followup_payload["answer"]

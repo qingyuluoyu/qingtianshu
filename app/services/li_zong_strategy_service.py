@@ -623,6 +623,19 @@ class LiZongStrategyService:
         )
         return [self._with_stock_basic(item) for item in items]
 
+    def list_actionable_candidates(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Return only actual candidate-pool members, with triggers first."""
+
+        size = max(1, min(int(limit), 200))
+        triggered = self.list_candidates(status="triggered", limit=size)
+        remaining = max(0, size - len(triggered))
+        qualified = (
+            self.list_candidates(status="qualified", limit=remaining)
+            if remaining
+            else []
+        )
+        return [*triggered, *qualified]
+
     def get_candidate(
         self,
         symbol: str,

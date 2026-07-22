@@ -701,6 +701,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "const marketKey = inferDiagnosisMarketKey(data, question)" in page.text
     assert 'const marketTerms = new Set(["A", "AI", "ETF"' in page.text
     assert 'activateWorkspace("agent")' in page.text
+    assert '$("chatInput").value = "";' in page.text
     assert "body.agent-page #agentSection" in page.text
     assert 'api("/research-method?limit=4")' in page.text
     assert 'api("/me/research-actions")' in page.text

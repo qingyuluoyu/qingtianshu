@@ -2658,12 +2658,18 @@ def create_app(
         prior_intent = _intent_from_history(history)
         contextual_followup = _is_contextual_followup(message)
         explicit_market_query = _is_market_query(message)
-        stock_screen_query = _is_stock_screen_query(message) or (
+        explicit_stock_screen_query = _is_stock_screen_query(message)
+        prior_screen_profile = _stock_screen_profile_from_history(history)
+        stock_screen_query = explicit_stock_screen_query or (
             prior_intent == "stock_screen" and contextual_followup
         )
-        li_zong_query = "李总" in message and any(
-            keyword in message
-            for keyword in ("策略", "选股", "候选", "触发", "规则")
+        explicit_li_zong_query = "李总" in message and any(
+            keyword in message for keyword in ("策略", "选股", "候选", "触发", "规则")
+        )
+        li_zong_query = explicit_li_zong_query or (
+            prior_intent == "stock_screen"
+            and prior_screen_profile == "li_zong"
+            and contextual_followup
         )
         peer_comparison_query = _is_peer_comparison_query(message)
         financial_driver_query = (
@@ -2697,6 +2703,7 @@ def create_app(
                 "shareholder_structure",
                 "analyst_expectations",
                 "event_timeline",
+                "stock_screen",
             }
             and (
                 contextual_followup
@@ -2820,6 +2827,11 @@ def create_app(
                     "market_sources": market_sources,
                     "evidence_sources": evidence_sources,
                     "model_tier": model_tier,
+                    "stock_screen_profile": (
+                        ((evidence_payload or {}).get("profile") or {}).get("key")
+                        if response_intent == "stock_screen"
+                        else None
+                    ),
                 },
             )
             try:
@@ -2887,26 +2899,64 @@ def create_app(
             }
         elif li_zong_query and upload is None:
             intent = "stock_screen"
+            coverage = li_zong_strategy.coverage_packet()
             if symbol is not None:
                 try:
                     candidates = [li_zong_strategy.get_candidate(symbol)]
                 except ValueError:
                     candidates = []
+                selection_mode = "symbol_check"
             else:
-                candidates = li_zong_strategy.list_candidates(limit=50)
+                candidates = li_zong_strategy.list_actionable_candidates(limit=50)
+                selection_mode = "candidate_pool"
             public_items = [
                 _public_li_zong_candidate(item)
                 for item in candidates
                 if item is not None
             ]
+            evaluated = int(coverage.get("evaluated_symbols") or 0)
+            universe_count = int(coverage.get("universe_count") or 0)
+            if not universe_count:
+                evaluated = max(evaluated, len(public_items))
+            full_coverage = bool(coverage.get("full_market_coverage"))
+            warnings: list[str] = []
+            if coverage.get("status") != "stable":
+                warnings.append("全市场名单和市值快照尚未达到稳定发布门槛。")
+            elif not full_coverage:
+                warnings.append(
+                    f"当前已完成 {evaluated}/{universe_count} 只股票的规则状态；"
+                    "未处理股票不能推断为通过或不通过。"
+                )
+            if selection_mode == "candidate_pool" and not public_items:
+                warnings.append(
+                    "当前已评估范围内尚无进入候选池或触发池的股票。"
+                    if not full_coverage
+                    else "本期全市场规则计算完成，尚无股票进入候选池或触发池。"
+                )
+            if selection_mode == "symbol_check" and not public_items:
+                warnings.append("该股票尚未形成可用的李总策略快照。")
             evidence = {
                 "type": "stock_screen",
-                "status": "ready" if public_items else "preparing",
+                "status": (
+                    "ready"
+                    if selection_mode == "symbol_check" and public_items
+                    else "complete"
+                    if selection_mode == "candidate_pool" and full_coverage
+                    else "partial"
+                ),
                 "strategy": li_zong_strategy.get_definition(),
-                "profile": {"key": "li_zong", "label": "李总策略"},
+                "profile": {
+                    "key": "li_zong",
+                    "label": "李总策略",
+                    "description": "基本面、股性、量价与盘后触发的确定性规则。",
+                },
+                "selection_mode": selection_mode,
+                "requested_symbol": symbol,
                 "items": public_items,
                 "data_meta": {
-                    "latest_completed_trade_date": max(
+                    "universe_status": coverage.get("status"),
+                    "latest_completed_trade_date": coverage.get("as_of_date")
+                    or max(
                         (
                             str(item.get("as_of_date"))
                             for item in public_items
@@ -2914,12 +2964,15 @@ def create_app(
                         ),
                         default=None,
                     ),
-                    "published_research_pool": len(public_items),
+                    "universe_count": universe_count,
+                    "evaluated_symbols": evaluated,
+                    "remaining_symbols": int(coverage.get("remaining_symbols") or 0),
+                    "coverage_ratio": float(coverage.get("coverage_ratio") or 0),
+                    "full_market_coverage": full_coverage,
+                    "actionable_candidate_count": len(public_items),
                 },
                 "user_question": message,
-                "warnings": (
-                    [] if public_items else ["当前尚无已发布的李总策略快照。"]
-                ),
+                "warnings": warnings,
                 "boundary": (
                     "该策略只生成研究候选和人工复核触发，不构成买卖建议。"
                 ),
@@ -3576,7 +3629,8 @@ def create_app(
                         "elapsed_seconds": update.get("elapsed_seconds"),
                         "event_index": update.get("event_index"),
                         "withheld_segments": update.get("withheld_segments", 0),
-                        "is_unverified": True,
+                        "is_unverified": update.get("is_unverified", True),
+                        "is_final": update.get("is_final", False),
                     },
                 )
             elif event_type == "reset":
@@ -5152,6 +5206,18 @@ def _intent_from_history(history: list[dict[str, Any]]) -> str | None:
             if intent in {"general_research", "clarification"}:
                 continue
             return intent
+    return None
+
+
+def _stock_screen_profile_from_history(
+    history: list[dict[str, Any]],
+) -> str | None:
+    for item in reversed(history):
+        if item.get("role") != "assistant" or item.get("intent") != "stock_screen":
+            continue
+        profile = (item.get("metadata") or {}).get("stock_screen_profile")
+        if profile:
+            return str(profile)
     return None
 
 

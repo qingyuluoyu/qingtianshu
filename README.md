@@ -130,6 +130,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 | `BACKGROUND_JOBS_ENABLED` | `true` | 是否启动后台刷新任务 |
 | `HERMES_ENABLED` | `false` | 是否调用 Hermes 生成深度回答 |
 | `HERMES_BIN` | `hermes` | Hermes 命令名或可执行文件路径 |
+| `HERMES_PYTHON_BIN` | 自动识别 | 可选；Hermes 流式桥接所用虚拟环境 Python，自动识别失败时再配置 |
 | `TUSHARE_ENABLED` | 按 Token 自动判断 | 是否启用 Tushare 数据 |
 | `TUSHARE_TOKEN` | 空 | 本地 Tushare Token，禁止提交 |
 | `LI_ZONG_UNIVERSE_BATCH_SIZE` | `10` | 每轮后台为多少只市值预筛股票补齐多年策略数据 |
@@ -262,6 +263,8 @@ export HERMES_ENABLED=true
 未设置时由 Hermes 当前配置决定。密钥由 Hermes 或进程环境管理，本项目不会读取、打印或复制密钥。
 
 一键启动不会假设特定供应商：检测到 `HERMES_BIN` 可执行文件时才启用 Hermes，模型和 Provider 继续由用户自己的 Hermes 配置或环境变量决定。密钥只由 Hermes 或进程环境读取，不写入项目。
+
+`HERMES_BIN=hermes` 会按当前进程的 `PATH` 解析，不要求写本机绝对路径。流式回答会从 Hermes 控制台脚本或启动包装器识别其虚拟环境 Python，并保留虚拟环境入口；只有非标准安装无法自动识别时，才需要设置 `HERMES_PYTHON_BIN`。应用不会读取或复制 Hermes 密钥。
 
 Hermes 返回后会经过 `deterministic_numeric_and_policy_guard_v2`：守卫理解“涨 / 跌 / 回撤”的语义方向、合理四舍五入和由确定性证据计算出的均线距离等派生值。大盘回答只使用模型实际收到的当前市场、当前问题证据校验，不会让其他市场数字或上一轮助手措辞成为可信事实；用户输入中的数字也不会因此放行。守卫仍拒绝证据外数字、反向改写、目标价、未来涨跌概率、收益保证、浪型判断以及 BUY/HOLD/SELL 指令，并拦截原始字段名、后台状态、供应商名称和数据源故障。若回答只包含少量不受支持的句子，系统会删行后再次完整验守，尽量保留其余针对性模型回答；涉及策略禁令、语义冲突或无法安全修复时，才退回确定性摘要。原始被拒文本只留在该用户 Run 目录用于诊断。
 

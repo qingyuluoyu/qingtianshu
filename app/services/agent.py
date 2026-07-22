@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from app.config import PROJECT_ROOT, Settings
 from app.db import Database
+from app.hermes_runtime import resolve_hermes_executable, resolve_hermes_python
 from app.utils import write_json
 
 
@@ -1402,6 +1403,9 @@ _UNAVAILABLE_MA5_RE = re.compile(r"(?:MA\s*5|5\s*日均线)", re.IGNORECASE)
 _UNSUPPORTED_WAVE_RE = re.compile(r"(?:A|B|C)\s*浪|浪型", re.IGNORECASE)
 _STOCK_FAILURE_THRESHOLD_LABEL = "个股失效条件只能使用证据包已有阈值和观察周期"
 _STOCK_OBSERVATION_WINDOW_LABEL = "个股观察周期只能使用研究计划已有交易日窗口"
+_LI_ZONG_RULE_BOTTLENECK_LABEL = (
+    "缺少逐规则汇总统计时不能推断李总策略的主要瓶颈或规则稀缺度"
+)
 _STOCK_DISCLOSURE_DATE_LABEL = "缺少披露日历证据时不能预测下一份报告日期"
 _STOCK_REPORT_DATE_CONFLICT_LABEL = "财报公告日期必须与结构化报告一致"
 _STOCK_DRAWDOWN_WINDOW_LABEL = "最大回撤观察窗口必须与确定性指标一致"
@@ -1452,6 +1456,16 @@ _STOCK_INVENTED_SINGLE_DIGIT_RE = re.compile(
 _STOCK_OBSERVATION_WINDOW_RE = re.compile(
     r"(?:(?:未来|后续|接下来)\s*)?"
     r"(\d+)\s*(?:[-—–~～至到]\s*(\d+)\s*)?个?交易日(?:内|后|观察|复核)"
+)
+_STOCK_T_PLUS_WINDOW_RE = re.compile(
+    r"(?<![A-Za-z0-9_])T\s*\+\s*(\d+)(?!\d)", re.IGNORECASE
+)
+_LI_ZONG_RULE_BOTTLENECK_RE = re.compile(
+    r"(?:尤其|主要卡在|主要来自|核心瓶颈|最大瓶颈|最严格|最难满足|"
+    r"极少|很少|稀缺|约束最强)"
+)
+_LI_ZONG_RULE_TERM_RE = re.compile(
+    r"(?:ROE|市值|股东|涨停|连板|阴线|复权新高|成交量|量价|股性|基本面)"
 )
 _STOCK_DISCLOSURE_DATE_RE = re.compile(
     r"(?:中报|半年报|年报|季报|定期报告|下一份报告|下一份财报)"
@@ -1590,13 +1604,36 @@ def _has_unsupported_stock_observation_window(
         int(match.group(1))
         for match in re.finditer(r'"horizon_sessions"\s*:\s*(\d+)', allowed_text)
     )
+    allowed.update(
+        int(match.group(1))
+        for match in _STOCK_T_PLUS_WINDOW_RE.finditer(allowed_text)
+    )
     for match in _STOCK_OBSERVATION_WINDOW_RE.finditer(answer):
         claimed = {int(match.group(1))}
         if match.group(2):
             claimed.add(int(match.group(2)))
         if not claimed.issubset(allowed):
             return True
+    for match in _STOCK_T_PLUS_WINDOW_RE.finditer(answer):
+        if int(match.group(1)) not in allowed:
+            return True
     return False
+
+
+def _has_li_zong_rule_bottleneck_overclaim(
+    answer: str, evidence: dict[str, Any]
+) -> bool:
+    if (
+        ((evidence.get("profile") or {}).get("key") != "li_zong")
+        or evidence.get("selection_mode") != "candidate_pool"
+        or (evidence.get("data_meta") or {}).get("rule_aggregate_counts")
+    ):
+        return False
+    return any(
+        _LI_ZONG_RULE_BOTTLENECK_RE.search(clause)
+        and _LI_ZONG_RULE_TERM_RE.search(clause)
+        for clause in re.split(r"[。；\n]", answer)
+    )
 
 
 def _has_unsupported_stock_disclosure_date(
@@ -2842,7 +2879,36 @@ unresolved 是尚未解决的风险或缺口，不能把 unresolved 写成已经
 百分比和比率可在不改变方向与含义的前提下保留最多两位小数。若 Claim 摘要没有用户可读的
 金额单位，可改用方向、同比、比率和报告期说明，不自行换算出新的金额。
 """
-        if intent == "stock_screen":
+        if intent == "stock_screen" and (
+            prompt_evidence.get("profile") or {}
+        ).get("key") == "li_zong":
+            prompt += """
+
+## 李总策略回答要求
+
+这是确定性策略状态查询，不是普通截面筛选。selection_mode=candidate_pool 时，items 只包含
+真正进入 qualified 或 triggered 状态的股票；不得把 not_qualified、data_incomplete、invalidated
+或尚未处理的股票称为候选。必须先说明数据交易日、已评估数/全市场数、覆盖率和剩余待处理数。
+若 full_market_coverage=false，只能说“当前已评估范围内”的候选情况，不得推断未处理股票，也不得
+宣称全市场没有候选。没有 items 时要区分“当前已评估范围内尚无候选”和“全市场完成后无候选”。
+
+selection_mode=symbol_check 时，必须直接回答该股票是 triggered、qualified、not_qualified、
+data_incomplete 还是 invalidated。not_qualified 不是候选，data_incomplete 不能判断通过，invalidated
+表示此前状态已被新数据推翻。优先列出明确未通过规则、数据不完整规则、反方证据和下一步核验；
+不得因为部分规则通过就把股票写成候选。规则实际值、阈值、证据日期和报告期只能引用证据包。
+
+“介入/触发”只表示进入重点关注和人工复核，不是买入、仓位或交易建议。正文不使用 Markdown 表格，
+证券代码使用 internal_symbol，不展示 Tushare 的 .SH 后缀。
+面向普通用户时，状态只使用“已触发、已进入候选、未通过、数据不完整、状态已失效”等中文，
+不要直接输出 triggered、qualified、not_qualified、data_incomplete、invalidated、selection_mode、
+profile key 或策略内部版本标识。默认使用中文规则名称；只有用户明确要求规则编号时才展示 LZ 编号。
+全市场待处理数只允许使用 remaining_symbols。市值门槛达标数量属于全市场预筛统计，和待处理队列
+不是同一口径，绝不能把市值达标数量写成“仍待处理、仍在队列或尚未评估”的股票数量。
+除非证据明确提供逐规则汇总统计，否则不能猜测哪条规则是主要瓶颈、最严格，或声称满足某几条
+规则的股票“极少”。不得为候选池自行增加 T+3、T+5 等复核周期；下一步只写完成剩余评估、
+查询具体股票规则证据，或核验证据日期与报告期。
+"""
+        elif intent == "stock_screen":
             prompt += """
 
 ## 研究候选筛选回答要求
@@ -3117,6 +3183,15 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 usage = {**(usage or {}), "output_guard": output_guard}
                 write_json(run_dir / "output_guard.json", output_guard)
                 guard_seconds = time.perf_counter() - guard_started
+                if stream_callback is not None and image_path is None:
+                    notify_stream(
+                        {
+                            "type": "delta",
+                            "draft": answer,
+                            "is_unverified": False,
+                            "is_final": True,
+                        }
+                    )
             except Exception as exc:
                 model_seconds = time.perf_counter() - model_started
                 notify_progress(
@@ -3904,11 +3979,15 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             )
         if (
             evidence.get("type") != "market_brief"
-            and evidence.get("symbol")
+            and (evidence.get("symbol") or evidence.get("type") == "stock_screen")
             and _has_unsupported_stock_observation_window(answer, evidence)
         ):
             unsupported_market_inferences.append(
                 _STOCK_OBSERVATION_WINDOW_LABEL
+            )
+        if _has_li_zong_rule_bottleneck_overclaim(answer, evidence):
+            unsupported_market_inferences.append(
+                _LI_ZONG_RULE_BOTTLENECK_LABEL
             )
         if (
             evidence.get("type") != "market_brief"
@@ -4625,6 +4704,11 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 _STOCK_OBSERVATION_WINDOW_LABEL
                 in unsupported_market_inferences
                 and _has_unsupported_stock_observation_window(line, evidence)
+            )
+            line_has_unsupported_inference = line_has_unsupported_inference or (
+                _LI_ZONG_RULE_BOTTLENECK_LABEL
+                in unsupported_market_inferences
+                and _has_li_zong_rule_bottleneck_overclaim(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
                 _STOCK_DISCLOSURE_DATE_LABEL
@@ -6231,8 +6315,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         user_workspace: Path,
         image_path: str | None,
     ) -> tuple[str, dict[str, Any] | None]:
-        if not self.settings.hermes_bin.exists():
-            raise FileNotFoundError(f"Hermes 可执行文件不存在：{self.settings.hermes_bin}")
+        hermes_bin = resolve_hermes_executable(self.settings.hermes_bin)
 
         provider = os.getenv(f"HERMES_{model_tier.upper()}_PROVIDER")
         model = os.getenv(f"HERMES_{model_tier.upper()}_MODEL")
@@ -6245,7 +6328,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             except ValueError as exc:
                 raise ValueError("图片必须位于当前用户的专属工作区中") from exc
             command = [
-                str(self.settings.hermes_bin),
+                str(hermes_bin),
                 "chat",
                 "-q",
                 prompt,
@@ -6260,7 +6343,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             ]
         else:
             command = [
-                str(self.settings.hermes_bin),
+                str(hermes_bin),
                 "-z",
                 prompt,
                 "--usage-file",
@@ -6307,9 +6390,10 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         trusted_context: list[str] | None,
         stream_callback: Callable[[dict[str, Any]], None],
     ) -> tuple[str, dict[str, Any] | None]:
-        python_bin = self.settings.hermes_bin.parent / "python"
+        hermes_bin = resolve_hermes_executable(self.settings.hermes_bin)
+        python_bin = resolve_hermes_python(hermes_bin)
         bridge = PROJECT_ROOT / "scripts" / "hermes_stream_bridge.py"
-        if not python_bin.exists() or not bridge.exists():
+        if not bridge.exists():
             raise FileNotFoundError("Hermes streaming bridge runtime is unavailable")
 
         provider = os.getenv(f"HERMES_{model_tier.upper()}_PROVIDER")
@@ -6608,6 +6692,118 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 """
 
     @staticmethod
+    def _render_li_zong_preview(evidence: dict[str, Any]) -> str:
+        items = list(evidence.get("items") or [])
+        data_meta = evidence.get("data_meta") or {}
+        strategy = evidence.get("strategy") or {}
+        rule_definitions = ((strategy.get("version") or {}).get("rules") or [])
+        rule_labels = {
+            str(item.get("rule_id")): str(item.get("label") or item.get("rule_id"))
+            for item in rule_definitions
+            if item.get("rule_id")
+        }
+        status_labels = {
+            "triggered": "已进入候选池，并触发重点关注与人工复核",
+            "qualified": "已进入候选池，当前未触发重点关注条件",
+            "not_qualified": "未满足候选池规则，不是当前候选",
+            "data_incomplete": "关键数据不完整，暂不能判断通过",
+            "invalidated": "此前候选状态已被新数据推翻",
+        }
+        evaluated = int(data_meta.get("evaluated_symbols") or 0)
+        universe = int(data_meta.get("universe_count") or 0)
+        remaining = int(data_meta.get("remaining_symbols") or 0)
+        coverage_ratio = float(data_meta.get("coverage_ratio") or 0)
+        coverage_text = (
+            f"已评估 {evaluated}/{universe} 只（{coverage_ratio * 100:.1f}%），"
+            f"仍有 {remaining} 只待处理"
+            if universe
+            else f"已发布 {evaluated} 只股票的规则状态"
+        )
+        trade_date = data_meta.get("latest_completed_trade_date") or "待确认"
+        boundary = evidence.get("boundary") or (
+            "该策略只生成研究候选和人工复核触发，不构成买卖建议。"
+        )
+
+        if evidence.get("selection_mode") == "symbol_check":
+            if not items:
+                return (
+                    f"截至 {trade_date}，该股票尚未形成可用的李总策略快照。"
+                    f"当前全市场{coverage_text}，未处理状态不能推断为通过或不通过。\n\n"
+                    f"{boundary}"
+                )
+            item = items[0]
+            status = str(item.get("status") or "data_incomplete")
+            rules = list(item.get("rule_results") or [])
+            candidate_rules = [
+                rule
+                for rule in rules
+                if str(rule.get("rule_id") or "").startswith(("LZ-F", "LZ-C", "LZ-VP"))
+            ]
+            passed_count = sum(rule.get("status") == "passed" for rule in candidate_rules)
+            failed = [rule for rule in candidate_rules if rule.get("status") == "failed"]
+            incomplete = [
+                rule for rule in candidate_rules if rule.get("status") == "data_incomplete"
+            ]
+            lines = [
+                f"{item.get('name')}（{item.get('internal_symbol')}）截至 {item.get('as_of_date') or trade_date} 的李总策略状态："
+                f"{status_labels.get(status, status)}。",
+                f"候选规则已有 {passed_count}/{len(candidate_rules) or 9} 项通过；{coverage_text}。",
+            ]
+            if failed:
+                lines.append(
+                    "明确未通过："
+                    + "；".join(
+                        f"{rule.get('rule_id')} {rule_labels.get(str(rule.get('rule_id')), '')}".strip()
+                        for rule in failed[:5]
+                    )
+                    + "。"
+                )
+            if incomplete:
+                lines.append(
+                    "待补数据："
+                    + "；".join(
+                        f"{rule.get('rule_id')} {rule_labels.get(str(rule.get('rule_id')), '')}".strip()
+                        for rule in incomplete[:5]
+                    )
+                    + "。"
+                )
+            if status == "triggered" and item.get("triggered_rule_ids"):
+                lines.append(
+                    "本次触发：" + "、".join(item.get("triggered_rule_ids") or []) + "；仅进入人工复核。"
+                )
+            lines.extend(
+                [
+                    "下一步应打开逐规则证据，核对失败项的数据时间、反方证据与可能改变判断的条件。",
+                    boundary,
+                ]
+            )
+            return "\n\n".join(lines)
+
+        lines = [f"李总策略数据交易日为 {trade_date}；当前{coverage_text}。"]
+        if not items:
+            if data_meta.get("full_market_coverage"):
+                lines.append("本期全市场规则计算已经完成，尚无股票进入候选池或触发池。")
+            else:
+                lines.append(
+                    "当前已评估范围内尚无股票进入候选池或触发池；"
+                    "这不能推断尚未处理的股票也不满足规则。"
+                )
+        else:
+            lines.append(f"当前共有 {len(items)} 只已发布研究候选：")
+            for index, item in enumerate(items[:10], start=1):
+                label = status_labels.get(str(item.get("status")), str(item.get("status")))
+                reasons = "；".join(
+                    str(value) for value in (item.get("matched_reasons") or [])[:3]
+                )
+                suffix = f"；{reasons}" if reasons else ""
+                lines.append(
+                    f"{index}. {item.get('name')}（{item.get('internal_symbol')}）：{label}{suffix}"
+                )
+            lines.append("选择其中一只后，应进入股票研究空间核验逐规则证据、反方证据和失效条件。")
+        lines.append(boundary)
+        return "\n\n".join(lines)
+
+    @staticmethod
     def _render_preview(evidence: dict[str, Any]) -> str:
         def fmt(value: Any, digits: int = 2) -> str:
             if not isinstance(value, (int, float)):
@@ -6629,6 +6825,8 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         kind = evidence.get("type")
         if kind == "stock_screen":
             profile = evidence.get("profile") or {}
+            if profile.get("key") == "li_zong":
+                return AgentService._render_li_zong_preview(evidence)
             items = evidence.get("items") or []
             data_meta = evidence.get("data_meta") or {}
             if evidence.get("status") == "unavailable":

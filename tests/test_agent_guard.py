@@ -441,6 +441,75 @@ def test_market_preview_hides_internal_degradation_language():
     assert "不构成下一交易日方向预测" in answer
 
 
+def test_li_zong_partial_preview_does_not_claim_full_market_has_no_candidates():
+    evidence = {
+        "type": "stock_screen",
+        "status": "partial",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "candidate_pool",
+        "items": [],
+        "data_meta": {
+            "latest_completed_trade_date": "2026-07-22",
+            "universe_count": 5530,
+            "evaluated_symbols": 4400,
+            "remaining_symbols": 1130,
+            "coverage_ratio": 4400 / 5530,
+            "full_market_coverage": False,
+        },
+        "boundary": "只生成研究候选和人工复核触发，不构成买卖建议。",
+    }
+
+    answer = AgentService._render_preview(evidence)
+
+    assert "已评估 4400/5530" in answer
+    assert "仍有 1130 只待处理" in answer
+    assert "当前已评估范围内尚无" in answer
+    assert "不能推断尚未处理" in answer
+    assert "全市场规则计算已经完成" not in answer
+
+
+def test_li_zong_guard_rejects_invented_review_cycle_and_rule_bottleneck():
+    evidence = {
+        "type": "stock_screen",
+        "status": "partial",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "candidate_pool",
+        "items": [],
+        "data_meta": {
+            "latest_completed_trade_date": "2026-07-22",
+            "universe_count": 5530,
+            "evaluated_symbols": 4464,
+            "remaining_symbols": 1066,
+            "coverage_ratio": 4464 / 5530,
+            "full_market_coverage": False,
+        },
+    }
+    answer = (
+        "截至2026-07-22，当前已评估4464/5530只，仍有1066只待处理。"
+        "当前已评估范围内没有候选，未处理股票不能推断为通过或不通过。"
+        "该策略只生成研究候选和人工复核触发，不构成推荐、评级或交易建议。\n"
+        "尤其连续五年ROE与近十日涨停同时满足的股票极少。\n"
+        "下一步按T+3周期复核候选池。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is False
+    assert agent_module._LI_ZONG_RULE_BOTTLENECK_LABEL in guard[
+        "unsupported_market_inferences"
+    ]
+    assert agent_module._STOCK_OBSERVATION_WINDOW_LABEL in guard[
+        "unsupported_market_inferences"
+    ]
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+    assert repaired is not None
+    repaired_answer, repaired_guard = repaired
+    assert repaired_guard["passed"] is True
+    assert "当前已评估范围内没有候选" in repaired_answer
+    assert "极少" not in repaired_answer
+    assert "T+3" not in repaired_answer
+
+
 def test_prompt_evidence_and_output_guard_hide_provider_operations():
     evidence = {
         "type": "market_brief",
@@ -5398,6 +5467,12 @@ def test_streamed_draft_is_replaced_by_final_guarded_answer(
     assert run["status"] == "completed"
     assert "短期修复" in run["answer"]
     assert "9999" not in run["answer"]
+    assert streamed[-1] == {
+        "type": "delta",
+        "draft": run["answer"],
+        "is_unverified": False,
+        "is_final": True,
+    }
     assert run["usage"]["output_guard"]["passed"] is True
     assert run["usage"]["timings"]["first_token_seconds"] == 0.25
     assert run["usage"]["timings"]["first_visible_seconds"] == 0.75
@@ -5454,7 +5529,13 @@ def test_streaming_bridge_failure_falls_back_to_oneshot_cli(
         {
             "type": "reset",
             "label": "实时生成连接已中断，正在恢复完整回答…",
-        }
+        },
+        {
+            "type": "delta",
+            "draft": "上证综指当日下跌1.23%。",
+            "is_unverified": False,
+            "is_final": True,
+        },
     ]
     assert run["usage"]["streaming"] == {
         "enabled": False,
