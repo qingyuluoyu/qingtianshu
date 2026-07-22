@@ -5,6 +5,7 @@ from typing import Any
 from app.catalog import INDEX_BY_SYMBOL, RESEARCH_TARGETS, normalize_symbol
 from app.db import Database
 from app.services.deep_stock import DeepStockResearchService
+from app.services.observation_tasks import ObservationTaskService
 from app.services.research_actions import ResearchActionService
 from app.services.research_claims import build_research_claim_ledger
 from app.services.research_tracking import ResearchTrackingService
@@ -23,12 +24,14 @@ class StockWorkspaceService:
         deep_stock: DeepStockResearchService,
         research_tracking: ResearchTrackingService,
         research_actions: ResearchActionService,
+        observation_tasks: ObservationTaskService,
         li_zong_strategy: Any | None = None,
     ):
         self.database = database
         self.deep_stock = deep_stock
         self.research_tracking = research_tracking
         self.research_actions = research_actions
+        self.observation_tasks = observation_tasks
         self.li_zong_strategy = li_zong_strategy
 
     def get_workspace(self, user_id: str, symbol: str) -> dict[str, Any]:
@@ -49,6 +52,9 @@ class StockWorkspaceService:
         claim_ledger = build_research_claim_ledger(evidence)
         tracking = self.research_tracking.get_packet(
             user_id, symbol=canonical, limit=20
+        )
+        observation_tasks = self.observation_tasks.list_tasks(
+            user_id=user_id, symbol=canonical, limit=100
         )
         action_item = self._action_item(user_id, canonical, watchlist)
         name = str(
@@ -79,6 +85,12 @@ class StockWorkspaceService:
             ]
         )
         pending_actions = self._pending_actions(action_item, coverage_tasks)
+        user_task_actions = [
+            self._observation_task_action(item)
+            for item in observation_tasks.get("items", [])
+            if item.get("status") in self.observation_tasks.ACTIVE_STATUSES
+        ]
+        pending_actions = [*user_task_actions, *pending_actions][:8]
         if research_entry is not None:
             pending_actions = [
                 {
@@ -158,6 +170,7 @@ class StockWorkspaceService:
             "thesis": thesis,
             "important_changes": important_changes,
             "pending_actions": pending_actions,
+            "observation_tasks": observation_tasks,
             "stage_progress": stage_progress,
             "evidence_summary": coverage,
             "claim_ledger": claim_ledger,
@@ -245,11 +258,34 @@ class StockWorkspaceService:
             "relation": workspace["relation"],
             "stage_progress": workspace["stage_progress"],
             "pending_actions": workspace["pending_actions"],
+            "observation_tasks": workspace["observation_tasks"],
             "next_evidence": workspace["next_evidence"],
             "boundary": (
                 "研究行动只用于核验事实、补充证据和复核判断；"
                 "不生成买卖、仓位、目标价或收益承诺。"
             ),
+        }
+
+    @staticmethod
+    def _observation_task_action(task: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": f"observation-task:{task['id']}",
+            "task_id": task["id"],
+            "title": task.get("title") or "用户观察任务",
+            "status": (
+                "pending_data"
+                if task.get("status") == "waiting_data"
+                else "triggered"
+            ),
+            "task_status": task.get("status"),
+            "task_status_label": task.get("status_label"),
+            "severity": task.get("priority") or "normal",
+            "source": "observation_task",
+            "condition": "用户已保存为长期观察任务",
+            "current_evidence": task.get("description"),
+            "next_step": task.get("description"),
+            "due_at": task.get("due_at"),
+            "version": task.get("version"),
         }
 
     def _action_item(

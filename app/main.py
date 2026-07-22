@@ -66,6 +66,12 @@ from app.services.stock_domain import (
     StockDomainService,
     StockDomainVersionConflict,
 )
+from app.services.observation_tasks import (
+    ObservationTaskInvalidState,
+    ObservationTaskNotFound,
+    ObservationTaskService,
+    ObservationTaskVersionConflict,
+)
 from app.services.stock_workspace import StockWorkspaceService
 from app.services.tushare_snapshots import TushareSnapshotService
 from app.services.li_zong_strategy_service import LiZongStrategyService
@@ -184,6 +190,39 @@ class ThesisCandidateCreate(BaseModel):
     source: Literal["user", "ai"] = "user"
     source_run_id: str | None = Field(default=None, max_length=36)
     base_version: int = Field(default=0, ge=0)
+
+
+class ObservationTaskCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=160)
+    description: str = Field(min_length=1, max_length=2000)
+    priority: Literal["high", "normal", "low"] = "normal"
+    due_at: str | None = Field(default=None, max_length=40)
+    thesis_id: str | None = Field(default=None, max_length=36)
+    change_ref: str | None = Field(default=None, max_length=160)
+    source_type: Literal["user", "research_action"] = "user"
+    source_ref_id: str | None = Field(default=None, max_length=160)
+
+
+class ObservationTaskUpdate(BaseModel):
+    base_version: int = Field(ge=1)
+    title: str | None = Field(default=None, min_length=1, max_length=160)
+    description: str | None = Field(default=None, min_length=1, max_length=2000)
+    priority: Literal["high", "normal", "low"] | None = None
+    due_at: str | None = Field(default=None, max_length=40)
+
+
+class ObservationTaskTransition(BaseModel):
+    base_version: int = Field(ge=1)
+    status: Literal[
+        "pending",
+        "in_progress",
+        "waiting_data",
+        "completed",
+        "ignored",
+        "cancelled",
+    ]
+    result_text: str | None = Field(default=None, max_length=3000)
+    evidence_refs: list[str] = Field(default_factory=list, max_length=12)
 
 
 class StockScreenFilters(BaseModel):
@@ -768,6 +807,7 @@ def create_app(
     conversation_quality = ConversationQualityService(database)
     deep_stock = DeepStockResearchService(database)
     stock_domain = StockDomainService(database)
+    observation_tasks = ObservationTaskService(database)
     resolved_tushare_client = tushare_client
     if resolved_tushare_client is None and settings.tushare_enabled:
         try:
@@ -788,6 +828,7 @@ def create_app(
         deep_stock,
         research_tracking,
         research_actions,
+        observation_tasks=observation_tasks,
         li_zong_strategy=li_zong_strategy,
     )
     event_broker = EventBroker()
@@ -866,6 +907,7 @@ def create_app(
     app.state.conversation_quality = conversation_quality
     app.state.deep_stock = deep_stock
     app.state.stock_domain = stock_domain
+    app.state.observation_tasks = observation_tasks
     app.state.stock_workspace = stock_workspace
     app.state.stock_screener = stock_screener
     app.state.tushare_snapshots = tushare_snapshots
@@ -1484,6 +1526,109 @@ def create_app(
         try:
             return stock_workspace.get_actions_workspace(user["id"], symbol)
         except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/v1/observation-tasks")
+    def list_my_observation_tasks(
+        request: Request,
+        symbol: str | None = Query(default=None, max_length=24),
+        status: str | None = Query(default=None, max_length=24),
+        limit: int = Query(default=100, ge=1, le=200),
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return observation_tasks.list_tasks(
+                user_id=user["id"], symbol=symbol, status=status, limit=limit
+            )
+        except ObservationTaskInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/v1/stocks/{symbol}/observation-tasks")
+    def list_my_stock_observation_tasks(
+        symbol: str,
+        request: Request,
+        status: str | None = Query(default=None, max_length=24),
+        limit: int = Query(default=100, ge=1, le=200),
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return observation_tasks.list_tasks(
+                user_id=user["id"], symbol=symbol, status=status, limit=limit
+            )
+        except ObservationTaskInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/stocks/{symbol}/observation-tasks", status_code=201)
+    def create_my_observation_task(
+        symbol: str, payload: ObservationTaskCreate, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return observation_tasks.create_task(
+                user_id=user["id"],
+                symbol=symbol,
+                title=payload.title,
+                description=payload.description,
+                priority=payload.priority,
+                due_at=payload.due_at,
+                thesis_id=payload.thesis_id,
+                change_ref=payload.change_ref,
+                source_type=payload.source_type,
+                source_ref_id=payload.source_ref_id,
+            )
+        except ObservationTaskInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/v1/observation-tasks/{task_id}")
+    def get_my_observation_task(task_id: str, request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return observation_tasks.get_task(user_id=user["id"], task_id=task_id)
+        except ObservationTaskNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.patch("/v1/observation-tasks/{task_id}")
+    def update_my_observation_task(
+        task_id: str, payload: ObservationTaskUpdate, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return observation_tasks.update_task(
+                user_id=user["id"],
+                task_id=task_id,
+                base_version=payload.base_version,
+                title=payload.title,
+                description=payload.description,
+                priority=payload.priority,
+                due_at=payload.due_at,
+                due_at_provided="due_at" in payload.model_fields_set,
+            )
+        except ObservationTaskNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ObservationTaskVersionConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ObservationTaskInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/observation-tasks/{task_id}/transition")
+    def transition_my_observation_task(
+        task_id: str, payload: ObservationTaskTransition, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return observation_tasks.transition_task(
+                user_id=user["id"],
+                task_id=task_id,
+                base_version=payload.base_version,
+                status=payload.status,
+                result_text=payload.result_text,
+                evidence_refs=payload.evidence_refs,
+            )
+        except ObservationTaskNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ObservationTaskVersionConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ObservationTaskInvalidState as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/v1/stocks/{symbol}/relation")

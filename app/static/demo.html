@@ -925,6 +925,14 @@
     .stock-task-copy, .stock-history-copy { margin-top: 7px; color: #64748a; font-size: 14px; line-height: 1.7; }
     .stock-history-copy, .deep-stock-card-copy { white-space: pre-line; }
     .stock-task-evidence { margin-top: 8px; color: #7a8799; font-size: 12px; line-height: 1.6; }
+    .stock-task-card.user-task { border-color: #cbdcff; background: linear-gradient(145deg,#fff,#f7faff); }
+    .stock-task-section-label { grid-column: 1 / -1; margin-top: 4px; color: #52647d; font-size: 13px; font-weight: 780; }
+    .stock-task-actions { display: flex; gap: 7px; margin-top: 12px; flex-wrap: wrap; }
+    .stock-task-actions .btn { padding: 7px 10px; font-size: 12px; }
+    .stock-task-editor { display: grid; gap: 9px; margin-top: 12px; padding-top: 12px; border-top: 1px solid #e5ebf5; }
+    .stock-task-editor input, .stock-task-editor textarea, .stock-task-editor select { width: 100%; border: 1px solid #d6dfed; border-radius: 9px; background: #fff; color: var(--text); padding: 9px 10px; font: inherit; }
+    .stock-task-editor textarea { min-height: 84px; resize: vertical; }
+    .stock-task-editor-status { color: #718096; font-size: 12px; line-height: 1.55; }
     .stock-history-meta { margin-top: 8px; color: #8490a2; font-size: 12px; }
     .stock-coverage-history { grid-column: 1 / -1; }
     .stock-coverage-history-list { max-height: 360px; margin-top: 10px; padding-right: 5px; overflow-y: auto; overscroll-behavior: contain; }
@@ -2412,11 +2420,7 @@
           const limitations = document.createElement("div"); limitations.className = "li-zong-limitations";
           limitations.textContent = item.limitations.slice(0, 2).join("；"); card.appendChild(limitations);
         }
-        const actions = document.createElement("div"); actions.className = "li-zong-actions";
-        const detail = document.createElement("button"); detail.type = "button"; detail.className = "btn"; detail.textContent = "查看逐规则证据"; detail.addEventListener("click", () => showLiZongDetail(item));
-        const follow = document.createElement("button"); follow.type = "button"; follow.className = "btn"; follow.textContent = item.status === "triggered" ? "加入重点关注" : "加入关注"; follow.addEventListener("click", () => { void addScreenCandidateToWatchlist(item, follow, "李总策略"); });
-        const research = document.createElement("button"); research.type = "button"; research.className = "btn primary"; research.textContent = "保存线索并研究";
-        research.addEventListener("click", () => { void enterScreenCandidateResearch(item, research, {
+        const entryContext = {
           source_kind: "li_zong_strategy",
           source_label: "李总策略",
           display_name: item.name,
@@ -2425,8 +2429,13 @@
           candidate_status: item.status,
           matched_reasons: (item.rule_results || []).filter(rule => rule.status === "passed").map(rule => liZongRuleLabel(rule.rule_id)),
           missing_fields: item.limitations || []
-        }); });
-        const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn"; ask.textContent = "让 Agent 核验"; ask.addEventListener("click", () => prepareAgentQuestion(`请核验${item.name}（${item.internal_symbol}）的李总策略结果。逐条说明基本面、股性、量价和触发规则的证据时间、反方证据、数据缺口、失效条件与下一步需要核验什么；不要输出买卖指令。`));
+        };
+        const actions = document.createElement("div"); actions.className = "li-zong-actions";
+        const detail = document.createElement("button"); detail.type = "button"; detail.className = "btn"; detail.textContent = "查看逐规则证据"; detail.addEventListener("click", () => showLiZongDetail(item));
+        const follow = document.createElement("button"); follow.type = "button"; follow.className = "btn"; follow.textContent = item.status === "triggered" ? "加入重点关注" : "加入关注"; follow.addEventListener("click", () => { void addScreenCandidateToWatchlist(item, follow, "李总策略"); });
+        const research = document.createElement("button"); research.type = "button"; research.className = "btn primary"; research.textContent = "保存线索并研究";
+        research.addEventListener("click", () => { void enterScreenCandidateResearch(item, research, entryContext); });
+        const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn"; ask.textContent = "让 Agent 核验"; ask.addEventListener("click", () => { void researchCandidateWithAgent(item, ask, entryContext, `请核验${item.name}（${item.internal_symbol}）的李总策略结果。逐条说明基本面、股性、量价和触发规则的证据时间、反方证据、数据缺口、失效条件与下一步需要核验什么；不要输出买卖指令。`); });
         actions.append(detail, follow, research, ask); card.appendChild(actions); container.appendChild(card);
       });
     }
@@ -2531,11 +2540,7 @@
           missing.textContent = `仍需补充：${item.missing_fields.slice(0, 6).map(stockScreenFieldLabel).join("、")}`;
           card.appendChild(missing);
         }
-        const actions = document.createElement("div"); actions.className = "screener-actions";
-        const follow = document.createElement("button"); follow.type = "button"; follow.className = "btn"; follow.textContent = "加入关注";
-        follow.addEventListener("click", () => { void addScreenCandidateToWatchlist(item, follow); });
-        const research = document.createElement("button"); research.type = "button"; research.className = "btn primary"; research.textContent = "保存线索并研究";
-        research.addEventListener("click", () => { void enterScreenCandidateResearch(item, research, {
+        const entryContext = {
           source_kind: "stock_screen",
           source_label: profile.label || "研究候选筛选",
           display_name: item.name,
@@ -2544,9 +2549,14 @@
           candidate_status: payload?.status,
           matched_reasons: item.matched_reasons || [],
           missing_fields: (item.missing_fields || []).map(stockScreenFieldLabel)
-        }); });
+        };
+        const actions = document.createElement("div"); actions.className = "screener-actions";
+        const follow = document.createElement("button"); follow.type = "button"; follow.className = "btn"; follow.textContent = "加入关注";
+        follow.addEventListener("click", () => { void addScreenCandidateToWatchlist(item, follow); });
+        const research = document.createElement("button"); research.type = "button"; research.className = "btn primary"; research.textContent = "保存线索并研究";
+        research.addEventListener("click", () => { void enterScreenCandidateResearch(item, research, entryContext); });
         const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn"; ask.textContent = "让 Agent 继续研究";
-        ask.addEventListener("click", () => prepareAgentQuestion(`请继续研究${item.name}（${item.internal_symbol}）。它命中了“${profile.label || "研究候选"}”筛选，请核验最新财务、公告、反方证据、失效条件和当前仍缺失的信息。`));
+        ask.addEventListener("click", () => { void researchCandidateWithAgent(item, ask, entryContext, `请继续研究${item.name}（${item.internal_symbol}）。它命中了“${profile.label || "研究候选"}”筛选，请核验最新财务、公告、反方证据、失效条件和当前仍缺失的信息。`); });
         actions.append(follow, research, ask); card.appendChild(actions); container.appendChild(card);
       });
     }
@@ -2625,6 +2635,29 @@
         button.disabled = false;
         button.textContent = original;
         openReader("研究空间暂未建立", error.message || "保存候选研究线索失败，请稍后重试。", "当前筛选结果仍保留在页面");
+      }
+    }
+
+    async function researchCandidateWithAgent(item, button, entryContext, question) {
+      const symbol = item.internal_symbol || item.symbol;
+      if (!symbol) return;
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = "正在进入长期研究对话…";
+      try {
+        const session = await api("/me/deep-stock", {
+          method: "POST",
+          body: JSON.stringify({symbol, entry_context: entryContext})
+        });
+        state.deepStock = session;
+        await loadConversations(false);
+        await loadDeepStock();
+        await continueDeepStockConversation(question);
+        button.textContent = "已进入研究对话";
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = original;
+        openReader("长期研究对话暂未打开", error.message || "请稍后重试。", "候选线索没有被自动写成正式判断");
       }
     }
 
@@ -4447,6 +4480,106 @@
       ].filter(Boolean).join("\n\n");
     }
 
+    function observationTaskHistoryDetail(task) {
+      const history = task?.history || [];
+      const historyLines = history.map(item => {
+        const from = item.from_status_label ? `${item.from_status_label} → ` : "";
+        return `版本 ${item.version} · ${readableTime(item.created_at)}\n${from}${item.to_status_label || item.to_status || "状态更新"}`;
+      });
+      return [
+        `任务说明：${task?.description || "未填写"}`,
+        task?.due_at ? `截止时间：${readableTime(task.due_at)}` : "截止时间：未设置",
+        task?.result_text ? `完成结果：${task.result_text}` : "",
+        task?.completion_evidence?.length ? `完成证据：${task.completion_evidence.join("、")}` : "",
+        historyLines.length ? `状态历史：\n\n${historyLines.join("\n\n")}` : "状态历史正在读取。",
+        "边界：任务用于保存事实核验和研究复核，不代表买卖、仓位或收益判断。"
+      ].filter(Boolean).join("\n\n");
+    }
+
+    async function openObservationTaskHistory(task) {
+      try {
+        const detail = await api(`/v1/observation-tasks/${encodeURIComponent(task.id)}`);
+        openReader(detail.title || "观察任务", observationTaskHistoryDetail(detail), `${detail.status_label || "研究任务"} · 版本 ${detail.version}`);
+      } catch (error) {
+        openReader(task.title || "观察任务", error.message || "任务历史暂时无法读取。", "请稍后重试");
+      }
+    }
+
+    async function refreshObservationTaskView(symbol) {
+      state.stockSpaceTab = "tasks";
+      await loadDeepStockOverview(symbol);
+      activateStockSpaceTab("tasks");
+    }
+
+    async function transitionObservationTask(symbol, task, status, resultText = null, evidenceRefs = []) {
+      await api(`/v1/observation-tasks/${encodeURIComponent(task.id)}/transition`, {
+        method: "POST",
+        body: JSON.stringify({base_version: task.version, status, result_text: resultText, evidence_refs: evidenceRefs})
+      });
+      await refreshObservationTaskView(symbol);
+    }
+
+    function showObservationTaskCompletion(card, symbol, task) {
+      if (card.querySelector(".stock-task-editor")) return;
+      const editor = document.createElement("div"); editor.className = "stock-task-editor";
+      const textarea = document.createElement("textarea"); textarea.setAttribute("aria-label", `${task.title}完成结果`); textarea.placeholder = "写下核验结果、仍未解决的疑点或引用的证据";
+      const status = document.createElement("div"); status.className = "stock-task-editor-status"; status.textContent = "完成任务必须留下结果；结果会与状态历史一起长期保存。";
+      const actions = document.createElement("div"); actions.className = "stock-task-actions";
+      const save = document.createElement("button"); save.type = "button"; save.className = "btn primary"; save.textContent = "确认完成";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "取消";
+      cancel.addEventListener("click", () => editor.remove());
+      save.addEventListener("click", async () => {
+        const result = textarea.value.trim();
+        if (!result) { status.textContent = "请先填写本次核验结果。"; textarea.focus(); return; }
+        save.disabled = true; cancel.disabled = true; status.textContent = "正在保存任务结果…";
+        try { await transitionObservationTask(symbol, task, "completed", result); }
+        catch (error) { save.disabled = false; cancel.disabled = false; status.textContent = error.message || "任务结果未保存，请重试。"; }
+      });
+      actions.append(save, cancel); editor.append(textarea, status, actions); card.appendChild(editor); textarea.focus();
+    }
+
+    function showObservationTaskEditor(card, symbol, task) {
+      if (card.querySelector(".stock-task-editor")) return;
+      const editor = document.createElement("div"); editor.className = "stock-task-editor";
+      const title = document.createElement("input"); title.type = "text"; title.value = task.title || ""; title.setAttribute("aria-label", "任务标题");
+      const description = document.createElement("textarea"); description.value = task.description || ""; description.setAttribute("aria-label", "任务说明");
+      const priority = document.createElement("select"); priority.setAttribute("aria-label", "任务优先级");
+      [["high", "高优先级"], ["normal", "普通优先级"], ["low", "低优先级"]].forEach(([value, label]) => { const option = document.createElement("option"); option.value = value; option.textContent = label; priority.appendChild(option); });
+      priority.value = task.priority || "normal";
+      const status = document.createElement("div"); status.className = "stock-task-editor-status"; status.textContent = "编辑会生成新版本，不会覆盖历史记录。";
+      const actions = document.createElement("div"); actions.className = "stock-task-actions";
+      const save = document.createElement("button"); save.type = "button"; save.className = "btn primary"; save.textContent = "保存修改";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "取消";
+      cancel.addEventListener("click", () => editor.remove());
+      save.addEventListener("click", async () => {
+        if (!title.value.trim() || !description.value.trim()) { status.textContent = "任务标题和说明不能为空。"; return; }
+        save.disabled = true; cancel.disabled = true; status.textContent = "正在保存新版本…";
+        try {
+          await api(`/v1/observation-tasks/${encodeURIComponent(task.id)}`, {method: "PATCH", body: JSON.stringify({base_version: task.version, title: title.value.trim(), description: description.value.trim(), priority: priority.value})});
+          await refreshObservationTaskView(symbol);
+        } catch (error) { save.disabled = false; cancel.disabled = false; status.textContent = error.message || "任务修改未保存，请重试。"; }
+      });
+      actions.append(save, cancel); editor.append(title, description, priority, status, actions); card.appendChild(editor); title.focus();
+    }
+
+    async function saveObservationTaskFromAction(symbol, action, button) {
+      const original = button.textContent; button.disabled = true; button.textContent = "正在保存…";
+      try {
+        await api(`/v1/stocks/${encodeURIComponent(symbol)}/observation-tasks`, {
+          method: "POST",
+          body: JSON.stringify({
+            title: action.title || "继续核验研究证据",
+            description: action.next_step || action.current_evidence || "继续核验相关事实与反方证据。",
+            priority: action.severity === "high" ? "high" : action.severity === "low" ? "low" : "normal",
+            source_type: "research_action",
+            source_ref_id: String(action.id || `${action.title}:${action.next_step}`).slice(0, 160)
+          })
+        });
+        button.textContent = "已保存为任务";
+        await refreshObservationTaskView(symbol);
+      } catch (error) { button.disabled = false; button.textContent = original; openReader("任务暂未保存", error.message || "请稍后重试。", "系统建议仍保留在当前页面"); }
+    }
+
     function renderStockSpaceTasks(symbol, session = null, workspace = null) {
       const container = $("deepStockTasks");
       if (!container) return;
@@ -4458,36 +4591,65 @@
           ? `历史证据仍保留；最近一次刷新为“${coverageStatusLabels[task.last_observed_status] || "待核验"}”。`
           : `当前覆盖：${coverageStatusLabels[task.coverage_status] || "待核验"}。`
       }));
+      const allUserTasks = workspace?.observation_tasks?.items || [];
+      const savedActionRefs = new Set(allUserTasks.filter(task => task.source_type === "research_action" && task.source_ref_id).map(task => String(task.source_ref_id)));
       const actions = (workspace?.pending_actions?.length
         ? [...workspace.pending_actions]
         : [...coverageActions, ...(actionItem?.actions || [])]
-      ).sort((a, b) => {
+      ).filter(action => action.source !== "observation_task" && !savedActionRefs.has(String(action.id || `${action.title}:${action.next_step}`).slice(0, 160))).sort((a, b) => {
         const rank = {triggered: 3, pending_data: 2, watching: 1};
         return (rank[b.status] || 0) - (rank[a.status] || 0);
       });
+      const userTasks = [
+        ...allUserTasks.filter(task => !task.terminal),
+        ...allUserTasks.filter(task => task.terminal).slice(0, 3)
+      ];
       container.innerHTML = "";
       const head = document.createElement("div"); head.className = "stock-space-section-head";
       const copyWrap = document.createElement("div");
-      const title = document.createElement("div"); title.className = "stock-space-section-title"; title.textContent = "待处理研究任务";
-      const copy = document.createElement("div"); copy.className = "stock-space-section-copy"; copy.textContent = "这里只列下一步需要核验的证据，不把研究任务包装成买卖信号。";
+      const title = document.createElement("div"); title.className = "stock-space-section-title"; title.textContent = "任务与操作";
+      const copy = document.createElement("div"); copy.className = "stock-space-section-copy"; copy.textContent = "我的观察任务会保存状态、结果和历史；系统建议只有在你确认后才成为个人任务。";
       copyWrap.append(title, copy);
       const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn primary"; ask.textContent = "让 Agent 帮我处理";
-      ask.addEventListener("click", () => { void continueDeepStockConversation(actions[0]?.next_step || session?.next_question); });
+      ask.addEventListener("click", () => { void continueDeepStockConversation(userTasks.find(task => !task.terminal)?.description || actions[0]?.next_step || session?.next_question); });
       head.append(copyWrap, ask); container.appendChild(head);
       const grid = document.createElement("div"); grid.className = "stock-task-grid";
+      if (userTasks.length) {
+        const label = document.createElement("div"); label.className = "stock-task-section-label"; label.textContent = `我的观察任务 · ${workspace?.observation_tasks?.summary?.active || 0} 项进行中`; grid.appendChild(label);
+        for (const task of userTasks) {
+          const card = document.createElement("article"); card.className = "stock-task-card user-task";
+          const status = document.createElement("span"); status.className = "stock-task-status"; status.textContent = task.status_label || "观察任务";
+          const cardTitle = document.createElement("div"); cardTitle.className = "stock-task-title"; cardTitle.textContent = task.title || "用户观察任务";
+          const cardCopy = document.createElement("div"); cardCopy.className = "stock-task-copy"; cardCopy.textContent = task.description || "继续核验相关事实。";
+          const evidenceCopy = document.createElement("div"); evidenceCopy.className = "stock-task-evidence"; evidenceCopy.textContent = [task.due_at ? `截止 ${readableTime(task.due_at)}` : "未设置截止时间", `版本 ${task.version}`, task.source_type === "research_action" ? "由系统建议保存" : "由用户创建"].join(" · ");
+          const taskActions = document.createElement("div"); taskActions.className = "stock-task-actions";
+          const addTransition = (label, nextStatus, primary = false) => { const button = document.createElement("button"); button.type = "button"; button.className = `btn${primary ? " primary" : ""}`; button.textContent = label; button.addEventListener("click", () => { if (nextStatus === "completed") showObservationTaskCompletion(card, symbol, task); else void transitionObservationTask(symbol, task, nextStatus).catch(error => openReader("任务状态未更新", error.message || "请稍后重试。", task.status_label)); }); taskActions.appendChild(button); };
+          if (task.status === "pending") { addTransition("开始处理", "in_progress", true); addTransition("等待数据", "waiting_data"); }
+          if (task.status === "in_progress") addTransition("等待数据", "waiting_data");
+          if (task.status === "waiting_data") addTransition("继续处理", "in_progress", true);
+          if (!task.terminal) { addTransition("完成", "completed", task.status !== "pending"); addTransition("忽略", "ignored"); addTransition("取消任务", "cancelled"); }
+          else addTransition("重开", "pending", true);
+          if (task.can_edit) { const edit = document.createElement("button"); edit.type = "button"; edit.className = "btn"; edit.textContent = "编辑"; edit.addEventListener("click", () => showObservationTaskEditor(card, symbol, task)); taskActions.appendChild(edit); }
+          const detail = document.createElement("button"); detail.type = "button"; detail.className = "btn"; detail.textContent = "查看历史"; detail.addEventListener("click", () => { void openObservationTaskHistory(task); }); taskActions.appendChild(detail);
+          card.append(status, cardTitle, cardCopy, evidenceCopy, taskActions); grid.appendChild(card);
+        }
+      }
       if (actions.length) {
+        const label = document.createElement("div"); label.className = "stock-task-section-label"; label.textContent = "系统建议的下一步 · 保存后才进入我的任务"; grid.appendChild(label);
         for (const action of actions) {
           const card = document.createElement("article"); card.className = "stock-task-card";
           const status = document.createElement("span"); status.className = "stock-task-status";
-          status.textContent = {triggered: "需要复核", pending_data: "等待证据", watching: "持续观察"}[action.status] || "研究任务";
+          status.textContent = {triggered: "需要复核", pending_data: "等待证据", watching: "持续观察"}[action.status] || "研究建议";
           const cardTitle = document.createElement("div"); cardTitle.className = "stock-task-title"; cardTitle.textContent = action.title || "继续核验研究证据";
           const cardCopy = document.createElement("div"); cardCopy.className = "stock-task-copy"; cardCopy.textContent = action.next_step || action.current_evidence || "继续按当前研究条件观察。";
           const evidenceCopy = document.createElement("div"); evidenceCopy.className = "stock-task-evidence"; evidenceCopy.textContent = action.current_evidence || "当前证据待补充。";
-          const detail = document.createElement("button"); detail.type = "button"; detail.className = "stock-workspace-item-detail"; detail.textContent = "查看任务依据";
-          detail.addEventListener("click", () => openReader(action.title || "研究任务", researchActionDetail(action), `${status.textContent} · ${action.severity || "常规"}`));
-          card.append(status, cardTitle, cardCopy, evidenceCopy, detail); grid.appendChild(card);
+          const actionButtons = document.createElement("div"); actionButtons.className = "stock-task-actions";
+          const save = document.createElement("button"); save.type = "button"; save.className = "btn primary"; save.textContent = "保存为我的任务"; save.addEventListener("click", () => { void saveObservationTaskFromAction(symbol, action, save); });
+          const detail = document.createElement("button"); detail.type = "button"; detail.className = "btn"; detail.textContent = "查看任务依据"; detail.addEventListener("click", () => openReader(action.title || "研究任务", researchActionDetail(action), `${status.textContent} · ${action.severity || "常规"}`));
+          actionButtons.append(save, detail); card.append(status, cardTitle, cardCopy, evidenceCopy, actionButtons); grid.appendChild(card);
         }
-      } else {
+      }
+      if (!userTasks.length && !actions.length) {
         const card = document.createElement("article"); card.className = "stock-task-card";
         const status = document.createElement("span"); status.className = "stock-task-status"; status.textContent = "下一步";
         const cardTitle = document.createElement("div"); cardTitle.className = "stock-task-title"; cardTitle.textContent = session?.current_stage?.label || "建立下一项观察条件";

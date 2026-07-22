@@ -161,6 +161,54 @@ class Database:
                     UNIQUE(workspace_id, version_no)
                 );
 
+                CREATE TABLE IF NOT EXISTS observation_tasks (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    workspace_id TEXT
+                        REFERENCES stock_workspaces(id) ON DELETE SET NULL,
+                    symbol TEXT NOT NULL,
+                    thesis_id TEXT REFERENCES thesis_versions(id) ON DELETE SET NULL,
+                    change_ref TEXT,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN (
+                        'pending', 'in_progress', 'waiting_data',
+                        'completed', 'ignored', 'cancelled'
+                    )),
+                    priority TEXT NOT NULL
+                        CHECK(priority IN ('high', 'normal', 'low')),
+                    source_type TEXT NOT NULL
+                        CHECK(source_type IN ('user', 'research_action')),
+                    source_ref_id TEXT,
+                    dedupe_key TEXT,
+                    due_at TEXT,
+                    result_text TEXT,
+                    completion_evidence_json TEXT NOT NULL DEFAULT '[]',
+                    version INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    ignored_at TEXT,
+                    cancelled_at TEXT,
+                    UNIQUE(user_id, dedupe_key)
+                );
+
+                CREATE TABLE IF NOT EXISTS observation_task_history (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL
+                        REFERENCES observation_tasks(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    version INTEGER NOT NULL,
+                    event_type TEXT NOT NULL CHECK(event_type IN (
+                        'created', 'updated', 'status_changed', 'reopened'
+                    )),
+                    from_status TEXT,
+                    to_status TEXT NOT NULL,
+                    snapshot_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(task_id, version)
+                );
+
                 CREATE TABLE IF NOT EXISTS conversations (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -841,6 +889,14 @@ class Database:
                     ON stock_relation_history(workspace_id, effective_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_thesis_versions_workspace_status
                     ON thesis_versions(workspace_id, status, version_no DESC);
+                CREATE INDEX IF NOT EXISTS idx_observation_tasks_user_status
+                    ON observation_tasks(
+                        user_id, status, priority, updated_at DESC
+                    );
+                CREATE INDEX IF NOT EXISTS idx_observation_tasks_user_symbol
+                    ON observation_tasks(user_id, symbol, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_observation_task_history_task
+                    ON observation_task_history(task_id, version DESC);
                 CREATE INDEX IF NOT EXISTS idx_conversations_user_updated
                     ON conversations(user_id, status, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_created
