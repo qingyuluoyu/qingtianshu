@@ -1965,6 +1965,54 @@ class Database:
             items.append(item)
         return items
 
+    def list_recent_conversation_messages(
+        self, user_id: str, conversation_id: str, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """Return the latest messages in chronological display order."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT conversation_messages.*
+                FROM conversation_messages
+                JOIN conversations ON conversations.id = conversation_messages.conversation_id
+                WHERE conversation_messages.conversation_id = ?
+                  AND conversations.user_id = ?
+                ORDER BY conversation_messages.created_at DESC,
+                    conversation_messages.rowid DESC LIMIT ?
+                """,
+                (conversation_id, user_id, limit),
+            ).fetchall()
+        items = []
+        for row in reversed(rows):
+            item = dict(row)
+            item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+            items.append(item)
+        return items
+
+    def list_recent_user_assistant_messages(
+        self, user_id: str, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        """Return one user's latest assistant messages across research conversations."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT conversation_messages.*
+                FROM conversation_messages
+                JOIN conversations ON conversations.id = conversation_messages.conversation_id
+                WHERE conversations.user_id = ?
+                  AND conversation_messages.role = 'assistant'
+                ORDER BY conversation_messages.created_at DESC,
+                    conversation_messages.rowid DESC LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+            items.append(item)
+        return items
+
     def save_deep_stock_session(
         self,
         *,

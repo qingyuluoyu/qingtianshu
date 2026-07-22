@@ -168,15 +168,28 @@
     .deep-stock-list { margin: 9px 0 0; padding-left: 17px; color: #aabfc2; font-size: 10px; line-height: 1.65; }
     .deep-stock-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
     .deep-stock-empty { padding: 34px 20px; color: var(--muted); text-align: center; line-height: 1.7; }
-    .evidence-coverage-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; margin-bottom: 14px; }
-    .evidence-coverage-card { padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: #fbfcff; }
+    .evidence-coverage-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-bottom: 14px; }
+    .evidence-coverage-card { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: #fbfcff; }
     .evidence-coverage-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .evidence-coverage-head-actions { display: flex; align-items: center; gap: 6px; }
     .evidence-coverage-label { color: #2c3a50; font-size: 12px; font-weight: 760; }
     .evidence-coverage-status { padding: 3px 7px; border-radius: 999px; background: #eef3fa; color: #6e7c8f; font-size: 9px; }
     .evidence-coverage-status.sufficient { color: #167256; background: #e7f7f1; }
     .evidence-coverage-status.partial { color: #8b621f; background: #fff5df; }
     .evidence-coverage-status.insufficient, .evidence-coverage-status.unavailable { color: #9b4d4d; background: #fff0f0; }
     .evidence-coverage-copy { margin-top: 7px; color: #6c7b90; font-size: 10px; line-height: 1.55; }
+    .evidence-layer-detail { border: 0; border-radius: 7px; padding: 4px 7px; color: #3f73d7; background: #edf3ff; font-size: 9px; }
+    .evidence-layer-stack { display: grid; gap: 7px; margin-top: 10px; }
+    .evidence-layer-row { display: grid; grid-template-columns: 66px minmax(0,1fr); gap: 8px; align-items: start; padding-top: 7px; border-top: 1px solid #e8edf5; }
+    .evidence-layer-label { padding: 3px 6px; border-radius: 7px; color: #58708f; background: #eef3fa; font-size: 9px; font-weight: 760; text-align: center; }
+    .evidence-layer-row.raw .evidence-layer-label { color: #256a8b; background: #eaf7fb; }
+    .evidence-layer-row.system .evidence-layer-label { color: #176d54; background: #e8f7f1; }
+    .evidence-layer-row.ai .evidence-layer-label { color: #6852b0; background: #f0edff; }
+    .evidence-layer-row.missing .evidence-layer-label { color: #9a6222; background: #fff3df; }
+    .evidence-layer-values { min-width: 0; color: #5e6e83; font-size: 10px; line-height: 1.55; }
+    .evidence-layer-values span { display: -webkit-box; overflow: hidden; margin-top: 3px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+    .evidence-layer-values span:first-child { margin-top: 0; }
+    .evidence-layer-values.empty { color: #9aa5b4; }
     .evidence-coverage-boundary { grid-column: 1 / -1; color: #7a8799; font-size: 10px; line-height: 1.55; }
     .screener-page { min-height: calc(100dvh - 118px); }
     .li-zong-panel { margin: 18px; overflow: hidden; border: 1px solid #d8e4f6; border-radius: 16px; background: linear-gradient(145deg,#f7faff 0%,#fff 62%); box-shadow: 0 12px 30px rgba(39,73,126,.06); }
@@ -1338,6 +1351,7 @@
       .stock-research-map-head { align-items: stretch; flex-direction: column; }
       .stock-research-map-actions { justify-content: flex-start; }
       .stock-research-map-grid { grid-template-columns: 1fr; }
+      .evidence-coverage-grid { grid-template-columns: 1fr; }
       .breadth-ring::after { width: 70px; height: 70px; }
       .sector-table { overflow-x: auto; }
       .sector-table-head, .sector-rotation-row { min-width: 610px; }
@@ -4535,12 +4549,14 @@
       const allowed = new Set(["overview", "ai", "evidence", "tasks", "history"]);
       if (!allowed.has(tabKey)) tabKey = "overview";
       state.stockSpaceTab = tabKey;
-      document.querySelectorAll("[data-stock-space-tab]").forEach(button => {
+      const panel = $("deepStockPanel") || document;
+      panel.querySelectorAll("[data-stock-space-tab]").forEach(button => {
         const active = button.dataset.stockSpaceTab === tabKey;
         button.classList.toggle("active", active);
         button.setAttribute("aria-selected", active ? "true" : "false");
+        button.tabIndex = active ? 0 : -1;
       });
-      document.querySelectorAll("[data-stock-space-pane]").forEach(pane => {
+      panel.querySelectorAll("[data-stock-space-pane]").forEach(pane => {
         pane.hidden = pane.dataset.stockSpacePane !== tabKey;
       });
     }
@@ -4919,6 +4935,10 @@
         coverage_tasks: (workspace.pending_actions || []).filter(item => item.source === "evidence_coverage")
       } : localSession;
       const evidenceCoverage = workspace?.evidence_summary || session?.evidence_coverage || {};
+      const evidenceLayers = workspace?.evidence_layers || {};
+      const evidenceLayerByKey = new Map(
+        (evidenceLayers.dimensions || []).map(item => [item.key, item])
+      );
       const claimLedger = workspace?.claim_ledger || {};
       const researchClaims = claimLedger.claims || [];
       const coverageDimensions = evidenceCoverage.dimensions || [];
@@ -5341,18 +5361,65 @@
         const coverageGrid = document.createElement("div"); coverageGrid.className = "evidence-coverage-grid";
         const statusLabels = {sufficient: "证据充分", partial: "部分覆盖", insufficient: "证据不足", unavailable: "尚未取得"};
         coverageDimensions.forEach(dimension => {
+          const layer = evidenceLayerByKey.get(dimension.key) || dimension;
           const card = document.createElement("article"); card.className = "evidence-coverage-card";
           const head = document.createElement("div"); head.className = "evidence-coverage-head";
           const label = document.createElement("div"); label.className = "evidence-coverage-label"; label.textContent = dimension.label;
           const status = document.createElement("span"); status.className = `evidence-coverage-status ${dimension.coverage_status}`; status.textContent = statusLabels[dimension.coverage_status] || "待核验";
-          head.append(label, status);
+          const headActions = document.createElement("div"); headActions.className = "evidence-coverage-head-actions";
+          const detail = document.createElement("button"); detail.type = "button"; detail.className = "evidence-layer-detail"; detail.textContent = "四层详情";
+          const aiEmpty = evidenceLayers.ai_status === "not_generated"
+            ? "尚未生成可恢复的 Agent 解释"
+            : "最近一次 Agent 未覆盖本维度";
+          const aiSourceLabel = {
+            bound_research_conversation: "当前股票绑定研究对话",
+            same_stock_history: "同一用户的该股票最近研究对话"
+          }[evidenceLayers.ai_source] || "";
+          const layerDefinitions = [
+            ["raw", "原始数据", layer.raw_data || [], "尚未取得可核验原始数据"],
+            ["system", "系统计算", layer.system_calculations || [], "尚未形成确定性计算"],
+            ["ai", "AI解释", layer.ai_explanations || [], aiEmpty],
+            ["missing", "缺失项", layer.missing_items || [], dimension.coverage_status === "sufficient" ? "当前没有阻塞性缺口，仍需关注新增证据" : "尚未明确缺失项"]
+          ];
+          detail.setAttribute("aria-label", `${dimension.label}四层证据详情`);
+          detail.addEventListener("click", () => {
+            const body = layerDefinitions.map(([, layerLabel, values, emptyText]) => {
+              const lines = values.length ? values : [emptyText];
+              return `${layerLabel}\n${lines.map((item, index) => `${index + 1}. ${item}`).join("\n")}`;
+            }).join("\n\n");
+            const layerSources = layer.sources || dimension.sources || [];
+            const layerTimes = layer.as_of || dimension.as_of || [];
+            openReader(
+              `${name} · ${dimension.label}四层证据`,
+              body,
+              [statusLabels[dimension.coverage_status] || "待核验", layerSources.join("、"), layerTimes.join("、"), aiSourceLabel].filter(Boolean).join(" · ")
+            );
+          });
+          headActions.append(status, detail); head.append(label, headActions);
           const copy = document.createElement("div"); copy.className = "evidence-coverage-copy";
-          copy.textContent = (dimension.sources || []).length
-            ? `已取得：${dimension.sources.join("、")}`
-            : (dimension.missing_items || ["需要继续补充可核验证据。"]).join("；");
-          card.append(head, copy); coverageGrid.appendChild(card);
+          const layerSources = layer.sources || dimension.sources || [];
+          const layerTimes = layer.as_of || dimension.as_of || [];
+          copy.textContent = [
+            layerSources.length ? `来源：${layerSources.join("、")}` : "来源尚未建立",
+            layerTimes.length ? `数据时间：${layerTimes.join("、")}` : "数据时间待补充"
+          ].join(" · ");
+          const layerStack = document.createElement("div"); layerStack.className = "evidence-layer-stack";
+          layerDefinitions.forEach(([kind, layerLabel, values, emptyText]) => {
+            const row = document.createElement("div"); row.className = `evidence-layer-row ${kind}`;
+            const rowLabel = document.createElement("span"); rowLabel.className = "evidence-layer-label"; rowLabel.textContent = layerLabel;
+            const rowValues = document.createElement("div"); rowValues.className = `evidence-layer-values${values.length ? "" : " empty"}`;
+            const previews = values.length ? values.slice(0, 2) : [emptyText];
+            previews.forEach(value => {
+              const line = document.createElement("span"); line.textContent = value; rowValues.appendChild(line);
+            });
+            row.append(rowLabel, rowValues); layerStack.appendChild(row);
+          });
+          card.append(head, copy, layerStack); coverageGrid.appendChild(card);
         });
-        const boundary = document.createElement("div"); boundary.className = "evidence-coverage-boundary"; boundary.textContent = evidenceCoverage.boundary || "覆盖状态只表示证据完整程度，不是公司评分或买卖信号。";
+        const boundary = document.createElement("div"); boundary.className = "evidence-coverage-boundary"; boundary.textContent = [
+          evidenceCoverage.boundary || "覆盖状态只表示证据完整程度，不是公司评分或买卖信号。",
+          evidenceLayers.boundary
+        ].filter(Boolean).join(" ");
         coverageGrid.appendChild(boundary); evidenceShell.appendChild(coverageGrid);
       }
       const researchBoard = document.createElement("div"); researchBoard.className = "deep-research-board";
@@ -5481,6 +5548,7 @@
       select.value = symbol;
       const session = state.deepStockSessions.find(item => item.symbol === symbol) || null;
       renderDeepStock(session);
+      activateStockSpaceTab("overview");
       await loadDeepStockOverview(symbol);
     }
 
@@ -6586,6 +6654,7 @@
       const session = state.deepStockSessions.find(item => item.symbol === symbol) || null;
       activateStockSpaceTab("overview");
       renderDeepStock(session);
+      activateStockSpaceTab("overview");
       void loadDeepStockOverview(symbol);
     });
     document.querySelectorAll("[data-stock-space-tab]").forEach(button => button.addEventListener("click", () => {
