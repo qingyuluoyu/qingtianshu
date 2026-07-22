@@ -901,11 +901,22 @@
     .stock-research-meta-item:first-child { border-left: 0; }
     .stock-research-meta-item span { display: block; color: #8490a2; font-size: 12px; }
     .stock-research-meta-item strong { display: block; margin-top: 6px; color: #2b3c55; font-size: 14px; line-height: 1.45; }
-    .stock-workspace-summary { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); grid-template-areas: "primary primary" "changes tasks"; gap: 12px; align-items: start; }
+    .stock-workspace-summary { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); grid-template-areas: "primary primary" "map map" "changes tasks"; gap: 12px; align-items: start; }
     .stock-workspace-card { min-width: 0; padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 8px 24px rgba(41,65,103,.035); }
     .stock-workspace-card.primary { grid-area: primary; border-color: #cbdcff; background: linear-gradient(112deg,#fff 58%,#f3f7ff); }
     .stock-workspace-card.changes { grid-area: changes; border-top: 3px solid #22a579; }
     .stock-workspace-card.tasks { grid-area: tasks; border-top: 3px solid #e6a342; }
+    .stock-research-map { grid-area: map; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 8px 24px rgba(41,65,103,.035); }
+    .stock-research-map-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 14px; }
+    .stock-research-map-copy { margin-top: 5px; color: #78869a; font-size: 12px; line-height: 1.55; }
+    .stock-research-map-actions { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+    .stock-research-map-grid { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 9px; margin-top: 13px; }
+    .stock-research-map-grid .deep-board-card { padding: 12px; box-shadow: none; }
+    .stock-research-map-grid .deep-board-title { font-size: 12px; }
+    .stock-research-map-grid .deep-board-list { font-size: 10px; line-height: 1.62; }
+    .stock-research-map-grid .deep-board-list li { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 4; }
+    .deep-board-card.risk { border-top: 3px solid #e6a342; }
+    .deep-board-card.next { border-top: 3px solid #7b61d1; }
     .stock-workspace-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
     .stock-workspace-head-actions { display: flex; align-items: center; gap: 10px; }
     .stock-workspace-head-actions .btn { padding: 6px 10px; font-size: 12px; }
@@ -1309,6 +1320,7 @@
       .market-dashboard-grid .market-card:last-child { grid-column: 1 / -1; }
       .market-lower-grid { grid-template-columns: 1fr; }
       .deep-research-board { grid-template-columns: 1fr; }
+      .stock-research-map-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
       .evidence-coverage-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
       .screener-layout { grid-template-columns: 1fr; }
       .screener-controls { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -1323,6 +1335,9 @@
       .ashare-index-card { grid-template-columns: minmax(0,1fr) 86px; }
       .breadth-body { grid-template-columns: 112px minmax(0,1fr); }
       .breadth-ring { width: 104px; height: 104px; }
+      .stock-research-map-head { align-items: stretch; flex-direction: column; }
+      .stock-research-map-actions { justify-content: flex-start; }
+      .stock-research-map-grid { grid-template-columns: 1fr; }
       .breadth-ring::after { width: 70px; height: 70px; }
       .sector-table { overflow-x: auto; }
       .sector-table-head, .sector-rotation-row { min-width: 610px; }
@@ -4461,9 +4476,9 @@
       container.appendChild(card);
     }
 
-    function appendDeepBoardCard(container, {kind, title, items = []}) {
+    function appendDeepBoardCard(container, {kind, title, items = [], previewLimit = 3}) {
       const normalized = items.map(structuredItemText).filter(Boolean);
-      const previewItems = normalized.slice(0, 3);
+      const previewItems = normalized.slice(0, previewLimit);
       const card = document.createElement("section"); card.className = `deep-board-card ${kind}`;
       const head = document.createElement("div"); head.className = "deep-board-head";
       const titleNode = document.createElement("div"); titleNode.className = "deep-board-title"; titleNode.textContent = title;
@@ -4915,6 +4930,56 @@
         const rank = {triggered: 3, pending_data: 2, watching: 1};
         return (rank[b.status] || 0) - (rank[a.status] || 0);
       }).slice(0, 3);
+      const normalizeResearchItems = items => [...new Set((items || []).map(structuredItemText).filter(Boolean))];
+      const counterevidenceText = item => {
+        if (!item) return "";
+        const dataTime = item.data_time
+          ? (/^\d{4}-\d{2}-\d{2}$/.test(String(item.data_time)) ? item.data_time : readableTime(item.data_time))
+          : "";
+        return [
+          item.statement,
+          item.evidence ? `依据：${item.evidence}` : "",
+          item.source_name ? `来源：${item.source_name}` : "",
+          dataTime ? `数据时间：${dataTime}` : "",
+          item.limitations?.[0] ? `边界：${item.limitations[0]}` : ""
+        ].filter(Boolean).join("；");
+      };
+      const supportedClaims = researchClaims.filter(item => item.relation === "supports");
+      const weakenedClaims = researchClaims.filter(item => item.relation === "weakens");
+      const unresolvedClaims = researchClaims.filter(item => item.relation === "unresolved");
+      const workspaceCounterevidence = workspace?.counterevidence || [];
+      const directCounterItems = workspaceCounterevidence
+        .filter(item => item.kind === "bear_case" || item.label === "反方证据")
+        .map(counterevidenceText);
+      const riskReviewItems = workspaceCounterevidence
+        .filter(item => item.kind === "risk_committee" || item.label === "风险复核")
+        .map(counterevidenceText);
+      const supportedEvidenceItems = normalizeResearchItems(supportedClaims.length ? supportedClaims.map(researchClaimText) : [
+        historyMetrics.trend_state ? `价格结构：${historyMetrics.trend_state}；20日收益 ${pct(historyMetrics.return_20d_pct)}。` : "",
+        ...(earnings?.supports || []).slice(0, 2),
+        ...(drivers?.confirmed_mechanical_drivers || []).slice(0, 2),
+        events?.coverage?.official_events ? `已归档 ${events.coverage.official_events} 条公司公告或监管事件。` : ""
+      ]);
+      const counterEvidenceItems = normalizeResearchItems(directCounterItems.length ? directCounterItems : weakenedClaims.length ? weakenedClaims.map(researchClaimText) : [
+        ...(earnings?.contradictions || []).slice(0, 3),
+        ...(drivers?.plausible_clues || []).slice(0, 2)
+      ]);
+      const riskEvidenceItems = normalizeResearchItems(riskReviewItems.length ? riskReviewItems : unresolvedClaims.length ? unresolvedClaims.map(researchClaimText) : [
+        ...(drivers?.unresolved_causes || []).slice(0, 2),
+        ...(earnings?.review_points || []).slice(0, 2)
+      ]);
+      const informationGapItems = normalizeResearchItems(claimLedger?.information_gaps?.length ? claimLedger.information_gaps.map(item => item.description) : [
+        ...(drivers?.unresolved_causes || []).slice(0, 3),
+        ...(earnings?.review_points || []).slice(0, 3)
+      ]);
+      const invalidationItems = normalizeResearchItems((claimLedger?.invalidation_conditions || workspace?.invalidation_conditions || []).map(invalidationConditionText));
+      const nextEvidenceItems = normalizeResearchItems((workspace?.next_evidence || []).map(item => item.description));
+      if (!nextEvidenceItems.length) {
+        nextEvidenceItems.push(...normalizeResearchItems([
+          ...pendingActions.map(item => item.next_step),
+          session?.next_question
+        ]));
+      }
       const moduleAvailability = [
         Boolean(points.length), Boolean(fundamentals), earnings?.status === "available",
         drivers?.status === "available", Boolean(shareholders), Boolean(expectations),
@@ -5218,6 +5283,24 @@
       thesisHead.replaceChildren(thesisTitle, thesisActions);
       thesisCard.append(thesisHead, judgmentLayout);
 
+      const researchMap = document.createElement("section"); researchMap.className = "stock-research-map";
+      const researchMapHead = document.createElement("div"); researchMapHead.className = "stock-research-map-head";
+      const researchMapIdentity = document.createElement("div");
+      const researchMapTitle = document.createElement("div"); researchMapTitle.className = "stock-workspace-card-title"; researchMapTitle.textContent = "研究证据地图";
+      const researchMapCopy = document.createElement("div"); researchMapCopy.className = "stock-research-map-copy"; researchMapCopy.textContent = "把当前判断拆成支持、反证、风险与失效、信息缺口和下一证据；证据覆盖不等于投资评分。";
+      researchMapIdentity.append(researchMapTitle, researchMapCopy);
+      const researchMapActions = document.createElement("div"); researchMapActions.className = "stock-research-map-actions";
+      const openAllEvidence = document.createElement("button"); openAllEvidence.type = "button"; openAllEvidence.className = "btn"; openAllEvidence.textContent = "查看完整证据"; openAllEvidence.addEventListener("click", () => activateStockSpaceTab("evidence"));
+      const verifyNextEvidence = document.createElement("button"); verifyNextEvidence.type = "button"; verifyNextEvidence.className = "btn primary"; verifyNextEvidence.textContent = "让 Agent 核验下一证据"; verifyNextEvidence.addEventListener("click", () => { void continueDeepStockConversation(nextEvidenceItems[0] || session?.next_question || `请基于当前资料说明${name}下一条最值得核验的证据。`); });
+      researchMapActions.append(openAllEvidence, verifyNextEvidence); researchMapHead.append(researchMapIdentity, researchMapActions);
+      const researchMapGrid = document.createElement("div"); researchMapGrid.className = "stock-research-map-grid";
+      appendDeepBoardCard(researchMapGrid, {kind: "confirmed", title: "支持证据", items: supportedEvidenceItems, previewLimit: 2});
+      appendDeepBoardCard(researchMapGrid, {kind: "counter", title: "反方证据", items: counterEvidenceItems, previewLimit: 2});
+      appendDeepBoardCard(researchMapGrid, {kind: "risk", title: "风险与失效条件", items: normalizeResearchItems([...riskEvidenceItems, ...invalidationItems]), previewLimit: 2});
+      appendDeepBoardCard(researchMapGrid, {kind: "gaps", title: "信息缺口", items: informationGapItems, previewLimit: 2});
+      appendDeepBoardCard(researchMapGrid, {kind: "next", title: "下一证据", items: nextEvidenceItems, previewLimit: 2});
+      researchMap.append(researchMapHead, researchMapGrid);
+
       const changesCard = document.createElement("section"); changesCard.className = "stock-workspace-card changes";
       const changesHead = document.createElement("div"); changesHead.className = "stock-workspace-card-head";
       const changesTitle = document.createElement("div"); changesTitle.className = "stock-workspace-card-title"; changesTitle.textContent = "最新重要变化";
@@ -5245,7 +5328,7 @@
       const openTasks = document.createElement("button"); openTasks.type = "button"; openTasks.className = "btn"; openTasks.textContent = "查看全部任务"; openTasks.addEventListener("click", () => activateStockSpaceTab("tasks"));
       const askAgent = document.createElement("button"); askAgent.type = "button"; askAgent.className = "btn primary"; askAgent.textContent = "与 Agent 研究"; askAgent.addEventListener("click", () => { void continueDeepStockConversation(pendingActions[0]?.next_step || session?.next_question); });
       taskActions.append(openTasks, askAgent); tasksCard.append(tasksHead, taskList, taskActions);
-      workspaceSummary.append(thesisCard, changesCard, tasksCard); shell.appendChild(workspaceSummary);
+      workspaceSummary.append(thesisCard, researchMap, changesCard, tasksCard); shell.appendChild(workspaceSummary);
 
       const evidenceContainer = $("deepStockEvidence"); evidenceContainer.innerHTML = "";
       const evidenceHead = document.createElement("div"); evidenceHead.className = "stock-space-section-head";
@@ -5273,28 +5356,9 @@
         coverageGrid.appendChild(boundary); evidenceShell.appendChild(coverageGrid);
       }
       const researchBoard = document.createElement("div"); researchBoard.className = "deep-research-board";
-      const confirmedClaims = researchClaims.filter(item => item.relation === "supports");
-      const counterClaims = researchClaims.filter(item => ["weakens", "unresolved"].includes(item.relation));
-      const confirmedItems = confirmedClaims.length ? confirmedClaims.map(researchClaimText) : [
-        historyMetrics.trend_state ? `价格结构：${historyMetrics.trend_state}；20日收益 ${pct(historyMetrics.return_20d_pct)}。` : "",
-        ...(earnings?.supports || []).slice(0, 2),
-        ...(drivers?.confirmed_mechanical_drivers || []).slice(0, 2),
-        events?.coverage?.official_events ? `已归档 ${events.coverage.official_events} 条公司公告或监管事件。` : ""
-      ];
-      const counterItems = counterClaims.length ? counterClaims.map(researchClaimText) : [
-        ...(workspace?.counterevidence || []).map(item => [item.statement, item.evidence].filter(Boolean).join("：")),
-        ...(earnings?.contradictions || []).slice(0, 3),
-        ...(drivers?.plausible_clues || []).slice(0, 2)
-      ];
-      const gapItems = claimLedger?.information_gaps?.length ? claimLedger.information_gaps.map(item => item.description) : [
-        ...(workspace?.next_evidence || []).map(item => item.description),
-        ...(drivers?.unresolved_causes || []).slice(0, 3),
-        ...(earnings?.review_points || []).slice(0, 3)
-      ];
-      const invalidationItems = (claimLedger?.invalidation_conditions || workspace?.invalidation_conditions || []).map(invalidationConditionText);
-      appendDeepBoardCard(researchBoard, {kind: "confirmed", title: "已确认的证据", items: confirmedItems});
-      appendDeepBoardCard(researchBoard, {kind: "counter", title: "关键反证与压力", items: counterItems});
-      appendDeepBoardCard(researchBoard, {kind: "gaps", title: "仍需补证", items: gapItems});
+      appendDeepBoardCard(researchBoard, {kind: "confirmed", title: "已确认的证据", items: supportedEvidenceItems});
+      appendDeepBoardCard(researchBoard, {kind: "counter", title: "关键反证与压力", items: normalizeResearchItems([...counterEvidenceItems, ...riskEvidenceItems])});
+      appendDeepBoardCard(researchBoard, {kind: "gaps", title: "仍需补证", items: informationGapItems});
       appendDeepBoardCard(researchBoard, {kind: "invalidation", title: "判断失效条件", items: invalidationItems});
       evidenceShell.appendChild(researchBoard);
 
