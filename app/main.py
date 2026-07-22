@@ -151,9 +151,21 @@ class ConversationPatch(BaseModel):
     quality_scope: Literal["user", "evaluation"] | None = None
 
 
+class DeepStockEntryContext(BaseModel):
+    source_kind: Literal["stock_screen", "li_zong_strategy"]
+    source_label: str = Field(min_length=1, max_length=80)
+    display_name: str | None = Field(default=None, max_length=80)
+    profile_key: str | None = Field(default=None, max_length=60)
+    as_of_date: str | None = Field(default=None, max_length=32)
+    candidate_status: str | None = Field(default=None, max_length=40)
+    matched_reasons: list[str] = Field(default_factory=list, max_length=8)
+    missing_fields: list[str] = Field(default_factory=list, max_length=8)
+
+
 class DeepStockStart(BaseModel):
     symbol: str = Field(min_length=1, max_length=24)
     conversation_id: str | None = Field(default=None, max_length=36)
+    entry_context: DeepStockEntryContext | None = None
 
 
 class StockRelationUpdate(BaseModel):
@@ -1412,7 +1424,14 @@ def create_app(
         user = require_session_user(request)
         try:
             return deep_stock.get_or_create(
-                user["id"], payload.symbol, payload.conversation_id
+                user["id"],
+                payload.symbol,
+                payload.conversation_id,
+                entry_context=(
+                    payload.entry_context.model_dump()
+                    if payload.entry_context is not None
+                    else None
+                ),
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

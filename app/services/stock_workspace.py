@@ -51,8 +51,11 @@ class StockWorkspaceService:
             user_id, symbol=canonical, limit=20
         )
         action_item = self._action_item(user_id, canonical, watchlist)
-        name = self._display_name(
-            canonical, formal_workspace, watchlist, report, evidence
+        name = str(
+            (session or {}).get("name")
+            or self._display_name(
+                canonical, formal_workspace, watchlist, report, evidence
+            )
         )
 
         if session is not None:
@@ -68,6 +71,7 @@ class StockWorkspaceService:
             coverage_tasks = list(coverage_packet["tasks"])
 
         strategy_evidence = self._strategy_evidence(canonical)
+        research_entry = dict((session or {}).get("research_entry") or {}) or None
         important_changes = self._important_changes(
             [
                 *self._strategy_changes(strategy_evidence),
@@ -75,6 +79,21 @@ class StockWorkspaceService:
             ]
         )
         pending_actions = self._pending_actions(action_item, coverage_tasks)
+        if research_entry is not None:
+            pending_actions = [
+                {
+                    "id": f"screening-entry:{canonical}",
+                    "title": f"核验{research_entry.get('source_label') or '研究候选'}线索",
+                    "status": "watching",
+                    "severity": "medium",
+                    "source": "screening_entry",
+                    "next_step": (
+                        "逐条核验候选命中理由、反方证据和缺失字段，"
+                        "再决定是否形成正式关注判断。"
+                    ),
+                },
+                *pending_actions,
+            ][:8]
         if strategy_evidence and strategy_evidence.get("status") == "triggered":
             pending_actions = [
                 {
@@ -146,6 +165,7 @@ class StockWorkspaceService:
             "invalidation_conditions": invalidation_conditions,
             "next_evidence": next_evidence,
             "strategy_evidence": strategy_evidence,
+            "research_entry": research_entry,
             "latest_report": latest_report,
             "recent_research": recent_research,
             "conversation": (session or {}).get("conversation"),

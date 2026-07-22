@@ -569,6 +569,11 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "李总策略" in page.text
     assert 'api("/v1/stock-strategies/li-zong/candidates?limit=200")' in page.text
     assert 'data-li-zong-filter="data_incomplete"' in page.text
+    assert "function enterScreenCandidateResearch(" in page.text
+    assert "entry_context: entryContext" in page.text
+    assert "保存线索并研究" in page.text
+    assert "本次研究入口" in page.text
+    assert "筛选线索待确认" in page.text
     assert "⊕ 添加图片" in page.text
     assert "AI 图像研究" in page.text
     assert 'api("/me/uploads/images"' in page.text

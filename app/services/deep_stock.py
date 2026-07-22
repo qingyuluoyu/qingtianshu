@@ -115,8 +115,10 @@ class DeepStockResearchService:
         user_id: str,
         symbol: str,
         conversation_id: str | None = None,
+        entry_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
+        research_entry = self._normalize_research_entry(entry_context)
         existing = self.database.get_deep_stock_session(user_id, canonical)
         bound_conversation = None
         if conversation_id:
@@ -135,13 +137,40 @@ class DeepStockResearchService:
             if bound_conversation and bound_conversation.get("status") != "active":
                 bound_conversation = None
         if bound_conversation is None:
-            display_name = self._display_name(user_id, canonical)
+            display_name = str(
+                (research_entry or {}).get("display_name")
+                or self._display_name(user_id, canonical)
+            )
             bound_conversation = self.database.create_conversation(
                 user_id, f"个股研究｜{display_name}"
             )
 
         report = self.database.latest_research_report(canonical)
-        name = self._display_name(user_id, canonical)
+        name = str(
+            (research_entry or {}).get("display_name")
+            or self._display_name(user_id, canonical)
+        )
+        current_title = str(bound_conversation.get("title") or "")
+        automatic_titles = {
+            f"个股研究｜{canonical}",
+            f"个股研究｜{canonical.split('.', 1)[0]}",
+        }
+        desired_title = f"个股研究｜{name}"
+        if (
+            current_title != desired_title
+            and (
+                conversation_id is not None
+                or (
+                    research_entry is not None
+                    and current_title in automatic_titles
+                )
+            )
+        ):
+            bound_conversation = self.database.rename_conversation(
+                user_id,
+                str(bound_conversation["id"]),
+                desired_title,
+            ) or bound_conversation
         if existing is None:
             watchlist = self.database.get_watchlist_item(user_id, canonical)
             thesis = str((watchlist or {}).get("thesis") or "").strip()
@@ -163,6 +192,17 @@ class DeepStockResearchService:
                     *self._report_unresolved(report),
                 ]
             )
+        if research_entry is not None:
+            evidence_modules["screening_entry"] = research_entry
+            unresolved = self._dedupe(
+                [
+                    *unresolved,
+                    *[
+                        f"筛选入口待核验：{item}"
+                        for item in research_entry.get("missing_fields") or []
+                    ],
+                ]
+            )
         stages = self._normalize_stage_statuses(stages)
         status = (
             "completed"
@@ -170,6 +210,13 @@ class DeepStockResearchService:
             else "active"
         )
         next_question = self._next_question(stages, name)
+        if research_entry is not None and (
+            next((item for item in stages if item.get("status") == "in_progress"), {})
+        ).get("key") == "original_thesis":
+            next_question = (
+                f"请先核验{name}命中“{research_entry['source_label']}”的理由、"
+                "反方证据和缺失项，再形成自己的关注理由。"
+            )
         session = self.database.save_deep_stock_session(
             user_id=user_id,
             symbol=canonical,
@@ -207,6 +254,50 @@ class DeepStockResearchService:
                 if reconciled is not None:
                     return reconciled
         return self._public_session(session)
+
+    @staticmethod
+    def _normalize_research_entry(
+        entry_context: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(entry_context, dict):
+            return None
+        source_kind = str(entry_context.get("source_kind") or "").strip()
+        if source_kind not in {"stock_screen", "li_zong_strategy"}:
+            return None
+
+        def clean_text(value: Any, limit: int) -> str | None:
+            text = " ".join(str(value or "").split()).strip()
+            return text[:limit] if text else None
+
+        def clean_items(value: Any, limit: int) -> list[str]:
+            if not isinstance(value, list):
+                return []
+            items = [clean_text(item, 160) for item in value]
+            return list(dict.fromkeys(item for item in items if item))[:limit]
+
+        source_label = clean_text(entry_context.get("source_label"), 80)
+        if source_label is None:
+            source_label = "研究候选筛选"
+        matched_reasons = clean_items(entry_context.get("matched_reasons"), 8)
+        missing_fields = clean_items(entry_context.get("missing_fields"), 8)
+        return {
+            "source_kind": source_kind,
+            "source_label": source_label,
+            "display_name": clean_text(entry_context.get("display_name"), 80),
+            "profile_key": clean_text(entry_context.get("profile_key"), 60),
+            "as_of_date": clean_text(entry_context.get("as_of_date"), 32),
+            "candidate_status": clean_text(
+                entry_context.get("candidate_status"), 40
+            ),
+            "matched_reasons": matched_reasons,
+            "missing_fields": missing_fields,
+            "status": "user_selected_context",
+            "limitations": [
+                "这是用户从筛选结果进入研究空间时保存的研究线索，"
+                "不会直接完成研究阶段，仍需用正式行情、财务和公告证据核验。"
+            ],
+            "updated_at": utc_now(),
+        }
 
     def get(self, user_id: str, symbol: str) -> dict[str, Any] | None:
         canonical = normalize_symbol(symbol)
@@ -878,6 +969,9 @@ class DeepStockResearchService:
         coverage_history = list(
             (session.get("evidence_modules") or {}).get("_coverage_history") or []
         )
+        research_entry = dict(
+            (session.get("evidence_modules") or {}).get("screening_entry") or {}
+        )
         conversation = self.database.get_conversation(
             str(session["user_id"]), str(session["conversation_id"])
         )
@@ -909,6 +1003,7 @@ class DeepStockResearchService:
             },
             "coverage_tasks": coverage_tasks,
             "coverage_history": coverage_history[-20:],
+            "research_entry": research_entry or None,
         }
 
     def _coverage_from_modules(

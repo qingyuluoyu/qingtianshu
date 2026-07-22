@@ -5,7 +5,7 @@
 ## 自动化测试
 
 ```bash
-/Users/chr/.hermes/hermes-agent/venv/bin/python -m pytest
+uv run pytest
 ```
 
 结果：`312 tests collected` 并全部通过；`ruff check .` 通过。

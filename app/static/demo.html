@@ -2415,7 +2415,17 @@
         const actions = document.createElement("div"); actions.className = "li-zong-actions";
         const detail = document.createElement("button"); detail.type = "button"; detail.className = "btn"; detail.textContent = "查看逐规则证据"; detail.addEventListener("click", () => showLiZongDetail(item));
         const follow = document.createElement("button"); follow.type = "button"; follow.className = "btn"; follow.textContent = item.status === "triggered" ? "加入重点关注" : "加入关注"; follow.addEventListener("click", () => { void addScreenCandidateToWatchlist(item, follow, "李总策略"); });
-        const research = document.createElement("button"); research.type = "button"; research.className = "btn primary"; research.textContent = "进入个股研究"; research.addEventListener("click", () => { void openDeepStockSymbol(item.internal_symbol); });
+        const research = document.createElement("button"); research.type = "button"; research.className = "btn primary"; research.textContent = "保存线索并研究";
+        research.addEventListener("click", () => { void enterScreenCandidateResearch(item, research, {
+          source_kind: "li_zong_strategy",
+          source_label: "李总策略",
+          display_name: item.name,
+          profile_key: item.parameter_version || item.strategy_version,
+          as_of_date: item.as_of_date,
+          candidate_status: item.status,
+          matched_reasons: (item.rule_results || []).filter(rule => rule.status === "passed").map(rule => liZongRuleLabel(rule.rule_id)),
+          missing_fields: item.limitations || []
+        }); });
         const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn"; ask.textContent = "让 Agent 核验"; ask.addEventListener("click", () => prepareAgentQuestion(`请核验${item.name}（${item.internal_symbol}）的李总策略结果。逐条说明基本面、股性、量价和触发规则的证据时间、反方证据、数据缺口、失效条件与下一步需要核验什么；不要输出买卖指令。`));
         actions.append(detail, follow, research, ask); card.appendChild(actions); container.appendChild(card);
       });
@@ -2524,8 +2534,17 @@
         const actions = document.createElement("div"); actions.className = "screener-actions";
         const follow = document.createElement("button"); follow.type = "button"; follow.className = "btn"; follow.textContent = "加入关注";
         follow.addEventListener("click", () => { void addScreenCandidateToWatchlist(item, follow); });
-        const research = document.createElement("button"); research.type = "button"; research.className = "btn primary"; research.textContent = "进入股票研究空间";
-        research.addEventListener("click", () => { void openDeepStockSymbol(item.internal_symbol); });
+        const research = document.createElement("button"); research.type = "button"; research.className = "btn primary"; research.textContent = "保存线索并研究";
+        research.addEventListener("click", () => { void enterScreenCandidateResearch(item, research, {
+          source_kind: "stock_screen",
+          source_label: profile.label || "研究候选筛选",
+          display_name: item.name,
+          profile_key: profile.key,
+          as_of_date: meta.latest_completed_trade_date,
+          candidate_status: payload?.status,
+          matched_reasons: item.matched_reasons || [],
+          missing_fields: (item.missing_fields || []).map(stockScreenFieldLabel)
+        }); });
         const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn"; ask.textContent = "让 Agent 继续研究";
         ask.addEventListener("click", () => prepareAgentQuestion(`请继续研究${item.name}（${item.internal_symbol}）。它命中了“${profile.label || "研究候选"}”筛选，请核验最新财务、公告、反方证据、失效条件和当前仍缺失的信息。`));
         actions.append(follow, research, ask); card.appendChild(actions); container.appendChild(card);
@@ -2583,6 +2602,29 @@
         await loadWatchlist();
       } catch {
         button.disabled = false; button.textContent = "重试加入关注";
+      }
+    }
+
+    async function enterScreenCandidateResearch(item, button, entryContext) {
+      const symbol = item.internal_symbol || item.symbol;
+      if (!symbol) return;
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = "正在保存研究线索…";
+      try {
+        const session = await api("/me/deep-stock", {
+          method: "POST",
+          body: JSON.stringify({symbol, entry_context: entryContext})
+        });
+        state.deepStock = session;
+        await loadConversations(false);
+        await loadDeepStock();
+        await openDeepStockSymbol(symbol);
+        button.textContent = "已进入研究空间";
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = original;
+        openReader("研究空间暂未建立", error.message || "保存候选研究线索失败，请稍后重试。", "当前筛选结果仍保留在页面");
       }
     }
 
@@ -4796,16 +4838,24 @@
       primaryGrid.append(chartCard, digest); shell.appendChild(primaryGrid);
 
       const workspaceSummary = document.createElement("div"); workspaceSummary.className = "stock-workspace-summary";
+      const researchEntry = workspace?.research_entry || session?.research_entry || null;
       const thesisCard = document.createElement("section"); thesisCard.className = "stock-workspace-card primary";
       const thesisHead = document.createElement("div"); thesisHead.className = "stock-workspace-card-head";
       const thesisTitle = document.createElement("div"); thesisTitle.className = "stock-workspace-card-title"; thesisTitle.textContent = "当前研究判断";
-      const thesisMeta = document.createElement("span"); thesisMeta.className = "stock-workspace-card-meta"; thesisMeta.textContent = watchItem?.thesis ? "由你确认" : "待你确认";
+      const thesisMeta = document.createElement("span"); thesisMeta.className = "stock-workspace-card-meta"; thesisMeta.textContent = watchItem?.thesis ? "由你确认" : researchEntry ? "筛选线索待确认" : "待你确认";
       thesisHead.append(thesisTitle, thesisMeta);
       const judgmentLayout = document.createElement("div"); judgmentLayout.className = "stock-judgment-layout";
       const judgmentMain = document.createElement("div"); judgmentMain.className = "stock-judgment-main";
       const judgmentLabel = document.createElement("div"); judgmentLabel.className = "stock-judgment-label"; judgmentLabel.textContent = "研究主线";
       const thesisCopy = document.createElement("div"); thesisCopy.className = "stock-workspace-copy";
-      thesisCopy.textContent = watchItem?.thesis || "还没有记录为什么关注这只股票、主要观察什么以及何时重新判断。补充后，Agent 会把它作为最高优先级私人上下文。";
+      thesisCopy.textContent = watchItem?.thesis || (researchEntry
+        ? [
+            `你从“${researchEntry.source_label || "研究候选筛选"}”进入研究空间。`,
+            (researchEntry.matched_reasons || []).length ? `已保存的候选理由：${researchEntry.matched_reasons.slice(0, 4).join("；")}。` : "",
+            (researchEntry.missing_fields || []).length ? `仍需补证：${researchEntry.missing_fields.slice(0, 4).join("、")}。` : "",
+            "这些内容只是待核验线索，不会自动成为正式关注判断或推进研究阶段。"
+          ].filter(Boolean).join(" ")
+        : "还没有记录为什么关注这只股票、主要观察什么以及何时重新判断。补充后，Agent 会把它作为最高优先级私人上下文。");
       judgmentMain.append(judgmentLabel, thesisCopy);
       const systemObservation = document.createElement("aside"); systemObservation.className = "stock-system-observation";
       const systemTitle = document.createElement("strong"); systemTitle.textContent = "系统观察（基于当前确定性数据）";
@@ -5148,6 +5198,24 @@
       main.append(progress, stages);
 
       const side = document.createElement("aside"); side.className = "deep-stock-side";
+      const entry = session.research_entry;
+      if (entry) {
+        const entryCard = document.createElement("section"); entryCard.className = "deep-stock-card";
+        const entryTitle = document.createElement("div"); entryTitle.className = "deep-stock-card-title"; entryTitle.textContent = "本次研究入口";
+        const entryCopy = document.createElement("div"); entryCopy.className = "deep-stock-card-copy";
+        entryCopy.textContent = `${entry.source_label || "研究候选筛选"}${entry.as_of_date ? ` · 数据日 ${entry.as_of_date}` : ""}。这些是待核验线索，不会自动完成研究阶段。`;
+        entryCard.append(entryTitle, entryCopy);
+        const entryItems = [
+          ...(entry.matched_reasons || []).slice(0, 4).map(value => `命中：${value}`),
+          ...(entry.missing_fields || []).slice(0, 4).map(value => `待补：${value}`)
+        ];
+        if (entryItems.length) {
+          const entryList = document.createElement("ul"); entryList.className = "deep-stock-list";
+          entryItems.forEach(value => { const li = document.createElement("li"); li.textContent = value; entryList.appendChild(li); });
+          entryCard.appendChild(entryList);
+        }
+        side.appendChild(entryCard);
+      }
       const next = document.createElement("section"); next.className = "deep-stock-card";
       const nextTitle = document.createElement("div"); nextTitle.className = "deep-stock-card-title"; nextTitle.textContent = "下一步研究问题";
       const nextCopy = document.createElement("div"); nextCopy.className = "deep-stock-card-copy"; nextCopy.textContent = session.next_question;

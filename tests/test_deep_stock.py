@@ -39,6 +39,8 @@ def test_deep_stock_api_binds_existing_conversation_and_is_user_isolated(app):
     assert created.status_code == 201
     payload = created.json()
     assert payload["symbol"] == "000063.SZ"
+    assert payload["name"] == "中兴通讯"
+    assert payload["conversation"]["title"] == "个股研究｜中兴通讯"
     assert payload["conversation_id"] == conversation["id"]
     assert payload["workflow_version"] == "guided_deep_stock_v1"
     assert payload["progress"] == {"completed": 1, "total": 7, "percent": 14}
@@ -77,6 +79,84 @@ def test_deep_stock_api_binds_existing_conversation_and_is_user_isolated(app):
 
     other = TestClient(app)
     _create_user(other, "Deep Stock Other")
+    assert other.get("/me/deep-stock/000063").status_code == 404
+
+
+def test_screening_candidate_entry_is_saved_without_completing_research_stage(app):
+    client = TestClient(app)
+    _create_user(client, "Screening Entry User")
+
+    created = client.post(
+        "/me/deep-stock",
+        json={
+            "symbol": "000063",
+            "entry_context": {
+                "source_kind": "stock_screen",
+                "source_label": "经营改善候选",
+                "display_name": "中兴通讯",
+                "profile_key": "quality",
+                "as_of_date": "2026-07-22",
+                "candidate_status": "ready",
+                "matched_reasons": [
+                    "营收同比保持增长",
+                    "毛利率高于模板下限",
+                ],
+                "missing_fields": ["最新公告原文", "现金流变化原因"],
+            },
+        },
+    )
+
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["symbol"] == "000063.SZ"
+    assert payload["progress"]["completed"] == 0
+    assert payload["current_stage"]["key"] == "original_thesis"
+    assert payload["research_entry"] == {
+        "source_kind": "stock_screen",
+        "source_label": "经营改善候选",
+        "display_name": "中兴通讯",
+        "profile_key": "quality",
+        "as_of_date": "2026-07-22",
+        "candidate_status": "ready",
+        "matched_reasons": ["营收同比保持增长", "毛利率高于模板下限"],
+        "missing_fields": ["最新公告原文", "现金流变化原因"],
+        "status": "user_selected_context",
+        "limitations": [
+            "这是用户从筛选结果进入研究空间时保存的研究线索，"
+            "不会直接完成研究阶段，仍需用正式行情、财务和公告证据核验。"
+        ],
+        "updated_at": payload["research_entry"]["updated_at"],
+    }
+    assert "经营改善候选" in payload["next_question"]
+    assert "筛选入口待核验：最新公告原文" in payload["unresolved_items"]
+
+    workspace = client.get("/v1/stocks/000063/workspace")
+    assert workspace.status_code == 200
+    workspace_payload = workspace.json()
+    assert workspace_payload["name"] == "中兴通讯"
+    assert workspace_payload["research_entry"]["profile_key"] == "quality"
+    assert workspace_payload["pending_actions"][0]["source"] == "screening_entry"
+    assert "经营改善候选" in workspace_payload["pending_actions"][0]["title"]
+
+    repeated = client.post(
+        "/me/deep-stock",
+        json={
+            "symbol": "000063.SZ",
+            "entry_context": {
+                "source_kind": "li_zong_strategy",
+                "source_label": "李总策略",
+                "display_name": "中兴通讯",
+                "candidate_status": "qualified",
+                "matched_reasons": ["总市值严格大于150亿元"],
+            },
+        },
+    )
+    assert repeated.status_code == 201
+    assert repeated.json()["conversation_id"] == payload["conversation_id"]
+    assert repeated.json()["research_entry"]["source_kind"] == "li_zong_strategy"
+
+    other = TestClient(app)
+    _create_user(other, "Screening Entry Other User")
     assert other.get("/me/deep-stock/000063").status_code == 404
 
 

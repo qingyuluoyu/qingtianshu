@@ -59,7 +59,7 @@ class Settings:
             hermes_bin=Path(
                 os.getenv(
                     "HERMES_BIN",
-                    "/Users/chr/.hermes/hermes-agent/venv/bin/hermes",
+                    "hermes",
                 )
             ).expanduser(),
             hermes_enabled=os.getenv("HERMES_ENABLED", "false").lower() in {"1", "true", "yes"},

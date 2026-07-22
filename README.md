@@ -55,34 +55,84 @@
 - 对话可直接识别“中兴通讯为什么大跌”等中文公司名问法；未识别对象时返回可操作的补充提示，不再直接报 `422`。实时证据刷新失败时，默认标的会使用服务器最新预生成报告证据。
 - “美股为什么收盘跌了”会同时组合指数价格事实与近期市场资讯驱动；资讯会在对话中即时刷新并入库，后台也会预先刷新七个市场范围。
 
-完整产品取舍见 [清数智算MVP产品方案.md](../AI金融Agent产品方案/清数智算MVP产品方案.md)。
+产品差距与实施顺序见 [PRODUCT_GAP_MATRIX_20260722.md](./PRODUCT_GAP_MATRIX_20260722.md) 和 [个股功能增强实施说明](./个股功能增强_主Agent实施说明.md)。
 后端数据、算法、大模型、Agent 与回答上下文见 [后端运行流程与回答上下文.md](./后端运行流程与回答上下文.md)。
 当前实测结果与未验证边界见 [VERIFICATION.md](./VERIFICATION.md)。
 真实对话暴露的数据缺口和验收条件见 [待补金融数据清单.md](./待补金融数据清单.md)。
 
-## 最简单的启动方式
+## 安装与启动
 
-你不需要输入命令。
+项目支持 macOS、Linux 和 Windows（WSL/PowerShell），要求 Python 3.11 或更高版本。Hermes 和 Tushare 都是可选能力：不配置时仍可运行确定性行情、数据库、选股、研究空间和 preview 对话。
 
-1. 在 Finder 打开 `/Users/chr/Documents/青树金融交易/qingshu-agent-demo`；
-2. 双击 `一键启动并演示.command`；
-3. 等待终端出现“产品页面已打开”，浏览器会自动进入清数智算首页；
-4. 保持终端窗口开启，Demo 就会继续运行；关闭窗口即可停止。
-
-第一次双击如果 macOS 阻止运行，请右键该文件，选择“打开”，再确认一次。
-
-不需要先运行命令行演示。本机一键启动会启用已配置的 Hermes 能力，网页默认勾选“AI 深度解读”；用户可随时取消勾选，切换到无需模型调用的确定性研究。模型费用取决于本机 Hermes 当前 provider 配置。
-
-首次打开页面会自动创建匿名个人会话，不需要注册或输入密码。旧版网页已有的体验用户会一次性迁移到安全会话，原自选股、关注理由和 Run 会保留。前端不再把用户 ID 当作访问凭证。
-
-## 开发者启动方式
-
-本机 Hermes 虚拟环境已经包含 Demo 所需依赖：
+### 方式一：使用 uv（推荐）
 
 ```bash
-cd /Users/chr/Documents/青树金融交易/qingshu-agent-demo
-/Users/chr/.hermes/hermes-agent/venv/bin/python -m uvicorn app.main:app --reload --port 8000
+git clone https://github.com/qingyuluoyu/qingtianshu.git
+cd qingtianshu
+cp .env.example .env
+uv sync --extra dev
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
+
+如果尚未安装 uv，可参考 <https://docs.astral.sh/uv/getting-started/installation/>。
+
+### 方式二：标准 Python 虚拟环境
+
+macOS / Linux：
+
+```bash
+git clone https://github.com/qingyuluoyu/qingtianshu.git
+cd qingtianshu
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+cp .env.example .env
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Windows PowerShell：
+
+```powershell
+git clone https://github.com/qingyuluoyu/qingtianshu.git
+cd qingtianshu
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+Copy-Item .env.example .env
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+启动后访问：
+
+- 产品页面：<http://127.0.0.1:8000/demo>
+- 健康检查：<http://127.0.0.1:8000/health>
+- API 文档：<http://127.0.0.1:8000/docs>
+
+首次打开页面会自动创建匿名个人会话，不需要注册。默认数据写入项目下的 `data/`；可通过 `QINGSHU_DATA_DIR` 改到独立持久化目录。
+
+### macOS 一键启动
+
+双击 `一键启动并演示.command`。脚本不依赖开发者电脑路径，会优先使用项目自己的 `.venv`；首次运行时会自动创建环境并安装依赖。若已安装并配置 Hermes，脚本会启用 AI 深度解读；否则自动使用无需模型费用的确定性研究模式。
+
+第一次运行如果 macOS 阻止脚本，请右键文件选择“打开”。
+
+### 配置文件
+
+复制 `.env.example` 为 `.env`，常用配置如下：
+
+| 变量 | 默认值 | 作用 |
+| --- | --- | --- |
+| `QINGSHU_DATA_DIR` | `./data` | SQLite、用户工作区和缓存目录 |
+| `BACKGROUND_JOBS_ENABLED` | `true` | 是否启动后台刷新任务 |
+| `HERMES_ENABLED` | `false` | 是否调用 Hermes 生成深度回答 |
+| `HERMES_BIN` | `hermes` | Hermes 命令名或可执行文件路径 |
+| `TUSHARE_ENABLED` | 按 Token 自动判断 | 是否启用 Tushare 数据 |
+| `TUSHARE_TOKEN` | 空 | 本地 Tushare Token，禁止提交 |
+| `SEC_USER_AGENT` | 示例值 | SEC 要求的应用名称和联系邮箱 |
+
+`.env`、`data/`、数据库、缓存和本地工作区已经被 `.gitignore` 排除。
 
 ### Tushare Pro 数据接口
 
@@ -99,7 +149,7 @@ TUSHARE_API_URL=https://teajoin.com
 配置后可执行只读连通性校验：
 
 ```bash
-PYTHONPATH=. /Users/chr/.hermes/hermes-agent/venv/bin/python scripts/verify_tushare.py
+uv run python scripts/verify_tushare.py
 ```
 
 选股服务使用 `stock_basic`、`trade_cal`、`daily`、`daily_basic` 和逐股 `fina_indicator`：先建立完整交易日行情与估值截面，再只为有限候选补财务数据。临时财务请求失败会重试且不会长期缓存为证据缺口。实时行情和历史分钟行情是否可用，仍以代理服务和账号实际开通权限为准。
@@ -135,7 +185,6 @@ PYTHONPATH=. /Users/chr/.hermes/hermes-agent/venv/bin/python scripts/verify_tush
 Docker 方式：
 
 ```bash
-cd /Users/chr/Documents/青树金融交易/qingshu-agent-demo
 docker compose up --build -d
 ```
 
@@ -146,8 +195,7 @@ docker compose up --build -d
 服务启动后，在另一个终端运行：
 
 ```bash
-cd /Users/chr/Documents/青树金融交易/qingshu-agent-demo
-/Users/chr/.hermes/hermes-agent/venv/bin/python scripts/demo_flow.py
+uv run python scripts/demo_flow.py
 ```
 
 也可以手动调用：
@@ -207,7 +255,7 @@ export HERMES_ENABLED=true
 
 未设置时由 Hermes 当前配置决定。密钥由 Hermes 或进程环境管理，本项目不会读取、打印或复制密钥。
 
-当前一键启动把标准解读默认路由到已实测的 `deepseek / deepseek-chat`；用户显式设置环境变量时仍可覆盖。深入解读和视觉模型未配置时继续使用 Hermes 当前默认路由。密钥仍只由 Hermes 或进程环境读取，不写入项目。
+一键启动不会假设特定供应商：检测到 `HERMES_BIN` 可执行文件时才启用 Hermes，模型和 Provider 继续由用户自己的 Hermes 配置或环境变量决定。密钥只由 Hermes 或进程环境读取，不写入项目。
 
 Hermes 返回后会经过 `deterministic_numeric_and_policy_guard_v2`：守卫理解“涨 / 跌 / 回撤”的语义方向、合理四舍五入和由确定性证据计算出的均线距离等派生值。大盘回答只使用模型实际收到的当前市场、当前问题证据校验，不会让其他市场数字或上一轮助手措辞成为可信事实；用户输入中的数字也不会因此放行。守卫仍拒绝证据外数字、反向改写、目标价、未来涨跌概率、收益保证、浪型判断以及 BUY/HOLD/SELL 指令，并拦截原始字段名、后台状态、供应商名称和数据源故障。若回答只包含少量不受支持的句子，系统会删行后再次完整验守，尽量保留其余针对性模型回答；涉及策略禁令、语义冲突或无法安全修复时，才退回确定性摘要。原始被拒文本只留在该用户 Run 目录用于诊断。
 
@@ -237,8 +285,7 @@ Hermes 返回后会经过 `deterministic_numeric_and_policy_guard_v2`：守卫�
 服务器内置后台任务会自动做发布评估。`scripts/publish_market_pulse.py` 只是开发人员需要单独验证文章逻辑时使用；系统只有在证据质量达标、距离上一篇至少四小时、市场结构指纹变化且未超过 24 小时三篇上限时才真正生成文章。
 
 ```bash
-cd /Users/chr/Documents/青树金融交易/qingshu-agent-demo
-PYTHONPATH=. /Users/chr/.hermes/hermes-agent/venv/bin/python scripts/publish_market_pulse.py
+uv run python scripts/publish_market_pulse.py
 ```
 
 需要后台模型润色时同时设置 `HERMES_ENABLED=true` 和 `BACKGROUND_USE_HERMES=true`。生产版应把后台任务迁移到独立 Worker/任务队列；当前线程调度器是可运行的 MVP 实现。
@@ -248,16 +295,16 @@ PYTHONPATH=. /Users/chr/.hermes/hermes-agent/venv/bin/python scripts/publish_mar
 单元和 API 测试全部使用模拟行情，不依赖公网：
 
 ```bash
-cd /Users/chr/Documents/青树金融交易/qingshu-agent-demo
-/Users/chr/.hermes/hermes-agent/venv/bin/python -m pytest
+uv run pytest
+uv run ruff check .
 ```
 
-当前完整测试共 `312` 项并全部通过；`ruff check .` 通过。
+当前完整测试数量以 `pytest --collect-only` 输出为准；主分支合并前必须同时通过全量测试与 Ruff。
 
 实时 smoke test：
 
 ```bash
-/Users/chr/.hermes/hermes-agent/venv/bin/python scripts/live_smoke.py
+uv run python scripts/live_smoke.py
 ```
 
 实时测试失败不等于本地业务逻辑失败；请根据输出区分 Yahoo、东方财富、代理/WAF 和本地解析问题。
