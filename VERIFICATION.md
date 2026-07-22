@@ -494,3 +494,18 @@ uv run pytest
 - 全量 `425 tests collected` 并全部通过；`ruff check app tests scripts` 通过；内联 JavaScript 语法检查通过。运行中 `/health=ok`、Hermes 启用、后台和李总策略 Worker 正常、数据健康 `54/54 healthy`。
 
 仍未完成：李总策略全市场覆盖仍由后台增量推进；用户订阅通知、今日观察触发流、参数确认界面和历史回放仍属于后续工作，不因 Agent 主链恢复而提前标记完成。
+
+## 2026-07-23 P0-07 结构化回答、逐 Claim 引用与判断确认写回
+
+- 新增 `ai_citations`、`ai_writeback_candidates` 和 `StructuredAIService`。股票研究 Run 直接消费 `research_claims`，保存事实、推断、反证、待验证假设、信息缺口、失效条件、下一步核验、结论边界与逐 Claim 引用；没有从 Markdown 正文反推正式写回内容。
+- 普通问题和未完成 Run 不产生判断候选；只有 `completed` Run 且用户明确要求形成或更新判断草稿时生成 `pending_confirmation`。候选公开字段不包含用户、工作区、会话和内部来源键。
+- 新增 `/v1/ai-writebacks` 列表、详情、确认和拒绝 API。确认前 active thesis 不变；确认后生成新版本并 supersede 旧版本；拒绝不改变 active thesis；base version 冲突返回 409 并把候选标记为 stale；跨用户访问统一返回 404。
+- SSE 新增并可断线重放 `agent_citation`、`agent_writeback_candidate`、`agent_structured_partial`、`agent_structured_failed`；历史消息 metadata 保存 `structured_answer`，preview 深化成功后会替换为完成 Run 的结构化回答。
+- 前端已展示结构化事实、证据推断、反证、假设、缺口、失效条件和下一步核验。证据点击后展示来源、时间、摘录与口径限制；判断草稿支持确认、拒绝和刷新后恢复状态。
+- 真实 Hermes Run `c95e887a-1891-4ae8-90e7-55b9e3053a79` 为 `stock_research / completed`、`error=null`。页面用 Enter 发送“分析中兴通讯当前支持证据、反方证据和失效条件，并形成判断草稿，供我确认，不要直接修改正式判断”，最终只保留一条助手回答，显示 8 条事实、8 条反证、7 项待核验和 12 项引用。
+- 确认前候选为 `pending_confirmation`、base version 1、active thesis version 1。点击确认后候选为 `confirmed` 并生成版本化判断。真实验收主动发现 `seed_demo_watchlist` 在每次鉴权时重复写默认 thesis，导致新版本被立即覆盖；已改为只在用户创建/旧空间迁移时补缺失默认股票，普通请求不再重置或复活用户已删除的自选股。
+- 修复后将测试产生的演示用户判断恢复为 active version 4；页面刷新、`/session` 和关注列表请求后仍保持该版本，控制台无 error/warn。新增回归测试覆盖默认初始化不得覆盖已确认判断或恢复已删除股票。
+- SQLite 现有数据库成功创建两张新表，`PRAGMA foreign_key_check` 无结果；Tushare 只读验证返回 5 行和最新交易日 `20260109`，未输出 Token；`/health=ok`、Hermes 启用、后台与李总策略 Worker 正常、数据健康 `54/54`。
+- 最终全量 `432 tests collected` 全部通过；`ruff check app tests scripts` 和内联 JavaScript 语法检查通过。
+
+当前边界：AI writeback 当前只支持版本化正式判断 `thesis`。用户任务、操作计划和正式复盘必须等对应领域对象完成后再按同一确认协议接入；确认流程由 StockDomain 的两个事务组成，MVP 已验证一致性，但生产版仍需收敛为单事务或补偿事务。

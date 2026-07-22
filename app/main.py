@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 import hmac
 from io import BytesIO
+import logging
 import re
 import time
 from pathlib import Path
@@ -67,6 +68,12 @@ from app.services.stock_domain import (
     StockDomainService,
     StockDomainVersionConflict,
 )
+from app.services.structured_ai import (
+    StructuredAIConflict,
+    StructuredAIInvalidState,
+    StructuredAINotFound,
+    StructuredAIService,
+)
 from app.services.observation_tasks import (
     ObservationTaskInvalidState,
     ObservationTaskNotFound,
@@ -107,6 +114,7 @@ from app.utils import utc_now
 
 SESSION_COOKIE_NAME = "qingshu_session"
 Image.MAX_IMAGE_PIXELS = 25_000_000
+logger = logging.getLogger(__name__)
 
 
 class UserCreate(BaseModel):
@@ -813,6 +821,7 @@ def create_app(
     conversation_quality = ConversationQualityService(database)
     deep_stock = DeepStockResearchService(database)
     stock_domain = StockDomainService(database)
+    structured_ai = StructuredAIService(database, stock_domain)
     observation_tasks = ObservationTaskService(database)
     resolved_tushare_client = tushare_client
     if resolved_tushare_client is None and settings.tushare_enabled:
@@ -913,6 +922,7 @@ def create_app(
     app.state.conversation_quality = conversation_quality
     app.state.deep_stock = deep_stock
     app.state.stock_domain = stock_domain
+    app.state.structured_ai = structured_ai
     app.state.observation_tasks = observation_tasks
     app.state.stock_workspace = stock_workspace
     app.state.stock_screener = stock_screener
@@ -927,6 +937,8 @@ def create_app(
             return
         for symbol in settings.default_research_symbols:
             canonical = normalize_symbol(symbol)
+            if database.get_watchlist_item(user["id"], canonical) is not None:
+                continue
             target = RESEARCH_TARGETS.get(canonical, {})
             database.upsert_watchlist(
                 user["id"],
@@ -1001,7 +1013,6 @@ def create_app(
         user = database.get_user_by_session(request.cookies.get(SESSION_COOKIE_NAME))
         if user is None:
             raise HTTPException(status_code=401, detail="需要有效个人会话")
-        seed_demo_watchlist(user)
         return user
 
     def require_admin_api(request: Request) -> dict[str, Any]:
@@ -1794,6 +1805,66 @@ def create_app(
         except StockDomainNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except StockDomainInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/v1/ai-writebacks")
+    def list_my_ai_writebacks(
+        request: Request,
+        status: str | None = Query(default=None, max_length=32),
+        limit: int = Query(default=100, ge=1, le=300),
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return structured_ai.list_writebacks(
+                user_id=user["id"], status=status, limit=limit
+            )
+        except StructuredAIInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/v1/ai-writebacks/{candidate_id}")
+    def get_my_ai_writeback(
+        candidate_id: str, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return structured_ai.get_writeback(
+                user_id=user["id"], candidate_id=candidate_id
+            )
+        except StructuredAINotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/v1/ai-writebacks/{candidate_id}/confirm")
+    def confirm_my_ai_writeback(
+        candidate_id: str, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return structured_ai.confirm_writeback(
+                user_id=user["id"], candidate_id=candidate_id
+            )
+        except StructuredAINotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except StructuredAIConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except StructuredAIInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except StockDomainVersionConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except StockDomainInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/ai-writebacks/{candidate_id}/reject")
+    def reject_my_ai_writeback(
+        candidate_id: str, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return structured_ai.reject_writeback(
+                user_id=user["id"], candidate_id=candidate_id
+            )
+        except StructuredAINotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except StructuredAIInvalidState as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/me/knowledge")
@@ -2789,6 +2860,7 @@ def create_app(
             response_symbol: str | None = None,
             run_id: str | None = None,
             evidence_payload: dict[str, Any] | None = None,
+            structured_answer: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             sources = [
                 {
@@ -2826,6 +2898,7 @@ def create_app(
                     "knowledge_sources": sources,
                     "market_sources": market_sources,
                     "evidence_sources": evidence_sources,
+                    "structured_answer": structured_answer,
                     "model_tier": model_tier,
                     "stock_screen_profile": (
                         ((evidence_payload or {}).get("profile") or {}).get("key")
@@ -2848,6 +2921,7 @@ def create_app(
                     "coverage": knowledge_context.get("coverage", {}),
                 },
                 "evidence_sources": evidence_sources,
+                "structured_answer": structured_answer,
             }
 
         if any(keyword in message for keyword in ("行情文章", "市场文章", "市场脉冲", "生成文章")):
@@ -3669,6 +3743,69 @@ def create_app(
                 else None
             ),
         )
+        structured_answer = None
+        structured_answer_failed = False
+        try:
+            structured_answer = structured_ai.build_and_persist(
+                user_id=user_id,
+                run=run,
+                evidence=evidence,
+                answer=str(run.get("answer") or ""),
+                message=message,
+                conversation_id=conversation_id,
+                symbol=symbol,
+            )
+        except Exception:
+            # Structured cards and writeback candidates must never hide an
+            # otherwise valid financial answer. The Run and evidence remain
+            # available for diagnosis and a later retry.
+            logger.exception(
+                "Failed to persist structured AI answer for run %s",
+                run.get("id"),
+            )
+            structured_answer_failed = True
+            structured_answer = None
+        if payload.request_id and payload.execute_agent and structured_answer:
+            for citation in structured_answer.get("citations") or []:
+                agent_streams.publish(
+                    payload.request_id,
+                    user_id,
+                    {
+                        "type": "agent_citation",
+                        "citation": citation,
+                    },
+                )
+            for candidate in structured_answer.get("candidate_writebacks") or []:
+                agent_streams.publish(
+                    payload.request_id,
+                    user_id,
+                    {
+                        "type": "agent_writeback_candidate",
+                        "candidate": candidate,
+                    },
+                )
+            if structured_answer.get("status") != "complete":
+                agent_streams.publish(
+                    payload.request_id,
+                    user_id,
+                    {
+                        "type": "agent_structured_partial",
+                        "status": structured_answer.get("status"),
+                    },
+                )
+        elif (
+            payload.request_id
+            and payload.execute_agent
+            and structured_answer_failed
+        ):
+            agent_streams.publish(
+                payload.request_id,
+                user_id,
+                {
+                    "type": "agent_structured_failed",
+                    "status": "failed",
+                },
+            )
         deep_stock_session = deep_stock.observe_chat(
             user_id=user_id,
             conversation_id=conversation_id,
@@ -3696,6 +3833,7 @@ def create_app(
             "evidence": evidence,
             "evidence_tasks": captured_evidence_tasks,
             "deep_stock_session": deep_stock_session,
+            "structured_answer": structured_answer,
             "error": run["error"],
         }
         result = persist_response(
@@ -3705,6 +3843,7 @@ def create_app(
             response_symbol=symbol,
             run_id=run["id"],
             evidence_payload=evidence,
+            structured_answer=structured_answer,
         )
         if payload.request_id and payload.execute_agent:
             agent_streams.publish(
@@ -3768,6 +3907,9 @@ def create_app(
                 "conversation_id": payload.conversation_id,
                 "assistant_message_id": payload.assistant_message_id,
                 "run_id": assistant_message.get("run_id"),
+                "structured_answer": (
+                    assistant_message.get("metadata") or {}
+                ).get("structured_answer"),
             }
 
         evidence = preview_run.get("evidence") or {}
@@ -3841,10 +3983,28 @@ def create_app(
             evidence=evidence,
         )
 
+        structured_answer = None
+        try:
+            structured_answer = structured_ai.build_and_persist(
+                user_id=user["id"],
+                run=run,
+                evidence=evidence,
+                answer=str(run.get("answer") or ""),
+                message=message,
+                conversation_id=payload.conversation_id,
+                symbol=str(refine_symbol) if refine_symbol else None,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist refined structured AI answer for run %s",
+                run.get("id"),
+            )
+
         metadata = {
             **(assistant_message.get("metadata") or {}),
             "model_tier": payload.model_tier,
             "refined": True,
+            "structured_answer": structured_answer,
         }
         updated = database.update_assistant_conversation_message(
             user_id=user["id"],
@@ -3869,6 +4029,7 @@ def create_app(
             "assistant_message_id": payload.assistant_message_id,
             "run_id": run["id"],
             "deep_stock_session": deep_stock_session,
+            "structured_answer": structured_answer,
         }
 
     @app.get("/runs/{run_id}")

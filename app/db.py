@@ -161,6 +161,46 @@ class Database:
                     UNIQUE(workspace_id, version_no)
                 );
 
+                CREATE TABLE IF NOT EXISTS ai_citations (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                    claim_id TEXT NOT NULL,
+                    source_name TEXT NOT NULL,
+                    source_key TEXT,
+                    source_url TEXT,
+                    evidence_type TEXT NOT NULL,
+                    data_time TEXT,
+                    report_period TEXT,
+                    excerpt TEXT NOT NULL,
+                    limitations_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, run_id, claim_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS ai_writeback_candidates (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                    conversation_id TEXT
+                        REFERENCES conversations(id) ON DELETE SET NULL,
+                    workspace_id TEXT NOT NULL
+                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                    symbol TEXT NOT NULL,
+                    candidate_type TEXT NOT NULL
+                        CHECK(candidate_type IN ('thesis')),
+                    status TEXT NOT NULL CHECK(status IN (
+                        'pending_confirmation', 'confirmed', 'rejected', 'stale'
+                    )),
+                    payload_json TEXT NOT NULL,
+                    citation_ids_json TEXT NOT NULL DEFAULT '[]',
+                    base_version INTEGER NOT NULL,
+                    target_object_id TEXT,
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT,
+                    UNIQUE(user_id, run_id, candidate_type)
+                );
+
                 CREATE TABLE IF NOT EXISTS observation_tasks (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -894,6 +934,16 @@ class Database:
                     ON stock_relation_history(workspace_id, effective_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_thesis_versions_workspace_status
                     ON thesis_versions(workspace_id, status, version_no DESC);
+                CREATE INDEX IF NOT EXISTS idx_ai_citations_user_run
+                    ON ai_citations(user_id, run_id, created_at ASC);
+                CREATE INDEX IF NOT EXISTS idx_ai_writebacks_user_status
+                    ON ai_writeback_candidates(
+                        user_id, status, created_at DESC
+                    );
+                CREATE INDEX IF NOT EXISTS idx_ai_writebacks_workspace
+                    ON ai_writeback_candidates(
+                        workspace_id, status, created_at DESC
+                    );
                 CREATE INDEX IF NOT EXISTS idx_observation_tasks_user_status
                     ON observation_tasks(
                         user_id, status, priority, updated_at DESC

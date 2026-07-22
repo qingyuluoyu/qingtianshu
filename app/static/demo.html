@@ -465,6 +465,21 @@
     .message-sources summary::-webkit-details-marker { display: none; }
     .message-sources summary::after { content: " ▾"; color: #8795a8; }
     .message-sources[open] summary::after { content: " ▴"; }
+    .structured-answer { margin-top: 14px; border: 1px solid #dce7f7; border-radius: 12px; background: #f8fbff; overflow: hidden; }
+    .structured-answer > summary { padding: 11px 13px; cursor: pointer; color: #315f9f; font-size: 12px; font-weight: 760; list-style: none; }
+    .structured-answer > summary::-webkit-details-marker { display: none; }
+    .structured-answer > summary::after { content: " ▾"; color: #8a9bb2; }
+    .structured-answer[open] > summary::after { content: " ▴"; }
+    .structured-answer-body { display: grid; gap: 12px; padding: 0 13px 13px; }
+    .structured-answer-section { display: grid; gap: 6px; }
+    .structured-answer-label { color: #65758c; font-size: 10px; font-weight: 760; letter-spacing: .04em; }
+    .structured-answer-item { width: 100%; padding: 8px 9px; border: 1px solid #e3eaf4; border-radius: 9px; color: #43546d; background: #fff; text-align: left; font-size: 11px; line-height: 1.55; }
+    button.structured-answer-item:hover { border-color: #b8cef0; background: #f7faff; }
+    .ai-writeback-card { margin-top: 12px; padding: 13px; border: 1px solid #cfe0fb; border-radius: 12px; background: #f4f8ff; }
+    .ai-writeback-title { color: #315f9f; font-size: 12px; font-weight: 780; }
+    .ai-writeback-copy { margin-top: 8px; color: #45566d; font-size: 12px; line-height: 1.65; white-space: pre-wrap; }
+    .ai-writeback-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    .ai-writeback-status { margin-top: 8px; color: #66778d; font-size: 11px; }
     .message-source-list { display: grid; gap: 7px; margin-top: 10px; }
     .message-source-item { width: 100%; display: grid; grid-template-columns: auto minmax(0,1fr); gap: 4px 8px; align-items: center; border: 1px solid var(--line); border-radius: 9px; background: #fbfcff; color: #40516a; padding: 8px 9px; text-align: left; text-decoration: none; }
     button.message-source-item, a.message-source-item { cursor: pointer; }
@@ -2922,6 +2937,103 @@
       node.appendChild(sources);
     }
 
+    function appendStructuredAnswer(node, metadata) {
+      const structured = metadata?.structured_answer || metadata?.structuredAnswer;
+      if (!structured || structured.contract_version !== "structured_ai_response_v1") return;
+      const citations = new Map((structured.citations || []).map(item => [String(item.id), item]));
+      const facts = structured.confirmed_facts || [];
+      const inferences = structured.evidence_based_inferences || [];
+      const risks = structured.counter_evidence_and_risks || [];
+      const hypotheses = structured.hypotheses_to_verify || [];
+      const gaps = structured.information_gaps || [];
+      const invalidations = structured.invalidation_conditions || [];
+      const nextTasks = structured.next_evidence_tasks || [];
+      const details = document.createElement("details"); details.className = "structured-answer";
+      const summary = document.createElement("summary");
+      summary.textContent = `结构化证据 · 事实 ${facts.length} · 反证 ${risks.length} · 待核验 ${hypotheses.length + gaps.length}`;
+      const body = document.createElement("div"); body.className = "structured-answer-body";
+
+      const appendSection = (label, items, fallbackText = "") => {
+        if (!(items || []).length && !fallbackText) return;
+        const section = document.createElement("div"); section.className = "structured-answer-section";
+        const title = document.createElement("div"); title.className = "structured-answer-label"; title.textContent = label;
+        section.appendChild(title);
+        for (const item of (items || []).slice(0, 4)) {
+          const text = String(item.text || item.evidence_summary || item.description || item.condition || "").trim();
+          if (!text) continue;
+          const citation = citations.get(String((item.citation_ids || [])[0] || ""));
+          const row = document.createElement(citation ? "button" : "div"); row.className = "structured-answer-item";
+          if (citation) row.type = "button";
+          row.textContent = text;
+          if (citation) row.addEventListener("click", () => {
+            const time = citation.data_time || citation.report_period || "时间待核验";
+            const limitations = (citation.limitations || []).join("\n");
+            openReader(
+              citation.source_name || "结构化证据",
+              [citation.excerpt, limitations ? `口径限制：${limitations}` : ""].filter(Boolean).join("\n\n"),
+              `${citation.evidence_type || "证据"} · ${time}`
+            );
+          });
+          section.appendChild(row);
+        }
+        if (!(items || []).length && fallbackText) {
+          const row = document.createElement("div"); row.className = "structured-answer-item"; row.textContent = fallbackText; section.appendChild(row);
+        }
+        body.appendChild(section);
+      };
+
+      appendSection("已确认事实", facts);
+      appendSection("证据支持的推断", inferences);
+      appendSection("反方证据与风险", risks);
+      appendSection("待验证假设", hypotheses);
+      appendSection("信息缺口", gaps);
+      appendSection("失效条件", invalidations);
+      appendSection("下一步核验", nextTasks);
+      appendSection("结论边界", [], structured.conclusion_boundary || "");
+      details.append(summary, body); node.appendChild(details);
+
+      for (const candidate of (structured.candidate_writebacks || [])) {
+        const card = document.createElement("div"); card.className = "ai-writeback-card";
+        const title = document.createElement("div"); title.className = "ai-writeback-title"; title.textContent = "AI 提出的判断草稿 · 需要你确认";
+        const copy = document.createElement("div"); copy.className = "ai-writeback-copy";
+        const payload = candidate.payload || {};
+        copy.textContent = [payload.current_reason_text ? `当前判断：${payload.current_reason_text}` : "当前尚无正式判断", `建议草稿：${payload.reason_text || ""}`].join("\n\n");
+        const actions = document.createElement("div"); actions.className = "ai-writeback-actions";
+        const confirm = document.createElement("button"); confirm.type = "button"; confirm.className = "btn primary"; confirm.textContent = "确认写入当前判断";
+        const reject = document.createElement("button"); reject.type = "button"; reject.className = "btn ghost"; reject.textContent = "暂不采用";
+        const status = document.createElement("div"); status.className = "ai-writeback-status";
+        const applyStatus = value => {
+          candidate.status = value;
+          const pending = value === "pending_confirmation";
+          confirm.hidden = !pending; reject.hidden = !pending;
+          status.textContent = ({confirmed: "已由你确认，并写入版本化当前判断。", rejected: "已拒绝，正式判断没有变化。", stale: "正式判断已更新，这份草稿已失效。"})[value] || "确认前不会修改正式判断。";
+        };
+        confirm.addEventListener("click", async () => {
+          confirm.disabled = true; reject.disabled = true; status.textContent = "正在写入版本化判断…";
+          try {
+            const result = await api(`/v1/ai-writebacks/${encodeURIComponent(candidate.id)}/confirm`, {method: "POST"});
+            applyStatus(result.status || "confirmed");
+            await loadWatchlist();
+          } catch (error) {
+            status.textContent = error.message || "暂时无法确认这份判断草稿。";
+            confirm.disabled = false; reject.disabled = false;
+          }
+        });
+        reject.addEventListener("click", async () => {
+          confirm.disabled = true; reject.disabled = true; status.textContent = "正在保留原判断…";
+          try {
+            const result = await api(`/v1/ai-writebacks/${encodeURIComponent(candidate.id)}/reject`, {method: "POST"});
+            applyStatus(result.status || "rejected");
+          } catch (error) {
+            status.textContent = error.message || "暂时无法处理这份判断草稿。";
+            confirm.disabled = false; reject.disabled = false;
+          }
+        });
+        actions.append(confirm, reject); card.append(title, copy, actions, status); node.appendChild(card); applyStatus(candidate.status);
+        void api(`/v1/ai-writebacks/${encodeURIComponent(candidate.id)}`).then(current => applyStatus(current.status)).catch(() => {});
+      }
+    }
+
     function appendMessageActions(node, text) {
       const actions = document.createElement("div"); actions.className = "message-actions";
       const copy = document.createElement("button");
@@ -2941,6 +3053,7 @@
       if (role === "agent" && !pending) {
         const body = document.createElement("div"); body.className = "message-body";
         body.appendChild(renderMarkdown(text)); node.appendChild(body);
+        appendStructuredAnswer(node, metadata);
         appendMessageSources(node, metadata);
         appendMessageActions(node, text);
       } else {
@@ -6254,6 +6367,7 @@
           knowledgeSources: data.knowledge?.items || [],
           marketSources: data.evidence?.market_drivers?.items || [],
           evidenceSources: data.evidence_sources || [],
+          structured_answer: data.structured_answer || null,
           intent: data.intent,
           status: data.status,
           symbol: inferDiagnosisSymbol(data, question),

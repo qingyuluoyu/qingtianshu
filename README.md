@@ -20,6 +20,7 @@
 - 用户、安全会话、自选股、关注理由、记忆候选/确认和 Agent Run 的 SQLite 存储；
 - DeepSeek/ChatGPT 式多研究对话：新建、历史列表、连续上下文、重命名 API、归档和跨用户隔离；
 - 统一“研究 Agent”工作区：Hermes 按当前问题检索实时证据、资料库和金融 Skills；同一页保存多段历史对话，并按市场区域或证券代码自动呈现对应 K 线，个股同时显示 RSI14、MACD、ATR14 和 5/20 日量比；
+- 个股 Agent 结构化回答与确认写回：每次股票研究在自然语言正文之外保存事实、证据推断、反方证据、待验证假设、信息缺口、失效条件、下一步核验和逐 Claim 引用；只有用户明确要求“形成/更新判断草稿”且 Run 完成时才创建候选，确认前不改变正式判断，确认后生成新的版本化判断，拒绝或版本冲突不会覆盖当前版本；
 - “选股研究”双入口：网页可选择经营改善、相对行业增强、估值约束和回撤待复核四类透明模板，自然语言也可解析 PE、PB、市值、ROE、营收/净利润增速、行业和市场范围；确定性引擎执行筛选，逐只展示命中原因、交易日、财务报告期、缺失项和边界，不计算综合分或买卖信号；候选可保存为研究线索，或直接进入该股票唯一的长期 Agent 对话继续核验；
 - “李总策略”独立执行全A股确定性筛选：先发布最近完整交易日的全市场名单和市值快照，再对市值严格大于150亿元的股票分批补齐ROE、股东、复权日线和真实涨跌停价；不稳定市值批次不会生成候选，历史异常批次会被隔离。策略使用独立后台线程持续推进，普通用户只能读取覆盖率和结果，不能从网页触发重算；
 - “我的关注”金融终端页：支持直接添加、删除自选股，展示最新价、涨跌、研究状态和关注理由；右侧详情可切换分时、日线和前端确定性聚合的周线，并可一键进入股票研究空间或 Agent；
@@ -111,6 +112,40 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 - 产品页面：<http://127.0.0.1:8000/demo>
 - 健康检查：<http://127.0.0.1:8000/health>
 - API 文档：<http://127.0.0.1:8000/docs>
+
+### 结构化回答与判断确认 API
+
+`stock_research` 对话响应和历史消息 `metadata` 会包含
+`structured_answer`。其主要字段为：
+
+- `answer_summary`
+- `confirmed_facts`
+- `evidence_based_inferences`
+- `hypotheses_to_verify`
+- `counter_evidence_and_risks`
+- `information_gaps`
+- `invalidation_conditions`
+- `next_evidence_tasks`
+- `conclusion_boundary`
+- `citations`
+- `candidate_writebacks`
+
+引用和候选写回会持久化到 SQLite；公开响应不会返回 `user_id`、
+`workspace_id`、`conversation_id`、内部 `source_key` 等字段。当前 R1
+首先开放版本化“当前判断”写回：
+
+- `GET /v1/ai-writebacks`
+- `GET /v1/ai-writebacks/{candidate_id}`
+- `POST /v1/ai-writebacks/{candidate_id}/confirm`
+- `POST /v1/ai-writebacks/{candidate_id}/reject`
+
+普通问题不会产生判断草稿。可以明确询问：
+
+> 分析中兴通讯当前支持证据、反方证据和失效条件，并形成判断草稿，供我确认，不要直接修改正式判断。
+
+Agent 失败、守卫未完成或只返回 preview 时不会创建候选。确认时若正式判断
+已经变化，接口返回 `409` 并把旧候选标记为 `stale`。当前还没有开放任务、
+操作计划和正式复盘的通用 AI 写回，这些对象必须等各自领域模型完成后再接入。
 
 首次打开页面会自动创建匿名个人会话，不需要注册。默认数据写入项目下的 `data/`；可通过 `QINGSHU_DATA_DIR` 改到独立持久化目录。
 
