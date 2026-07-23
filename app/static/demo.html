@@ -480,10 +480,7 @@
     .message-action { border: 0; border-radius: 7px; padding: 4px 8px; background: transparent; color: #718b91; font-size: 10px; }
     .message-action:hover { background: rgba(255,255,255,.055); color: #cfe6e1; }
     .refine-status { margin-top: 8px; color: #8fb8ad; font-size: 10px; animation: breathe 1.2s infinite alternate; }
-    .stream-draft-status { margin-bottom: 8px; color: #8fb8ad; font-size: 10px; letter-spacing: .02em; }
-    .message.streaming-draft { border-color: rgba(85,219,182,.23); }
-    .stream-final-status { margin: 0 0 11px; padding: 8px 10px; border: 1px solid #cce8df; border-radius: 8px; color: #35685a; background: #effaf6; font-size: 11px; font-weight: 680; line-height: 1.5; letter-spacing: .01em; }
-    .stream-final-status.revised { border-color: #ead79a; color: #76580e; background: #fff8df; }
+    .message.streaming-progress { border-color: rgba(85,219,182,.23); }
     .message.stream-finalized { border-color: rgba(85,219,182,.2); }
     .message-sources { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); color: #607188; font-size: 11px; line-height: 1.5; }
     .message-sources summary { width: fit-content; cursor: pointer; color: #356dcc; font-weight: 700; list-style: none; }
@@ -3689,62 +3686,49 @@
     function replaceMessageContent(node, text, metadata = null) {
       if (!node) return;
       node.classList.remove("pending");
-      node.classList.remove("streaming-draft");
+      node.classList.remove("streaming-progress");
       renderMessageContent(node, "agent", text, false, metadata);
     }
 
-    function comparableAnswerText(text) {
-      return String(text || "")
-        .replace(/(^|\n)\s*[-+]\s+/g, "$1")
-        .replace(/[`*_>#]/g, "")
-        .replace(/\s+/g, "")
-        .trim();
-    }
-
-    function streamDraftWasRevised(draft, finalAnswer) {
-      const draftText = comparableAnswerText(draft);
-      const finalText = comparableAnswerText(finalAnswer);
-      if (!draftText || !finalText) return false;
-      return !finalText.startsWith(draftText);
+    function appendFinalMessageMetadata(node, text, metadata = null) {
+      if (!node || !metadata) return;
+      node.querySelectorAll(":scope > .structured-answer, :scope > .message-sources, :scope > .ai-writeback-card, :scope > .message-actions")
+        .forEach(child => child.remove());
+      appendStructuredAnswer(node, metadata);
+      appendMessageSources(node, metadata);
+      appendMessageActions(node, text);
     }
 
     function finalizeStreamingMessage(node, text, metadata = null, options = {}) {
       if (!node) return null;
+      const finalText = String(text || "");
+      const finalAlreadyVisible = node.dataset.finalAnswerVisible === "true";
+      const sameFinalAnswer = node.dataset.finalAnswer === finalText;
+      if (finalAlreadyVisible && !options.replaceFinal) {
+        if (sameFinalAnswer) appendFinalMessageMetadata(node, finalText, metadata);
+        return node;
+      }
       const messages = $("messages");
       const distanceFromBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight;
       const keepAtBottom = distanceFromBottom < 96;
-      const draft = String(options.draft || "");
-      const revised = streamDraftWasRevised(draft, text);
-      replaceMessageContent(node, text, metadata);
+      replaceMessageContent(node, finalText, metadata);
       node.classList.add("stream-finalized");
-      if (draft) {
-        const status = document.createElement("div");
-        status.className = `stream-final-status${revised ? " revised" : ""}`;
-        status.textContent = options.mode === "refine"
-          ? "深度研究已完成 · 已在当前回答内更新最终结论"
-          : revised
-            ? "证据校验完成 · 草稿中的不确定内容已修正，以下为最终答案"
-            : "证据校验完成 · 以下内容已保存为最终答案";
-        node.prepend(status);
-      }
+      node.dataset.finalAnswerVisible = "true";
+      node.dataset.finalAnswer = finalText;
       if (keepAtBottom) messages.scrollTop = messages.scrollHeight;
       return node;
     }
 
-    function renderStreamingDraft(node, text, label = "AI 实时生成中（草稿） · 完成证据校验前内容可能调整") {
-      if (!node?.isConnected) return;
-      node.classList.remove("pending");
-      node.classList.add("streaming-draft");
-      node.textContent = "";
-      const status = document.createElement("div"); status.className = "stream-draft-status"; status.textContent = label;
-      const body = document.createElement("div"); body.className = "message-body"; body.appendChild(renderMarkdown(text));
-      node.append(status, body);
+    function renderStreamingProgress(node, label = "AI 正在整理证据并生成回答…") {
+      if (!node?.isConnected || node.dataset.finalAnswerVisible === "true") return;
+      node.classList.add("pending", "streaming-progress");
+      node.textContent = label;
       $("messages").scrollTop = $("messages").scrollHeight;
     }
 
     function connectPrivateAgentStream(requestId, pending) {
       const source = new EventSource(`/me/chat/stream/${encodeURIComponent(requestId)}`);
-      const context = {node: pending, source, draft: "", opened: false};
+      const context = {node: pending, source, finalText: "", finalShown: false, opened: false};
       state.pendingAgentRequests.set(requestId, context);
       let settleReady;
       const ready = new Promise(resolve => { settleReady = resolve; });
@@ -3757,22 +3741,20 @@
       source.onmessage = event => {
         try {
           const data = JSON.parse(event.data);
-          if (data.type === "agent_progress" && data.label && !context.draft && pending.isConnected) {
-            pending.textContent = data.label;
+          if (data.type === "agent_progress" && data.label && !context.finalShown) {
+            renderStreamingProgress(pending, data.label);
           }
           if (data.type === "agent_delta" && data.draft) {
-            context.draft = data.draft;
-            renderStreamingDraft(
-              pending,
-              context.draft,
-              data.is_unverified === false
-                ? "证据校验完成 · 正在保存最终答案"
-                : "AI 实时生成中（草稿） · 完成证据校验前内容可能调整"
-            );
+            if (data.is_unverified === false && data.is_final === true) {
+              context.finalText = data.draft;
+              context.finalShown = true;
+              finalizeStreamingMessage(pending, context.finalText);
+            } else {
+              renderStreamingProgress(pending, "回答草稿已生成，正在核对行情、数字和证据…");
+            }
           }
-          if (data.type === "agent_stream_status" && data.label) {
-            if (context.draft) renderStreamingDraft(pending, context.draft, data.label);
-            else if (pending.isConnected) pending.textContent = data.label;
+          if (data.type === "agent_stream_status" && data.label && !context.finalShown) {
+            renderStreamingProgress(pending, data.label);
           }
           if (["agent_stream_complete", "agent_stream_error"].includes(data.type)) source.close();
         } catch { /* malformed private events do not affect the final HTTP answer */ }
@@ -8016,7 +7998,7 @@
           if (data.type === "agent_progress" && data.request_id) {
             const request = state.pendingAgentRequests.get(data.request_id);
             const pending = request?.node || request;
-            if (pending?.isConnected && data.label && !request?.draft) pending.textContent = data.label;
+            if (pending?.isConnected && data.label) renderStreamingProgress(pending, data.label);
           }
           if (data.type === "data_health_updated") {
             state.health = {...(state.health || {}), data_health: data.data_health};
@@ -8053,8 +8035,7 @@
         });
         if (refined.status === "completed" || refined.status === "already_refined") {
           finalizeStreamingMessage(node, refined.answer, metadata, {
-            draft: preview.answer || "",
-            mode: "refine"
+            replaceFinal: true
           });
           renderAgentResearchContext(metadata, state.agentContextQuestion);
           if (refined.deep_stock_session) state.deepStock = refined.deep_stock_session;
@@ -8128,25 +8109,23 @@
         };
         state.agentContextMetadata = responseMetadata;
         renderAgentResearchContext(responseMetadata, question);
-        const streamDraft = privateStream?.context?.draft || "";
         let responseNode = pending;
         if (data.intent === "memory_candidate" && data.evidence?.memory) {
           pending.remove();
           responseNode = null;
           renderMemoryCandidate(data.evidence.memory, data.answer || "");
         } else if (data.answer) {
-          responseNode = finalizeStreamingMessage(pending, data.answer, responseMetadata, {draft: streamDraft});
+          responseNode = finalizeStreamingMessage(pending, data.answer, responseMetadata);
         }
         else if (data.article) {
           responseNode = finalizeStreamingMessage(
             pending,
             `${data.article.title}\n\n${data.article.summary || data.article.body}\n\n发布状态：${data.decision}`,
-            responseMetadata,
-            {draft: streamDraft}
+            responseMetadata
           );
           await loadArticles();
         } else {
-          responseNode = finalizeStreamingMessage(pending, data.reason || "任务已完成。", responseMetadata, {draft: streamDraft});
+          responseNode = finalizeStreamingMessage(pending, data.reason || "任务已完成。", responseMetadata);
         }
         if (["watchlist_update", "watchlist_brief"].includes(data.intent)) await loadWatchlist();
         if (["research_priority", "research_outcome"].includes(data.intent)) await loadKnowledge();
@@ -8157,8 +8136,7 @@
         finalizeStreamingMessage(
           pending,
           "这次研究暂未完成，我会保留当前可用数据，请稍后重试。",
-          null,
-          {draft: privateStream?.context?.draft || ""}
+          null
         );
       } finally {
         if (requestId) {

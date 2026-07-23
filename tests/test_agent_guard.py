@@ -3281,6 +3281,37 @@ def test_stock_guard_accepts_deterministic_failure_condition_from_outlook():
     assert guard["passed"] is True
 
 
+def test_stock_guard_does_not_treat_inline_failure_condition_as_section_heading():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "今天的下跌是否改变原判断？",
+        "price_levels": {"ma20": 37.28, "ma60": 37.3},
+        "conditional_outlook": {
+            "horizon": "未来 5—20 个交易日",
+            "scenarios": [
+                {
+                    "name": "下行风险",
+                    "condition": "收盘跌破关键参考位37.3，同时20日收益继续恶化",
+                }
+            ],
+            "invalidation": "价格跨越关键参考位后必须重算。",
+        },
+        "analysis_board": {"tracking_plan": []},
+    }
+    answer = (
+        "**价格关系**\n"
+        "条件展望仍为震荡观察，其下行失效条件是收盘跌破关键参考位37.3，"
+        "同时20日收益继续恶化。\n\n"
+        "**反方证据**\n"
+        "2026一季报净利润同比下降46.58%，需要继续复核盈利兑现。"
+    )
+
+    assert agent_module._has_unsupported_stock_failure_threshold(
+        answer, evidence
+    ) is False
+
+
 def test_stock_guard_rejects_invented_observation_window_and_report_month():
     evidence = {
         "type": "stock_research",
@@ -3835,6 +3866,28 @@ def test_stock_guard_requires_current_quote_when_user_asks_about_today():
     assert "用户询问今日时必须给出更新报价并区分历史日线" in guard[
         "unsupported_market_inferences"
     ]
+
+
+def test_stock_guard_accepts_unsigned_quote_change_with_matching_direction():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯今天为什么跌？",
+        "metrics": {"latest_close": 37.5, "return_1d_pct": 7.51},
+        "provenance": {"market_timestamp": "2026-07-22T01:30:00+00:00"},
+        "current_quote": {
+            "price": 35.91,
+            "pct_change": -4.24,
+            "market_timestamp": "2026-07-23T14:47:27+08:00",
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "盘中最新报价35.91元，下跌4.24%；最近完整日线属于上一交易日。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
 
 
 def test_stock_guard_rejects_cross_date_breadth_as_systemic_explanation():
@@ -5746,7 +5799,7 @@ def test_streaming_bridge_waits_for_current_quote_then_keeps_growing(
     assert usage["streaming"]["deferred_segments"] == 1
 
 
-def test_streamed_draft_is_replaced_by_final_guarded_answer(
+def test_streamed_unverified_draft_is_followed_by_final_guarded_answer(
     tmp_path: Path, settings, monkeypatch
 ):
     guarded_settings = replace(

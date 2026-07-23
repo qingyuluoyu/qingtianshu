@@ -691,8 +691,14 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "event.keyCode !== 229" in page.text
     assert '$("chatForm").requestSubmit()' in page.text
     assert "function finalizeStreamingMessage(" in page.text
-    assert "AI 实时生成中（草稿） · 完成证据校验前内容可能调整" in page.text
-    assert "证据校验完成 · 草稿中的不确定内容已修正，以下为最终答案" in page.text
+    assert "function appendFinalMessageMetadata(" in page.text
+    assert "function renderStreamingProgress(" in page.text
+    assert "回答草稿已生成，正在核对行情、数字和证据" in page.text
+    assert 'data.is_unverified === false && data.is_final === true' in page.text
+    assert 'node.dataset.finalAnswerVisible === "true"' in page.text
+    assert "if (pending?.isConnected && data.label) renderStreamingProgress(pending, data.label);" in page.text
+    assert "renderStreamingDraft(" not in page.text
+    assert "AI 实时生成中（草稿）" not in page.text
     assert "return {source, ready, context};" in page.text
     assert "pending.remove();\n        state.conversationId" not in page.text
     assert "responseNode = finalizeStreamingMessage(pending, data.answer" in page.text

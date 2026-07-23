@@ -1627,20 +1627,42 @@ def _has_unsupported_stock_failure_threshold(
         line = raw_line.strip()
         if not line:
             continue
-        heading = re.sub(r"^[#>*\s]+", "", line).strip("*：: ")
-        if "失效条件" in heading or "不成立条件" in heading:
+        normalized_line = re.sub(r"^[-+*]\s+", "", line)
+        section_match = re.match(
+            r"^(?:#{1,6}\s*)?(?:\*\*|__)?"
+            r"(?:失效条件|不成立条件)(?:\*\*|__)?"
+            r"\s*(?:[：:]\s*(?P<remainder>.*))?$",
+            normalized_line,
+        )
+        if section_match:
             in_failure_section = True
-            remainder = re.split(r"失效条件|不成立条件", line, maxsplit=1)[-1]
+            remainder = str(section_match.group("remainder") or "").strip()
             if remainder and _stock_failure_line_has_unsupported_threshold(
                 remainder, evidence
             ):
                 return True
             continue
-        if in_failure_section and re.match(r"^#{1,6}\s+", line):
+        if in_failure_section and (
+            re.match(r"^#{1,6}\s+", line)
+            or re.match(r"^(?:\*\*|__)[^*_]+(?:\*\*|__)\s*$", line)
+        ):
             break
         if in_failure_section and _stock_failure_line_has_unsupported_threshold(
             line, evidence
         ):
+            return True
+        inline_condition = re.search(
+            r"(?:失效条件|不成立条件)\s*(?:是|为|[：:])\s*(?P<condition>.+)",
+            line,
+        )
+        if inline_condition and _stock_failure_line_has_unsupported_threshold(
+            inline_condition.group("condition"), evidence
+        ):
+            return True
+        if re.search(
+            r"(?:假设|判断|框架|逻辑)[^。；\n]{0,24}(?:失效|不成立)",
+            line,
+        ) and _stock_failure_line_has_unsupported_threshold(line, evidence):
             return True
     return False
 
@@ -2298,19 +2320,47 @@ def _stock_current_quote_required_but_missing(
     quote = evidence.get("current_quote") or {}
     if not _stock_current_quote_is_newer(evidence):
         return False
-    required_values = [quote.get("price"), quote.get("pct_change")]
+    quote_price = quote.get("price")
+    quote_change = quote.get("pct_change")
+    if not isinstance(quote_price, (int, float)) or not isinstance(
+        quote_change, (int, float)
+    ):
+        return True
+
     claimed_values = [
         value
         for match in _NUMBER_RE.finditer(answer)
         if (value := _number_value(match.group(0))) is not None
     ]
-    for required in required_values:
-        if not isinstance(required, (int, float)):
-            return True
-        tolerance = max(0.02, abs(float(required)) * 0.002)
-        if not any(abs(value - float(required)) <= tolerance for value in claimed_values):
-            return True
-    return False
+    price_tolerance = max(0.02, abs(float(quote_price)) * 0.002)
+    if not any(
+        abs(value - float(quote_price)) <= price_tolerance
+        for value in claimed_values
+    ):
+        return True
+
+    change_tolerance = max(0.02, abs(float(quote_change)) * 0.002)
+    if any(
+        abs(value - float(quote_change)) <= change_tolerance
+        for value in claimed_values
+    ):
+        return False
+
+    direction_terms = (
+        ("下跌", "跌幅", "收跌", "回落", "走低", "下挫", "下滑")
+        if float(quote_change) < 0
+        else ("上涨", "涨幅", "收涨", "反弹", "走高", "上扬")
+    )
+    for clause in re.split(r"[。；\n]", answer):
+        if not any(term in clause for term in direction_terms):
+            continue
+        for match in _NUMBER_RE.finditer(clause):
+            value = _number_value(match.group(0))
+            if value is not None and abs(
+                abs(value) - abs(float(quote_change))
+            ) <= change_tolerance:
+                return False
+    return True
 
 
 def _has_stock_cross_date_market_claim(
@@ -3295,15 +3345,6 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 usage = {**(usage or {}), "output_guard": output_guard}
                 write_json(run_dir / "output_guard.json", output_guard)
                 guard_seconds = time.perf_counter() - guard_started
-                if stream_callback is not None and image_path is None:
-                    notify_stream(
-                        {
-                            "type": "delta",
-                            "draft": answer,
-                            "is_unverified": False,
-                            "is_final": True,
-                        }
-                    )
             except Exception as exc:
                 model_seconds = time.perf_counter() - model_started
                 notify_progress(
@@ -3321,6 +3362,16 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 
         if intent == "stock_research":
             answer = _normalize_stock_research_number_precision(answer)
+
+        if stream_callback is not None and image_path is None:
+            notify_stream(
+                {
+                    "type": "delta",
+                    "draft": answer,
+                    "is_unverified": False,
+                    "is_final": True,
+                }
+            )
 
         agent_total_seconds = time.perf_counter() - agent_started
         if should_execute:
