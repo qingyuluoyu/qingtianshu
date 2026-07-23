@@ -189,6 +189,14 @@ class PositionLedgerService:
         now = utc_now()
         with self.database.connect() as connection:
             workspace = self._workspace(connection, user_id, canonical)
+            normalized_plan_id = self._clean_text(plan_id, 80)
+            plan = self._validated_plan(
+                connection,
+                user_id=user_id,
+                workspace_id=str(workspace["id"]),
+                operation_type=operation_type,
+                plan_id=normalized_plan_id,
+            )
             repeated = connection.execute(
                 """
                 SELECT id FROM position_operations
@@ -221,12 +229,12 @@ class PositionLedgerService:
                     self._quantity_text(quantity_value),
                     self._amount_text(fee_value) if fee_value is not None else None,
                     reason,
-                    self._clean_text(plan_id, 80),
+                    normalized_plan_id,
                     idempotency_key,
                     now,
                 ),
             )
-            self._recalculate_and_save(
+            calculated = self._recalculate_and_save(
                 connection,
                 user_id=user_id,
                 workspace=workspace,
@@ -234,6 +242,32 @@ class PositionLedgerService:
                 source_event_id=operation_id,
                 snapshot_at=operation_time.isoformat(),
             )
+            self._capture_operation_context_and_review(
+                connection,
+                user_id=user_id,
+                workspace=workspace,
+                operation_id=operation_id,
+                operation_type=operation_type,
+                operation_time=operation_time,
+                price=self._price_text(price_value),
+                quantity=self._quantity_text(quantity_value),
+                fees=(
+                    self._amount_text(fee_value) if fee_value is not None else None
+                ),
+                reason_text=reason,
+                plan=plan,
+                position_snapshot=calculated,
+                created_at=now,
+            )
+            if plan is not None:
+                self._advance_plan_after_operation(
+                    connection,
+                    plan=plan,
+                    user_id=user_id,
+                    operation_quantity=quantity_value,
+                    operation_amount=price_value * quantity_value,
+                    created_at=now,
+                )
         return self.get_position(user_id, canonical)
 
     def revise_operation(
@@ -467,6 +501,282 @@ class PositionLedgerService:
             ),
         )
         return calculated
+
+    def _validated_plan(
+        self,
+        connection: Any,
+        *,
+        user_id: str,
+        workspace_id: str,
+        operation_type: str,
+        plan_id: str | None,
+    ) -> dict[str, Any] | None:
+        if plan_id is None:
+            return None
+        row = connection.execute(
+            """
+            SELECT * FROM action_plans
+            WHERE id = ? AND user_id = ? AND workspace_id = ?
+            """,
+            (plan_id, user_id, workspace_id),
+        ).fetchone()
+        if row is None:
+            raise PositionLedgerNotFound("关联的操作计划不存在")
+        item = dict(row)
+        if item.get("status") not in {"saved", "partially_executed"}:
+            raise PositionLedgerInvalidState("只有已保存或部分执行的计划可以关联操作")
+        if item.get("action_type") != operation_type:
+            raise PositionLedgerInvalidState("实际操作方向与关联计划不一致")
+        return item
+
+    def _capture_operation_context_and_review(
+        self,
+        connection: Any,
+        *,
+        user_id: str,
+        workspace: Any,
+        operation_id: str,
+        operation_type: str,
+        operation_time: datetime,
+        price: str,
+        quantity: str,
+        fees: str | None,
+        reason_text: str,
+        plan: dict[str, Any] | None,
+        position_snapshot: dict[str, Any],
+        created_at: str,
+    ) -> None:
+        thesis_row = connection.execute(
+            """
+            SELECT * FROM thesis_versions
+            WHERE user_id = ? AND workspace_id = ? AND status = 'active'
+            ORDER BY version_no DESC LIMIT 1
+            """,
+            (user_id, workspace["id"]),
+        ).fetchone()
+        thesis = dict(thesis_row) if thesis_row is not None else None
+        if thesis is not None:
+            thesis["watch_items"] = json.loads(
+                thesis.pop("watch_items_json") or "[]"
+            )
+            thesis["recheck_conditions"] = json.loads(
+                thesis.pop("recheck_conditions_json") or "[]"
+            )
+        market_bar = connection.execute(
+            """
+            SELECT symbol, interval, timestamp, open, high, low, close,
+                   adjusted_close, volume, source, fetched_at
+            FROM market_bars
+            WHERE symbol = ? AND interval = '1d'
+              AND substr(timestamp, 1, 10) <= ?
+            ORDER BY timestamp DESC LIMIT 1
+            """,
+            (workspace["symbol"], operation_time.date().isoformat()),
+        ).fetchone()
+        report_row = connection.execute(
+            """
+            SELECT id, symbol, name, title, summary, status,
+                   market_timestamp, generated_at
+            FROM research_reports
+            WHERE symbol = ? AND generated_at <= ?
+            ORDER BY generated_at DESC LIMIT 1
+            """,
+            (workspace["symbol"], operation_time.isoformat()),
+        ).fetchone()
+        missing_items: list[str] = []
+        if thesis is None:
+            missing_items.append("操作时没有正式判断")
+        if plan is None:
+            missing_items.append("本次操作未关联已保存计划")
+        if market_bar is None:
+            missing_items.append("操作时没有可冻结的已完成日线")
+        if report_row is None:
+            missing_items.append("操作时没有可冻结的研究报告")
+        if fees is None:
+            missing_items.append("操作费用未填写")
+        context = {
+            "operation": {
+                "id": operation_id,
+                "operation_type": operation_type,
+                "operated_at": operation_time.isoformat(),
+                "price": price,
+                "quantity": quantity,
+                "fees": fees,
+                "reason_text": reason_text,
+            },
+            "action_plan": self._context_plan(plan),
+            "thesis": self._context_thesis(thesis),
+            "market_bar": dict(market_bar) if market_bar is not None else None,
+            "research_report": dict(report_row) if report_row is not None else None,
+            "position_snapshot": position_snapshot,
+            "data_completeness": {
+                "status": "complete" if not missing_items else "partial",
+                "missing_items": missing_items,
+            },
+        }
+        connection.execute(
+            """
+            INSERT INTO operation_context_snapshots(
+                id, operation_id, workspace_id, user_id,
+                snapshot_json, data_time, snapshot_version, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'trade_context_v1', ?)
+            """,
+            (
+                str(uuid4()),
+                operation_id,
+                workspace["id"],
+                user_id,
+                json_dumps(context),
+                operation_time.isoformat(),
+                created_at,
+            ),
+        )
+        if operation_type not in {"reduce", "sell"}:
+            return
+        review_id = str(uuid4())
+        connection.execute(
+            """
+            INSERT INTO trade_reviews(
+                id, user_id, workspace_id, operation_id, plan_id,
+                status, horizon_sessions, data_status, current_version_id,
+                ready_at, confirmed_at, archived_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'waiting_data', 3, ?, NULL,
+                      NULL, NULL, NULL, ?, ?)
+            """,
+            (
+                review_id,
+                user_id,
+                workspace["id"],
+                operation_id,
+                plan.get("id") if plan else None,
+                "fresh" if not missing_items else "missing",
+                created_at,
+                created_at,
+            ),
+        )
+        tags = json.loads(workspace["attention_tags_json"] or "[]")
+        if "待复盘" not in tags:
+            tags.append("待复盘")
+        connection.execute(
+            """
+            UPDATE stock_workspaces
+            SET workflow_status = 'waiting_data', attention_tags_json = ?,
+                version = version + 1, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (json_dumps(tags), created_at, workspace["id"], user_id),
+        )
+
+    def _advance_plan_after_operation(
+        self,
+        connection: Any,
+        *,
+        plan: dict[str, Any],
+        user_id: str,
+        operation_quantity: Decimal,
+        operation_amount: Decimal,
+        created_at: str,
+    ) -> None:
+        target_quantity = (
+            self._decimal(plan["target_quantity"], "计划目标数量")
+            if plan.get("target_quantity")
+            else None
+        )
+        target_amount = (
+            self._decimal(plan["target_amount"], "计划目标金额")
+            if plan.get("target_amount")
+            else None
+        )
+        completed = (
+            operation_quantity >= target_quantity
+            if target_quantity is not None
+            else operation_amount >= target_amount
+            if target_amount is not None
+            else True
+        )
+        next_status = "executed" if completed else "partially_executed"
+        next_version = int(plan["version"]) + 1
+        updated = {
+            **plan,
+            "status": next_status,
+            "version": next_version,
+            "updated_at": created_at,
+        }
+        connection.execute(
+            """
+            UPDATE action_plans
+            SET status = ?, version = ?, updated_at = ?
+            WHERE id = ? AND user_id = ? AND version = ?
+            """,
+            (
+                next_status,
+                next_version,
+                created_at,
+                plan["id"],
+                user_id,
+                plan["version"],
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO action_plan_history(
+                id, plan_id, user_id, workspace_id, version, event_type,
+                from_status, to_status, snapshot_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, 'operation_linked', ?, ?, ?, ?)
+            """,
+            (
+                str(uuid4()),
+                plan["id"],
+                user_id,
+                plan["workspace_id"],
+                next_version,
+                plan["status"],
+                next_status,
+                json_dumps(updated),
+                created_at,
+            ),
+        )
+
+    @staticmethod
+    def _context_plan(plan: dict[str, Any] | None) -> dict[str, Any] | None:
+        if plan is None:
+            return None
+        return {
+            key: plan.get(key)
+            for key in (
+                "id",
+                "action_type",
+                "trigger_text",
+                "target_quantity",
+                "target_amount",
+                "target_position_percent",
+                "thesis_version_id",
+                "check_result_json",
+                "status",
+                "expires_at",
+                "version",
+                "created_at",
+                "updated_at",
+            )
+        }
+
+    @staticmethod
+    def _context_thesis(thesis: dict[str, Any] | None) -> dict[str, Any] | None:
+        if thesis is None:
+            return None
+        return {
+            key: thesis.get(key)
+            for key in (
+                "id",
+                "version_no",
+                "reason_text",
+                "watch_items",
+                "recheck_conditions",
+                "source",
+                "confirmed_at",
+                "created_at",
+            )
+        }
 
     def _calculate(
         self,

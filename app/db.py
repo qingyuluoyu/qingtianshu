@@ -249,6 +249,61 @@ class Database:
                     UNIQUE(task_id, version)
                 );
 
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_workspaces_scope
+                ON stock_workspaces(id, user_id);
+
+                CREATE TABLE IF NOT EXISTS action_plans (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    action_type TEXT NOT NULL CHECK(action_type IN (
+                        'buy', 'add', 'reduce', 'sell', 'hold'
+                    )),
+                    trigger_text TEXT NOT NULL,
+                    target_quantity TEXT,
+                    target_amount TEXT,
+                    target_position_percent TEXT,
+                    thesis_version_id TEXT
+                        REFERENCES thesis_versions(id) ON DELETE SET NULL,
+                    check_result_json TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN (
+                        'draft', 'checked', 'saved', 'partially_executed',
+                        'executed', 'cancelled', 'expired'
+                    )),
+                    expires_at TEXT,
+                    version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(id, user_id, workspace_id),
+                    FOREIGN KEY(workspace_id, user_id)
+                        REFERENCES stock_workspaces(id, user_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS action_plan_history (
+                    id TEXT PRIMARY KEY,
+                    plan_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    version INTEGER NOT NULL CHECK(version > 0),
+                    event_type TEXT NOT NULL,
+                    from_status TEXT CHECK(
+                        from_status IS NULL OR from_status IN (
+                            'draft', 'checked', 'saved', 'partially_executed',
+                            'executed', 'cancelled', 'expired'
+                        )
+                    ),
+                    to_status TEXT NOT NULL CHECK(to_status IN (
+                        'draft', 'checked', 'saved', 'partially_executed',
+                        'executed', 'cancelled', 'expired'
+                    )),
+                    snapshot_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(plan_id, version),
+                    FOREIGN KEY(plan_id, user_id, workspace_id)
+                        REFERENCES action_plans(id, user_id, workspace_id)
+                        ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS position_openings (
                     id TEXT PRIMARY KEY,
                     workspace_id TEXT NOT NULL UNIQUE
@@ -361,6 +416,106 @@ class Database:
 
                 CREATE INDEX IF NOT EXISTS idx_position_snapshots_workspace_time
                 ON position_snapshots(workspace_id, snapshot_at DESC, created_at DESC);
+
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_position_operations_scope
+                ON position_operations(id, user_id, workspace_id);
+
+                CREATE TABLE IF NOT EXISTS operation_context_snapshots (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    operation_id TEXT NOT NULL,
+                    plan_id TEXT,
+                    thesis_version_id TEXT
+                        REFERENCES thesis_versions(id) ON DELETE SET NULL,
+                    snapshot_json TEXT NOT NULL DEFAULT '{}',
+                    data_time TEXT NOT NULL,
+                    snapshot_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(operation_id),
+                    FOREIGN KEY(operation_id, user_id, workspace_id)
+                        REFERENCES position_operations(id, user_id, workspace_id),
+                    FOREIGN KEY(plan_id, user_id, workspace_id)
+                        REFERENCES action_plans(id, user_id, workspace_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS trade_reviews (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    operation_id TEXT,
+                    plan_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'waiting_data' CHECK(status IN (
+                        'waiting_data', 'ready', 'draft', 'confirmed',
+                        'archived', 'revised'
+                    )),
+                    horizon_sessions INTEGER NOT NULL CHECK(horizon_sessions > 0),
+                    data_status TEXT NOT NULL DEFAULT 'missing' CHECK(data_status IN (
+                        'fresh', 'delayed', 'stale', 'missing', 'failed',
+                        'conflict', 'not_applicable'
+                    )),
+                    current_version_id TEXT
+                        REFERENCES trade_review_versions(id) ON DELETE SET NULL,
+                    ready_at TEXT,
+                    confirmed_at TEXT,
+                    archived_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(id, user_id, workspace_id),
+                    UNIQUE(user_id, workspace_id, operation_id, horizon_sessions),
+                    FOREIGN KEY(workspace_id, user_id)
+                        REFERENCES stock_workspaces(id, user_id) ON DELETE CASCADE,
+                    FOREIGN KEY(operation_id, user_id, workspace_id)
+                        REFERENCES position_operations(id, user_id, workspace_id),
+                    FOREIGN KEY(plan_id, user_id, workspace_id)
+                        REFERENCES action_plans(id, user_id, workspace_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS trade_review_versions (
+                    id TEXT PRIMARY KEY,
+                    review_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    version_no INTEGER NOT NULL CHECK(version_no > 0),
+                    price_result TEXT,
+                    logic_result TEXT,
+                    plan_deviation TEXT,
+                    bias_tags_json TEXT NOT NULL DEFAULT '[]',
+                    improvement_text TEXT,
+                    created_source TEXT NOT NULL CHECK(created_source IN ('ai', 'user')),
+                    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN (
+                        'draft', 'confirmed', 'revised'
+                    )),
+                    created_at TEXT NOT NULL,
+                    UNIQUE(review_id, version_no),
+                    FOREIGN KEY(review_id, user_id, workspace_id)
+                        REFERENCES trade_reviews(id, user_id, workspace_id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_action_plans_scope_status
+                ON action_plans(user_id, workspace_id, status, updated_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_action_plan_history_scope_version
+                ON action_plan_history(
+                    user_id, workspace_id, plan_id, version DESC
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_operation_context_scope_time
+                ON operation_context_snapshots(
+                    user_id, workspace_id, data_time DESC
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_trade_reviews_scope_status
+                ON trade_reviews(user_id, workspace_id, status, updated_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_trade_reviews_operation_horizon
+                ON trade_reviews(operation_id, horizon_sessions, updated_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_trade_review_versions_scope_version
+                ON trade_review_versions(
+                    user_id, workspace_id, review_id, version_no DESC
+                );
 
                 CREATE TABLE IF NOT EXISTS conversations (
                     id TEXT PRIMARY KEY,
