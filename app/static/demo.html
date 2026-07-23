@@ -126,7 +126,7 @@
     .article-item-title { font-size: 14px; font-weight: 700; line-height: 1.45; }
     .article-item-time { color: var(--muted); font-size: 10px; white-space: nowrap; }
     .article-item-summary { grid-column: 1 / -1; color: #aebfc3; font-size: 11px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-    .workspace-page[hidden], .research-page-panel[hidden], #homeFocus[hidden], #todayOverviewGrid[hidden], #liveSection[hidden], #marketDashboard[hidden], #insightSection[hidden], #insightAsk[hidden], #agentSection[hidden], #knowledgePanel[hidden], #deepStockPanel[hidden], #productNotice[hidden] { display: none !important; }
+    .workspace-page[hidden], .research-page-panel[hidden], #homeFocus[hidden], #todayOverviewGrid[hidden], #liveSection[hidden], #marketDashboard[hidden], #insightSection[hidden], #insightAsk[hidden], #agentSection[hidden], #knowledgePanel[hidden], #deepStockPanel[hidden], #liZongPanel[hidden], #productNotice[hidden] { display: none !important; }
     .insight-ask { margin-top: 14px; padding: 14px 16px; }
     .insight-ask-copy { color: var(--muted); font-size: 10px; line-height: 1.55; }
     .insight-ask-form { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 9px; margin-top: 9px; }
@@ -972,6 +972,25 @@
     .stock-space-section-copy { margin-top: 4px; color: #718096; font-size: 13px; line-height: 1.6; }
     .stock-task-grid, .stock-history-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
     .stock-task-card, .stock-history-card { padding: 16px; border: 1px solid var(--line); border-radius: 13px; background: #fff; }
+    .position-workspace { display: grid; gap: 12px; margin-bottom: 16px; padding: 16px; border: 1px solid #cbdcff; border-radius: 14px; background: linear-gradient(145deg,#fff,#f7faff); }
+    .position-workspace-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+    .position-workspace-title { color: #22314a; font-size: 15px; font-weight: 800; }
+    .position-workspace-copy { margin-top: 4px; color: #718096; font-size: 12px; line-height: 1.6; }
+    .position-metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 9px; }
+    .position-metric { padding: 11px 12px; border: 1px solid #dce5f2; border-radius: 10px; background: #fff; }
+    .position-metric span { display: block; color: #8290a4; font-size: 11px; }
+    .position-metric strong { display: block; margin-top: 5px; color: #243650; font-size: 15px; }
+    .position-ledger-list { display: grid; gap: 8px; }
+    .position-ledger-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid #e2e8f2; border-radius: 10px; background: #fff; }
+    .position-ledger-item strong { color: #2a3b55; font-size: 13px; }
+    .position-ledger-item span { color: #718096; font-size: 11px; line-height: 1.55; text-align: right; }
+    .position-entry-form { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; padding-top: 12px; border-top: 1px solid #dce5f2; }
+    .position-entry-form label { display: grid; gap: 5px; color: #65758b; font-size: 11px; }
+    .position-entry-form input, .position-entry-form select, .position-entry-form textarea { width: 100%; border: 1px solid #d6dfed; border-radius: 9px; background: #fff; color: var(--text); padding: 9px 10px; font: inherit; }
+    .position-entry-form textarea, .position-entry-form .position-form-wide { grid-column: 1 / -1; }
+    .position-entry-form textarea { min-height: 74px; resize: vertical; }
+    .position-form-status { grid-column: 1 / -1; color: #718096; font-size: 12px; line-height: 1.55; }
+    .position-form-actions { grid-column: 1 / -1; display: flex; gap: 8px; flex-wrap: wrap; }
     .stock-task-status { display: inline-flex; padding: 4px 8px; border-radius: 999px; color: #55719d; background: #edf3ff; font-size: 11px; }
     .stock-task-title, .stock-history-title { margin-top: 10px; color: #24344e; font-size: 15px; font-weight: 760; line-height: 1.55; }
     .stock-task-copy, .stock-history-copy { margin-top: 7px; color: #64748a; font-size: 14px; line-height: 1.7; }
@@ -1425,7 +1444,8 @@
       .watchlist-side { grid-template-columns: 1fr; }
       .deep-module-panel { grid-template-columns: 1fr; }
       .deep-session-cta { grid-template-columns: 1fr; }
-      .stock-workspace-summary, .stock-task-grid, .stock-history-grid { grid-template-columns: 1fr; }
+      .stock-workspace-summary, .stock-task-grid, .stock-history-grid, .position-metrics, .position-entry-form { grid-template-columns: 1fr; }
+      .position-entry-form textarea, .position-entry-form .position-form-wide { grid-column: auto; }
       .screener-inline, .screener-metrics { grid-template-columns: 1fr 1fr; }
       .li-zong-panel { margin: 12px; }
       .li-zong-head { flex-direction: column; }
@@ -1780,7 +1800,7 @@
           </div>
         </section>
 
-        <section id="todayOverviewGrid" class="today-overview-grid" aria-label="今日待处理与相关变化">
+        <section id="todayOverviewGrid" class="today-overview-grid" aria-label="今日待处理与相关变化" hidden>
           <article class="panel today-overview-card">
             <div class="today-overview-head">
               <div>
@@ -1790,7 +1810,7 @@
               <span id="todaySessionBadge" class="today-session-badge">状态待确认</span>
             </div>
             <div id="todayPrioritySummary" class="today-overview-summary">正在读取个人研究事项…</div>
-            <div id="todayPriorityItems" class="today-item-list"><div class="empty">正在建立今日工作清单…</div></div>
+            <div id="todayPriorityItems" class="today-item-list"><div class="empty">正在加载今日事项…</div></div>
           </article>
           <article class="panel today-overview-card">
             <div class="today-overview-head">
@@ -1800,7 +1820,7 @@
               </div>
               <span id="todayChangeCount" class="today-session-badge">0 项</span>
             </div>
-            <div id="todayRelatedChanges" class="today-item-list"><div class="empty">正在读取个人研究变化…</div></div>
+            <div id="todayRelatedChanges" class="today-item-list"><div class="empty">正在加载研究变化…</div></div>
             <div id="todayRelatedBoundary" class="today-boundary">未完成来源和规则验收的事件类别不会在这里伪装上线。</div>
           </article>
         </section>
@@ -1915,26 +1935,26 @@
               <button class="research-mode-button active" type="button" role="tab" aria-selected="true" data-open-page="screening">透明选股</button>
             </div>
           </div>
-          <section class="li-zong-panel" aria-labelledby="liZongTitle">
+          <section id="liZongPanel" class="li-zong-panel" aria-labelledby="liZongTitle" hidden>
             <div class="li-zong-head">
               <div>
                 <div class="li-zong-kicker">DETERMINISTIC STRATEGY</div>
                 <div id="liZongTitle" class="li-zong-title">李总策略</div>
                 <div class="li-zong-copy">独立执行长期基本面、股性与量价规则；满足介入条件只进入重点关注和人工复核，不自动买入、不生成仓位或目标价。</div>
               </div>
-              <div id="liZongState" class="li-zong-state">正在读取已发布快照</div>
+              <div id="liZongState" class="li-zong-state">最新策略结果</div>
             </div>
-            <div class="li-zong-stats">
+            <div id="liZongStats" class="li-zong-stats">
               <div class="li-zong-stat"><span>策略版本</span><strong id="liZongVersion">—</strong></div>
               <div class="li-zong-stat"><span>数据交易日</span><strong id="liZongDate">—</strong></div>
-              <div class="li-zong-stat"><span>全市场名单</span><strong id="liZongUniverse">—</strong></div>
-              <div class="li-zong-stat"><span>可深度核验</span><strong id="liZongDeepEligible">—</strong></div>
-              <div class="li-zong-stat"><span>深度处理进度</span><strong id="liZongCoverage">—</strong></div>
-              <div class="li-zong-stat"><span>量价历史不足</span><strong id="liZongHistoryInsufficient">—</strong></div>
-              <div class="li-zong-stat"><span>财务历史待实查</span><strong id="liZongHistoryUnknown">—</strong></div>
+              <div class="li-zong-stat"><span>股票范围</span><strong id="liZongUniverse">—</strong></div>
+              <div class="li-zong-stat" hidden><span>可深度核验</span><strong id="liZongDeepEligible">—</strong></div>
+              <div class="li-zong-stat" hidden><span>深度处理进度</span><strong id="liZongCoverage">—</strong></div>
+              <div class="li-zong-stat" hidden><span>量价历史不足</span><strong id="liZongHistoryInsufficient">—</strong></div>
+              <div class="li-zong-stat" hidden><span>财务历史待实查</span><strong id="liZongHistoryUnknown">—</strong></div>
               <div class="li-zong-stat"><span>候选</span><strong id="liZongQualified">—</strong></div>
               <div class="li-zong-stat"><span>今日触发</span><strong id="liZongTriggered">—</strong></div>
-              <div class="li-zong-stat"><span>数据待补</span><strong id="liZongIncomplete">—</strong></div>
+              <div class="li-zong-stat" hidden><span>数据待补</span><strong id="liZongIncomplete">—</strong></div>
             </div>
             <div class="li-zong-tabs" role="tablist" aria-label="李总策略结果分类">
               <button class="li-zong-tab active" type="button" data-li-zong-filter="qualified">候选</button>
@@ -1943,7 +1963,7 @@
               <button class="li-zong-tab" type="button" data-li-zong-filter="invalidated">已失效</button>
               <button class="li-zong-tab" type="button" data-li-zong-filter="not_qualified">未满足</button>
             </div>
-            <div id="liZongResults" class="li-zong-list"><div class="screener-empty">正在读取已发布的策略结果…</div></div>
+            <div id="liZongResults" class="li-zong-list"><div class="screener-empty">当前没有可展示的策略候选。</div></div>
           </section>
           <div class="screener-section-heading"><strong>通用截面筛选</strong><span>适合快速缩小研究范围；与李总策略的长周期规则和盘后触发独立运行。</span></div>
           <div class="screener-layout">
@@ -2375,6 +2395,7 @@
       liZongLoading: false,
       liZongLoadToken: 0,
       liZongFilter: "qualified",
+      liZongRenderedFilter: "qualified",
       deepStock: null,
       deepStockSessions: [],
       deepStockOverviewSymbol: null,
@@ -2384,6 +2405,7 @@
       liveMarkets: [],
       marketBreadth: null,
       todayOverview: null,
+      todayOverviewAvailable: false,
       reviewTab: "outcomes",
       researchOutcomes: null,
       selectedOutcomeSymbol: null,
@@ -2594,7 +2616,7 @@
       state.workspacePage = page;
       const insightsVisible = page === "insights";
       $("homeFocus").hidden = !insightsVisible;
-      $("todayOverviewGrid").hidden = !insightsVisible;
+      $("todayOverviewGrid").hidden = !insightsVisible || !state.todayOverviewAvailable;
       $("liveSection").hidden = !insightsVisible;
       $("marketDashboard").hidden = !insightsVisible;
       $("insightSection").hidden = !insightsVisible;
@@ -2739,49 +2761,56 @@
     }
 
     function renderLiZongStrategy(payload) {
-      state.liZongStrategy = payload;
       const items = payload?.items || [];
       const counts = payload?.counts || {};
       const meta = payload?.data_meta || {};
       const definition = payload?.strategy || {};
-      $("liZongVersion").textContent = definition.current_version || definition.version?.version || "li_zong_v1";
-      $("liZongDate").textContent = meta.latest_as_of_date || "待发布";
-      const evaluated = Number(meta.evaluated_symbols || 0);
       const universe = Number(meta.universe_count || 0);
-      const stableUniverse = meta.universe_status === "stable";
+      const publishable = payload?.status === "ready" || universe > 0 || items.length > 0;
+      if (!publishable) {
+        if (state.liZongStrategy) {
+          state.liZongFilter = state.liZongRenderedFilter;
+          $("liZongState").textContent = "显示最近可用结果";
+          document.querySelectorAll("[data-li-zong-filter]").forEach(button => button.classList.toggle("active", button.dataset.liZongFilter === state.liZongFilter));
+        } else {
+          $("liZongPanel").hidden = true;
+        }
+        return;
+      }
+      state.liZongStrategy = payload;
+      state.liZongRenderedFilter = state.liZongFilter;
+      $("liZongPanel").hidden = false;
+      $("liZongStats").hidden = !universe && !items.length;
+      $("liZongVersion").textContent = definition.current_version || definition.version?.version || "li_zong_v1";
+      $("liZongDate").textContent = meta.latest_as_of_date || "—";
+      const evaluated = Number(meta.evaluated_symbols || 0);
       const coveragePct = universe ? `${(Number(meta.coverage_ratio || 0) * 100).toFixed(1)}%` : "";
       const deepEligible = Number(meta.deep_check_eligible_count ?? meta.market_cap_eligible_count ?? 0);
       const deepProcessed = Number(meta.deep_processed_symbols ?? 0);
       const deepRemaining = Number(meta.deep_remaining_symbols ?? Math.max(0, deepEligible - deepProcessed));
       const deepPct = deepEligible ? `${(Number(meta.deep_processing_ratio || 0) * 100).toFixed(1)}%` : "100.0%";
       $("liZongUniverse").textContent = universe ? `${universe} 只` : "—";
-      $("liZongUniverse").title = universe ? `当期已有 ${evaluated}/${universe} 只形成预筛或规则状态，名单状态覆盖 ${coveragePct}` : "当前尚未发布全市场名单快照";
+      $("liZongUniverse").title = universe ? `当前覆盖 ${evaluated}/${universe} 只，比例 ${coveragePct}` : "";
       $("liZongDeepEligible").textContent = universe ? `${deepEligible} 只` : "—";
       $("liZongHistoryInsufficient").textContent = universe ? `${Number(meta.history_insufficient_count || 0)} 只` : "—";
       $("liZongHistoryUnknown").textContent = universe ? `${Number(meta.history_unknown_count || 0)} 只` : "—";
       $("liZongCoverage").textContent = deepEligible ? `${deepProcessed}/${deepEligible}` : "0/0";
       $("liZongCoverage").title = universe
         ? `真实深度处理进度 ${deepPct}；仍待深度处理 ${deepRemaining} 只；已完成完整规则判断 ${meta.deep_decisive_symbols || 0} 只；深度处理后仍有缺口 ${meta.deep_data_incomplete_symbols || 0} 只`
-        : "当前尚未发布全市场名单快照";
+        : "";
       $("liZongQualified").textContent = counts.qualified ?? 0;
       $("liZongTriggered").textContent = counts.triggered ?? 0;
       $("liZongIncomplete").textContent = counts.data_incomplete ?? 0;
       $("liZongState").textContent = meta.full_market_coverage && meta.deep_check_complete
-        ? "全市场预筛与深度处理已完成"
-        : universe && stableUniverse
-          ? `后台分批处理中 · 深度处理 ${deepPct}`
-          : universe
-            ? "等待最近完整交易日市值快照"
-          : payload?.status === "ready" ? "研究池数据已就绪" : "首批快照准备中";
+        ? "最新策略结果"
+        : "当前可核验结果";
       document.querySelectorAll("[data-li-zong-filter]").forEach(button => button.classList.toggle("active", button.dataset.liZongFilter === state.liZongFilter));
 
       const filtered = items.filter(item => item.status === state.liZongFilter);
       const container = $("liZongResults"); container.innerHTML = "";
       if (!filtered.length) {
         const empty = document.createElement("div"); empty.className = "screener-empty";
-        empty.textContent = payload?.status === "ready"
-          ? `${liZongStatusLabel(state.liZongFilter)}列表当前为空。系统会保留上一稳定结果，并在新数据发布后重新计算。`
-          : "系统正在为当前研究池建立可追溯数据快照。页面不会用演示数字或供应商错误填充结果。";
+        empty.textContent = `${liZongStatusLabel(state.liZongFilter)}列表当前为空。可以切换其他分类，或使用下方通用筛选。`;
         container.appendChild(empty); return;
       }
       filtered.forEach(item => {
@@ -2842,17 +2871,23 @@
     async function loadLiZongStrategy() {
       const filter = state.liZongFilter || "qualified";
       const loadToken = ++state.liZongLoadToken;
+      const hadPublishedResult = Boolean(state.liZongStrategy);
       state.liZongLoading = true;
-      $("liZongState").textContent = "正在读取已发布快照";
+      if (!hadPublishedResult) $("liZongPanel").hidden = true;
       try {
         const payload = await api(`/v1/stock-strategies/li-zong/candidates?status=${encodeURIComponent(filter)}&limit=200`);
         if (loadToken !== state.liZongLoadToken) return;
         renderLiZongStrategy(payload);
       } catch {
         if (loadToken !== state.liZongLoadToken) return;
-        state.liZongStrategy = null;
-        $("liZongState").textContent = "首批快照准备中";
-        $("liZongResults").innerHTML = '<div class="screener-empty">系统正在准备可追溯策略快照；现有选股工具和个股研究仍可正常使用。</div>';
+        if (hadPublishedResult) {
+          state.liZongFilter = state.liZongRenderedFilter;
+          $("liZongPanel").hidden = false;
+          $("liZongState").textContent = "显示最近可用结果";
+          document.querySelectorAll("[data-li-zong-filter]").forEach(button => button.classList.toggle("active", button.dataset.liZongFilter === state.liZongFilter));
+        } else {
+          $("liZongPanel").hidden = true;
+        }
       } finally {
         if (loadToken === state.liZongLoadToken) state.liZongLoading = false;
       }
@@ -2904,7 +2939,9 @@
       const container = $("stockScreenResults"); container.innerHTML = "";
       if (!items.length) {
         const empty = document.createElement("div"); empty.className = "screener-empty";
-        empty.textContent = payload?.status === "empty" ? "当前没有股票同时满足全部条件。建议一次只放宽一项规则后重新筛选。" : "完整市场截面正在准备，请稍后重试。";
+        empty.textContent = payload?.status === "empty"
+          ? "当前没有股票同时满足全部条件。建议一次只放宽一项规则后重新筛选。"
+          : "当前没有可展示的候选。可以调整一个筛选条件后重新执行。";
         container.appendChild(empty); return;
       }
       items.forEach(item => {
@@ -2967,8 +3004,8 @@
     async function loadStockScreener() {
       if (state.stockScreenerLoading) return;
       state.stockScreenerLoading = true;
-      const button = $("runStockScreener"); button.disabled = true; button.textContent = "正在筛选完整市场…";
-      $("stockScreenResults").innerHTML = '<div class="screener-empty">正在对齐完整交易日行情、估值截面和候选财务指标…</div>';
+      const button = $("runStockScreener"); button.disabled = true; button.textContent = "筛选中…";
+      $("stockScreenResults").innerHTML = '<div class="screener-empty">正在应用已选研究条件…</div>';
       const filters = {};
       const industry = $("stockScreenIndustry").value.trim();
       const minCap = $("stockScreenMinCap").value;
@@ -2989,10 +3026,10 @@
         renderStockScreener(payload);
       } catch {
         state.stockScreener = null;
-        $("stockScreenTitle").textContent = "市场数据正在准备";
-        $("stockScreenMeta").textContent = "系统只会在完整行情截面可核验时返回候选。";
-        $("stockScreenCountBadge").textContent = "— 只";
-        $("stockScreenResults").innerHTML = '<div class="screener-empty">完整市场数据仍在准备，请稍后点击“执行确定性筛选”重试。</div>';
+        $("stockScreenTitle").textContent = "暂未形成筛选结果";
+        $("stockScreenMeta").textContent = "可以调整行业、市值或估值条件后重新执行筛选。";
+        $("stockScreenCountBadge").textContent = "0 只";
+        $("stockScreenResults").innerHTML = '<div class="screener-empty">当前没有可展示的候选。调整一个筛选条件后，可再次执行确定性筛选。</div>';
       } finally {
         state.stockScreenerLoading = false;
         button.disabled = false; button.textContent = "执行确定性筛选";
@@ -3945,6 +3982,8 @@
 
     function renderTodayOverview(data) {
       state.todayOverview = data;
+      state.todayOverviewAvailable = true;
+      $("todayOverviewGrid").hidden = state.workspacePage !== "insights";
       const session = data.session || {};
       const priority = data.priority_items || {};
       const personalized = data.personalized || {};
@@ -3990,9 +4029,10 @@
     async function loadTodayOverview() {
       try { renderTodayOverview(await api("/v1/today/overview")); }
       catch {
-        $("todayPrioritySummary").textContent = "今日事项正在重新连接；其他行情和研究功能不受影响。";
-        $("todayPriorityItems").innerHTML = '<div class="empty">暂时无法读取个人待处理事项</div>';
-        $("todayRelatedChanges").innerHTML = '<div class="empty">暂时无法读取个人研究变化</div>';
+        if (!state.todayOverview) {
+          state.todayOverviewAvailable = false;
+          $("todayOverviewGrid").hidden = true;
+        }
       }
     }
 
@@ -5380,6 +5420,189 @@
       } catch (error) { button.disabled = false; button.textContent = original; openReader("任务暂未保存", error.message || "请稍后重试。", "系统建议仍保留在当前页面"); }
     }
 
+    function positionIdempotencyKey(prefix) {
+      const random = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      return `${prefix}-${random}`;
+    }
+
+    function localDateTimeValue(date = new Date()) {
+      const offset = date.getTimezoneOffset() * 60000;
+      return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+    }
+
+    function positionField(labelText, input) {
+      const label = document.createElement("label");
+      if (input.classList.contains("position-form-wide")) label.classList.add("position-form-wide");
+      const text = document.createElement("span"); text.textContent = labelText;
+      label.append(text, input); return label;
+    }
+
+    async function refreshPositionWorkspace(symbol) {
+      await loadDeepStockOverview(symbol);
+      activateStockSpaceTab("tasks");
+    }
+
+    function showPositionOpeningForm(host, symbol) {
+      if (host.querySelector(".position-entry-form")) return;
+      const form = document.createElement("form"); form.className = "position-entry-form";
+      const asOf = document.createElement("input"); asOf.type = "date"; asOf.required = true; asOf.value = new Date().toISOString().slice(0, 10);
+      const quantity = document.createElement("input"); quantity.inputMode = "decimal"; quantity.required = true; quantity.placeholder = "例如 1000";
+      const cost = document.createElement("input"); cost.inputMode = "decimal"; cost.required = true; cost.placeholder = "每股成本，例如 37.50";
+      const fees = document.createElement("input"); fees.inputMode = "decimal"; fees.placeholder = "不知道可留空，不会按 0 处理";
+      const note = document.createElement("textarea"); note.className = "position-form-wide"; note.placeholder = "可选：数据来源、补录原因或费用口径";
+      const status = document.createElement("div"); status.className = "position-form-status"; status.textContent = "期初持仓每个股票空间只录入一次；保存后由流水派生快照。";
+      const actions = document.createElement("div"); actions.className = "position-form-actions";
+      const save = document.createElement("button"); save.type = "submit"; save.className = "btn primary"; save.textContent = "保存期初持仓";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "取消"; cancel.addEventListener("click", () => form.remove());
+      actions.append(save, cancel);
+      form.append(positionField("基准日期", asOf), positionField("持仓数量", quantity), positionField("每股成本", cost), positionField("已知费用", fees), positionField("备注", note), status, actions);
+      form.addEventListener("submit", async event => {
+        event.preventDefault(); save.disabled = true; cancel.disabled = true; status.textContent = "正在保存并重算持仓…";
+        try {
+          await api(`/v1/stocks/${encodeURIComponent(symbol)}/position/opening`, {
+            method: "POST",
+            headers: {"Idempotency-Key": positionIdempotencyKey("opening")},
+            body: JSON.stringify({as_of_date: asOf.value, quantity: quantity.value.trim(), cost_price: cost.value.trim(), fees: fees.value.trim() || null, note: note.value.trim() || null})
+          });
+          await refreshPositionWorkspace(symbol);
+        } catch (error) { save.disabled = false; cancel.disabled = false; status.textContent = error.message || "期初持仓未保存，请检查输入。"; }
+      });
+      host.appendChild(form); quantity.focus();
+    }
+
+    function showPositionOperationForm(host, symbol) {
+      if (host.querySelector(".position-entry-form")) return;
+      const form = document.createElement("form"); form.className = "position-entry-form";
+      const type = document.createElement("select");
+      [["buy", "首次买入"], ["add", "增加持仓"], ["reduce", "减少持仓"], ["sell", "卖出"]].forEach(([value, label]) => { const option = document.createElement("option"); option.value = value; option.textContent = label; type.appendChild(option); });
+      const operatedAt = document.createElement("input"); operatedAt.type = "datetime-local"; operatedAt.required = true; operatedAt.value = localDateTimeValue();
+      const price = document.createElement("input"); price.inputMode = "decimal"; price.required = true; price.placeholder = "成交价格";
+      const quantity = document.createElement("input"); quantity.inputMode = "decimal"; quantity.required = true; quantity.placeholder = "成交数量";
+      const fees = document.createElement("input"); fees.inputMode = "decimal"; fees.placeholder = "不知道可留空";
+      const reason = document.createElement("textarea"); reason.className = "position-form-wide"; reason.required = true; reason.placeholder = "记录当时的事实和理由；请勿填写系统生成的买卖建议";
+      const status = document.createElement("div"); status.className = "position-form-status"; status.textContent = "操作只追加流水；错误记录通过修订保留历史，不直接覆盖。";
+      const actions = document.createElement("div"); actions.className = "position-form-actions";
+      const save = document.createElement("button"); save.type = "submit"; save.className = "btn primary"; save.textContent = "保存操作";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "取消"; cancel.addEventListener("click", () => form.remove());
+      actions.append(save, cancel);
+      form.append(positionField("操作类型", type), positionField("操作时间", operatedAt), positionField("成交价格", price), positionField("成交数量", quantity), positionField("已知费用", fees), positionField("操作事实与理由", reason), status, actions);
+      form.addEventListener("submit", async event => {
+        event.preventDefault(); save.disabled = true; cancel.disabled = true; status.textContent = "正在保存流水并生成新快照…";
+        try {
+          await api(`/v1/stocks/${encodeURIComponent(symbol)}/operations`, {
+            method: "POST",
+            headers: {"Idempotency-Key": positionIdempotencyKey("operation")},
+            body: JSON.stringify({operation_type: type.value, operated_at: new Date(operatedAt.value).toISOString(), price: price.value.trim(), quantity: quantity.value.trim(), fees: fees.value.trim() || null, reason_text: reason.value.trim()})
+          });
+          await refreshPositionWorkspace(symbol);
+        } catch (error) { save.disabled = false; cancel.disabled = false; status.textContent = error.message || "操作未保存，请检查输入。"; }
+      });
+      host.appendChild(form); price.focus();
+    }
+
+    function showPositionAdjustmentForm(host, symbol) {
+      if (host.querySelector(".position-entry-form")) return;
+      const form = document.createElement("form"); form.className = "position-entry-form";
+      const type = document.createElement("select");
+      [["corporate_action", "送转、拆并等公司行动"], ["quantity_correction", "数量调整"], ["cost_correction", "成本调整"], ["other", "其他非交易调整"]].forEach(([value, label]) => { const option = document.createElement("option"); option.value = value; option.textContent = label; type.appendChild(option); });
+      const effectiveAt = document.createElement("input"); effectiveAt.type = "datetime-local"; effectiveAt.required = true; effectiveAt.value = localDateTimeValue();
+      const quantity = document.createElement("input"); quantity.inputMode = "decimal"; quantity.value = "0"; quantity.placeholder = "增加为正，减少为负";
+      const cost = document.createElement("input"); cost.inputMode = "decimal"; cost.value = "0"; cost.placeholder = "成本增加为正，减少为负";
+      const reason = document.createElement("textarea"); reason.className = "position-form-wide"; reason.required = true; reason.placeholder = "说明调整原因和口径";
+      const evidence = document.createElement("textarea"); evidence.className = "position-form-wide"; evidence.placeholder = "可选：公告、回单或人工核对依据";
+      const status = document.createElement("div"); status.className = "position-form-status"; status.textContent = "非交易调整不会伪装成买卖记录；数量和成本至少一项必须变化。";
+      const actions = document.createElement("div"); actions.className = "position-form-actions";
+      const save = document.createElement("button"); save.type = "submit"; save.className = "btn primary"; save.textContent = "保存调整";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "取消"; cancel.addEventListener("click", () => form.remove());
+      actions.append(save, cancel);
+      form.append(positionField("调整类型", type), positionField("生效时间", effectiveAt), positionField("数量变化", quantity), positionField("成本变化", cost), positionField("调整原因", reason), positionField("核对依据", evidence), status, actions);
+      form.addEventListener("submit", async event => {
+        event.preventDefault(); save.disabled = true; cancel.disabled = true; status.textContent = "正在保存调整并重算持仓…";
+        try {
+          await api(`/v1/stocks/${encodeURIComponent(symbol)}/position-adjustments`, {
+            method: "POST",
+            headers: {"Idempotency-Key": positionIdempotencyKey("adjustment")},
+            body: JSON.stringify({adjustment_type: type.value, effective_at: new Date(effectiveAt.value).toISOString(), quantity_delta: quantity.value.trim() || "0", cost_delta: cost.value.trim() || "0", reason_text: reason.value.trim(), evidence_text: evidence.value.trim() || null})
+          });
+          await refreshPositionWorkspace(symbol);
+        } catch (error) { save.disabled = false; cancel.disabled = false; status.textContent = error.message || "调整未保存，请检查输入。"; }
+      });
+      host.appendChild(form); reason.focus();
+    }
+
+    function showPositionRevisionForm(host, symbol, operation) {
+      if (host.querySelector(".position-entry-form")) return;
+      const form = document.createElement("form"); form.className = "position-entry-form";
+      const price = document.createElement("input"); price.inputMode = "decimal"; price.required = true; price.value = operation.price || "";
+      const quantity = document.createElement("input"); quantity.inputMode = "decimal"; quantity.required = true; quantity.value = operation.quantity || "";
+      const fees = document.createElement("input"); fees.inputMode = "decimal"; fees.value = operation.fees ?? ""; fees.placeholder = "不知道可留空";
+      const reason = document.createElement("textarea"); reason.className = "position-form-wide"; reason.required = true; reason.placeholder = "说明为什么需要修正，并保留回单或核对依据";
+      const status = document.createElement("div"); status.className = "position-form-status"; status.textContent = `当前修订版本 ${operation.current_revision || 0}；原流水不会被覆盖。`;
+      const actions = document.createElement("div"); actions.className = "position-form-actions";
+      const save = document.createElement("button"); save.type = "submit"; save.className = "btn primary"; save.textContent = "保存修订";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "取消"; cancel.addEventListener("click", () => form.remove());
+      actions.append(save, cancel);
+      form.append(positionField("修正价格", price), positionField("修正数量", quantity), positionField("修正费用", fees), positionField("修正原因", reason), status, actions);
+      form.addEventListener("submit", async event => {
+        event.preventDefault(); save.disabled = true; cancel.disabled = true; status.textContent = "正在保存修订并重放全部流水…";
+        try {
+          await api(`/v1/operations/${encodeURIComponent(operation.id)}`, {
+            method: "PATCH",
+            headers: {"Idempotency-Key": positionIdempotencyKey("revision")},
+            body: JSON.stringify({base_revision: operation.current_revision || 0, price: price.value.trim(), quantity: quantity.value.trim(), fees: fees.value.trim() || null, reason_text: reason.value.trim()})
+          });
+          await refreshPositionWorkspace(symbol);
+        } catch (error) { save.disabled = false; cancel.disabled = false; status.textContent = error.message || "修订未保存，请检查是否已有更新。"; }
+      });
+      host.appendChild(form); reason.focus();
+    }
+
+    function renderPositionWorkspace(symbol, workspace) {
+      const section = document.createElement("section"); section.className = "position-workspace";
+      const position = workspace?.position_snapshot || {available: false, status: "not_configured"};
+      const head = document.createElement("div"); head.className = "position-workspace-head";
+      const copyWrap = document.createElement("div");
+      const title = document.createElement("div"); title.className = "position-workspace-title"; title.textContent = "持仓事实与操作流水";
+      const copy = document.createElement("div"); copy.className = "position-workspace-copy";
+      copy.textContent = position.available ? "当前持仓由期初、操作和调整流水派生，不能直接编辑结果。" : "关系标签不等于真实持仓；录入期初数量和成本后才开始对账。";
+      copyWrap.append(title, copy);
+      const buttons = document.createElement("div"); buttons.className = "stock-workspace-actions";
+      if (!position.available) {
+        const opening = document.createElement("button"); opening.type = "button"; opening.className = "btn primary"; opening.textContent = "录入期初持仓"; opening.addEventListener("click", () => showPositionOpeningForm(section, symbol)); buttons.appendChild(opening);
+      } else {
+        const record = document.createElement("button"); record.type = "button"; record.className = "btn primary"; record.textContent = "记录操作"; record.addEventListener("click", () => showPositionOperationForm(section, symbol));
+        const adjust = document.createElement("button"); adjust.type = "button"; adjust.className = "btn"; adjust.textContent = "非交易调整"; adjust.addEventListener("click", () => showPositionAdjustmentForm(section, symbol));
+        buttons.append(record, adjust);
+      }
+      head.append(copyWrap, buttons); section.appendChild(head);
+      if (!position.available || !position.current) return section;
+      const current = position.current;
+      const metrics = document.createElement("div"); metrics.className = "position-metrics";
+      [["持仓数量", current.quantity], ["移动平均成本", current.average_cost || "已清仓"], ["当前成本总额", current.cost_basis], ["已实现净结果", current.realized_net_pnl ?? "费用待补"]].forEach(([labelText, value]) => {
+        const card = document.createElement("div"); card.className = "position-metric";
+        const label = document.createElement("span"); label.textContent = labelText;
+        const strong = document.createElement("strong"); strong.textContent = value ?? "—";
+        card.append(label, strong); metrics.appendChild(card);
+      });
+      section.appendChild(metrics);
+      const warnings = current.warnings || [];
+      if (warnings.length) { const warning = document.createElement("div"); warning.className = "position-workspace-copy"; warning.textContent = warnings.join(" "); section.appendChild(warning); }
+      const operations = [...(position.operations || [])].reverse().slice(0, 4);
+      if (operations.length) {
+        const list = document.createElement("div"); list.className = "position-ledger-list";
+        operations.forEach(item => {
+          const row = document.createElement("div"); row.className = "position-ledger-item";
+          const label = document.createElement("strong"); label.textContent = {buy: "买入", add: "增加持仓", reduce: "减少持仓", sell: "卖出"}[item.operation_type] || "操作";
+          const detail = document.createElement("span"); detail.textContent = `${readableTime(item.operated_at)} · ${item.quantity} 股 × ${item.price}${item.fees == null ? " · 费用待补" : ` · 费用 ${item.fees}`}${item.current_revision ? ` · 修订 ${item.current_revision}` : ""}`;
+          const right = document.createElement("div"); right.className = "stock-workspace-actions";
+          const revise = document.createElement("button"); revise.type = "button"; revise.className = "btn"; revise.textContent = "修正"; revise.addEventListener("click", () => showPositionRevisionForm(section, symbol, item));
+          right.append(detail, revise); row.append(label, right); list.appendChild(row);
+        });
+        section.appendChild(list);
+      }
+      return section;
+    }
+
     function renderStockSpaceTasks(symbol, session = null, workspace = null) {
       const container = $("deepStockTasks");
       if (!container) return;
@@ -5413,6 +5636,7 @@
       const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn primary"; ask.textContent = "让 Agent 帮我处理";
       ask.addEventListener("click", () => { void continueDeepStockConversation(userTasks.find(task => !task.terminal)?.description || actions[0]?.next_step || session?.next_question); });
       head.append(copyWrap, ask); container.appendChild(head);
+      container.appendChild(renderPositionWorkspace(symbol, workspace));
       const grid = document.createElement("div"); grid.className = "stock-task-grid";
       if (userTasks.length) {
         const label = document.createElement("div"); label.className = "stock-task-section-label"; label.textContent = `我的观察任务 · ${workspace?.observation_tasks?.summary?.active || 0} 项进行中`; grid.appendChild(label);
@@ -5491,7 +5715,19 @@
         read.addEventListener("click", () => openReader(latestReport.title, latestReport.body || latestReport.summary, meta.textContent));
         actions.appendChild(read); report.append(meta, actions);
       }
-      grid.append(conversation, report); container.appendChild(grid);
+      grid.append(conversation, report);
+      const position = workspace?.position_snapshot || null;
+      if (position?.available && position.current) {
+        const positionCard = document.createElement("article"); positionCard.className = "stock-history-card";
+        const positionTitle = document.createElement("div"); positionTitle.className = "stock-history-title"; positionTitle.textContent = "持仓与操作历史";
+        const positionCopy = document.createElement("div"); positionCopy.className = "stock-history-copy";
+        positionCopy.textContent = `当前 ${position.current.quantity} 股，移动平均成本 ${position.current.average_cost || "已归零"}；已保存 ${(position.operations || []).length} 笔操作、${(position.adjustments || []).length} 笔调整和 ${(position.snapshots || []).length} 个派生快照。`;
+        const meta = document.createElement("div"); meta.className = "stock-history-meta"; meta.textContent = position.current.fees_complete ? "费用记录完整，可计算已实现净结果。" : "部分费用缺失，复盘不得展示伪精确净收益。";
+        const actions = document.createElement("div"); actions.className = "stock-workspace-actions";
+        const open = document.createElement("button"); open.type = "button"; open.className = "btn"; open.textContent = "查看操作与持仓"; open.addEventListener("click", () => activateStockSpaceTab("tasks"));
+        actions.appendChild(open); positionCard.append(positionTitle, positionCopy, meta, actions); grid.appendChild(positionCard);
+      }
+      container.appendChild(grid);
       const coverageHistory = [...(session?.coverage_history || [])].reverse();
       if (coverageHistory.length) {
         const statusLabels = {sufficient: "充分", partial: "部分覆盖", insufficient: "不足", unavailable: "尚未取得"};

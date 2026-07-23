@@ -249,6 +249,119 @@ class Database:
                     UNIQUE(task_id, version)
                 );
 
+                CREATE TABLE IF NOT EXISTS position_openings (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL UNIQUE
+                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    symbol TEXT NOT NULL,
+                    as_of_date TEXT NOT NULL,
+                    quantity TEXT NOT NULL,
+                    cost_price TEXT NOT NULL,
+                    fees TEXT,
+                    note TEXT,
+                    idempotency_key TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, idempotency_key)
+                );
+
+                CREATE TABLE IF NOT EXISTS position_operations (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL
+                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    symbol TEXT NOT NULL,
+                    operation_type TEXT NOT NULL CHECK(operation_type IN (
+                        'buy', 'add', 'reduce', 'sell'
+                    )),
+                    operated_at TEXT NOT NULL,
+                    price TEXT NOT NULL,
+                    quantity TEXT NOT NULL,
+                    fees TEXT,
+                    reason_text TEXT NOT NULL,
+                    plan_id TEXT,
+                    idempotency_key TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, idempotency_key)
+                );
+
+                CREATE TABLE IF NOT EXISTS operation_revisions (
+                    id TEXT PRIMARY KEY,
+                    operation_id TEXT NOT NULL
+                        REFERENCES position_operations(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL
+                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    revision_no INTEGER NOT NULL,
+                    price TEXT NOT NULL,
+                    quantity TEXT NOT NULL,
+                    fees TEXT,
+                    reason_text TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(operation_id, revision_no),
+                    UNIQUE(user_id, idempotency_key)
+                );
+
+                CREATE TABLE IF NOT EXISTS position_adjustments (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL
+                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    symbol TEXT NOT NULL,
+                    adjustment_type TEXT NOT NULL CHECK(adjustment_type IN (
+                        'quantity_correction', 'cost_correction',
+                        'corporate_action', 'other'
+                    )),
+                    effective_at TEXT NOT NULL,
+                    quantity_delta TEXT NOT NULL,
+                    cost_delta TEXT NOT NULL,
+                    reason_text TEXT NOT NULL,
+                    evidence_text TEXT,
+                    idempotency_key TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, idempotency_key)
+                );
+
+                CREATE TABLE IF NOT EXISTS position_snapshots (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL
+                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    symbol TEXT NOT NULL,
+                    snapshot_at TEXT NOT NULL,
+                    source_event_type TEXT NOT NULL CHECK(source_event_type IN (
+                        'opening', 'operation', 'operation_revision', 'adjustment'
+                    )),
+                    source_event_id TEXT NOT NULL,
+                    quantity TEXT NOT NULL,
+                    cost_basis TEXT NOT NULL,
+                    average_cost TEXT,
+                    realized_gross_pnl TEXT NOT NULL,
+                    realized_net_pnl TEXT,
+                    known_fees TEXT NOT NULL,
+                    fees_complete INTEGER NOT NULL CHECK(fees_complete IN (0, 1)),
+                    data_status TEXT NOT NULL CHECK(data_status IN (
+                        'complete', 'partial', 'conflict'
+                    )),
+                    warnings_json TEXT NOT NULL DEFAULT '[]',
+                    calculation_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(
+                        workspace_id, source_event_type, source_event_id,
+                        calculation_version
+                    )
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_position_operations_workspace_time
+                ON position_operations(workspace_id, operated_at, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_position_adjustments_workspace_time
+                ON position_adjustments(workspace_id, effective_at, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_position_snapshots_workspace_time
+                ON position_snapshots(workspace_id, snapshot_at DESC, created_at DESC);
+
                 CREATE TABLE IF NOT EXISTS conversations (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

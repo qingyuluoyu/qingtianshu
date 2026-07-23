@@ -559,6 +559,18 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "数据源不可用" not in page.text
     assert "盘中数据暂不可用" not in page.text
     assert "板块数据暂不可用" not in page.text
+    assert "暂时无法读取个人待处理事项" not in page.text
+    assert "暂时无法读取个人研究变化" not in page.text
+    assert "首批快照准备中" not in page.text
+    assert "系统正在准备可追溯策略快照" not in page.text
+    assert "系统正在为当前研究池建立可追溯数据快照" not in page.text
+    assert "完整市场截面正在准备" not in page.text
+    assert "完整市场数据仍在准备" not in page.text
+    assert "市场数据正在准备" not in page.text
+    assert 'id="todayOverviewGrid" class="today-overview-grid"' in page.text
+    assert 'id="liZongPanel" class="li-zong-panel"' in page.text
+    assert '$("todayOverviewGrid").hidden = true' in page.text
+    assert '$("liZongPanel").hidden = true' in page.text
     assert 'api("/session")' in page.text
     assert 'api("/me/watchlist/brief")' in page.text
     assert 'api("/me/chat"' in page.text

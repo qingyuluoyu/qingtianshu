@@ -82,6 +82,12 @@ from app.services.observation_tasks import (
 )
 from app.services.stock_assets import StockAssetListService
 from app.services.stock_workspace import StockWorkspaceService
+from app.services.position_ledger import (
+    PositionLedgerConflict,
+    PositionLedgerInvalidState,
+    PositionLedgerNotFound,
+    PositionLedgerService,
+)
 from app.services.tushare_snapshots import TushareSnapshotService
 from app.services.li_zong_strategy_service import LiZongStrategyService
 from app.services.today_overview import TodayOverviewService
@@ -234,6 +240,43 @@ class ObservationTaskTransition(BaseModel):
     ]
     result_text: str | None = Field(default=None, max_length=3000)
     evidence_refs: list[str] = Field(default_factory=list, max_length=12)
+
+
+class PositionOpeningCreate(BaseModel):
+    as_of_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    quantity: str = Field(min_length=1, max_length=40)
+    cost_price: str = Field(min_length=1, max_length=40)
+    fees: str | None = Field(default=None, max_length=40)
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class PositionOperationCreate(BaseModel):
+    operation_type: Literal["buy", "add", "reduce", "sell"]
+    operated_at: str = Field(min_length=20, max_length=40)
+    price: str = Field(min_length=1, max_length=40)
+    quantity: str = Field(min_length=1, max_length=40)
+    fees: str | None = Field(default=None, max_length=40)
+    reason_text: str = Field(min_length=1, max_length=1200)
+    plan_id: str | None = Field(default=None, max_length=80)
+
+
+class PositionOperationRevisionCreate(BaseModel):
+    base_revision: int = Field(default=0, ge=0)
+    price: str = Field(min_length=1, max_length=40)
+    quantity: str = Field(min_length=1, max_length=40)
+    fees: str | None = Field(default=None, max_length=40)
+    reason_text: str = Field(min_length=1, max_length=1200)
+
+
+class PositionAdjustmentCreate(BaseModel):
+    adjustment_type: Literal[
+        "quantity_correction", "cost_correction", "corporate_action", "other"
+    ]
+    effective_at: str = Field(min_length=20, max_length=40)
+    quantity_delta: str = Field(default="0", min_length=1, max_length=40)
+    cost_delta: str = Field(default="0", min_length=1, max_length=40)
+    reason_text: str = Field(min_length=1, max_length=1200)
+    evidence_text: str | None = Field(default=None, max_length=1200)
 
 
 class StockScreenFilters(BaseModel):
@@ -825,6 +868,7 @@ def create_app(
     stock_domain = StockDomainService(database)
     structured_ai = StructuredAIService(database, stock_domain)
     observation_tasks = ObservationTaskService(database)
+    position_ledger = PositionLedgerService(database)
     resolved_tushare_client = tushare_client
     if resolved_tushare_client is None and settings.tushare_enabled:
         try:
@@ -851,6 +895,7 @@ def create_app(
         research_actions,
         observation_tasks=observation_tasks,
         li_zong_strategy=li_zong_strategy,
+        position_ledger=position_ledger,
     )
     stock_assets = StockAssetListService(database, stock_workspace)
     today_overview = TodayOverviewService(
@@ -939,6 +984,7 @@ def create_app(
     app.state.stock_domain = stock_domain
     app.state.structured_ai = structured_ai
     app.state.observation_tasks = observation_tasks
+    app.state.position_ledger = position_ledger
     app.state.stock_workspace = stock_workspace
     app.state.stock_assets = stock_assets
     app.state.stock_screener = stock_screener
@@ -1031,6 +1077,15 @@ def create_app(
         if user is None:
             raise HTTPException(status_code=401, detail="需要有效个人会话")
         return user
+
+    def require_idempotency_key(request: Request) -> str:
+        value = str(request.headers.get("Idempotency-Key") or "").strip()
+        if not 8 <= len(value) <= 128:
+            raise HTTPException(
+                status_code=422,
+                detail="写入持仓事实时必须提供 8—128 位 Idempotency-Key",
+            )
+        return value
 
     def require_admin_api(request: Request) -> dict[str, Any]:
         user = require_session_user(request)
@@ -1669,6 +1724,113 @@ def create_app(
         try:
             return stock_workspace.get_actions_workspace(user["id"], symbol)
         except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/v1/stocks/{symbol}/position")
+    def get_my_stock_position(symbol: str, request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return position_ledger.get_position(user["id"], symbol)
+        except PositionLedgerNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PositionLedgerInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/stocks/{symbol}/position/opening", status_code=201)
+    def create_my_position_opening(
+        symbol: str, payload: PositionOpeningCreate, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return position_ledger.create_opening(
+                user_id=user["id"],
+                symbol=symbol,
+                as_of_date=payload.as_of_date,
+                quantity=payload.quantity,
+                cost_price=payload.cost_price,
+                fees=payload.fees,
+                note=payload.note,
+                idempotency_key=require_idempotency_key(request),
+            )
+        except PositionLedgerNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PositionLedgerConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except PositionLedgerInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/stocks/{symbol}/operations", status_code=201)
+    def record_my_position_operation(
+        symbol: str, payload: PositionOperationCreate, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return position_ledger.record_operation(
+                user_id=user["id"],
+                symbol=symbol,
+                operation_type=payload.operation_type,
+                operated_at=payload.operated_at,
+                price=payload.price,
+                quantity=payload.quantity,
+                fees=payload.fees,
+                reason_text=payload.reason_text,
+                plan_id=payload.plan_id,
+                idempotency_key=require_idempotency_key(request),
+            )
+        except PositionLedgerNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PositionLedgerConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except PositionLedgerInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.patch("/v1/operations/{operation_id}")
+    def revise_my_position_operation(
+        operation_id: str,
+        payload: PositionOperationRevisionCreate,
+        request: Request,
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return position_ledger.revise_operation(
+                user_id=user["id"],
+                operation_id=operation_id,
+                base_revision=payload.base_revision,
+                price=payload.price,
+                quantity=payload.quantity,
+                fees=payload.fees,
+                reason_text=payload.reason_text,
+                idempotency_key=require_idempotency_key(request),
+            )
+        except PositionLedgerNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PositionLedgerConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except PositionLedgerInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/stocks/{symbol}/position-adjustments", status_code=201)
+    def record_my_position_adjustment(
+        symbol: str, payload: PositionAdjustmentCreate, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return position_ledger.record_adjustment(
+                user_id=user["id"],
+                symbol=symbol,
+                adjustment_type=payload.adjustment_type,
+                effective_at=payload.effective_at,
+                quantity_delta=payload.quantity_delta,
+                cost_delta=payload.cost_delta,
+                reason_text=payload.reason_text,
+                evidence_text=payload.evidence_text,
+                idempotency_key=require_idempotency_key(request),
+            )
+        except PositionLedgerNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PositionLedgerConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except PositionLedgerInvalidState as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/v1/observation-tasks")

@@ -738,7 +738,7 @@ wheels = [
 [[package]]
 name = "qingshu-agent-demo"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "exchange-calendars" },
     { name = "fastapi" },

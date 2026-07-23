@@ -1,0 +1,897 @@
+from __future__ import annotations
+
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+import json
+from typing import Any
+from uuid import uuid4
+
+from app.catalog import normalize_symbol
+from app.db import Database
+from app.utils import json_dumps, utc_now
+
+
+class PositionLedgerNotFound(ValueError):
+    pass
+
+
+class PositionLedgerInvalidState(ValueError):
+    pass
+
+
+class PositionLedgerConflict(ValueError):
+    pass
+
+
+class PositionLedgerService:
+    """Immutable position facts with deterministic moving-average snapshots."""
+
+    CONTRACT_VERSION = "position_ledger_v1"
+    CALCULATION_VERSION = "moving_weighted_average_v1"
+    OPERATION_TYPES = {"buy", "add", "reduce", "sell"}
+    ADJUSTMENT_TYPES = {
+        "quantity_correction",
+        "cost_correction",
+        "corporate_action",
+        "other",
+    }
+    _PRICE_QUANT = Decimal("0.000001")
+    _QUANTITY_QUANT = Decimal("0.000001")
+    _AMOUNT_QUANT = Decimal("0.0001")
+
+    def __init__(self, database: Database) -> None:
+        self.database = database
+
+    def get_position(self, user_id: str, symbol: str) -> dict[str, Any]:
+        canonical = normalize_symbol(symbol)
+        with self.database.connect() as connection:
+            workspace = self._workspace(connection, user_id, canonical)
+            opening = connection.execute(
+                """
+                SELECT * FROM position_openings
+                WHERE user_id = ? AND workspace_id = ?
+                """,
+                (user_id, workspace["id"]),
+            ).fetchone()
+            if opening is None:
+                return self._empty_packet(workspace)
+            snapshot = connection.execute(
+                """
+                SELECT * FROM position_snapshots
+                WHERE user_id = ? AND workspace_id = ?
+                ORDER BY created_at DESC, rowid DESC LIMIT 1
+                """,
+                (user_id, workspace["id"]),
+            ).fetchone()
+            operations = self._operation_rows(
+                connection, user_id=user_id, workspace_id=str(workspace["id"])
+            )
+            adjustments = connection.execute(
+                """
+                SELECT * FROM position_adjustments
+                WHERE user_id = ? AND workspace_id = ?
+                ORDER BY effective_at ASC, created_at ASC, rowid ASC
+                """,
+                (user_id, workspace["id"]),
+            ).fetchall()
+            snapshots = connection.execute(
+                """
+                SELECT * FROM position_snapshots
+                WHERE user_id = ? AND workspace_id = ?
+                ORDER BY created_at DESC, rowid DESC LIMIT 20
+                """,
+                (user_id, workspace["id"]),
+            ).fetchall()
+        return self._packet(
+            workspace=workspace,
+            opening=dict(opening),
+            snapshot=dict(snapshot) if snapshot is not None else None,
+            operations=operations,
+            adjustments=[dict(row) for row in adjustments],
+            snapshots=[dict(row) for row in snapshots],
+        )
+
+    def create_opening(
+        self,
+        *,
+        user_id: str,
+        symbol: str,
+        as_of_date: str,
+        quantity: str,
+        cost_price: str,
+        fees: str | None,
+        note: str | None,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        canonical = normalize_symbol(symbol)
+        parsed_date = self._date(as_of_date, "期初持仓日期")
+        quantity_value = self._positive_decimal(quantity, "期初持仓数量")
+        cost_value = self._non_negative_decimal(cost_price, "期初持仓成本")
+        fee_value = self._optional_non_negative_decimal(fees, "期初费用")
+        now = utc_now()
+        with self.database.connect() as connection:
+            workspace = self._workspace(connection, user_id, canonical)
+            repeated = connection.execute(
+                """
+                SELECT id FROM position_openings
+                WHERE user_id = ? AND idempotency_key = ?
+                """,
+                (user_id, idempotency_key),
+            ).fetchone()
+            if repeated is not None:
+                return self.get_position(user_id, canonical)
+            existing = connection.execute(
+                """
+                SELECT id FROM position_openings
+                WHERE user_id = ? AND workspace_id = ?
+                """,
+                (user_id, workspace["id"]),
+            ).fetchone()
+            if existing is not None:
+                raise PositionLedgerConflict("每个股票空间只能录入一个有效期初持仓")
+            opening_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO position_openings(
+                    id, workspace_id, user_id, symbol, as_of_date,
+                    quantity, cost_price, fees, note, idempotency_key, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    opening_id,
+                    workspace["id"],
+                    user_id,
+                    canonical,
+                    parsed_date.isoformat(),
+                    self._quantity_text(quantity_value),
+                    self._price_text(cost_value),
+                    self._amount_text(fee_value) if fee_value is not None else None,
+                    self._clean_text(note, 1000),
+                    idempotency_key,
+                    now,
+                ),
+            )
+            self._mark_workspace_holding(
+                connection, workspace=workspace, user_id=user_id, now=now
+            )
+            self._recalculate_and_save(
+                connection,
+                user_id=user_id,
+                workspace=workspace,
+                source_event_type="opening",
+                source_event_id=opening_id,
+                snapshot_at=f"{parsed_date.isoformat()}T00:00:00+08:00",
+            )
+        return self.get_position(user_id, canonical)
+
+    def record_operation(
+        self,
+        *,
+        user_id: str,
+        symbol: str,
+        operation_type: str,
+        operated_at: str,
+        price: str,
+        quantity: str,
+        fees: str | None,
+        reason_text: str,
+        plan_id: str | None,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        canonical = normalize_symbol(symbol)
+        if operation_type not in self.OPERATION_TYPES:
+            raise PositionLedgerInvalidState("操作类型不受支持")
+        operation_time = self._datetime(operated_at, "操作时间")
+        price_value = self._positive_decimal(price, "操作价格")
+        quantity_value = self._positive_decimal(quantity, "操作数量")
+        fee_value = self._optional_non_negative_decimal(fees, "操作费用")
+        reason = self._required_text(reason_text, "操作原因", 1200)
+        now = utc_now()
+        with self.database.connect() as connection:
+            workspace = self._workspace(connection, user_id, canonical)
+            repeated = connection.execute(
+                """
+                SELECT id FROM position_operations
+                WHERE user_id = ? AND idempotency_key = ?
+                """,
+                (user_id, idempotency_key),
+            ).fetchone()
+            if repeated is not None:
+                return self.get_position(user_id, canonical)
+            opening = self._opening(connection, user_id, str(workspace["id"]))
+            if operation_time.date() < date.fromisoformat(str(opening["as_of_date"])):
+                raise PositionLedgerInvalidState("操作时间不能早于期初持仓日期")
+            operation_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO position_operations(
+                    id, workspace_id, user_id, symbol, operation_type,
+                    operated_at, price, quantity, fees, reason_text,
+                    plan_id, idempotency_key, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    operation_id,
+                    workspace["id"],
+                    user_id,
+                    canonical,
+                    operation_type,
+                    operation_time.isoformat(),
+                    self._price_text(price_value),
+                    self._quantity_text(quantity_value),
+                    self._amount_text(fee_value) if fee_value is not None else None,
+                    reason,
+                    self._clean_text(plan_id, 80),
+                    idempotency_key,
+                    now,
+                ),
+            )
+            self._recalculate_and_save(
+                connection,
+                user_id=user_id,
+                workspace=workspace,
+                source_event_type="operation",
+                source_event_id=operation_id,
+                snapshot_at=operation_time.isoformat(),
+            )
+        return self.get_position(user_id, canonical)
+
+    def revise_operation(
+        self,
+        *,
+        user_id: str,
+        operation_id: str,
+        base_revision: int,
+        price: str,
+        quantity: str,
+        fees: str | None,
+        reason_text: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        price_value = self._positive_decimal(price, "修正价格")
+        quantity_value = self._positive_decimal(quantity, "修正数量")
+        fee_value = self._optional_non_negative_decimal(fees, "修正费用")
+        reason = self._required_text(reason_text, "修正原因", 1200)
+        now = utc_now()
+        symbol: str | None = None
+        with self.database.connect() as connection:
+            repeated = connection.execute(
+                """
+                SELECT operation_id FROM operation_revisions
+                WHERE user_id = ? AND idempotency_key = ?
+                """,
+                (user_id, idempotency_key),
+            ).fetchone()
+            if repeated is not None:
+                operation = connection.execute(
+                    """
+                    SELECT symbol FROM position_operations
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (repeated["operation_id"], user_id),
+                ).fetchone()
+                if operation is None:
+                    raise PositionLedgerNotFound("操作记录不存在")
+                symbol = str(operation["symbol"])
+            else:
+                operation = connection.execute(
+                    """
+                    SELECT * FROM position_operations
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (operation_id, user_id),
+                ).fetchone()
+                if operation is None:
+                    raise PositionLedgerNotFound("操作记录不存在")
+                latest = connection.execute(
+                    """
+                    SELECT COALESCE(MAX(revision_no), 0) AS revision_no
+                    FROM operation_revisions
+                    WHERE operation_id = ? AND user_id = ?
+                    """,
+                    (operation_id, user_id),
+                ).fetchone()
+                current_revision = int(latest["revision_no"] or 0)
+                if int(base_revision) != current_revision:
+                    raise PositionLedgerConflict(
+                        f"操作记录已更新，当前修订版本为 {current_revision}"
+                    )
+                revision_id = str(uuid4())
+                connection.execute(
+                    """
+                    INSERT INTO operation_revisions(
+                        id, operation_id, workspace_id, user_id, revision_no,
+                        price, quantity, fees, reason_text,
+                        idempotency_key, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        revision_id,
+                        operation_id,
+                        operation["workspace_id"],
+                        user_id,
+                        current_revision + 1,
+                        self._price_text(price_value),
+                        self._quantity_text(quantity_value),
+                        self._amount_text(fee_value)
+                        if fee_value is not None
+                        else None,
+                        reason,
+                        idempotency_key,
+                        now,
+                    ),
+                )
+                workspace = self._workspace_by_id(
+                    connection, user_id, str(operation["workspace_id"])
+                )
+                self._recalculate_and_save(
+                    connection,
+                    user_id=user_id,
+                    workspace=workspace,
+                    source_event_type="operation_revision",
+                    source_event_id=revision_id,
+                    snapshot_at=now,
+                )
+                symbol = str(operation["symbol"])
+        if symbol is None:
+            raise PositionLedgerNotFound("操作记录不存在")
+        return self.get_position(user_id, symbol)
+
+    def record_adjustment(
+        self,
+        *,
+        user_id: str,
+        symbol: str,
+        adjustment_type: str,
+        effective_at: str,
+        quantity_delta: str,
+        cost_delta: str,
+        reason_text: str,
+        evidence_text: str | None,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        canonical = normalize_symbol(symbol)
+        if adjustment_type not in self.ADJUSTMENT_TYPES:
+            raise PositionLedgerInvalidState("调整类型不受支持")
+        effective_time = self._datetime(effective_at, "调整生效时间")
+        quantity_value = self._decimal(quantity_delta, "数量调整")
+        cost_value = self._decimal(cost_delta, "成本调整")
+        if quantity_value == 0 and cost_value == 0:
+            raise PositionLedgerInvalidState("数量调整和成本调整不能同时为零")
+        reason = self._required_text(reason_text, "调整原因", 1200)
+        now = utc_now()
+        with self.database.connect() as connection:
+            workspace = self._workspace(connection, user_id, canonical)
+            repeated = connection.execute(
+                """
+                SELECT id FROM position_adjustments
+                WHERE user_id = ? AND idempotency_key = ?
+                """,
+                (user_id, idempotency_key),
+            ).fetchone()
+            if repeated is not None:
+                return self.get_position(user_id, canonical)
+            opening = self._opening(connection, user_id, str(workspace["id"]))
+            if effective_time.date() < date.fromisoformat(str(opening["as_of_date"])):
+                raise PositionLedgerInvalidState("调整生效时间不能早于期初持仓日期")
+            adjustment_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO position_adjustments(
+                    id, workspace_id, user_id, symbol, adjustment_type,
+                    effective_at, quantity_delta, cost_delta, reason_text,
+                    evidence_text, idempotency_key, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    adjustment_id,
+                    workspace["id"],
+                    user_id,
+                    canonical,
+                    adjustment_type,
+                    effective_time.isoformat(),
+                    self._quantity_text(quantity_value),
+                    self._amount_text(cost_value),
+                    reason,
+                    self._clean_text(evidence_text, 1200),
+                    idempotency_key,
+                    now,
+                ),
+            )
+            self._recalculate_and_save(
+                connection,
+                user_id=user_id,
+                workspace=workspace,
+                source_event_type="adjustment",
+                source_event_id=adjustment_id,
+                snapshot_at=effective_time.isoformat(),
+            )
+        return self.get_position(user_id, canonical)
+
+    def _recalculate_and_save(
+        self,
+        connection: Any,
+        *,
+        user_id: str,
+        workspace: Any,
+        source_event_type: str,
+        source_event_id: str,
+        snapshot_at: str,
+    ) -> dict[str, Any]:
+        opening = self._opening(connection, user_id, str(workspace["id"]))
+        operations = self._operation_rows(
+            connection, user_id=user_id, workspace_id=str(workspace["id"])
+        )
+        adjustments = [
+            dict(row)
+            for row in connection.execute(
+                """
+                SELECT * FROM position_adjustments
+                WHERE user_id = ? AND workspace_id = ?
+                ORDER BY effective_at ASC, created_at ASC, rowid ASC
+                """,
+                (user_id, workspace["id"]),
+            ).fetchall()
+        ]
+        calculated = self._calculate(dict(opening), operations, adjustments)
+        snapshot_id = str(uuid4())
+        connection.execute(
+            """
+            INSERT INTO position_snapshots(
+                id, workspace_id, user_id, symbol, snapshot_at,
+                source_event_type, source_event_id, quantity, cost_basis,
+                average_cost, realized_gross_pnl, realized_net_pnl,
+                known_fees, fees_complete, data_status, warnings_json,
+                calculation_version, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot_id,
+                workspace["id"],
+                user_id,
+                workspace["symbol"],
+                snapshot_at,
+                source_event_type,
+                source_event_id,
+                calculated["quantity"],
+                calculated["cost_basis"],
+                calculated["average_cost"],
+                calculated["realized_gross_pnl"],
+                calculated["realized_net_pnl"],
+                calculated["known_fees"],
+                int(calculated["fees_complete"]),
+                calculated["data_status"],
+                json_dumps(calculated["warnings"]),
+                self.CALCULATION_VERSION,
+                utc_now(),
+            ),
+        )
+        return calculated
+
+    def _calculate(
+        self,
+        opening: dict[str, Any],
+        operations: list[dict[str, Any]],
+        adjustments: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        quantity = self._decimal(opening["quantity"], "期初持仓数量")
+        opening_cost = self._decimal(opening["cost_price"], "期初持仓成本")
+        cost_basis = quantity * opening_cost
+        known_fees = Decimal("0")
+        fees_complete = opening.get("fees") is not None
+        if opening.get("fees") is not None:
+            opening_fees = self._decimal(opening["fees"], "期初费用")
+            cost_basis += opening_fees
+            known_fees += opening_fees
+        realized_gross = Decimal("0")
+        realized_net = Decimal("0")
+        events: list[tuple[datetime, int, dict[str, Any]]] = []
+        for operation in operations:
+            events.append(
+                (
+                    self._datetime(operation["operated_at"], "操作时间"),
+                    0,
+                    {"kind": "operation", **operation},
+                )
+            )
+        for adjustment in adjustments:
+            events.append(
+                (
+                    self._datetime(adjustment["effective_at"], "调整生效时间"),
+                    1,
+                    {"kind": "adjustment", **adjustment},
+                )
+            )
+        events.sort(key=lambda item: (item[0], item[1], str(item[2].get("created_at"))))
+
+        for _, _, event in events:
+            if event["kind"] == "adjustment":
+                quantity += self._decimal(event["quantity_delta"], "数量调整")
+                cost_basis += self._decimal(event["cost_delta"], "成本调整")
+                if quantity < 0:
+                    raise PositionLedgerInvalidState("调整后持仓数量不能为负数")
+                if cost_basis < 0:
+                    raise PositionLedgerInvalidState("调整后持仓成本不能为负数")
+                if quantity == 0:
+                    cost_basis = Decimal("0")
+                continue
+
+            operation_quantity = self._decimal(event["effective_quantity"], "操作数量")
+            operation_price = self._decimal(event["effective_price"], "操作价格")
+            fee = (
+                self._decimal(event["effective_fees"], "操作费用")
+                if event.get("effective_fees") is not None
+                else None
+            )
+            if fee is None:
+                fees_complete = False
+            else:
+                known_fees += fee
+            if event["operation_type"] in {"buy", "add"}:
+                cost_basis += operation_price * operation_quantity
+                if fee is not None:
+                    cost_basis += fee
+                quantity += operation_quantity
+                continue
+            if operation_quantity > quantity:
+                raise PositionLedgerInvalidState(
+                    f"{event['operated_at']} 的卖出数量超过当时可用持仓"
+                )
+            average_before = cost_basis / quantity if quantity else Decimal("0")
+            allocated_cost = average_before * operation_quantity
+            gross_result = operation_price * operation_quantity - allocated_cost
+            realized_gross += gross_result
+            realized_net += gross_result - (fee or Decimal("0"))
+            cost_basis -= allocated_cost
+            quantity -= operation_quantity
+            if quantity == 0:
+                cost_basis = Decimal("0")
+
+        warnings: list[str] = []
+        if not fees_complete:
+            warnings.append("部分费用尚未录入，不能展示伪精确净收益。")
+        if quantity == 0:
+            warnings.append("持仓数量已归零；是否转为关注或结束由用户确认。")
+        average_cost = cost_basis / quantity if quantity else None
+        return {
+            "quantity": self._quantity_text(quantity),
+            "cost_basis": self._amount_text(cost_basis),
+            "average_cost": self._price_text(average_cost)
+            if average_cost is not None
+            else None,
+            "realized_gross_pnl": self._amount_text(realized_gross),
+            "realized_net_pnl": self._amount_text(realized_net)
+            if fees_complete
+            else None,
+            "known_fees": self._amount_text(known_fees),
+            "fees_complete": fees_complete,
+            "data_status": "complete" if fees_complete else "partial",
+            "warnings": warnings,
+        }
+
+    def _operation_rows(
+        self, connection: Any, *, user_id: str, workspace_id: str
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            """
+            SELECT * FROM position_operations
+            WHERE user_id = ? AND workspace_id = ?
+            ORDER BY operated_at ASC, created_at ASC, rowid ASC
+            """,
+            (user_id, workspace_id),
+        ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            revision = connection.execute(
+                """
+                SELECT * FROM operation_revisions
+                WHERE user_id = ? AND operation_id = ?
+                ORDER BY revision_no DESC, rowid DESC LIMIT 1
+                """,
+                (user_id, item["id"]),
+            ).fetchone()
+            revision_item = dict(revision) if revision is not None else None
+            item["current_revision"] = int(
+                revision_item["revision_no"] if revision_item else 0
+            )
+            item["effective_price"] = (
+                revision_item["price"] if revision_item else item["price"]
+            )
+            item["effective_quantity"] = (
+                revision_item["quantity"] if revision_item else item["quantity"]
+            )
+            item["effective_fees"] = (
+                revision_item["fees"] if revision_item else item["fees"]
+            )
+            item["latest_revision"] = revision_item
+            items.append(item)
+        return items
+
+    def _packet(
+        self,
+        *,
+        workspace: Any,
+        opening: dict[str, Any],
+        snapshot: dict[str, Any] | None,
+        operations: list[dict[str, Any]],
+        adjustments: list[dict[str, Any]],
+        snapshots: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        public_snapshot = self._snapshot(snapshot) if snapshot else None
+        return {
+            "contract_version": self.CONTRACT_VERSION,
+            "status": (
+                "ready"
+                if public_snapshot and public_snapshot["data_status"] == "complete"
+                else "partial"
+            ),
+            "workspace_id": workspace["id"],
+            "symbol": workspace["symbol"],
+            "opening": self._opening_public(opening),
+            "current": public_snapshot,
+            "operations": [self._operation_public(item) for item in operations],
+            "adjustments": [self._adjustment_public(item) for item in adjustments],
+            "snapshots": [self._snapshot(item) for item in snapshots],
+            "completeness": {
+                "fees_complete": bool(
+                    public_snapshot and public_snapshot["fees_complete"]
+                ),
+                "can_show_precise_net_result": bool(
+                    public_snapshot
+                    and public_snapshot["realized_net_pnl"] is not None
+                ),
+                "method": self.CALCULATION_VERSION,
+            },
+            "boundary": (
+                "持仓由期初、操作、修正和非交易调整流水派生；"
+                "页面不能直接编辑快照。费用缺失时不展示伪精确净收益。"
+            ),
+        }
+
+    def _empty_packet(self, workspace: Any) -> dict[str, Any]:
+        return {
+            "contract_version": self.CONTRACT_VERSION,
+            "status": "not_configured",
+            "workspace_id": workspace["id"],
+            "symbol": workspace["symbol"],
+            "opening": None,
+            "current": None,
+            "operations": [],
+            "adjustments": [],
+            "snapshots": [],
+            "completeness": {
+                "fees_complete": False,
+                "can_show_precise_net_result": False,
+                "method": self.CALCULATION_VERSION,
+            },
+            "boundary": "录入期初持仓后，系统才会依据不可变流水派生持仓。",
+        }
+
+    @staticmethod
+    def _opening_public(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: item.get(key)
+            for key in (
+                "id",
+                "as_of_date",
+                "quantity",
+                "cost_price",
+                "fees",
+                "note",
+                "created_at",
+            )
+        }
+
+    @staticmethod
+    def _operation_public(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": item.get("id"),
+            "operation_type": item.get("operation_type"),
+            "operated_at": item.get("operated_at"),
+            "price": item.get("effective_price"),
+            "quantity": item.get("effective_quantity"),
+            "fees": item.get("effective_fees"),
+            "reason_text": item.get("reason_text"),
+            "plan_id": item.get("plan_id"),
+            "current_revision": item.get("current_revision"),
+            "latest_revision": (
+                {
+                    key: item["latest_revision"].get(key)
+                    for key in (
+                        "id",
+                        "revision_no",
+                        "price",
+                        "quantity",
+                        "fees",
+                        "reason_text",
+                        "created_at",
+                    )
+                }
+                if item.get("latest_revision")
+                else None
+            ),
+            "created_at": item.get("created_at"),
+        }
+
+    @staticmethod
+    def _adjustment_public(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: item.get(key)
+            for key in (
+                "id",
+                "adjustment_type",
+                "effective_at",
+                "quantity_delta",
+                "cost_delta",
+                "reason_text",
+                "evidence_text",
+                "created_at",
+            )
+        }
+
+    @staticmethod
+    def _snapshot(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": item.get("id"),
+            "snapshot_at": item.get("snapshot_at"),
+            "source_event_type": item.get("source_event_type"),
+            "source_event_id": item.get("source_event_id"),
+            "quantity": item.get("quantity"),
+            "cost_basis": item.get("cost_basis"),
+            "average_cost": item.get("average_cost"),
+            "realized_gross_pnl": item.get("realized_gross_pnl"),
+            "realized_net_pnl": item.get("realized_net_pnl"),
+            "known_fees": item.get("known_fees"),
+            "fees_complete": bool(item.get("fees_complete")),
+            "data_status": item.get("data_status"),
+            "warnings": json.loads(item.get("warnings_json") or "[]"),
+            "calculation_version": item.get("calculation_version"),
+            "created_at": item.get("created_at"),
+        }
+
+    def _opening(self, connection: Any, user_id: str, workspace_id: str) -> Any:
+        row = connection.execute(
+            """
+            SELECT * FROM position_openings
+            WHERE user_id = ? AND workspace_id = ?
+            """,
+            (user_id, workspace_id),
+        ).fetchone()
+        if row is None:
+            raise PositionLedgerInvalidState("请先录入期初持仓")
+        return row
+
+    @staticmethod
+    def _workspace(connection: Any, user_id: str, symbol: str) -> Any:
+        row = connection.execute(
+            """
+            SELECT * FROM stock_workspaces
+            WHERE user_id = ? AND symbol = ?
+            """,
+            (user_id, symbol),
+        ).fetchone()
+        if row is None:
+            raise PositionLedgerNotFound("股票研究空间不存在")
+        return row
+
+    @staticmethod
+    def _workspace_by_id(connection: Any, user_id: str, workspace_id: str) -> Any:
+        row = connection.execute(
+            """
+            SELECT * FROM stock_workspaces
+            WHERE user_id = ? AND id = ?
+            """,
+            (user_id, workspace_id),
+        ).fetchone()
+        if row is None:
+            raise PositionLedgerNotFound("股票研究空间不存在")
+        return row
+
+    @staticmethod
+    def _mark_workspace_holding(
+        connection: Any, *, workspace: Any, user_id: str, now: str
+    ) -> None:
+        if workspace["relation_type"] == "holding":
+            return
+        connection.execute(
+            """
+            UPDATE stock_relation_history SET ended_at = ?
+            WHERE workspace_id = ? AND ended_at IS NULL
+            """,
+            (now, workspace["id"]),
+        )
+        connection.execute(
+            """
+            INSERT INTO stock_relation_history(
+                id, workspace_id, user_id, relation_type, priority,
+                tracking_status, source, effective_at, ended_at
+            ) VALUES (?, ?, ?, 'holding', NULL, 'active',
+                      'position_opening', ?, NULL)
+            """,
+            (str(uuid4()), workspace["id"], user_id, now),
+        )
+        connection.execute(
+            """
+            UPDATE stock_workspaces
+            SET relation_type = 'holding', priority = NULL,
+                tracking_status = 'active', version = version + 1,
+                updated_at = ?, ended_at = NULL
+            WHERE id = ? AND user_id = ?
+            """,
+            (now, workspace["id"], user_id),
+        )
+
+    @staticmethod
+    def _required_text(value: str, label: str, limit: int) -> str:
+        cleaned = str(value or "").strip()
+        if not cleaned:
+            raise PositionLedgerInvalidState(f"{label}不能为空")
+        return cleaned[:limit]
+
+    @staticmethod
+    def _clean_text(value: str | None, limit: int) -> str | None:
+        cleaned = str(value or "").strip()
+        return cleaned[:limit] if cleaned else None
+
+    @staticmethod
+    def _date(value: str, label: str) -> date:
+        try:
+            return date.fromisoformat(str(value))
+        except ValueError as exc:
+            raise PositionLedgerInvalidState(f"{label}必须使用 YYYY-MM-DD") from exc
+
+    @staticmethod
+    def _datetime(value: str, label: str) -> datetime:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise PositionLedgerInvalidState(f"{label}必须使用 ISO 8601 时间") from exc
+        if parsed.tzinfo is None:
+            raise PositionLedgerInvalidState(f"{label}必须包含时区")
+        return parsed
+
+    def _positive_decimal(self, value: str, label: str) -> Decimal:
+        parsed = self._decimal(value, label)
+        if parsed <= 0:
+            raise PositionLedgerInvalidState(f"{label}必须大于零")
+        return parsed
+
+    def _non_negative_decimal(self, value: str, label: str) -> Decimal:
+        parsed = self._decimal(value, label)
+        if parsed < 0:
+            raise PositionLedgerInvalidState(f"{label}不能为负数")
+        return parsed
+
+    def _optional_non_negative_decimal(
+        self, value: str | None, label: str
+    ) -> Decimal | None:
+        if value is None or not str(value).strip():
+            return None
+        return self._non_negative_decimal(value, label)
+
+    @staticmethod
+    def _decimal(value: str, label: str) -> Decimal:
+        try:
+            parsed = Decimal(str(value))
+        except (InvalidOperation, ValueError) as exc:
+            raise PositionLedgerInvalidState(f"{label}不是有效数字") from exc
+        if not parsed.is_finite():
+            raise PositionLedgerInvalidState(f"{label}不是有效数字")
+        return parsed
+
+    def _price_text(self, value: Decimal) -> str:
+        return self._decimal_text(value, self._PRICE_QUANT)
+
+    def _quantity_text(self, value: Decimal) -> str:
+        return self._decimal_text(value, self._QUANTITY_QUANT)
+
+    def _amount_text(self, value: Decimal) -> str:
+        return self._decimal_text(value, self._AMOUNT_QUANT)
+
+    @staticmethod
+    def _decimal_text(value: Decimal, quant: Decimal) -> str:
+        normalized = value.quantize(quant, rounding=ROUND_HALF_UP)
+        if normalized == 0:
+            normalized = abs(normalized)
+        return format(normalized, "f")

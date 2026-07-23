@@ -76,6 +76,7 @@ class StockWorkspaceService:
         research_actions: ResearchActionService,
         observation_tasks: ObservationTaskService,
         li_zong_strategy: Any | None = None,
+        position_ledger: Any | None = None,
     ):
         self.database = database
         self.deep_stock = deep_stock
@@ -83,6 +84,7 @@ class StockWorkspaceService:
         self.research_actions = research_actions
         self.observation_tasks = observation_tasks
         self.li_zong_strategy = li_zong_strategy
+        self.position_ledger = position_ledger
 
     def get_workspace(self, user_id: str, symbol: str) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
@@ -212,6 +214,7 @@ class StockWorkspaceService:
             if sufficient_dimensions == len(dimensions) and dimensions
             else "partial"
         )
+        position = self._position(user_id, canonical, formal_workspace)
 
         return {
             "contract_version": self.CONTRACT_VERSION,
@@ -224,10 +227,7 @@ class StockWorkspaceService:
                 "data_status": data_status,
             },
             "relation": relation,
-            "position_snapshot": {
-                "available": False,
-                "status": "not_configured",
-            },
+            "position_snapshot": position,
             "thesis": thesis,
             "important_changes": important_changes,
             "pending_actions": pending_actions,
@@ -266,16 +266,24 @@ class StockWorkspaceService:
                     if important_changes
                     else None
                 ),
+                "position_operation_count": len(position.get("operations") or []),
+                "position_snapshot_count": len(position.get("snapshots") or []),
             },
             "completeness": {
                 "has_stock_space": formal_workspace is not None,
                 "has_thesis": bool(thesis.get("summary")),
                 "has_research_session": session is not None,
                 "has_latest_report": report is not None,
+                "has_position_opening": position.get("opening") is not None,
                 "evidence_dimensions": len(dimensions),
                 "sufficient_dimensions": sufficient_dimensions,
                 "missing_items": self._completeness_missing(
-                    formal_workspace, thesis, session, report, coverage_tasks
+                    formal_workspace,
+                    thesis,
+                    session,
+                    report,
+                    coverage_tasks,
+                    position,
                 ),
             },
             "boundary": (
@@ -308,6 +316,7 @@ class StockWorkspaceService:
             "name": workspace["name"],
             "important_changes": workspace["important_changes"],
             "recent_research": workspace["recent_research"],
+            "position": workspace["position_snapshot"],
             "history_summary": workspace["history_summary"],
             "data_meta": workspace["data_meta"],
         }
@@ -322,11 +331,37 @@ class StockWorkspaceService:
             "stage_progress": workspace["stage_progress"],
             "pending_actions": workspace["pending_actions"],
             "observation_tasks": workspace["observation_tasks"],
+            "position": workspace["position_snapshot"],
             "next_evidence": workspace["next_evidence"],
             "boundary": (
                 "研究行动只用于核验事实、补充证据和复核判断；"
                 "不生成买卖、仓位、目标价或收益承诺。"
             ),
+        }
+
+    def _position(
+        self,
+        user_id: str,
+        symbol: str,
+        formal_workspace: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        if formal_workspace is None or self.position_ledger is None:
+            return {
+                "available": False,
+                "status": "not_configured",
+            }
+        try:
+            packet = self.position_ledger.get_position(user_id, symbol)
+        except Exception:
+            return {
+                "available": False,
+                "status": "partial",
+            }
+        if packet.get("status") == "not_configured":
+            return {"available": False, "status": "not_configured"}
+        return {
+            "available": packet.get("status") != "not_configured",
+            **packet,
         }
 
     @staticmethod
@@ -1241,6 +1276,7 @@ class StockWorkspaceService:
         session: dict[str, Any] | None,
         report: dict[str, Any] | None,
         coverage_tasks: list[dict[str, Any]],
+        position: dict[str, Any],
     ) -> list[str]:
         missing: list[str] = []
         if workspace is None:
@@ -1251,6 +1287,14 @@ class StockWorkspaceService:
             missing.append("尚未启动股票内研究对话")
         if report is None:
             missing.append("尚未建立服务器端研究报告")
+        if (
+            workspace is not None
+            and workspace.get("relation_type") == "holding"
+            and not position.get("opening")
+        ):
+            missing.append("持仓关系尚未录入期初数量和成本")
+        if (position.get("current") or {}).get("data_status") == "partial":
+            missing.append("持仓费用或调整依据尚未完整")
         if coverage_tasks:
             missing.append(f"仍有{len(coverage_tasks)}个证据维度需要补充或复核")
         return missing
