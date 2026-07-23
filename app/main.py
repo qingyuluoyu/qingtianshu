@@ -56,6 +56,7 @@ from app.services.business_structure import BusinessStructureAnalysisService
 from app.services.shareholders import ShareholderStructureAnalysisService
 from app.services.analyst_expectations import AnalystExpectationsService
 from app.services.china_info import ChinaInformationService
+from app.services.change_events import ChangeEventNotFound, ChangeEventService
 from app.services.conversation_quality import ConversationQualityService
 from app.services.deep_stock import DeepStockResearchService
 from app.services.stock_screener import (
@@ -149,6 +150,10 @@ class WatchlistUpsert(BaseModel):
 class MemoryCandidateCreate(BaseModel):
     kind: str = Field(default="preference", min_length=1, max_length=40)
     content: str = Field(min_length=1, max_length=2000)
+
+
+class ChangeRelevanceUpdate(BaseModel):
+    relevance_status: Literal["relevant", "irrelevant"]
 
 
 class ChatRequest(BaseModel):
@@ -446,9 +451,7 @@ def _public_li_zong_candidate(item: dict[str, Any]) -> dict[str, Any]:
             "market_cap_yi": (actual("LZ-F-01") or {}).get("market_cap_yi"),
             "roe_min_pct": min(roe_values) if roe_values else None,
             "annual_roe_years": len(roe_values),
-            "non_natural_holder_count": shareholder.get(
-                "non_natural_holder_count"
-            ),
+            "non_natural_holder_count": shareholder.get("non_natural_holder_count"),
             "unknown_holder_count": shareholder.get("unknown_holder_count"),
             "annual_limit_up_count": annual_limits.get("limit_up_count"),
             "has_consecutive_limit_up": (
@@ -513,9 +516,7 @@ def _build_visible_evidence_sources(
 
     quote = packet.get("current_quote") or {}
     quote_price = _public_evidence_number(quote.get("price"))
-    quote_change = _public_evidence_number(
-        quote.get("pct_change"), signed=True
-    )
+    quote_change = _public_evidence_number(quote.get("pct_change"), signed=True)
     if quote_price is not None:
         currency = str(quote.get("currency") or "").strip()
         quote_label = str(quote.get("quote_label") or "最新报价").strip()
@@ -540,9 +541,7 @@ def _build_visible_evidence_sources(
         trend_state = str(metrics.get("trend_state") or "").strip()
         if trend_state:
             daily_parts.append(f"趋势结构 {trend_state}")
-        return_20d = _public_evidence_number(
-            metrics.get("return_20d_pct"), signed=True
-        )
+        return_20d = _public_evidence_number(metrics.get("return_20d_pct"), signed=True)
         if return_20d is not None:
             daily_parts.append(f"近20日 {return_20d}%")
         volatility = _public_evidence_number(
@@ -570,8 +569,7 @@ def _build_visible_evidence_sources(
             "财务证据",
             f"{display_name}{report_name}财报质量",
             earnings_quality.get("summary"),
-            as_of=latest_report.get("notice_date")
-            or latest_report.get("report_date"),
+            as_of=latest_report.get("notice_date") or latest_report.get("report_date"),
             source="定期报告与确定性财务分析",
         )
 
@@ -587,8 +585,7 @@ def _build_visible_evidence_sources(
             "财务拆解",
             f"{display_name}{period_name}利润与现金流拆解",
             financial_drivers.get("summary"),
-            as_of=latest_period.get("notice_date")
-            or latest_period.get("report_date"),
+            as_of=latest_period.get("notice_date") or latest_period.get("report_date"),
             source="三表科目与财报原文",
         )
 
@@ -662,9 +659,7 @@ def _build_visible_evidence_sources(
     index_parts: list[str] = []
     for item in indices[:4]:
         metrics_item = item.get("metrics") or {}
-        change = _public_evidence_number(
-            metrics_item.get("return_1d_pct"), signed=True
-        )
+        change = _public_evidence_number(metrics_item.get("return_1d_pct"), signed=True)
         if change is not None:
             index_parts.append(f"{item.get('name') or item.get('symbol')} {change}%")
     if index_parts:
@@ -709,9 +704,7 @@ def _build_visible_evidence_sources(
         )
 
     if packet.get("type") == "stock_screen":
-        screen_date = (packet.get("data_meta") or {}).get(
-            "latest_completed_trade_date"
-        )
+        screen_date = (packet.get("data_meta") or {}).get("latest_completed_trade_date")
         for item in (packet.get("items") or [])[:6]:
             reasons = "；".join(
                 str(value) for value in (item.get("matched_reasons") or [])[:2]
@@ -780,7 +773,9 @@ def create_app(
     settings.ensure_directories()
     database = Database(settings.database_path, settings.workspace_root)
     database.initialize()
-    knowledge = KnowledgeService(database, PROJECT_ROOT / "app" / "knowledge" / "common")
+    knowledge = KnowledgeService(
+        database, PROJECT_ROOT / "app" / "knowledge" / "common"
+    )
     knowledge.seed_common_documents()
     supplied_market_provider = market_provider
     market_provider = market_provider or YahooMarketProvider(
@@ -838,7 +833,10 @@ def create_app(
         database, china_info_provider or AShareInformationProvider()
     )
     event_timeline = EventTimelineService(database, china_info)
-    a_share_fundamentals_provider = fundamentals_provider or AShareFundamentalsProvider()
+    change_events = ChangeEventService(database)
+    a_share_fundamentals_provider = (
+        fundamentals_provider or AShareFundamentalsProvider()
+    )
     fundamentals = FundamentalsService(database, a_share_fundamentals_provider)
     global_info = GlobalInformationService(
         database, global_info_provider or NasdaqCompanyNewsProvider()
@@ -850,9 +848,7 @@ def create_app(
     us_fundamentals = USEquityFundamentalsService(
         database, us_equity_fundamentals_provider
     )
-    filings = AShareFilingService(
-        database, filing_provider or AShareFilingProvider()
-    )
+    filings = AShareFilingService(database, filing_provider or AShareFilingProvider())
     business_structure = BusinessStructureAnalysisService(
         database,
         business_structure_provider or AShareBusinessStructureProvider(),
@@ -952,6 +948,7 @@ def create_app(
         li_zong_strategy=li_zong_strategy,
         position_ledger=position_ledger,
         trade_workflow=trade_workflow,
+        change_events=change_events,
     )
     stock_assets = StockAssetListService(database, stock_workspace)
     today_overview = TodayOverviewService(
@@ -962,6 +959,7 @@ def create_app(
         research_tracking,
         structured_ai,
         trade_workflow=trade_workflow,
+        change_events=change_events,
     )
     event_broker = EventBroker()
     agent_streams = AgentStreamBroker()
@@ -992,6 +990,7 @@ def create_app(
         tushare_snapshots=tushare_snapshots,
         li_zong_strategy=li_zong_strategy,
         trade_workflow=trade_workflow,
+        change_events=change_events,
     )
 
     @asynccontextmanager
@@ -1015,6 +1014,7 @@ def create_app(
     app.state.articles = articles
     app.state.china_info = china_info
     app.state.event_timeline = event_timeline
+    app.state.change_events = change_events
     app.state.fundamentals = fundamentals
     app.state.global_info = global_info
     app.state.us_fundamentals = us_fundamentals
@@ -1385,9 +1385,7 @@ def create_app(
         return public_conversation(conversation)
 
     @app.delete("/me/conversations/{conversation_id}", status_code=204)
-    def archive_my_conversation(
-        conversation_id: str, request: Request
-    ) -> Response:
+    def archive_my_conversation(conversation_id: str, request: Request) -> Response:
         user = require_session_user(request)
         if not database.archive_conversation(user["id"], conversation_id):
             raise HTTPException(status_code=404, detail="研究对话不存在")
@@ -1462,9 +1460,7 @@ def create_app(
             "symbol": _external_ts_code(normalize_symbol(symbol)),
             "status": (result.get("run") or {}).get("status"),
             "published": bool(result.get("published")),
-            "previous_stable_retained": bool(
-                result.get("previous_stable_retained")
-            ),
+            "previous_stable_retained": bool(result.get("previous_stable_retained")),
             "run": result.get("run"),
             "snapshot": result.get("snapshot"),
         }
@@ -1593,9 +1589,7 @@ def create_app(
         has_universe = bool(coverage.get("universe_count"))
         counts = coverage.get("counts") if has_universe else visible_counts
         published_status = (
-            "ready"
-            if items or coverage.get("status") == "stable"
-            else "preparing"
+            "ready" if items or coverage.get("status") == "stable" else "preparing"
         )
         return {
             "strategy": li_zong_strategy.get_definition(),
@@ -1607,7 +1601,9 @@ def create_app(
                 "latest_as_of_date": (
                     coverage.get("as_of_date")
                     if has_universe
-                    else as_of_dates[0] if as_of_dates else None
+                    else as_of_dates[0]
+                    if as_of_dates
+                    else None
                 ),
                 "evaluated_symbols": (
                     coverage.get("evaluated_symbols") if has_universe else len(items)
@@ -1628,43 +1624,25 @@ def create_app(
                 "history_insufficient_count": (
                     coverage.get("history_insufficient_count") or 0
                 ),
-                "history_unknown_count": (
-                    coverage.get("history_unknown_count") or 0
-                ),
-                "deep_processed_symbols": (
-                    coverage.get("deep_processed_symbols") or 0
-                ),
-                "deep_remaining_symbols": (
-                    coverage.get("deep_remaining_symbols") or 0
-                ),
-                "deep_processing_ratio": (
-                    coverage.get("deep_processing_ratio") or 0
-                ),
-                "deep_decisive_symbols": (
-                    coverage.get("deep_decisive_symbols") or 0
-                ),
+                "history_unknown_count": (coverage.get("history_unknown_count") or 0),
+                "deep_processed_symbols": (coverage.get("deep_processed_symbols") or 0),
+                "deep_remaining_symbols": (coverage.get("deep_remaining_symbols") or 0),
+                "deep_processing_ratio": (coverage.get("deep_processing_ratio") or 0),
+                "deep_decisive_symbols": (coverage.get("deep_decisive_symbols") or 0),
                 "deep_data_incomplete_symbols": (
                     coverage.get("deep_data_incomplete_symbols") or 0
                 ),
-                "decisive_status_count": (
-                    coverage.get("decisive_status_count") or 0
-                ),
+                "decisive_status_count": (coverage.get("decisive_status_count") or 0),
                 "decisive_coverage_ratio": (
                     coverage.get("decisive_coverage_ratio") or 0
                 ),
                 "remaining_symbols": coverage.get("remaining_symbols") or 0,
                 "coverage_ratio": coverage.get("coverage_ratio") or 0,
                 "scope": (
-                    coverage.get("scope")
-                    if has_universe
-                    else "published_research_pool"
+                    coverage.get("scope") if has_universe else "published_research_pool"
                 ),
-                "full_market_coverage": bool(
-                    coverage.get("full_market_coverage")
-                ),
-                "deep_check_complete": bool(
-                    coverage.get("deep_check_complete")
-                ),
+                "full_market_coverage": bool(coverage.get("full_market_coverage")),
+                "deep_check_complete": bool(coverage.get("deep_check_complete")),
                 "latest_run": coverage.get("latest_run"),
             },
             "boundary": (
@@ -1776,9 +1754,7 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/v1/stocks/{symbol}/workspace/actions")
-    def get_my_stock_workspace_actions(
-        symbol: str, request: Request
-    ) -> dict[str, Any]:
+    def get_my_stock_workspace_actions(symbol: str, request: Request) -> dict[str, Any]:
         user = require_session_user(request)
         try:
             return stock_workspace.get_actions_workspace(user["id"], symbol)
@@ -1936,9 +1912,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/v1/action-plans/{plan_id}/history")
-    def get_my_action_plan_history(
-        plan_id: str, request: Request
-    ) -> dict[str, Any]:
+    def get_my_action_plan_history(plan_id: str, request: Request) -> dict[str, Any]:
         user = require_session_user(request)
         try:
             plan = trade_workflow.get_action_plan(user["id"], plan_id)
@@ -1990,9 +1964,7 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/v1/operations/{operation_id}/context")
-    def get_my_operation_context(
-        operation_id: str, request: Request
-    ) -> dict[str, Any]:
+    def get_my_operation_context(operation_id: str, request: Request) -> dict[str, Any]:
         user = require_session_user(request)
         try:
             return trade_workflow.get_operation_context(user["id"], operation_id)
@@ -2352,9 +2324,7 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/v1/ai-writebacks/{candidate_id}")
-    def get_my_ai_writeback(
-        candidate_id: str, request: Request
-    ) -> dict[str, Any]:
+    def get_my_ai_writeback(candidate_id: str, request: Request) -> dict[str, Any]:
         user = require_session_user(request)
         try:
             return structured_ai.get_writeback(
@@ -2364,9 +2334,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.post("/v1/ai-writebacks/{candidate_id}/confirm")
-    def confirm_my_ai_writeback(
-        candidate_id: str, request: Request
-    ) -> dict[str, Any]:
+    def confirm_my_ai_writeback(candidate_id: str, request: Request) -> dict[str, Any]:
         user = require_session_user(request)
         try:
             return structured_ai.confirm_writeback(
@@ -2384,9 +2352,7 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.post("/v1/ai-writebacks/{candidate_id}/reject")
-    def reject_my_ai_writeback(
-        candidate_id: str, request: Request
-    ) -> dict[str, Any]:
+    def reject_my_ai_writeback(candidate_id: str, request: Request) -> dict[str, Any]:
         user = require_session_user(request)
         try:
             return structured_ai.reject_writeback(
@@ -2417,9 +2383,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="资料不存在")
         content = str(document.get("content") or "")
         return {
-            **knowledge.public_document(
-                {**document, "content_chars": len(content)}
-            ),
+            **knowledge.public_document({**document, "content_chars": len(content)}),
             "content": content,
         }
 
@@ -2590,6 +2554,57 @@ def create_app(
         user = require_session_user(request)
         return today_overview.get_overview(user["id"])
 
+    @app.get("/api/v1/changes", include_in_schema=False)
+    @app.get("/v1/changes")
+    def list_my_change_events(
+        request: Request,
+        symbol: str | None = Query(default=None, max_length=24),
+        relevance_status: Literal["pending", "relevant", "irrelevant"] | None = Query(
+            default=None
+        ),
+        limit: int = Query(default=50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return change_events.get_user_packet(
+                user["id"],
+                symbol=symbol,
+                relevance_status=relevance_status,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/v1/changes/{link_id}")
+    def get_my_change_event(link_id: str, request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return change_events.get_user_change(user["id"], link_id)
+        except ChangeEventNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/v1/user-changes/{link_id}/read")
+    def mark_my_change_event_read(link_id: str, request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return change_events.mark_read(user["id"], link_id)
+        except ChangeEventNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/v1/user-changes/{link_id}/relevance")
+    def set_my_change_event_relevance(
+        link_id: str, payload: ChangeRelevanceUpdate, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return change_events.set_relevance(
+                user["id"], link_id, payload.relevance_status
+            )
+        except ChangeEventNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.get("/a-share/{symbol}/information")
     def get_a_share_information(symbol: str) -> dict[str, Any]:
         try:
@@ -2681,9 +2696,13 @@ def create_app(
 
     @app.get("/a-share/news")
     def get_latest_a_share_news(
-        limit: int = Query(default=30, ge=1, le=100)
+        limit: int = Query(default=30, ge=1, le=100),
     ) -> dict[str, Any]:
-        return {"items": database.list_news(limit=limit, categories=("announcement", "news"))}
+        return {
+            "items": database.list_news(
+                limit=limit, categories=("announcement", "news")
+            )
+        }
 
     @app.get("/users/{user_id}/watchlist")
     def list_watchlist(user_id: str, request: Request) -> dict[str, Any]:
@@ -2777,9 +2796,7 @@ def create_app(
         return memory
 
     @app.post("/users/{user_id}/memories/{memory_id}/reject")
-    def reject_memory(
-        user_id: str, memory_id: str, request: Request
-    ) -> dict[str, Any]:
+    def reject_memory(user_id: str, memory_id: str, request: Request) -> dict[str, Any]:
         require_user(request, user_id)
         memory = database.reject_memory(user_id, memory_id)
         if memory is None:
@@ -2831,22 +2848,21 @@ def create_app(
 
     @app.get("/research-reports")
     def list_research_reports(
-        limit: int = Query(default=20, ge=1, le=100)
+        limit: int = Query(default=20, ge=1, le=100),
     ) -> dict[str, Any]:
         return {"items": research_reports.list_latest(limit=limit)}
 
     @app.get("/research-method")
     def get_research_method(
-        limit: int = Query(default=4, ge=1, le=12)
+        limit: int = Query(default=4, ge=1, le=12),
     ) -> dict[str, Any]:
         recent = []
         for report in database.list_latest_research_reports(limit=limit):
             evidence = report.get("evidence") or {}
             board = evidence.get("analysis_board") or {}
-            display_name = (
-                RESEARCH_TARGETS.get(str(report.get("symbol")), {}).get("name")
-                or report.get("name")
-            )
+            display_name = RESEARCH_TARGETS.get(str(report.get("symbol")), {}).get(
+                "name"
+            ) or report.get("name")
             report_title = str(report.get("title") or "")
             if report.get("name") and display_name:
                 report_title = report_title.replace(
@@ -2992,9 +3008,7 @@ def create_app(
     ) -> dict[str, Any]:
         user = require_session_user(request)
         try:
-            return research_tracking.get_packet(
-                user["id"], symbol=symbol, limit=limit
-            )
+            return research_tracking.get_packet(user["id"], symbol=symbol, limit=limit)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -3172,9 +3186,7 @@ def create_app(
     ) -> dict[str, Any]:
         user = require_session_user(request)
         try:
-            return research_outcomes.get_packet(
-                user["id"], symbol=symbol, limit=limit
-            )
+            return research_outcomes.get_packet(user["id"], symbol=symbol, limit=limit)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -3200,9 +3212,7 @@ def create_app(
         return research_reports.public_report(report)
 
     @app.post("/users/{user_id}/chat")
-    def chat(
-        user_id: str, payload: ChatRequest, request: Request
-    ) -> dict[str, Any]:
+    def chat(user_id: str, payload: ChatRequest, request: Request) -> dict[str, Any]:
         request_started = time.perf_counter()
         user = require_user(request, user_id)
         if payload.request_id and payload.execute_agent:
@@ -3223,9 +3233,7 @@ def create_app(
                 "request_id": payload.request_id,
                 "phase": phase,
                 "label": label,
-                "elapsed_seconds": round(
-                    time.perf_counter() - request_started, 3
-                ),
+                "elapsed_seconds": round(time.perf_counter() - request_started, 3),
                 "time": utc_now(),
                 **details,
             }
@@ -3238,9 +3246,7 @@ def create_app(
         )
         message = payload.message.strip()
         if payload.conversation_id:
-            conversation = database.get_conversation(
-                user_id, payload.conversation_id
-            )
+            conversation = database.get_conversation(user_id, payload.conversation_id)
             if conversation is None or conversation.get("status") != "active":
                 raise HTTPException(status_code=404, detail="研究对话不存在")
         else:
@@ -3254,9 +3260,12 @@ def create_app(
             user_id, conversation_id, limit=40
         )
         if not history and conversation.get("title") == "新的研究对话":
-            conversation = database.rename_conversation(
-                user_id, conversation_id, _conversation_title(message)
-            ) or conversation
+            conversation = (
+                database.rename_conversation(
+                    user_id, conversation_id, _conversation_title(message)
+                )
+                or conversation
+            )
         symbol = _extract_symbol(
             payload.symbol,
             message,
@@ -3301,7 +3310,8 @@ def create_app(
         if (
             symbol is None
             and not explicit_market_query
-            and prior_intent in {
+            and prior_intent
+            in {
                 "stock_research",
                 "research_tracking",
                 "research_outcome",
@@ -3330,10 +3340,14 @@ def create_app(
         if payload.image_id:
             upload = database.get_user_upload(user_id, payload.image_id)
             if upload is None:
-                raise HTTPException(status_code=404, detail="图片不存在或不属于当前用户")
+                raise HTTPException(
+                    status_code=404, detail="图片不存在或不属于当前用户"
+                )
             image_path = upload["workspace_path"]
             if not Path(image_path).is_file():
-                raise HTTPException(status_code=410, detail="图片文件已失效，请重新上传")
+                raise HTTPException(
+                    status_code=410, detail="图片文件已失效，请重新上传"
+                )
             database.mark_user_upload_used(user_id, payload.image_id)
             model_tier = "vision"
 
@@ -3417,16 +3431,12 @@ def create_app(
                 .get("items", [])[:6]
             ]
             market_key = (
-                (evidence_payload or {})
-                .get("market_drivers", {})
-                .get("market_key")
+                (evidence_payload or {}).get("market_drivers", {}).get("market_key")
             )
             research_targets: list[dict[str, str]] = []
             if response_intent == "stock_screen":
                 screen_evidence = evidence_payload or {}
-                requested_targets = list(
-                    screen_evidence.get("requested_symbols") or []
-                )
+                requested_targets = list(screen_evidence.get("requested_symbols") or [])
                 if not requested_targets and screen_evidence.get("requested_symbol"):
                     requested_targets = [screen_evidence["requested_symbol"]]
                 item_targets = {
@@ -3483,11 +3493,18 @@ def create_app(
                 "structured_answer": structured_answer,
             }
 
-        if any(keyword in message for keyword in ("行情文章", "市场文章", "市场脉冲", "生成文章")):
+        if any(
+            keyword in message
+            for keyword in ("行情文章", "市场文章", "市场脉冲", "生成文章")
+        ):
             if upload is not None:
-                raise HTTPException(status_code=422, detail="图片不用于全站市场文章生成")
+                raise HTTPException(
+                    status_code=422, detail="图片不用于全站市场文章生成"
+                )
             result = articles.generate(
-                model_tier=payload.model_tier if payload.model_tier != "vision" else "economy",
+                model_tier=payload.model_tier
+                if payload.model_tier != "vision"
+                else "economy",
                 execute_agent=payload.execute_agent,
                 force=False,
             )
@@ -3505,7 +3522,9 @@ def create_app(
             )
         if any(keyword in message for keyword in ("加入自选", "添加自选", "加到自选")):
             if symbol is None:
-                raise HTTPException(status_code=422, detail="没有识别到要添加的证券代码")
+                raise HTTPException(
+                    status_code=422, detail="没有识别到要添加的证券代码"
+                )
             item = database.upsert_watchlist(
                 user_id,
                 symbol,
@@ -3566,9 +3585,7 @@ def create_app(
             deep_eligible = int(coverage.get("deep_check_eligible_count") or 0)
             deep_processed = int(coverage.get("deep_processed_symbols") or 0)
             deep_complete = bool(coverage.get("deep_check_complete"))
-            history_insufficient = int(
-                coverage.get("history_insufficient_count") or 0
-            )
+            history_insufficient = int(coverage.get("history_insufficient_count") or 0)
             history_unknown = int(coverage.get("history_unknown_count") or 0)
             warnings: list[str] = []
             if coverage.get("status") != "stable":
@@ -3641,9 +3658,7 @@ def create_app(
                 },
                 "selection_mode": selection_mode,
                 "requested_symbol": (
-                    requested_symbols[0]
-                    if len(requested_symbols) == 1
-                    else None
+                    requested_symbols[0] if len(requested_symbols) == 1 else None
                 ),
                 "requested_symbols": requested_symbols,
                 "missing_requested_symbols": missing_requested_symbols,
@@ -3685,9 +3700,7 @@ def create_app(
                 },
                 "user_question": message,
                 "warnings": warnings,
-                "boundary": (
-                    "该策略只生成研究候选和人工复核触发，不构成买卖建议。"
-                ),
+                "boundary": ("该策略只生成研究候选和人工复核触发，不构成买卖建议。"),
             }
         elif stock_screen_query and upload is None:
             intent = "stock_screen"
@@ -4048,24 +4061,17 @@ def create_app(
             evidence["fundamental_summary"] = fundamental_packet.get("summary") or {}
             evidence["related_information"] = related_information
             if symbol.endswith((".SS", ".SZ")):
-                report_period = (evidence.get("latest_report") or {}).get(
-                    "report_date"
-                )
+                report_period = (evidence.get("latest_report") or {}).get("report_date")
                 try:
                     filing_evidence = filings.get_packet(
                         symbol, report_period=report_period
                     )
-                    if (
-                        filing_evidence.get("status") != "available"
-                        and report_period
-                    ):
-                        filing_evidence = filings.ensure_report(
-                            symbol, report_period
-                        )
+                    if filing_evidence.get("status") != "available" and report_period:
+                        filing_evidence = filings.ensure_report(symbol, report_period)
                     evidence["filing_evidence"] = filing_evidence
-                    evidence["company_explanations"] = filing_evidence.get(
-                        "explicit_company_explanations"
-                    ) or []
+                    evidence["company_explanations"] = (
+                        filing_evidence.get("explicit_company_explanations") or []
+                    )
                 except Exception:
                     evidence["company_explanations"] = []
             watchlist_item = database.get_watchlist_item(user_id, symbol)
@@ -4095,9 +4101,12 @@ def create_app(
                 focus_key=question_focus["key"],
             )
             if explicit_industry_topic:
-                target_market_date = str(
-                    (evidence.get("analysis_target") or {}).get("market_date") or ""
-                ).strip() or None
+                target_market_date = (
+                    str(
+                        (evidence.get("analysis_target") or {}).get("market_date") or ""
+                    ).strip()
+                    or None
+                )
                 evidence["industry_focus"] = {
                     "name": explicit_industry_topic,
                     "market_scope": "A股",
@@ -4197,7 +4206,9 @@ def create_app(
                             symbol, generate_if_missing=False
                         )
                         if latest_report is None or not latest_report.get("evidence"):
-                            raise HTTPException(status_code=502, detail=str(exc)) from exc
+                            raise HTTPException(
+                                status_code=502, detail=str(exc)
+                            ) from exc
                         evidence = dict(latest_report["evidence"])
                         evidence["generated_at"] = utc_now()
                         evidence["precomputed_report"] = {
@@ -4257,15 +4268,12 @@ def create_app(
                     if _needs_stock_market_context(message):
                         try:
                             industry_name = str(
-                                (
-                                    evidence.get("analyst_expectations")
-                                    or {}
-                                ).get("industry")
+                                (evidence.get("analyst_expectations") or {}).get(
+                                    "industry"
+                                )
                                 or ""
                             )
-                            analysis_target = _stock_analysis_target(
-                                message, evidence
-                            )
+                            analysis_target = _stock_analysis_target(message, evidence)
                             evidence["stock_market_context"] = (
                                 _build_stock_market_context(
                                     message,
@@ -4273,22 +4281,17 @@ def create_app(
                                     analysis.market_brief(market_key="china"),
                                     analysis.industry_snapshot(
                                         industry_name,
-                                        market_date=analysis_target.get(
-                                            "market_date"
-                                        ),
+                                        market_date=analysis_target.get("market_date"),
                                     ),
                                 )
                             )
                         except Exception as exc:
                             evidence.setdefault("warnings", []).append(
-                                "个股市场对照证据刷新未完成："
-                                f"{type(exc).__name__}"
+                                f"个股市场对照证据刷新未完成：{type(exc).__name__}"
                             )
-                evidence["deep_stock_coverage"] = (
-                    deep_stock.evidence_coverage_packet(
-                        evidence,
-                        intent="stock_research",
-                    )
+                evidence["deep_stock_coverage"] = deep_stock.evidence_coverage_packet(
+                    evidence,
+                    intent="stock_research",
                 )
                 if _is_deep_stock_coverage_query(message):
                     tracking_packet = research_tracking.get_packet(
@@ -4333,11 +4336,7 @@ def create_app(
             publish_agent_progress(
                 phase,
                 label,
-                timings={
-                    key: value
-                    for key, value in update.items()
-                    if key != "phase"
-                },
+                timings={key: value for key, value in update.items() if key != "phase"},
             )
 
         def forward_agent_stream(update: dict[str, Any]) -> None:
@@ -4444,11 +4443,7 @@ def create_app(
                         "status": structured_answer.get("status"),
                     },
                 )
-        elif (
-            payload.request_id
-            and payload.execute_agent
-            and structured_answer_failed
-        ):
+        elif payload.request_id and payload.execute_agent and structured_answer_failed:
             agent_streams.publish(
                 payload.request_id,
                 user_id,
@@ -4514,9 +4509,7 @@ def create_app(
         return chat(user["id"], payload, request)
 
     @app.post("/me/chat/refine")
-    def refine_my_chat(
-        payload: ChatRefineRequest, request: Request
-    ) -> dict[str, Any]:
+    def refine_my_chat(payload: ChatRefineRequest, request: Request) -> dict[str, Any]:
         user = require_session_user(request)
         allowed_intents = {
             "market_brief",
@@ -4558,9 +4551,9 @@ def create_app(
                 "conversation_id": payload.conversation_id,
                 "assistant_message_id": payload.assistant_message_id,
                 "run_id": assistant_message.get("run_id"),
-                "structured_answer": (
-                    assistant_message.get("metadata") or {}
-                ).get("structured_answer"),
+                "structured_answer": (assistant_message.get("metadata") or {}).get(
+                    "structured_answer"
+                ),
             }
 
         evidence = preview_run.get("evidence") or {}
@@ -4739,9 +4732,7 @@ def _public_run_review(
             f"移除 {len(repair_groups['internal'])} 处不应面向用户的运行措辞"
         )
     if repair_groups["semantic"]:
-        repair_summary.append(
-            f"修正 {len(repair_groups['semantic'])} 处证据与结论冲突"
-        )
+        repair_summary.append(f"修正 {len(repair_groups['semantic'])} 处证据与结论冲突")
     if repaired and not repair_summary:
         repair_summary.append("回答在展示前经过了守卫修复")
     if not repair_summary:
@@ -4787,9 +4778,7 @@ def _public_run_review(
 
     status = str(run.get("status") or "unknown")
     if status == "guarded" and not repaired:
-        repair_summary = [
-            "模型原始回答未满足展示条件，系统改用已验证证据生成回退回答"
-        ]
+        repair_summary = ["模型原始回答未满足展示条件，系统改用已验证证据生成回退回答"]
     elif status == "degraded" and not repaired:
         repair_summary = ["模型综合未完整完成，系统保留并展示了可验证的证据回答"]
     elif status == "failed" and not repaired:
@@ -4866,8 +4855,7 @@ def _public_run_review(
             "total_seconds": duration_seconds,
         },
         "guard": {
-            "passed": status == "completed"
-            and bool(output_guard.get("passed", True)),
+            "passed": status == "completed" and bool(output_guard.get("passed", True)),
             "repaired": repaired,
             "label": guard_label,
             "summary": repair_summary,
@@ -4930,7 +4918,9 @@ def _extract_symbol(
         if name and symbol:
             aliases[name] = symbol
     folded_message = message.casefold()
-    for alias, symbol in sorted(aliases.items(), key=lambda item: len(item[0]), reverse=True):
+    for alias, symbol in sorted(
+        aliases.items(), key=lambda item: len(item[0]), reverse=True
+    ):
         if alias and alias.casefold() in folded_message:
             return normalize_symbol(symbol)
     ticker_pattern = re.compile(
@@ -4968,7 +4958,9 @@ def _is_stock_screen_query(message: str) -> bool:
     ):
         return True
     return bool(
-        re.search(r"(?:找|挑|筛|选)(?:一些|几只|一批)?[^。；，,]{0,12}(?:股票|公司)", folded)
+        re.search(
+            r"(?:找|挑|筛|选)(?:一些|几只|一批)?[^。；，,]{0,12}(?:股票|公司)", folded
+        )
     )
 
 
@@ -4977,8 +4969,7 @@ def _stock_screen_parameters(message: str) -> dict[str, Any]:
     if any(term in folded for term in ("回撤", "超跌", "企稳", "跌下来")):
         profile = "pullback"
     elif any(
-        term in folded
-        for term in ("趋势", "强势", "跑赢行业", "相对行业", "动量")
+        term in folded for term in ("趋势", "强势", "跑赢行业", "相对行业", "动量")
     ):
         profile = "trend"
     elif any(
@@ -5344,9 +5335,7 @@ def _question_market_date(
         return None
 
 
-def _stock_analysis_target(
-    message: str, evidence: dict[str, Any]
-) -> dict[str, Any]:
+def _stock_analysis_target(message: str, evidence: dict[str, Any]) -> dict[str, Any]:
     current_quote = evidence.get("current_quote") or {}
     metrics = evidence.get("metrics") or {}
     history_market_date = _market_date(
@@ -5453,7 +5442,9 @@ def _build_stock_market_context(
     if stock_target_index is not None and stock_target_index > 0:
         stock_previous_bar = stock_recent_bars[stock_target_index - 1]
         stock_previous_close = stock_previous_bar.get("close")
-        stock_current_close = stock_target_bar.get("close") if stock_target_bar else None
+        stock_current_close = (
+            stock_target_bar.get("close") if stock_target_bar else None
+        )
         stock_previous_date = _market_date(stock_previous_bar.get("timestamp"))
         if (
             stock_previous_date == expected_previous_market_date
@@ -5462,8 +5453,7 @@ def _build_stock_market_context(
             and stock_previous_close
         ):
             stock_target_return_from_bars = round(
-                (float(stock_current_close) / float(stock_previous_close) - 1)
-                * 100,
+                (float(stock_current_close) / float(stock_previous_close) - 1) * 100,
                 4,
             )
 
@@ -5473,8 +5463,7 @@ def _build_stock_market_context(
     exact_industry_matches = [
         item
         for item in sectors
-        if company_industry
-        and str(item.get("name") or "").strip() == company_industry
+        if company_industry and str(item.get("name") or "").strip() == company_industry
     ]
     industry_snapshot = industry_snapshot or {}
     industry_point = next(
@@ -5541,8 +5530,7 @@ def _build_stock_market_context(
             "status": "intraday_not_supported",
             "market_date": target_market_date,
             "boundary": (
-                incomplete_daily_boundary
-                + "行业成分的同日完整日线尚未形成；"
+                incomplete_daily_boundary + "行业成分的同日完整日线尚未形成；"
                 "不能用少量先返回的日线样本判断行业普涨、普跌或参与面。"
             ),
         }
@@ -5555,12 +5543,8 @@ def _build_stock_market_context(
             ),
         }
     elif component_same_date:
-        component_breadth["coverage"] = dict(
-            component_analysis.get("coverage") or {}
-        )
-        component_breadth["failures"] = list(
-            component_analysis.get("failures") or []
-        )
+        component_breadth["coverage"] = dict(component_analysis.get("coverage") or {})
+        component_breadth["failures"] = list(component_analysis.get("failures") or [])
         component_breadth["source_fallbacks"] = [
             {
                 "symbol": item.get("symbol"),
@@ -5572,15 +5556,11 @@ def _build_stock_market_context(
             for item in (component_analysis.get("components") or [])
             if item.get("adjustment") == "unadjusted"
         ]
-        component_breadth["boundary"] = component_analysis.get(
-            "boundary"
-        )
+        component_breadth["boundary"] = component_analysis.get("boundary")
     for ratio_key in ("advance_ratio", "decline_ratio"):
         ratio_value = component_breadth.get(ratio_key)
         if isinstance(ratio_value, (int, float)):
-            component_breadth[f"{ratio_key}_pct"] = round(
-                float(ratio_value) * 100, 2
-            )
+            component_breadth[f"{ratio_key}_pct"] = round(float(ratio_value) * 100, 2)
     component_contribution = (
         {
             "status": "intraday_not_supported",
@@ -5620,9 +5600,7 @@ def _build_stock_market_context(
             None,
         )
         comparison_bar = (
-            recent_bars[matching_index]
-            if matching_index is not None
-            else None
+            recent_bars[matching_index] if matching_index is not None else None
         )
         comparison_return = None
         comparison_has_adjacent_session = False
@@ -5717,16 +5695,13 @@ def _build_stock_market_context(
             ),
             "return_1d_pct": stock_target_return,
             "price_label": (
-                current_quote.get("quote_label")
-                or "盘中/最新报价快照"
+                current_quote.get("quote_label") or "盘中/最新报价快照"
                 if intraday_quote_target
                 else "完整日线收盘"
             ),
             "is_complete_daily_close": stock_target_bar is not None,
             "quote_timestamp": (
-                current_quote.get("market_timestamp")
-                if intraday_quote_target
-                else None
+                current_quote.get("market_timestamp") if intraday_quote_target else None
             ),
             "source": (
                 (evidence.get("provenance") or {}).get("source")
@@ -5736,10 +5711,7 @@ def _build_stock_market_context(
         },
         "company_industry": company_industry or None,
         "exact_industry_match_available": official_industry_match
-        or (
-            bool(exact_industry_matches)
-            and sector_market_date == target_market_date
-        ),
+        or (bool(exact_industry_matches) and sector_market_date == target_market_date),
         "exact_industry_matches": exact_industry_matches,
         "exact_industry_index": {
             "status": (
@@ -5765,21 +5737,16 @@ def _build_stock_market_context(
             "weights_as_of": industry_snapshot.get("weights_as_of"),
             "subject_is_constituent": subject_constituent is not None,
             "subject_weight_pct": (
-                subject_constituent.get("weight_pct")
-                if subject_constituent
-                else None
+                subject_constituent.get("weight_pct") if subject_constituent else None
             ),
-            "industry_mapping": industry_snapshot.get("industry_mapping")
-            or {},
+            "industry_mapping": industry_snapshot.get("industry_mapping") or {},
             "component_breadth": component_breadth,
             "component_contribution": {
                 **component_contribution,
                 "subject": subject_component,
             },
             "source_url": industry_snapshot.get("source_url"),
-            "constituent_source_url": industry_snapshot.get(
-                "constituent_source_url"
-            ),
+            "constituent_source_url": industry_snapshot.get("constituent_source_url"),
         },
         "market_state": {
             "market_date": target_market_date,
@@ -5861,9 +5828,7 @@ def _filter_knowledge_context(
                 "builtin:market-causality.md",
                 "builtin:market-trend-risk.md",
             }
-            or str(item.get("source_key") or "").startswith(
-                ("market-", "market:")
-            )
+            or str(item.get("source_key") or "").startswith(("market-", "market:"))
         ]
     elif intent == "stock_screen":
         stock_specific_prefixes = (
@@ -5881,9 +5846,7 @@ def _filter_knowledge_context(
         items = [
             item
             for item in items
-            if not str(item.get("source_key") or "").startswith(
-                stock_specific_prefixes
-            )
+            if not str(item.get("source_key") or "").startswith(stock_specific_prefixes)
         ]
     elif intent in {"research_priority", "research_actions"}:
         items = [
@@ -5894,16 +5857,20 @@ def _filter_knowledge_context(
                 ("research-priority:", "research-actions:")
             )
         ]
-    elif intent in {
-        "stock_research",
-        "research_tracking",
-        "earnings_quality",
-        "financial_drivers",
-        "business_structure",
-        "shareholder_structure",
-        "analyst_expectations",
-        "event_timeline",
-    } and symbol:
+    elif (
+        intent
+        in {
+            "stock_research",
+            "research_tracking",
+            "earnings_quality",
+            "financial_drivers",
+            "business_structure",
+            "shareholder_structure",
+            "analyst_expectations",
+            "event_timeline",
+        }
+        and symbol
+    ):
         canonical = normalize_symbol(symbol)
         question = str((evidence or {}).get("user_question") or "")
         time_sensitive_question = any(
@@ -5937,14 +5904,11 @@ def _filter_knowledge_context(
             items = [
                 item
                 for item in items
-                if not str(item.get("source_key") or "").startswith(
-                    snapshot_prefixes
-                )
+                if not str(item.get("source_key") or "").startswith(snapshot_prefixes)
             ]
-        report_period = (
-            ((evidence or {}).get("latest_period") or {}).get("report_date")
-            or ((evidence or {}).get("latest_report") or {}).get("report_date")
-        )
+        report_period = ((evidence or {}).get("latest_period") or {}).get(
+            "report_date"
+        ) or ((evidence or {}).get("latest_report") or {}).get("report_date")
         wanted = {
             f"research-report:{canonical}",
             f"earnings-quality:{canonical}",
@@ -5986,19 +5950,21 @@ def _filter_knowledge_context(
         ]
     elif intent == "research_outcome":
         canonical = normalize_symbol(symbol) if symbol else None
-        wanted = {
-            f"research-report:{canonical}",
-            f"research-outcome:{canonical}",
-        } if canonical else set()
+        wanted = (
+            {
+                f"research-report:{canonical}",
+                f"research-outcome:{canonical}",
+            }
+            if canonical
+            else set()
+        )
         items = [
             item
             for item in items
             if (
                 item.get("source_key") in wanted
                 if canonical
-                else str(item.get("source_key") or "").startswith(
-                    "research-outcome:"
-                )
+                else str(item.get("source_key") or "").startswith("research-outcome:")
             )
         ]
     coverage = dict(context.get("coverage") or {})

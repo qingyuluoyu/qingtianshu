@@ -78,6 +78,7 @@ class StockWorkspaceService:
         li_zong_strategy: Any | None = None,
         position_ledger: Any | None = None,
         trade_workflow: Any | None = None,
+        change_events: Any | None = None,
     ):
         self.database = database
         self.deep_stock = deep_stock
@@ -87,6 +88,7 @@ class StockWorkspaceService:
         self.li_zong_strategy = li_zong_strategy
         self.position_ledger = position_ledger
         self.trade_workflow = trade_workflow
+        self.change_events = change_events
 
     def get_workspace(self, user_id: str, symbol: str) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
@@ -132,8 +134,14 @@ class StockWorkspaceService:
 
         strategy_evidence = self._strategy_evidence(canonical)
         research_entry = dict((session or {}).get("research_entry") or {}) or None
+        whitelist_packet = (
+            self.change_events.get_user_packet(user_id, symbol=canonical, limit=20)
+            if self.change_events is not None
+            else {}
+        )
         important_changes = self._important_changes(
             [
+                *self._whitelist_changes(whitelist_packet),
                 *self._strategy_changes(strategy_evidence),
                 *(tracking.get("events") or []),
             ]
@@ -273,7 +281,7 @@ class StockWorkspaceService:
             },
             "history_summary": {
                 "recent_report_count": len(recent_research),
-                "change_count": len(tracking.get("events") or []),
+                "change_count": len(important_changes),
                 "coverage_snapshot_count": len(
                     (session or {}).get("coverage_history") or []
                 ),
@@ -392,9 +400,7 @@ class StockWorkspaceService:
             "task_id": task["id"],
             "title": task.get("title") or "用户观察任务",
             "status": (
-                "pending_data"
-                if task.get("status") == "waiting_data"
-                else "triggered"
+                "pending_data" if task.get("status") == "waiting_data" else "triggered"
             ),
             "task_status": task.get("status"),
             "task_status_label": task.get("status_label"),
@@ -426,7 +432,14 @@ class StockWorkspaceService:
         output: list[dict[str, Any]] = []
         seen: set[str] = set()
         for event in events:
-            summary = " ".join(str(event.get("summary") or "").split())
+            summary = " ".join(
+                str(
+                    event.get("summary")
+                    or event.get("fact_summary")
+                    or event.get("title")
+                    or ""
+                ).split()
+            )
             identity = summary or str(event.get("id") or "")
             if not identity or identity in seen:
                 continue
@@ -434,6 +447,25 @@ class StockWorkspaceService:
             output.append(event)
             if len(output) == 3:
                 break
+        return output
+
+    @staticmethod
+    def _whitelist_changes(packet: dict[str, Any]) -> list[dict[str, Any]]:
+        output = []
+        for event in packet.get("items") or []:
+            output.append(
+                {
+                    **event,
+                    "id": event.get("event_id"),
+                    "summary": event.get("fact_summary"),
+                    "data_as_of": event.get("occurred_at"),
+                    "created_at": event.get("detected_at"),
+                    "source_type": "verified_change_event",
+                    "url": event.get("source_url"),
+                    "changes": [],
+                    "new_evidence": [],
+                }
+            )
         return output
 
     @staticmethod
@@ -599,9 +631,7 @@ class StockWorkspaceService:
             pct_change = valuation.get("pct_change")
         if pct_change is None:
             pct_change = metrics.get("return_1d_pct")
-        quote_as_of = quote.get("market_timestamp") or valuation.get(
-            "market_timestamp"
-        )
+        quote_as_of = quote.get("market_timestamp") or valuation.get("market_timestamp")
         daily_as_of = (
             metrics.get("market_timestamp")
             or provenance.get("market_timestamp")
@@ -610,7 +640,9 @@ class StockWorkspaceService:
         semantic_label = (
             quote.get("quote_label")
             or valuation.get("quote_label")
-            or ("最新报价" if quote_as_of and quote_as_of != daily_as_of else "最近收盘")
+            or (
+                "最新报价" if quote_as_of and quote_as_of != daily_as_of else "最近收盘"
+            )
         )
         return (
             {
@@ -670,16 +702,18 @@ class StockWorkspaceService:
         def add(source: str, description: Any, status: str = "pending_data") -> None:
             text = str(description or "").strip()
             if text and all(item["description"] != text for item in output):
-                output.append(
-                    {"source": source, "description": text, "status": status}
-                )
+                output.append({"source": source, "description": text, "status": status})
 
         for gap in claim_ledger.get("information_gaps") or []:
             add("claim_ledger", gap.get("description"))
             if output:
                 output[-1]["related_claim_ids"] = gap.get("related_claim_ids") or []
         for task in coverage_tasks:
-            add("evidence_coverage", task.get("next_step"), str(task.get("status") or "pending_data"))
+            add(
+                "evidence_coverage",
+                task.get("next_step"),
+                str(task.get("status") or "pending_data"),
+            )
         for item in (evidence.get("research_frame") or {}).get(
             "missing_information"
         ) or []:
@@ -688,7 +722,11 @@ class StockWorkspaceService:
             for check in plan.get("checks") or []:
                 add("tracking_plan", check, "watching")
         for action in (action_item or {}).get("actions", []):
-            add("research_action", action.get("next_step"), str(action.get("status") or "pending_data"))
+            add(
+                "research_action",
+                action.get("next_step"),
+                str(action.get("status") or "pending_data"),
+            )
         return output[:10]
 
     def _latest_structured_answer(
@@ -778,9 +816,7 @@ class StockWorkspaceService:
         structured_answer: dict[str, Any] | None,
     ) -> dict[str, Any]:
         dimension_by_key = {
-            str(item.get("key")): dict(item)
-            for item in dimensions
-            if item.get("key")
+            str(item.get("key")): dict(item) for item in dimensions if item.get("key")
         }
         keys = [key for key, _ in DeepStockResearchService.COVERAGE_DIMENSIONS]
         raw: dict[str, list[str]] = {key: [] for key in keys}
@@ -858,7 +894,9 @@ class StockWorkspaceService:
         financial_periods = list(fundamentals.get("financial_periods") or [])
         latest_period = financial_periods[0] if financial_periods else {}
         if not latest_period:
-            latest_period = dict((fundamentals.get("summary") or {}).get("latest_report") or {})
+            latest_period = dict(
+                (fundamentals.get("summary") or {}).get("latest_report") or {}
+            )
         report_period = latest_period.get("report_period") or latest_period.get(
             "report_date"
         )
@@ -878,7 +916,9 @@ class StockWorkspaceService:
             ("毛利率", "gross_margin_pct"),
             ("经营现金流/净利润", "operating_cashflow_to_net_profit"),
         ):
-            value = number(latest_period.get(field), "%" if field.endswith("pct") else "")
+            value = number(
+                latest_period.get(field), "%" if field.endswith("pct") else ""
+            )
             add(
                 raw,
                 "financial_quality",
@@ -907,9 +947,7 @@ class StockWorkspaceService:
         peers = packet("peer_comparison")
         peer_items = list(peers.get("peers") or [])
         expectations = packet("analyst_expectations")
-        industry_as_of = peers.get("report_period") or peers.get(
-            "market_timestamp"
-        )
+        industry_as_of = peers.get("report_period") or peers.get("market_timestamp")
         if peer_items:
             add(
                 raw,
@@ -977,9 +1015,9 @@ class StockWorkspaceService:
             )
 
         metrics = packet("metrics")
-        technical_as_of = packet("provenance").get(
+        technical_as_of = packet("provenance").get("market_timestamp") or metrics.get(
             "market_timestamp"
-        ) or metrics.get("market_timestamp")
+        )
         for label, field, suffix in (
             ("最近完整收盘", "latest_close", ""),
             ("20日收益", "return_20d_pct", "%"),
@@ -1018,11 +1056,13 @@ class StockWorkspaceService:
             global_information.get("news") or []
         )
         social_count = len(information.get("social_posts") or [])
-        risk_as_of = timeline.get("market_timestamp") or information.get(
-            "fetched_at"
-        )
+        risk_as_of = timeline.get("market_timestamp") or information.get("fetched_at")
         for label, count, source in (
-            ("公司公告与监管事件", event_count + announcement_count, "公告与事件时间线"),
+            (
+                "公司公告与监管事件",
+                event_count + announcement_count,
+                "公告与事件时间线",
+            ),
             ("新闻线索", news_count, "公司新闻"),
             ("社区弱情绪样本", social_count, "社区样本"),
         ):
@@ -1097,7 +1137,11 @@ class StockWorkspaceService:
                     dimension_key = dimension_key or section_fallbacks.get(section)
                     if not dimension_key:
                         continue
-                    citation_count = len(item.get("citation_ids") or []) if isinstance(item, dict) else 0
+                    citation_count = (
+                        len(item.get("citation_ids") or [])
+                        if isinstance(item, dict)
+                        else 0
+                    )
                     suffix = f"（引用 {citation_count} 项）" if citation_count else ""
                     add(ai_explanations, dimension_key, f"{text}{suffix}")
                     if section == "information_gaps":
@@ -1137,9 +1181,7 @@ class StockWorkspaceService:
                 "missing_items": [],
             }
             dimension_as_of = [
-                str(value)
-                for value in dimension.get("as_of") or []
-                if value
+                str(value) for value in dimension.get("as_of") or [] if value
             ]
             for value in derived_as_of.get(key) or []:
                 value_text = str(value or "").strip()
@@ -1182,10 +1224,7 @@ class StockWorkspaceService:
         if not isinstance(value, dict):
             return ""
         label = str(
-            value.get("label")
-            or value.get("title")
-            or value.get("name")
-            or ""
+            value.get("label") or value.get("title") or value.get("name") or ""
         ).strip()
         detail = str(
             value.get("text")
@@ -1244,9 +1283,7 @@ class StockWorkspaceService:
             or [],
             "trigger_events": item.get("trigger_events") or [],
             "limitations": result.get("limitations") or [],
-            "boundary": (
-                "策略证据只用于研究候选和人工复核，不构成买卖建议。"
-            ),
+            "boundary": ("策略证据只用于研究候选和人工复核，不构成买卖建议。"),
         }
 
     @staticmethod

@@ -1033,6 +1033,39 @@ class Database:
                     UNIQUE(symbol, fingerprint)
                 );
 
+                CREATE TABLE IF NOT EXISTS change_events (
+                    id TEXT PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    fact_summary TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL,
+                    detected_at TEXT NOT NULL,
+                    source_name TEXT NOT NULL,
+                    source_url TEXT,
+                    data_status TEXT NOT NULL,
+                    rule_version TEXT NOT NULL,
+                    dedupe_hash TEXT NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS user_change_links (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    change_event_id TEXT NOT NULL
+                        REFERENCES change_events(id) ON DELETE CASCADE,
+                    symbol TEXT NOT NULL,
+                    relevance_status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK(relevance_status IN ('pending', 'relevant', 'irrelevant')),
+                    read_at TEXT,
+                    handled_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(user_id, change_event_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS research_reports (
                     id TEXT PRIMARY KEY,
                     symbol TEXT NOT NULL,
@@ -1290,6 +1323,14 @@ class Database:
                     ON analyst_expectation_snapshots(symbol, as_of_date DESC, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_event_timeline_symbol_time
                     ON event_timeline_snapshots(symbol, as_of_date DESC, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_change_events_symbol_time
+                    ON change_events(symbol, occurred_at DESC, detected_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_user_change_links_user_status
+                    ON user_change_links(
+                        user_id, relevance_status, read_at, handled_at, updated_at DESC
+                    );
+                CREATE INDEX IF NOT EXISTS idx_user_change_links_symbol
+                    ON user_change_links(user_id, symbol, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_research_reports_symbol_time
                     ON research_reports(symbol, generated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_deep_stock_user_time
@@ -1396,9 +1437,7 @@ class Database:
         if row is None:
             return None
         item = dict(row)
-        item["attention_tags"] = json.loads(
-            item.pop("attention_tags_json") or "[]"
-        )
+        item["attention_tags"] = json.loads(item.pop("attention_tags_json") or "[]")
         return item
 
     @staticmethod
@@ -1603,7 +1642,11 @@ class Database:
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
-            return self._row(connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
+            return self._row(
+                connection.execute(
+                    "SELECT * FROM users WHERE id = ?", (user_id,)
+                ).fetchone()
+            )
 
     @staticmethod
     def _session_token_hash(token: str) -> str:
@@ -1759,7 +1802,8 @@ class Database:
                 (user_id, symbol, name, market, thesis, now, now),
             )
             row = connection.execute(
-                "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?", (user_id, symbol)
+                "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?",
+                (user_id, symbol),
             ).fetchone()
             self._sync_stock_domain_from_watchlist(
                 connection,
@@ -1778,7 +1822,8 @@ class Database:
     def list_watchlist(self, user_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM watchlist WHERE user_id = ? ORDER BY updated_at DESC", (user_id,)
+                "SELECT * FROM watchlist WHERE user_id = ? ORDER BY updated_at DESC",
+                (user_id,),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -1806,7 +1851,8 @@ class Database:
         with self.connect() as connection:
             return self._row(
                 connection.execute(
-                    "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?", (user_id, symbol)
+                    "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?",
+                    (user_id, symbol),
                 ).fetchone()
             )
 
@@ -1860,9 +1906,7 @@ class Database:
             return True
         return False
 
-    def get_stock_workspace(
-        self, user_id: str, symbol: str
-    ) -> dict[str, Any] | None:
+    def get_stock_workspace(self, user_id: str, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -1916,9 +1960,7 @@ class Database:
             ).fetchone()
         return self._thesis_row(row)
 
-    def get_thesis_version(
-        self, user_id: str, thesis_id: str
-    ) -> dict[str, Any] | None:
+    def get_thesis_version(self, user_id: str, thesis_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM thesis_versions WHERE user_id = ? AND id = ?",
@@ -1959,7 +2001,8 @@ class Database:
         with self.connect() as connection:
             return self._row(
                 connection.execute(
-                    "SELECT * FROM memories WHERE user_id = ? AND id = ?", (user_id, memory_id)
+                    "SELECT * FROM memories WHERE user_id = ? AND id = ?",
+                    (user_id, memory_id),
                 ).fetchone()
             )
 
@@ -1991,7 +2034,9 @@ class Database:
                 return None
         return self.get_memory(user_id, memory_id)
 
-    def list_memories(self, user_id: str, status: str = "confirmed") -> list[dict[str, Any]]:
+    def list_memories(
+        self, user_id: str, status: str = "confirmed"
+    ) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM memories WHERE user_id = ? AND status = ? ORDER BY created_at DESC",
@@ -2003,7 +2048,10 @@ class Database:
         user = self.get_user(user_id)
         if user is None:
             return
-        write_json(Path(user["workspace_path"]) / "watchlist.json", self.list_watchlist(user_id))
+        write_json(
+            Path(user["workspace_path"]) / "watchlist.json",
+            self.list_watchlist(user_id),
+        )
 
     def _sync_confirmed_memory_file(self, user_id: str) -> None:
         user = self.get_user(user_id)
@@ -2067,7 +2115,9 @@ class Database:
     def list_conversations(
         self, user_id: str, include_archived: bool = False, limit: int = 100
     ) -> list[dict[str, Any]]:
-        status_clause = "" if include_archived else "AND conversations.status = 'active'"
+        status_clause = (
+            "" if include_archived else "AND conversations.status = 'active'"
+        )
         with self.connect() as connection:
             rows = connection.execute(
                 f"""
@@ -2431,12 +2481,8 @@ class Database:
             return None
         item = dict(row)
         item["stages"] = json.loads(item.pop("stages_json") or "[]")
-        item["evidence_modules"] = json.loads(
-            item.pop("evidence_modules_json") or "{}"
-        )
-        item["unresolved_items"] = json.loads(
-            item.pop("unresolved_json") or "[]"
-        )
+        item["evidence_modules"] = json.loads(item.pop("evidence_modules_json") or "{}")
+        item["unresolved_items"] = json.loads(item.pop("unresolved_json") or "[]")
         return item
 
     def _sync_deep_stock_session_file(
@@ -2512,9 +2558,13 @@ class Database:
     def list_knowledge_documents(
         self, user_id: str | None, include_content: bool = False
     ) -> list[dict[str, Any]]:
-        fields = "*" if include_content else (
-            "id, owner_user_id, scope, title, original_name, mime_type, "
-            "source_key, length(content) AS content_chars, created_at, updated_at"
+        fields = (
+            "*"
+            if include_content
+            else (
+                "id, owner_user_id, scope, title, original_name, mime_type, "
+                "source_key, length(content) AS content_chars, created_at, updated_at"
+            )
         )
         with self.connect() as connection:
             rows = connection.execute(
@@ -2555,7 +2605,15 @@ class Database:
                     workspace_path, created_at
                 ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?)
                 """,
-                (run_id, user_id, intent, model_tier, json_dumps(input_data), str(workspace_path), utc_now()),
+                (
+                    run_id,
+                    user_id,
+                    intent,
+                    model_tier,
+                    json_dumps(input_data),
+                    str(workspace_path),
+                    utc_now(),
+                ),
             )
         return self.get_run(run_id, user_id)  # type: ignore[return-value]
 
@@ -2601,9 +2659,7 @@ class Database:
             item[key.removesuffix("_json")] = json.loads(raw) if raw else None
         return item
 
-    def list_user_runs(
-        self, user_id: str, limit: int = 500
-    ) -> list[dict[str, Any]]:
+    def list_user_runs(self, user_id: str, limit: int = 500) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
                 """
@@ -2717,7 +2773,8 @@ class Database:
     def get_article(self, user_id: str, article_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM articles WHERE user_id = ? AND id = ?", (user_id, article_id)
+                "SELECT * FROM articles WHERE user_id = ? AND id = ?",
+                (user_id, article_id),
             ).fetchone()
         item = self._row(row)
         if item is not None:
@@ -2765,9 +2822,13 @@ class Database:
             ).fetchone()
         return int(row["count"])
 
-    def put_cache(self, cache_key: str, payload: dict[str, Any], ttl_seconds: int) -> None:
+    def put_cache(
+        self, cache_key: str, payload: dict[str, Any], ttl_seconds: int
+    ) -> None:
         fetched_at = payload.get("fetched_at") or utc_now()
-        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat(timespec="seconds")
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+        ).isoformat(timespec="seconds")
         with self.connect() as connection:
             connection.execute(
                 """
@@ -2836,9 +2897,7 @@ class Database:
                 ),
             )
 
-    def list_market_breadth_snapshots(
-        self, limit: int = 21
-    ) -> list[dict[str, Any]]:
+    def list_market_breadth_snapshots(self, limit: int = 21) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
                 """
@@ -2858,21 +2917,27 @@ class Database:
             items.append(payload)
         return items
 
-    def get_cache(self, cache_key: str, allow_stale: bool = False) -> dict[str, Any] | None:
+    def get_cache(
+        self, cache_key: str, allow_stale: bool = False
+    ) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM market_cache WHERE cache_key = ?", (cache_key,)
             ).fetchone()
         if row is None:
             return None
-        expired = datetime.fromisoformat(row["expires_at"]) <= datetime.now(timezone.utc)
+        expired = datetime.fromisoformat(row["expires_at"]) <= datetime.now(
+            timezone.utc
+        )
         if expired and not allow_stale:
             return None
         payload = json.loads(row["payload_json"])
         payload["cache_hit"] = True
         payload["is_stale"] = expired
         if expired:
-            payload.setdefault("warnings", []).append("实时上游不可用，当前返回已过期缓存。")
+            payload.setdefault("warnings", []).append(
+                "实时上游不可用，当前返回已过期缓存。"
+            )
         return payload
 
     def upsert_market_bars(
@@ -3225,9 +3290,7 @@ class Database:
         item["payload"] = json.loads(item.pop("payload_json") or "{}")
         return item
 
-    def upsert_strategy_definition(
-        self, definition: dict[str, Any]
-    ) -> dict[str, Any]:
+    def upsert_strategy_definition(self, definition: dict[str, Any]) -> dict[str, Any]:
         now = utc_now()
         with self.connect() as connection:
             connection.execute(
@@ -3339,9 +3402,7 @@ class Database:
             ).fetchall()
         return [self._strategy_definition_row(row) for row in rows]  # type: ignore[misc]
 
-    def get_strategy_definition(
-        self, strategy_id: str
-    ) -> dict[str, Any] | None:
+    def get_strategy_definition(self, strategy_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM strategy_definitions WHERE strategy_id = ?",
@@ -3492,7 +3553,7 @@ class Database:
             row = connection.execute(
                 f"""
                 SELECT * FROM strategy_screen_runs
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 ORDER BY started_at DESC, rowid DESC LIMIT 1
                 """,
                 tuple(params),
@@ -3717,10 +3778,7 @@ class Database:
             strategy_version=strategy_version,
             parameter_version=parameter_version,
         )
-        return {
-            symbol: str(state["as_of_date"])
-            for symbol, state in states.items()
-        }
+        return {symbol: str(state["as_of_date"]) for symbol, state in states.items()}
 
     def latest_strategy_candidate_states(
         self,
@@ -4287,9 +4345,7 @@ class Database:
             )
         return self.latest_earnings_quality_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
-    def latest_earnings_quality_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_earnings_quality_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4410,9 +4466,7 @@ class Database:
             )
         return self.latest_financial_driver_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
-    def latest_financial_driver_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_financial_driver_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4467,9 +4521,7 @@ class Database:
                     document.get("fetched_at") or utc_now(),
                 ),
             )
-        return self.get_filing_document(
-            document["symbol"], document["article_code"]
-        )  # type: ignore[return-value]
+        return self.get_filing_document(document["symbol"], document["article_code"])  # type: ignore[return-value]
 
     def get_filing_document(
         self, symbol: str, article_code: str
@@ -4494,12 +4546,16 @@ class Database:
         *,
         include_content: bool = False,
     ) -> list[dict[str, Any]]:
-        fields = "*" if include_content else """
+        fields = (
+            "*"
+            if include_content
+            else """
             symbol, article_code, title, document_type, report_period,
             notice_date, published_at, attach_url, content_hash, source,
             source_url, warnings_json, fetched_at,
             LENGTH(content_text) AS content_chars
         """
+        )
         with self.connect() as connection:
             rows = connection.execute(
                 f"""
@@ -4571,7 +4627,7 @@ class Database:
             row = connection.execute(
                 f"""
                 SELECT * FROM filing_evidence_snapshots
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 ORDER BY COALESCE(report_period, created_at) DESC,
                     created_at DESC, rowid DESC LIMIT 1
                 """,
@@ -4679,13 +4735,9 @@ class Database:
                     created_at,
                 ),
             )
-        return self.latest_business_structure_snapshot(
-            snapshot["symbol"]
-        )  # type: ignore[return-value]
+        return self.latest_business_structure_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
-    def latest_business_structure_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_business_structure_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4728,13 +4780,9 @@ class Database:
                     created_at,
                 ),
             )
-        return self.latest_peer_operating_snapshot(
-            snapshot["symbol"]
-        )  # type: ignore[return-value]
+        return self.latest_peer_operating_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
-    def latest_peer_operating_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_peer_operating_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4807,9 +4855,7 @@ class Database:
                     created_at,
                 ),
             )
-        return self.latest_shareholder_structure_snapshot(
-            snapshot["symbol"]
-        )  # type: ignore[return-value]
+        return self.latest_shareholder_structure_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
     def latest_shareholder_structure_snapshot(
         self, symbol: str
@@ -4826,9 +4872,7 @@ class Database:
             ).fetchone()
         item = self._row(row)
         if item is not None:
-            item["top_holders"] = json.loads(
-                item.pop("top_holders_json") or "[]"
-            )
+            item["top_holders"] = json.loads(item.pop("top_holders_json") or "[]")
             item["payload"] = json.loads(item.pop("payload_json") or "{}")
         return item
 
@@ -4866,9 +4910,7 @@ class Database:
                     created_at,
                 ),
             )
-        return self.latest_analyst_expectation_snapshot(
-            snapshot["symbol"]
-        )  # type: ignore[return-value]
+        return self.latest_analyst_expectation_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
     def save_event_timeline_snapshot(
         self, snapshot: dict[str, Any], fingerprint: str
@@ -4903,9 +4945,7 @@ class Database:
             ).fetchone()
         return self._event_timeline_row(row)  # type: ignore[return-value]
 
-    def latest_event_timeline_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_event_timeline_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4925,9 +4965,272 @@ class Database:
         item["payload"] = json.loads(item.pop("payload_json") or "{}")
         return item
 
-    def latest_analyst_expectation_snapshot(
-        self, symbol: str
+    def upsert_change_event(
+        self,
+        *,
+        symbol: str,
+        event_type: str,
+        title: str,
+        fact_summary: str,
+        occurred_at: str,
+        detected_at: str,
+        source_name: str,
+        source_url: str | None,
+        data_status: str,
+        rule_version: str,
+        dedupe_hash: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        event_id = str(uuid4())
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO change_events(
+                    id, symbol, event_type, title, fact_summary, occurred_at,
+                    detected_at, source_name, source_url, data_status,
+                    rule_version, dedupe_hash, payload_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(dedupe_hash) DO UPDATE SET
+                    title = excluded.title,
+                    fact_summary = excluded.fact_summary,
+                    detected_at = excluded.detected_at,
+                    source_name = excluded.source_name,
+                    source_url = excluded.source_url,
+                    data_status = excluded.data_status,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    event_id,
+                    symbol,
+                    event_type,
+                    title,
+                    fact_summary,
+                    occurred_at,
+                    detected_at,
+                    source_name,
+                    source_url,
+                    data_status,
+                    rule_version,
+                    dedupe_hash,
+                    json_dumps(payload),
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM change_events WHERE dedupe_hash = ?",
+                (dedupe_hash,),
+            ).fetchone()
+        return self._change_event_row(row)  # type: ignore[return-value]
+
+    def get_change_event(self, event_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM change_events WHERE id = ?", (event_id,)
+            ).fetchone()
+        return self._change_event_row(row)
+
+    def list_change_events(
+        self, *, symbol: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if symbol:
+            clauses.append("symbol = ?")
+            parameters.append(symbol)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        parameters.append(max(1, min(limit, 500)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM change_events{where}
+                ORDER BY occurred_at DESC, detected_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        return [
+            item for row in rows if (item := self._change_event_row(row)) is not None
+        ]
+
+    @staticmethod
+    def _change_event_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json") or "{}")
+        return item
+
+    def ensure_user_change_links(self, user_id: str, symbol: str) -> int:
+        now = utc_now()
+        with self.connect() as connection:
+            event_rows = connection.execute(
+                "SELECT id FROM change_events WHERE symbol = ?", (symbol,)
+            ).fetchall()
+            before = connection.total_changes
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO user_change_links(
+                    id, user_id, change_event_id, symbol, relevance_status,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, 'pending', ?, ?)
+                """,
+                [
+                    (str(uuid4()), user_id, str(row["id"]), symbol, now, now)
+                    for row in event_rows
+                ],
+            )
+            inserted = connection.total_changes - before
+        return max(0, inserted)
+
+    def list_watchlist_user_ids(self) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT user_id
+                FROM watchlist
+                ORDER BY user_id
+                """
+            ).fetchall()
+        return [str(row["user_id"]) for row in rows]
+
+    def list_user_change_links(
+        self,
+        user_id: str,
+        *,
+        symbol: str | None = None,
+        relevance_status: str | None = None,
+        unread_only: bool = False,
+        pending_only: bool = False,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses = ["links.user_id = ?"]
+        parameters: list[Any] = [user_id]
+        if symbol:
+            clauses.append("links.symbol = ?")
+            parameters.append(symbol)
+        if relevance_status:
+            clauses.append("links.relevance_status = ?")
+            parameters.append(relevance_status)
+        if unread_only:
+            clauses.append("links.read_at IS NULL")
+        if pending_only:
+            clauses.append("links.relevance_status = 'pending'")
+            clauses.append("links.handled_at IS NULL")
+        parameters.append(max(1, min(limit, 500)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT
+                    links.id AS link_id,
+                    links.relevance_status,
+                    links.read_at,
+                    links.handled_at,
+                    links.created_at AS linked_at,
+                    links.updated_at AS link_updated_at,
+                    events.id AS event_id,
+                    events.symbol,
+                    events.event_type,
+                    events.title,
+                    events.fact_summary,
+                    events.occurred_at,
+                    events.detected_at,
+                    events.source_name,
+                    events.source_url,
+                    events.data_status,
+                    events.rule_version,
+                    events.payload_json,
+                    events.created_at,
+                    events.updated_at
+                FROM user_change_links AS links
+                JOIN change_events AS events ON events.id = links.change_event_id
+                WHERE {" AND ".join(clauses)}
+                ORDER BY events.occurred_at DESC, events.detected_at DESC, links.rowid DESC
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        return [self._user_change_link_row(row) for row in rows]
+
+    def get_user_change_link(self, user_id: str, link_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    links.id AS link_id,
+                    links.relevance_status,
+                    links.read_at,
+                    links.handled_at,
+                    links.created_at AS linked_at,
+                    links.updated_at AS link_updated_at,
+                    events.id AS event_id,
+                    events.symbol,
+                    events.event_type,
+                    events.title,
+                    events.fact_summary,
+                    events.occurred_at,
+                    events.detected_at,
+                    events.source_name,
+                    events.source_url,
+                    events.data_status,
+                    events.rule_version,
+                    events.payload_json,
+                    events.created_at,
+                    events.updated_at
+                FROM user_change_links AS links
+                JOIN change_events AS events ON events.id = links.change_event_id
+                WHERE links.id = ? AND links.user_id = ?
+                """,
+                (link_id, user_id),
+            ).fetchone()
+        return self._user_change_link_row(row) if row is not None else None
+
+    @staticmethod
+    def _user_change_link_row(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json") or "{}")
+        return item
+
+    def mark_user_change_read(
+        self, user_id: str, link_id: str
     ) -> dict[str, Any] | None:
+        now = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE user_change_links
+                SET read_at = COALESCE(read_at, ?), updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (now, now, link_id, user_id),
+            )
+        if cursor.rowcount == 0:
+            return None
+        return self.get_user_change_link(user_id, link_id)
+
+    def set_user_change_relevance(
+        self, user_id: str, link_id: str, relevance_status: str
+    ) -> dict[str, Any] | None:
+        if relevance_status not in {"relevant", "irrelevant"}:
+            raise ValueError("相关性状态只接受 relevant 或 irrelevant")
+        now = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE user_change_links
+                SET relevance_status = ?, handled_at = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (relevance_status, now, now, link_id, user_id),
+            )
+        if cursor.rowcount == 0:
+            return None
+        return self.get_user_change_link(user_id, link_id)
+
+    def latest_analyst_expectation_snapshot(self, symbol: str) -> dict[str, Any] | None:
         items = self.list_analyst_expectation_snapshots(symbol, limit=1)
         return items[0] if items else None
 
@@ -4996,7 +5299,7 @@ class Database:
             row = connection.execute(
                 """
                 SELECT * FROM research_reports
-                WHERE symbol = ? ORDER BY generated_at DESC LIMIT 1
+                WHERE symbol = ? ORDER BY generated_at DESC, rowid DESC LIMIT 1
                 """,
                 (symbol,),
             ).fetchone()
@@ -5167,9 +5470,7 @@ class Database:
             ).fetchone()
         return self._research_priority_row(row)  # type: ignore[return-value]
 
-    def latest_research_priority_snapshot(
-        self, user_id: str
-    ) -> dict[str, Any] | None:
+    def latest_research_priority_snapshot(self, user_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -5218,9 +5519,7 @@ class Database:
             ).fetchone()
         return self._research_action_row(row)  # type: ignore[return-value]
 
-    def latest_research_action_snapshot(
-        self, user_id: str
-    ) -> dict[str, Any] | None:
+    def latest_research_action_snapshot(self, user_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -5306,9 +5605,7 @@ class Database:
             ).fetchone()
         return self._evidence_task_row(row)  # type: ignore[return-value]
 
-    def get_evidence_task(
-        self, user_id: str, task_id: str
-    ) -> dict[str, Any] | None:
+    def get_evidence_task(self, user_id: str, task_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM evidence_tasks WHERE id = ? AND user_id = ?",

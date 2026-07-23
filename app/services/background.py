@@ -97,6 +97,7 @@ class BackgroundScheduler:
         tushare_snapshots: TushareSnapshotService | None = None,
         li_zong_strategy: LiZongStrategyService | None = None,
         trade_workflow: Any | None = None,
+        change_events: Any | None = None,
     ):
         self.database = database
         self.live_markets = live_markets
@@ -124,6 +125,7 @@ class BackgroundScheduler:
         self.tushare_snapshots = tushare_snapshots
         self.li_zong_strategy = li_zong_strategy
         self.trade_workflow = trade_workflow
+        self.change_events = change_events
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._li_zong_thread: threading.Thread | None = None
@@ -177,15 +179,14 @@ class BackgroundScheduler:
             "research_refresh_seconds": self.settings.background_research_refresh_seconds,
             "research_outcome_refresh_seconds": self.settings.background_research_refresh_seconds,
             "trade_review_refresh_seconds": self.settings.background_research_refresh_seconds,
+            "change_event_refresh_seconds": self.settings.background_research_refresh_seconds,
             "market_news_refresh_seconds": self.settings.background_market_news_refresh_seconds,
             "evidence_task_refresh_seconds": self.settings.background_research_refresh_seconds,
             "calibration_refresh_seconds": self.settings.background_calibration_refresh_seconds,
             "data_quality_seconds": self.settings.background_data_quality_seconds,
             "article_uses_hermes": self.settings.background_use_hermes
             and self.settings.hermes_enabled,
-            "li_zong_strategy_enabled": bool(
-                self._li_zong_enabled
-            ),
+            "li_zong_strategy_enabled": bool(self._li_zong_enabled),
             "li_zong_worker_running": bool(
                 self._li_zong_thread and self._li_zong_thread.is_alive()
             ),
@@ -226,14 +227,14 @@ class BackgroundScheduler:
                     60, self.settings.background_article_check_seconds
                 )
             if now >= next_info:
-                self._run_job("a_share_information_refresh", self._refresh_a_share_information)
+                self._run_job(
+                    "a_share_information_refresh", self._refresh_a_share_information
+                )
                 next_info = time.monotonic() + max(
                     60, self.settings.background_info_refresh_seconds
                 )
             if now >= next_filings:
-                self._run_job(
-                    "a_share_filing_refresh", self._refresh_a_share_filings
-                )
+                self._run_job("a_share_filing_refresh", self._refresh_a_share_filings)
                 next_filings = time.monotonic() + max(
                     300, self.settings.background_fundamentals_refresh_seconds
                 )
@@ -291,9 +292,7 @@ class BackgroundScheduler:
                     300, self.settings.background_fundamentals_refresh_seconds
                 )
             if now >= next_peer_valuation:
-                self._run_job(
-                    "peer_valuation_refresh", self._refresh_peer_valuations
-                )
+                self._run_job("peer_valuation_refresh", self._refresh_peer_valuations)
                 next_peer_valuation = time.monotonic() + max(
                     300, self.settings.background_fundamentals_refresh_seconds
                 )
@@ -332,9 +331,7 @@ class BackgroundScheduler:
                     300, self.settings.background_market_news_refresh_seconds
                 )
             if now >= next_evidence_tasks:
-                self._run_job(
-                    "evidence_tasks_process", self._process_evidence_tasks
-                )
+                self._run_job("evidence_tasks_process", self._process_evidence_tasks)
                 next_evidence_tasks = time.monotonic() + max(
                     60, self.settings.background_research_refresh_seconds
                 )
@@ -472,6 +469,11 @@ class BackgroundScheduler:
         timeline_result = self.event_timeline.refresh_symbols(
             symbols, refresh_sources=False
         )
+        change_result = (
+            self.change_events.refresh_all_users()
+            if self.change_events is not None
+            else None
+        )
         self.broker.publish(
             {
                 "type": "a_share_information_updated",
@@ -488,6 +490,14 @@ class BackgroundScheduler:
                 "requested": timeline_result["requested"],
                 "completed": timeline_result["completed"],
             },
+            "change_events": (
+                {
+                    "requested_users": change_result["requested_users"],
+                    "completed_users": change_result["completed_users"],
+                }
+                if change_result is not None
+                else {"status": "not_configured"}
+            ),
         }
 
     def _refresh_a_share_fundamentals(self) -> dict[str, Any]:
@@ -537,9 +547,7 @@ class BackgroundScheduler:
             "requested": result["requested"],
             "completed": result["completed"],
             "symbols": [item.get("symbol") for item in result["results"]],
-            "rows": sum(
-                int(item.get("rows_saved") or 0) for item in result["results"]
-            ),
+            "rows": sum(int(item.get("rows_saved") or 0) for item in result["results"]),
         }
 
     def _refresh_shareholders(self) -> dict[str, Any]:
@@ -594,8 +602,7 @@ class BackgroundScheduler:
         for industry in sorted(industries):
             snapshot = self.market_analysis.industry_snapshot(industry)
             latest_market_date = str(
-                ((snapshot.get("points") or [{}])[-1]).get("market_date")
-                or ""
+                ((snapshot.get("points") or [{}])[-1]).get("market_date") or ""
             ).strip()
             if snapshot.get("status") == "available" and latest_market_date:
                 snapshot = self.market_analysis.industry_snapshot(
@@ -617,25 +624,21 @@ class BackgroundScheduler:
             "industry_indices": {
                 "requested": len(industry_results),
                 "available": sum(
-                    item.get("status") == "available"
-                    for item in industry_results
+                    item.get("status") == "available" for item in industry_results
                 ),
                 "items": [
                     {
                         "industry_name": item.get("industry_name"),
                         "index_code": item.get("index_code"),
                         "status": item.get("status"),
-                        "mapping_type": (
-                            item.get("industry_mapping") or {}
-                        ).get("match_type"),
-                        "component_status": (
-                            item.get("component_analysis") or {}
-                        ).get("status"),
+                        "mapping_type": (item.get("industry_mapping") or {}).get(
+                            "match_type"
+                        ),
+                        "component_status": (item.get("component_analysis") or {}).get(
+                            "status"
+                        ),
                         "component_coverage": (
-                            (item.get("component_analysis") or {}).get(
-                                "coverage"
-                            )
-                            or {}
+                            (item.get("component_analysis") or {}).get("coverage") or {}
                         ),
                         "component_failures": [
                             {
@@ -645,9 +648,7 @@ class BackgroundScheduler:
                                 "reason": failure.get("reason"),
                             }
                             for failure in (
-                                (item.get("component_analysis") or {}).get(
-                                    "failures"
-                                )
+                                (item.get("component_analysis") or {}).get("failures")
                                 or []
                             )[:5]
                         ],
@@ -775,6 +776,11 @@ class BackgroundScheduler:
 
     def _refresh_research_reports(self) -> dict[str, Any]:
         result = self.research_reports.refresh_targets()
+        change_result = (
+            self.change_events.refresh_all_users()
+            if self.change_events is not None
+            else None
+        )
         self.broker.publish(
             {
                 "type": "research_reports_updated",
@@ -787,6 +793,14 @@ class BackgroundScheduler:
             "requested": result["requested"],
             "completed": result["completed"],
             "symbols": [item.get("symbol") for item in result["results"]],
+            "change_events": (
+                {
+                    "requested_users": change_result["requested_users"],
+                    "completed_users": change_result["completed_users"],
+                }
+                if change_result is not None
+                else {"status": "not_configured"}
+            ),
         }
 
     def _refresh_research_outcomes(self) -> dict[str, Any]:

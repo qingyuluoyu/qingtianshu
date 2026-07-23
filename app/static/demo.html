@@ -591,6 +591,13 @@
     .reader-section-title.sub { font-size: 14px; }
     .reader-list { display: grid; gap: 7px; margin: 0; padding-left: 20px; color: #45566d; }
     .reader-list li { padding-left: 2px; }
+    .reader-event-feedback { display: grid; grid-template-columns: minmax(0,1fr) auto auto; align-items: center; gap: 9px; padding: 13px 26px; border-top: 1px solid var(--line); background: #f7f9fd; }
+    .reader-event-feedback[hidden] { display: none !important; }
+    .reader-event-feedback-copy { min-width: 0; }
+    .reader-event-feedback-copy strong, .reader-event-feedback-copy span { display: block; }
+    .reader-event-feedback-copy strong { color: #263851; font-size: 12px; }
+    .reader-event-feedback-copy span { margin-top: 3px; color: #718096; font-size: 10px; line-height: 1.45; }
+    .reader-event-feedback .btn.active { border-color: #9dbbff; color: #245fc2; background: #edf3ff; }
     .reader-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 15px 26px; border-top: 1px solid var(--line); background: #fff; }
     @media (max-width: 980px) {
       .app-shell { grid-template-columns: 76px minmax(0,1fr); }
@@ -1107,6 +1114,8 @@
       .stock-judgment-layout { grid-template-columns: 1fr; }
       .reader-card { width: 100%; border-radius: 0; }
       .reader-head, .reader-body { padding-left: 18px; padding-right: 18px; }
+      .reader-event-feedback { grid-template-columns: 1fr 1fr; padding-left: 18px; padding-right: 18px; }
+      .reader-event-feedback-copy { grid-column: 1 / -1; }
       .reader-actions { padding-left: 18px; padding-right: 18px; }
       .knowledge-toolbar { grid-template-columns: 1fr; }
       .knowledge-visible-count { grid-column: auto; }
@@ -2440,6 +2449,14 @@
         <button id="readerClose" class="reader-close" aria-label="关闭">×</button>
       </div>
       <div id="readerBody" class="reader-body"></div>
+      <div id="readerEventFeedback" class="reader-event-feedback" hidden>
+        <div class="reader-event-feedback-copy">
+          <strong>这条变化与当前关注有关吗？</strong>
+          <span id="readerEventFeedbackStatus">你的判断只影响个人提醒，不会修改公共事实。</span>
+        </div>
+        <button id="readerEventRelevant" class="btn" type="button">与我有关</button>
+        <button id="readerEventIrrelevant" class="btn" type="button">与我无关</button>
+      </div>
       <div class="reader-actions">
         <button id="readerDismiss" class="btn" type="button">关闭</button>
         <button id="readerContinue" class="btn primary" type="button">在 Agent 中继续研究</button>
@@ -3260,8 +3277,94 @@
       }
     }
 
+    function renderReaderEventFeedback(event = null) {
+      const container = $("readerEventFeedback");
+      const relevant = $("readerEventRelevant");
+      const irrelevant = $("readerEventIrrelevant");
+      if (!event?.link_id) {
+        container.hidden = true;
+        relevant.classList.remove("active");
+        irrelevant.classList.remove("active");
+        return;
+      }
+      container.hidden = false;
+      const status = event.relevance_status || "pending";
+      relevant.classList.toggle("active", status === "relevant");
+      irrelevant.classList.toggle("active", status === "irrelevant");
+      relevant.setAttribute("aria-pressed", status === "relevant" ? "true" : "false");
+      irrelevant.setAttribute("aria-pressed", status === "irrelevant" ? "true" : "false");
+      $("readerEventFeedbackStatus").textContent = ({
+        relevant: "已标记为与你有关，事件会保留在个人变化历史中。",
+        irrelevant: "已标记为与你无关，不再进入待处理提醒。",
+        pending: "你的判断只影响个人提醒，不会修改公共事实。"
+      })[status] || "你的判断只影响个人提醒，不会修改公共事实。";
+    }
+
+    function changeEventReaderBody(event) {
+      const payload = event?.payload || {};
+      const details = [
+        event?.fact_summary || "这条变化已经进入个人研究空间。",
+        `事件类型：${event?.event_type_label || "已验收变化"}`,
+        `事实时间：${readableTime(event?.occurred_at)}`,
+        `来源：${event?.source_name || "已归档来源"}`,
+        `数据状态：${event?.data_status_label || "事实已归档"}`
+      ];
+      if (event?.event_type === "daily_price_anomaly" && payload.current_quote_excluded) {
+        details.push("时间口径：异常判断只使用上一根完整日线；当天盘中报价没有被当成收盘数据。 ");
+      }
+      details.push(`研究边界：${event?.boundary || "事件事实不等于股价因果或交易信号。"}`);
+      return details.filter(Boolean).join("\n\n");
+    }
+
+    async function openChangeEvent(linkId) {
+      if (!linkId) return;
+      try {
+        let event = await api(`/v1/changes/${encodeURIComponent(linkId)}`);
+        try {
+          event = await api(`/v1/user-changes/${encodeURIComponent(linkId)}/read`, {method: "POST"});
+        } catch { /* Reading the fact remains available if the state update is delayed. */ }
+        openReader(
+          event.title || "重要变化",
+          changeEventReaderBody(event),
+          [event.name || event.symbol, event.relevance_status_label, readableTime(event.occurred_at)].filter(Boolean).join(" · "),
+          event.source_url || "",
+          {changeEvent: event}
+        );
+        void loadTodayOverview();
+      } catch (error) {
+        openReader("变化详情暂未打开", error?.message || "请稍后重试。", "当前页面中的研究资料仍然保留");
+      }
+    }
+
+    async function setReaderChangeRelevance(relevanceStatus) {
+      const event = state.readerContext?.changeEvent;
+      if (!event?.link_id) return;
+      const relevant = $("readerEventRelevant");
+      const irrelevant = $("readerEventIrrelevant");
+      relevant.disabled = true;
+      irrelevant.disabled = true;
+      try {
+        const updated = await api(`/v1/user-changes/${encodeURIComponent(event.link_id)}/relevance`, {
+          method: "POST",
+          body: JSON.stringify({relevance_status: relevanceStatus})
+        });
+        state.readerContext.changeEvent = updated;
+        renderReaderEventFeedback(updated);
+        void loadTodayOverview();
+        if (state.workspacePage === "deep_stock" && state.deepStockOverviewSymbol === updated.symbol) {
+          void loadDeepStockOverview(updated.symbol);
+        }
+      } catch (error) {
+        $("readerEventFeedbackStatus").textContent = error?.message || "相关性暂未保存，请稍后重试。";
+      } finally {
+        relevant.disabled = false;
+        irrelevant.disabled = false;
+      }
+    }
+
     function openReader(title, body, meta = "", sourceUrl = "") {
-      state.readerContext = {title: title || "研究内容", meta, body: body || ""};
+      const options = arguments[4] || {};
+      state.readerContext = {title: title || "研究内容", meta, body: body || "", changeEvent: options.changeEvent || null};
       state.readerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       $("readerTitle").textContent = title || "研究内容";
       $("readerMeta").textContent = meta;
@@ -3279,6 +3382,7 @@
           }
         } catch { /* Invalid source links remain hidden. */ }
       }
+      renderReaderEventFeedback(options.changeEvent || null);
       $("readerBackdrop").classList.add("open");
       $("readerBackdrop").setAttribute("aria-hidden", "false");
       document.body.style.overflow = "hidden";
@@ -4078,6 +4182,10 @@
       const action = item?.action || {};
       $("notificationPanel").hidden = true;
       $("notificationButton").setAttribute("aria-expanded", "false");
+      if (action.type === "open_change_event" && action.link_id) {
+        await openChangeEvent(action.link_id);
+        return;
+      }
       if (action.type === "open_trade_review" && action.review_id) {
         state.pendingTradeReviewId = action.review_id;
         state.reviewTab = "trades";
@@ -4141,12 +4249,15 @@
       const changesContainer = $("todayRelatedChanges"); changesContainer.innerHTML = "";
       for (const item of changes) {
         const row = document.createElement("button"); row.type = "button"; row.className = "today-item";
-        const title = document.createElement("span"); title.className = "today-item-title"; title.textContent = item.summary || `${item.symbol || "关注股票"}出现研究变化`;
-        const badge = document.createElement("span"); badge.className = `today-item-badge ${item.severity === "high" ? "risk_review" : "research_task"}`; badge.textContent = item.severity === "high" ? "优先复核" : "研究变化";
-        const detail = document.createElement("span"); detail.className = "today-item-detail"; detail.textContent = item.boundary || "变化来自连续研究报告的确定性比较。";
-        const meta = document.createElement("span"); meta.className = "today-item-meta"; meta.textContent = [item.symbol, item.event_time ? readableTime(item.event_time) : null, item.rule_version].filter(Boolean).join(" · ");
+        const title = document.createElement("span"); title.className = "today-item-title"; title.textContent = item.title || item.summary || `${item.symbol || "关注股票"}出现研究变化`;
+        const badge = document.createElement("span"); badge.className = `today-item-badge ${item.severity === "high" ? "risk_review" : "research_task"}`; badge.textContent = item.relevance_status_label || (item.severity === "high" ? "优先复核" : "研究变化");
+        const detail = document.createElement("span"); detail.className = "today-item-detail"; detail.textContent = item.summary || item.boundary || "变化来自连续研究报告的确定性比较。";
+        const meta = document.createElement("span"); meta.className = "today-item-meta"; meta.textContent = [item.name || item.symbol, item.event_type_label, item.event_time ? readableTime(item.event_time) : null, item.data_status_label].filter(Boolean).join(" · ");
         row.append(title, badge, detail, meta);
-        row.addEventListener("click", () => { if (item.symbol) void openDeepStockSymbol(item.symbol); });
+        row.addEventListener("click", () => {
+          if (item.link_id) void openChangeEvent(item.link_id);
+          else if (item.symbol) void openDeepStockSymbol(item.symbol);
+        });
         changesContainer.appendChild(row);
       }
       if (!changesContainer.children.length) changesContainer.innerHTML = `<div class="empty">${escapeHtml(personalized.empty_message || "当前没有新的可追溯研究变化。")}</div>`;
@@ -5363,7 +5474,7 @@
     }
 
     function appendStockWorkspaceItem(container, title, meta = "", detail = null) {
-      const interactive = Boolean(detail?.body || detail?.url);
+      const interactive = Boolean(detail?.body || detail?.url || detail?.linkId || detail?.onOpen);
       const item = document.createElement(interactive ? "button" : "div"); item.className = `stock-workspace-item${interactive ? " interactive" : ""}`;
       if (interactive) item.type = "button";
       const titleNode = document.createElement("strong"); titleNode.textContent = title;
@@ -5373,7 +5484,11 @@
         const affordance = document.createElement("span"); affordance.className = "stock-workspace-item-detail"; affordance.textContent = detail.label || "查看依据与原文";
         item.appendChild(affordance);
         item.setAttribute("aria-label", `${title}，${affordance.textContent}`);
-        item.addEventListener("click", () => openReader(title, detail.body || meta, detail.meta || meta, detail.url || ""));
+        item.addEventListener("click", () => {
+          if (detail.onOpen) detail.onOpen();
+          else if (detail.linkId) void openChangeEvent(detail.linkId);
+          else openReader(title, detail.body || meta, detail.meta || meta, detail.url || "");
+        });
       }
       container.appendChild(item);
     }
@@ -5424,16 +5539,26 @@
     function workspaceChangeItems(changes) {
       const severityLabels = {attention: "需要优先复核", notice: "发现新变化", stable: "研究基线"};
       return (changes || []).map(change => {
+        const verifiedEvent = change.source_type === "verified_change_event" || Boolean(change.link_id);
         const details = [
-          change.summary,
+          change.fact_summary || change.summary,
+          verifiedEvent && change.event_type_label ? `事件类型：${change.event_type_label}` : "",
+          verifiedEvent && change.source_name ? `来源：${change.source_name}` : "",
           ...(change.changes || []).map(item => item.detail || item.title),
           ...(change.new_evidence || []).map(item => `${item.category_label || "新增证据"}：${item.title}`),
           change.boundary
         ].filter(Boolean);
         return {
-          title: change.summary || "研究证据发生变化",
-          meta: `${readableTime(change.data_as_of || change.created_at)} · ${severityLabels[change.severity] || "等待复核"}`,
-          detail: details.join("\n\n")
+          title: change.title || change.summary || "研究证据发生变化",
+          meta: [
+            readableTime(change.data_as_of || change.created_at),
+            change.relevance_status_label,
+            change.data_status_label,
+            severityLabels[change.severity]
+          ].filter(Boolean).join(" · "),
+          detail: details.join("\n\n"),
+          url: change.source_url || change.url,
+          linkId: change.link_id
         };
       }).slice(0, 3);
     }
@@ -6774,7 +6899,7 @@
       const changesMeta = document.createElement("span"); changesMeta.className = "stock-workspace-card-meta"; changesMeta.textContent = `${changeItems.length} 项`;
       changesHead.append(changesTitle, changesMeta);
       const changesList = document.createElement("div"); changesList.className = "stock-workspace-list";
-      if (changeItems.length) changeItems.forEach(item => appendStockWorkspaceItem(changesList, item.title, item.meta, {body: item.detail, meta: item.meta, url: item.url}));
+      if (changeItems.length) changeItems.forEach(item => appendStockWorkspaceItem(changesList, item.title, item.meta, {body: item.detail, meta: item.meta, url: item.url, linkId: item.linkId}));
       else appendStockWorkspaceItem(changesList, "当前没有需要优先处理的新变化", "继续按当前判断观察；新增公告和事件会进入这里。 ");
       changesCard.append(changesHead, changesList);
 
@@ -8186,6 +8311,8 @@
     });
     $("readerClose").addEventListener("click", closeReader);
     $("readerDismiss").addEventListener("click", closeReader);
+    $("readerEventRelevant").addEventListener("click", () => { void setReaderChangeRelevance("relevant"); });
+    $("readerEventIrrelevant").addEventListener("click", () => { void setReaderChangeRelevance("irrelevant"); });
     $("readerContinue").addEventListener("click", () => {
       const context = state.readerContext;
       closeReader();

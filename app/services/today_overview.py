@@ -18,11 +18,12 @@ class TodayOverviewService:
     INDEX_SYMBOLS = ("000001.SS", "399001.SZ", "399006.SZ", "000688.SS")
     _CATEGORY_RANK = {
         "risk_review": 0,
-        "trade_review": 1,
-        "due_task": 2,
-        "draft_confirmation": 3,
-        "evidence_gap": 4,
-        "research_task": 5,
+        "change_event": 1,
+        "trade_review": 2,
+        "due_task": 3,
+        "draft_confirmation": 4,
+        "evidence_gap": 5,
+        "research_task": 6,
     }
     _PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
 
@@ -36,6 +37,7 @@ class TodayOverviewService:
         structured_ai: Any,
         *,
         trade_workflow: Any | None = None,
+        change_events: Any | None = None,
         session_provider: Callable[[], dict[str, Any]] | None = None,
     ):
         self.database = database
@@ -45,6 +47,7 @@ class TodayOverviewService:
         self.research_tracking = research_tracking
         self.structured_ai = structured_ai
         self.trade_workflow = trade_workflow
+        self.change_events = change_events
         self.session_provider = session_provider or self._default_session
 
     def get_overview(self, user_id: str) -> dict[str, Any]:
@@ -62,8 +65,12 @@ class TodayOverviewService:
             ),
         }
         if self.trade_workflow is not None:
-            calls["trade_reviews"] = lambda: self.trade_workflow.list_user_trade_reviews(
-                user_id, limit=100
+            calls["trade_reviews"] = lambda: (
+                self.trade_workflow.list_user_trade_reviews(user_id, limit=100)
+            )
+        if self.change_events is not None:
+            calls["whitelist_changes"] = lambda: self.change_events.get_user_packet(
+                user_id, limit=50
             )
         results, component_status = self._collect(calls)
         session = self.session_provider()
@@ -81,15 +88,18 @@ class TodayOverviewService:
             actions=results.get("actions") or {},
             writebacks=results.get("writebacks") or {},
             trade_reviews=results.get("trade_reviews") or {},
+            whitelist_changes=results.get("whitelist_changes") or {},
             names=watchlist_names,
         )
         market = self._market_packet(
             results.get("indices") or {},
             results.get("breadth") or {},
             results.get("industries") or {},
+            results.get("whitelist_changes") or {},
         )
         personalized = self._personalized_packet(
             changes=results.get("changes") or {},
+            whitelist_changes=results.get("whitelist_changes") or {},
             actions=results.get("actions") or {},
             watchlist=watchlist,
         )
@@ -104,6 +114,7 @@ class TodayOverviewService:
                 ("changes", "与我相关的研究变化暂未完整返回"),
                 ("writebacks", "待确认判断草稿暂未完整返回"),
                 ("trade_reviews", "个人交易复盘暂未完整返回"),
+                ("whitelist_changes", "已验收的重要变化暂未完整返回"),
             )
             if key in calls and component_status.get(key) != "ready"
         ]
@@ -117,7 +128,7 @@ class TodayOverviewService:
                 "items": priority_items,
                 "total_visible": len(priority_items),
                 "ranking_method": (
-                    "先按高风险、到期任务、判断草稿确认、证据缺口排序，"
+                    "先按高风险、已验收变化、到期任务、判断草稿确认、证据缺口排序，"
                     "同类再按用户优先级和更新时间排序；最多展示5项。"
                 ),
                 "empty_message": (
@@ -167,10 +178,45 @@ class TodayOverviewService:
         actions: dict[str, Any],
         writebacks: dict[str, Any],
         trade_reviews: dict[str, Any],
+        whitelist_changes: dict[str, Any],
         names: dict[str, str],
     ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         now = datetime.now(timezone.utc)
+        for event in whitelist_changes.get("pending_unread_items") or []:
+            symbol = str(event.get("symbol") or "")
+            name = str(event.get("name") or names.get(symbol) or symbol)
+            event_type = str(event.get("event_type") or "")
+            items.append(
+                {
+                    "id": f"change-event:{event.get('link_id')}",
+                    "kind": "change_event",
+                    "category": "change_event",
+                    "title": event.get("title") or f"{name}出现重要变化",
+                    "detail": event.get("fact_summary"),
+                    "symbol": symbol or None,
+                    "name": name or None,
+                    "status": event.get("relevance_status"),
+                    "status_label": "待确认相关性",
+                    "priority": (
+                        "high" if event.get("severity") == "high" else "normal"
+                    ),
+                    "due_at": None,
+                    "overdue": False,
+                    "rank_reason": (
+                        "完整日线价格异常等待核验"
+                        if event_type == "daily_price_anomaly"
+                        else "官方财务披露等待阅读原文"
+                    ),
+                    "source_type": "verified_change_event",
+                    "source_ref_id": event.get("link_id"),
+                    "updated_at": event.get("detected_at") or event.get("occurred_at"),
+                    "action": {
+                        "type": "open_change_event",
+                        "link_id": event.get("link_id"),
+                    },
+                }
+            )
         for review in trade_reviews.get("items") or []:
             status = str(review.get("status") or "")
             if status not in {"ready", "draft"}:
@@ -363,6 +409,7 @@ class TodayOverviewService:
         indices: dict[str, Any],
         breadth: dict[str, Any],
         industries: dict[str, Any],
+        whitelist_changes: dict[str, Any],
     ) -> dict[str, Any]:
         by_symbol = {
             str(item.get("symbol")): item for item in indices.get("indices") or []
@@ -440,8 +487,21 @@ class TodayOverviewService:
                 "message": "正式风格指数和冻结口径尚未接入，当前不生成风格结论。",
             },
             "risk_agenda": {
-                "status": "not_available",
-                "message": "冻结事件白名单与风险日程尚未完整接入。",
+                "status": (
+                    "available"
+                    if whitelist_changes.get("items")
+                    else "empty"
+                    if whitelist_changes
+                    else "not_available"
+                ),
+                "pending_unread": (whitelist_changes.get("counts") or {}).get(
+                    "pending_unread", 0
+                ),
+                "items": list(whitelist_changes.get("items") or [])[:5],
+                "message": (
+                    whitelist_changes.get("empty_message")
+                    or "当前只展示已完成来源与规则验收的事件类型。"
+                ),
             },
         }
 
@@ -449,6 +509,7 @@ class TodayOverviewService:
     def _personalized_packet(
         *,
         changes: dict[str, Any],
+        whitelist_changes: dict[str, Any],
         actions: dict[str, Any],
         watchlist: list[dict[str, Any]],
     ) -> dict[str, Any]:
@@ -470,7 +531,38 @@ class TodayOverviewService:
             reverse=True,
         )
         events = []
+        for event in whitelist_changes.get("items") or []:
+            events.append(
+                {
+                    "id": event.get("event_id"),
+                    "link_id": event.get("link_id"),
+                    "symbol": event.get("symbol"),
+                    "name": event.get("name"),
+                    "event_type": event.get("event_type"),
+                    "event_type_label": event.get("event_type_label"),
+                    "severity": event.get("severity"),
+                    "title": event.get("title"),
+                    "summary": event.get("fact_summary"),
+                    "event_time": event.get("occurred_at"),
+                    "discovered_at": event.get("detected_at"),
+                    "source_type": "verified_change_event",
+                    "source_name": event.get("source_name"),
+                    "source_url": event.get("source_url"),
+                    "data_status": event.get("data_status"),
+                    "data_status_label": event.get("data_status_label"),
+                    "rule_version": event.get("rule_version"),
+                    "relevance_status": event.get("relevance_status"),
+                    "relevance_status_label": event.get("relevance_status_label"),
+                    "read_at": event.get("read_at"),
+                    "handled_at": event.get("handled_at"),
+                    "boundary": event.get("boundary"),
+                }
+            )
+            if len(events) == 5:
+                break
         for event in ordered_events:
+            if len(events) == 5:
+                break
             event_time = str(event.get("data_as_of") or event.get("created_at") or "")
             events.append(
                 {
@@ -487,8 +579,6 @@ class TodayOverviewService:
                     "boundary": event.get("boundary"),
                 }
             )
-            if len(events) == 5:
-                break
         action_items = [
             {
                 "symbol": item.get("symbol"),
@@ -506,9 +596,12 @@ class TodayOverviewService:
             "changes": events,
             "stock_overview": action_items,
             "coverage": {
-                **(changes.get("coverage") or {}),
-                "event_scope": "连续研究报告的确定性变化",
                 "event_whitelist_complete": False,
+                **(changes.get("coverage") or {}),
+                **(whitelist_changes.get("coverage") or {}),
+                "event_scope": (
+                    "已验收的重要变化优先，连续研究报告的确定性比较作为补充"
+                ),
             },
             "empty_message": (
                 "添加关注股票后，这里会展示与个人判断相关的研究变化。"
@@ -516,8 +609,8 @@ class TodayOverviewService:
                 else None
             ),
             "boundary": (
-                "当前只展示连续研究报告中可追溯的变化；公告、解禁、增减持等"
-                "自动事件需要逐类完成来源与规则验收后再接入。"
+                whitelist_changes.get("boundary")
+                or "未完成来源与规则验收的事件类型不会进入用户提醒。"
             ),
         }
 
