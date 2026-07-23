@@ -2,7 +2,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.hermes_runtime import resolve_hermes_executable, resolve_hermes_python
+from app.hermes_runtime import (
+    resolve_hermes_executable,
+    resolve_hermes_python,
+    resolve_hermes_stream_bridge,
+)
+
+
+def test_packaged_stream_bridge_is_available():
+    bridge = resolve_hermes_stream_bridge()
+
+    assert bridge.name == "hermes_stream_bridge.py"
+    assert bridge.parent.name == "app"
+    assert bridge.is_file()
 
 
 def _make_executable(path: Path, content: str = "") -> None:

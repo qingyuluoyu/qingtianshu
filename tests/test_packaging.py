@@ -12,6 +12,7 @@ ASSET_ROOTS = (
     Path("app/skills"),
     Path("app/knowledge"),
 )
+PACKAGED_BRIDGE = "app/hermes_stream_bridge.py"
 
 
 def _copy_build_source(destination: Path) -> None:
@@ -85,5 +86,7 @@ def test_distribution_builds_with_runtime_data_and_contains_product_assets(
     sdist_members = _sdist_members(sdists[0])
     assert expected_assets <= wheel_members
     assert expected_assets <= sdist_members
+    assert PACKAGED_BRIDGE in wheel_members
+    assert PACKAGED_BRIDGE in sdist_members
     assert not any(member.startswith("data/") for member in wheel_members)
     assert not any(member.startswith("data/") for member in sdist_members)

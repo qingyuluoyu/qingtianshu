@@ -6,6 +6,15 @@ import shlex
 import shutil
 
 
+def resolve_hermes_stream_bridge() -> Path:
+    """Return the bridge bundled with the installed application package."""
+
+    bridge = Path(__file__).with_name("hermes_stream_bridge.py")
+    if bridge.is_file():
+        return bridge
+    raise FileNotFoundError("Hermes streaming bridge runtime is unavailable")
+
+
 def resolve_hermes_executable(configured: Path) -> Path:
     """Resolve either an explicit Hermes path or a command available on PATH."""
 

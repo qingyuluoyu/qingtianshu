@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from app.config import PROJECT_ROOT, Settings
+from app.config import DEFAULT_DATA_DIR, PROJECT_ROOT, Settings
 
 
 PORTABLE_FILES = (
@@ -28,7 +28,7 @@ def test_user_facing_installation_files_do_not_depend_on_developer_paths():
         assert "/Users/chr/.hermes" not in content, relative_path
 
 
-def test_default_configuration_uses_project_data_and_path_resolved_hermes(
+def test_explicit_configuration_uses_portable_data_and_path_resolved_hermes(
     monkeypatch, tmp_path: Path
 ):
     monkeypatch.delenv("HERMES_BIN", raising=False)
@@ -42,6 +42,16 @@ def test_default_configuration_uses_project_data_and_path_resolved_hermes(
     assert settings.workspace_root.parent == settings.data_dir
 
 
+def test_default_configuration_uses_writable_user_data_directory(monkeypatch):
+    monkeypatch.delenv("QINGSHU_DATA_DIR", raising=False)
+
+    settings = Settings.from_env()
+
+    assert settings.data_dir == DEFAULT_DATA_DIR.resolve()
+    assert settings.data_dir == (Path.home() / ".qingshu").resolve()
+    assert PROJECT_ROOT not in settings.data_dir.parents
+
+
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="macOS launcher uses zsh")
 def test_macos_launcher_has_valid_shell_syntax():
     result = subprocess.run(
@@ -51,3 +61,7 @@ def test_macos_launcher_has_valid_shell_syntax():
         text=True,
     )
     assert result.returncode == 0, result.stderr
+
+    launcher = (PROJECT_ROOT / "一键启动并演示.command").read_text(encoding="utf-8")
+    assert 'uv pip install --python "$PYTHON_BIN" -e "$ROOT_DIR"' in launcher
+    assert '"$PYTHON_BIN" -m ensurepip --upgrade' in launcher

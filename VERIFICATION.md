@@ -8,7 +8,18 @@
 uv run pytest
 ```
 
-结果：`513 passed`；`ruff check .`、内联 JavaScript `node --check`、`git diff --check`、`uv lock --check` 全部通过。此前已验证 wheel/sdist 可分发构建，网页、金融 Skills 与通用资料库均进入安装包。
+结果：`518 passed`；`ruff check .`、内联 JavaScript `node --check`、`git diff --check`、`uv lock --check` 全部通过。wheel/sdist 已重新构建，并在全新 Python 3.13 虚拟环境中完成安装与运行自检。
+
+## 2026-07-23 默认即时 AI、可分发 Hermes 链路与首屏收敛
+
+- `ChatRequest.execute_agent` 默认改为 `true`。网页不再让普通用户切换模型供应商；AI 配置可用时，每个问题都基于本轮证据、资料库和研究工具即时生成，预生成报告只能补充证据。需要无模型费用模式时可显式传 `execute_agent=false`。
+- Hermes 流式桥接从仅存在于源码 `scripts/` 的文件迁入可安装的 `app` 包，源码入口继续兼容。全新 Python 3.13 环境从 wheel 安装后执行 `python -m app.hermes_stream_bridge --self-test`，真实返回 `delta → boundary → final` 协议。
+- 标准安装默认把数据库和用户工作区写入 `~/.qingshu`，避免 wheel 安装后向 `site-packages/data` 写入。一键启动仍默认使用仓库 `data/`，并兼容 uv 创建、没有 pip 的虚拟环境：优先 `uv pip install`，无 uv 时再使用 `ensurepip + pip`。
+- AI研究页隐藏供应商开关、来源数量、资料数量、内部运行模式和自动展开的研究过程；保留历史对话、消息、输入框，以及问题识别后按需展开的行情与研究依据。首页把个人待办和相关变化前置到完整全球市场与 A 股结构之前。
+- 智能选股服务返回 503 时，页面明确显示“智能选股数据正在准备/服务器尚未配置选股数据”，不再伪装为“0 只候选”；真实零候选仍由正常筛选结果表达。
+- 修复一个真实 DeepSeek 回答被误退回模板的原因：合法失效条件与公告日期位于同一段时，旧守卫把前面的日期误当作自创阈值。现在只检查真正包含失效判断的句段，保存的原回答与 Agent 守卫全套测试均通过。
+- 真实 `deepseek-v4-pro` 验收：不传 `execute_agent` 询问“中兴通讯今天为什么上涨”时，回答先纠正 7 月 23 日实际下跌的错误前提，再解释 7 月 22 日事实、反证和核验，状态 `completed`；连续追问只补充与当前判断的关系。询问“美股为什么收盘跌了”直接进入 `market_brief`，不再要求股票代码，状态 `completed`。
+- 本轮浏览器控制插件拒绝重载本地 `127.0.0.1` 页面，因此没有把新版视觉验收冒充为已完成；运行服务 `/health=ok`、`hermes_enabled=true`、数据健康 `54/54`，页面 DOM 契约和内联 JavaScript 已由自动化验证。仍需在可控制本地页面的浏览器环境补一次新版截图验收。
 
 ## 2026-07-23 多股 Hermes 研究、页面恢复与首页事件去重
 
@@ -16,7 +27,7 @@ uv run pytest
 - 财务指标只有 `report_date + period_basis` 同时一致时才进入横向比较。真实结果中，中兴通讯和中际旭创按 2026 一季报同口径比较，英伟达 FY2027 Q1 单独说明；跨币种股价、市值和绝对金额不直接排序。
 - 用户按 Enter 追问“再重点比较盈利质量，并说明哪些项目当前不可比”后，系统从历史消息 metadata 恢复三只股票，无需重复输入名称。左侧会话历史保存本轮四条消息，证明多轮对话已经落库。
 - 多股证据允许部分成功：单只股票本轮数据未形成时，只标记该标的不可比，其余标的的确定性结果继续返回；回答保留关键差异、反方证据、下一步核验和可见证据引用。
-- 修复服务重启后的旧页面状态：页面启动先连接事件流，连接或重连成功后重新读取 `/health`；真实页面已自动恢复勾选“AI 深度解读”，随后完成 DeepSeek 流式回答。
+- 修复服务重启后的旧页面状态：页面启动先连接事件流，连接或重连成功后重新读取 `/health`；真实页面会自动恢复 AI 实时研究状态，随后完成 DeepSeek 流式回答。
 - 首页变化按 `symbol + event_type + occurred_at/market_date + rule_version` 的业务身份去重；已经进入“我的研究待办”的变化不再重复出现在右侧“与我相关的重要变化”，同时保留用户已读、相关性和处理状态。过期价格、财务事件不再伪装成今日变化。
 - 最终自动化验收：`513 passed`，Ruff、内联 JavaScript 语法、diff whitespace 和 lockfile 一致性全部通过。
 

@@ -1808,7 +1808,7 @@
           <section id="reviewEvidencePanel" class="review-tab-panel" data-review-panel="evidence" hidden>
             <section class="panel backend-flow-panel review-evidence-flow">
               <div class="backend-flow-title">一条回答怎样从数据走到用户面前</div>
-              <div class="backend-flow-copy">价格和结构化指标先由确定性工具生成；资料库负责补充语境；Hermes 只在证据包范围内组织解释、反方证据和失效条件。</div>
+              <div class="backend-flow-copy">价格和结构化指标先由确定性工具生成；资料库负责补充语境；AI 研究引擎只在证据包范围内组织解释、反方证据和失效条件。</div>
               <div class="backend-flow" aria-label="清数智算后端流程图">
                 <div class="backend-flow-node"><strong>① 采集</strong><span>行情、公告、财报、新闻和社区样本</span></div>
                 <div class="backend-flow-arrow">→</div>
@@ -1816,9 +1816,9 @@
                 <div class="backend-flow-arrow">→</div>
                 <div class="backend-flow-node"><strong>③ 入库</strong><span>行情、事件、报告、记忆与对话持久保存</span></div>
                 <div class="backend-flow-arrow">→</div>
-                <div class="backend-flow-node agent"><strong>④ Skills</strong><span>收益、均线、财报、事件和研究行动工具</span></div>
+                <div class="backend-flow-node agent"><strong>④ 研究工具</strong><span>收益、均线、财报、事件和研究行动工具</span></div>
                 <div class="backend-flow-arrow">→</div>
-                <div class="backend-flow-node output"><strong>⑤ Hermes</strong><span>解释、质疑、记忆并回填研究结果</span></div>
+                <div class="backend-flow-node output"><strong>⑤ AI 研究</strong><span>解释、质疑、记忆并回填研究结果</span></div>
               </div>
             </section>
             <div class="method-grid">
@@ -1829,7 +1829,7 @@
               </section>
               <section class="panel method-card">
                 <div class="method-card-title">确定性工具与资料</div>
-                <div class="method-card-copy">数字由代码和数据库提供；Hermes 负责有边界的综合表达。</div>
+                <div class="method-card-copy">数字由代码和数据库提供；AI 研究引擎负责有边界的综合表达。</div>
                 <div id="methodTools" class="method-tool-list"><div class="empty">正在读取工具清单…</div></div>
               </section>
               <section class="panel method-card">
@@ -1891,6 +1891,31 @@
               <span class="home-focus-arrow">→</span>
             </button>
           </div>
+        </section>
+
+        <section id="todayOverviewGrid" class="today-overview-grid" aria-label="我的研究待办与重要变化" hidden>
+          <article class="panel today-overview-card">
+            <div class="today-overview-head">
+              <div>
+                <div class="today-overview-title">我的研究待办</div>
+                <div class="today-overview-copy">按风险和时间优先级排列，先处理最需要核验的事项</div>
+              </div>
+              <span id="todaySessionBadge" class="today-session-badge">状态待确认</span>
+            </div>
+            <div id="todayPrioritySummary" class="today-overview-summary">正在读取个人研究事项…</div>
+            <div id="todayPriorityItems" class="today-item-list"><div class="empty">正在加载今日事项…</div></div>
+          </article>
+          <article class="panel today-overview-card">
+            <div class="today-overview-head">
+              <div>
+                <div class="today-overview-title">与我相关的重要变化</div>
+                <div class="today-overview-copy">只展示与你的关注或持仓有关、且尚未列入左侧待办的变化</div>
+              </div>
+              <span id="todayChangeCount" class="today-session-badge">0 项</span>
+            </div>
+            <div id="todayRelatedChanges" class="today-item-list"><div class="empty">正在加载研究变化…</div></div>
+            <div id="todayRelatedBoundary" class="today-boundary">点击变化可查看事实、证据和下一步核验。</div>
+          </article>
         </section>
 
         <section id="liveSection" class="panel live-panel">
@@ -1963,31 +1988,6 @@
               <div id="watchlistPulseSource" class="source-note">只显示当前用户空间中的关注与研究状态。</div>
             </article>
           </div>
-        </section>
-
-        <section id="todayOverviewGrid" class="today-overview-grid" aria-label="我的研究待办与重要变化" hidden>
-          <article class="panel today-overview-card">
-            <div class="today-overview-head">
-              <div>
-                <div class="today-overview-title">我的研究待办</div>
-                <div class="today-overview-copy">按风险和时间优先级排列，先处理最需要核验的事项</div>
-              </div>
-              <span id="todaySessionBadge" class="today-session-badge">状态待确认</span>
-            </div>
-            <div id="todayPrioritySummary" class="today-overview-summary">正在读取个人研究事项…</div>
-            <div id="todayPriorityItems" class="today-item-list"><div class="empty">正在加载今日事项…</div></div>
-          </article>
-          <article class="panel today-overview-card">
-            <div class="today-overview-head">
-              <div>
-                <div class="today-overview-title">与我相关的重要变化</div>
-                <div class="today-overview-copy">只展示与你的关注或持仓有关、且尚未列入左侧待办的变化</div>
-              </div>
-              <span id="todayChangeCount" class="today-session-badge">0 项</span>
-            </div>
-            <div id="todayRelatedChanges" class="today-item-list"><div class="empty">正在加载研究变化…</div></div>
-            <div id="todayRelatedBoundary" class="today-boundary">点击变化可查看事实、证据和下一步核验。</div>
-          </article>
         </section>
 
         <div id="insightSection" class="insight-layout">
@@ -2268,7 +2268,7 @@
                 <div class="account-list">
                   <div class="account-row"><span>隐私边界</span><strong>个人上下文按用户隔离</strong></div>
                   <div class="account-row"><span>会员与额度</span><strong>内部 MVP 暂未启用计费</strong></div>
-                  <div class="account-row"><span>密钥管理</span><strong>Hermes 从运行环境读取</strong></div>
+                  <div class="account-row"><span>模型连接</span><strong>由服务端安全管理</strong></div>
                 </div>
               </article>
             </section>
@@ -2319,8 +2319,8 @@
                 <button class="research-mode-button active" type="button" role="tab" aria-selected="true" data-open-page="agent">对话研究</button>
                 <button class="research-mode-button" type="button" role="tab" aria-selected="false" data-open-page="screening">透明选股</button>
               </div>
-              <button id="agentProcessToggle" class="agent-view-toggle" type="button">查看研究过程</button>
-              <button id="agentContextToggle" class="agent-view-toggle" type="button">展开金融侧栏</button>
+              <button id="agentProcessToggle" class="agent-view-toggle" type="button" hidden>查看研究过程</button>
+              <button id="agentContextToggle" class="agent-view-toggle" type="button">展开研究依据</button>
               <span id="agentMode" class="status-pill">研究模式</span>
             </div>
           </div>
@@ -2355,7 +2355,7 @@
             <div class="agent-context-tabs" role="tablist" aria-label="研究侧栏">
               <button class="agent-context-tab active" type="button" role="tab" aria-selected="true" data-agent-context-tab="market">行情</button>
               <button class="agent-context-tab" type="button" role="tab" aria-selected="false" data-agent-context-tab="evidence">证据</button>
-              <button class="agent-context-tab" type="button" role="tab" aria-selected="false" data-agent-context-tab="capabilities">研究能力</button>
+              <button class="agent-context-tab" type="button" role="tab" aria-selected="false" data-agent-context-tab="capabilities">研究依据</button>
             </div>
             <div id="agentContextMarket" class="agent-context-panel">
               <div class="diagnosis-context-head">
@@ -2377,13 +2377,13 @@
               <div id="agentEvidenceList" class="agent-context-list"></div>
             </div>
             <div id="agentContextCapabilities" class="agent-context-panel" hidden>
-              <div class="agent-context-heading">当前可用研究能力</div>
-              <div class="agent-context-summary">这些能力会按问题选择，不会在每轮全部调用。</div>
+              <div class="agent-context-heading">本轮可用研究依据</div>
+              <div class="agent-context-summary">系统会按问题选择必要的数据、资料与分析方法。</div>
               <div id="agentCapabilityList" class="agent-context-list"></div>
             </div>
           </section>
           <div id="messages" class="messages">
-            <div class="message agent">你好，我是清数智算。你可以直接问市场、个股、新闻、财报或原研究逻辑；我会调用 Hermes、资料库和金融 Skills，并把事实、反方证据与失效条件分开说明。</div>
+            <div class="message agent">你好，我是清数智算。你可以直接问市场、个股、新闻、财报或原研究逻辑；我会结合实时数据、研究资料和分析工具即时回答，并把事实、反方证据与失效条件分开说明。</div>
           </div>
           <div id="quickActions" class="quick-actions">
             <span class="quick-actions-label">研究类型</span>
@@ -2463,7 +2463,7 @@
   </div>
 
   <script>
-    const welcomeMessage = "你好，我是清数智算。我会记住这个对话的上下文，并结合实时证据、你的资料库、已确认记忆和金融 Skills 回答。";
+    const welcomeMessage = "你好，我是清数智算。我会记住这个对话的上下文，并结合实时证据、你的资料、已确认记忆和金融分析工具即时回答。";
     const evaluationMode = new URLSearchParams(window.location.search).get("qa") === "1";
     const state = {
       user: null,
@@ -2622,7 +2622,7 @@
       state.agentContextCollapsed = Boolean(collapsed);
       $("agentSection")?.classList.toggle("context-collapsed", state.agentContextCollapsed);
       if ($("agentContextToggle")) {
-        $("agentContextToggle").textContent = state.agentContextCollapsed ? "展开金融侧栏" : "收起金融侧栏";
+        $("agentContextToggle").textContent = state.agentContextCollapsed ? "展开研究依据" : "收起研究依据";
         $("agentContextToggle").setAttribute("aria-expanded", state.agentContextCollapsed ? "false" : "true");
       }
     }
@@ -3134,12 +3134,17 @@
           })
         });
         renderStockScreener(payload);
-      } catch {
+      } catch (error) {
         state.stockScreener = null;
-        $("stockScreenTitle").textContent = "暂未形成筛选结果";
-        $("stockScreenMeta").textContent = "可以调整行业、市值或估值条件后重新执行筛选。";
-        $("stockScreenCountBadge").textContent = "0 只";
-        $("stockScreenResults").innerHTML = '<div class="screener-empty">当前没有可展示的候选。调整一个筛选条件后，可再次执行确定性筛选。</div>';
+        const unavailable = error?.status === 503;
+        $("stockScreenTitle").textContent = unavailable ? "智能选股数据正在准备" : "本次筛选暂未完成";
+        $("stockScreenMeta").textContent = unavailable
+          ? "服务器尚未配置完整选股数据，完成数据服务配置后即可重新执行。"
+          : "请检查筛选条件并重新执行；已有候选不会因此被清空。";
+        $("stockScreenCountBadge").textContent = unavailable ? "待准备" : "可重试";
+        $("stockScreenResults").innerHTML = unavailable
+          ? '<div class="screener-empty"><strong>服务器尚未配置选股数据</strong><br>请按 README 的 Tushare 数据配置说明完成设置并重启服务，然后点击“执行确定性筛选”。</div>'
+          : '<div class="screener-empty">筛选服务暂时没有完成本次计算。调整条件或稍后重新执行。</div>';
       } finally {
         state.stockScreenerLoading = false;
         button.disabled = false; button.textContent = "执行确定性筛选";
@@ -4297,7 +4302,7 @@
       $("accountSessionExpires").textContent = user.session_expires_at
         ? new Intl.DateTimeFormat("zh-CN", {year: "numeric", month: "2-digit", day: "2-digit"}).format(new Date(user.session_expires_at))
         : "当前会话中";
-      $("accountResearchMode").textContent = state.health?.hermes_enabled ? "Hermes AI 研究已启用" : "确定性研究模式";
+      $("accountResearchMode").textContent = state.health?.hermes_enabled ? "AI 实时研究已启用" : "基础研究可用";
       $("accountDataHealth").textContent = healthSummary.total
         ? `${healthSummary.healthy || 0}/${healthSummary.total} 数据集健康`
         : "正在检查数据";
@@ -4346,7 +4351,7 @@
       renderAccountCenter();
       $("useHermes").disabled = !state.health.hermes_enabled;
       $("useHermes").checked = Boolean(state.health.hermes_enabled);
-      $("useHermesLabel").hidden = !state.health.hermes_enabled;
+      $("useHermesLabel").hidden = true;
       renderImageAttachment();
     }
 
@@ -7673,7 +7678,7 @@
       const timeline = document.createElement("div"); timeline.className = "review-timeline";
       const timingRows = [
         ["路由与证据包", data.timings?.evidence_seconds],
-        ["Hermes 综合", data.timings?.model_seconds],
+        ["AI 综合", data.timings?.model_seconds],
         ["输出守卫", data.timings?.guard_seconds],
         ["请求总计", data.timings?.total_seconds]
       ];
@@ -8054,13 +8059,11 @@
       if (!question) return;
       state.agentContextQuestion = question;
       state.agentResearchRunning = true;
-      setAgentProcessExpanded(true);
+      setAgentProcessExpanded(false);
       renderAgentResearchContext(state.agentContextMetadata, question);
-      const wantsHermes = !attachedImage && Boolean($("useHermes").checked) && Boolean(state.health?.hermes_enabled);
-      // The user-facing research chat always asks Hermes to generate against
-      // the current question. Saved reports may enrich the evidence packet,
-      // but they are never shown as a temporary or final chat answer.
-      const directHermes = wantsHermes;
+      // Saved reports may enrich the evidence packet, but they never replace
+      // the live answer generated for the current question.
+      const directHermes = Boolean(state.health?.hermes_enabled);
       const requestId = directHermes
         ? (globalThis.crypto?.randomUUID?.() || `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`)
         : null;

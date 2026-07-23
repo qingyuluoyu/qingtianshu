@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.main import (
+    ChatRequest,
     _build_stock_market_context,
     _build_visible_evidence_sources,
     _filter_knowledge_context,
@@ -27,6 +28,10 @@ def create_user(client, name: str):
     payload = response.json()
     assert "workspace_path" not in payload
     return payload
+
+
+def test_chat_requests_execute_live_agent_by_default():
+    assert ChatRequest(message="分析中兴通讯").execute_agent is True
 
 
 def test_stock_move_question_direction_understands_colloquial_why_up_or_down():
@@ -547,7 +552,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert page.headers["pragma"] == "no-cache"
     assert "清数智算" in page.text
     assert "金融研究 Agent" in page.text
-    assert "AI 深度解读" in page.text
+    assert 'id="useHermesLabel" class="model-toggle" hidden' in page.text
     assert "研究深度" in page.text
     assert "按时间从新到旧" in page.text
     assert "当前交易中" in page.text
@@ -568,9 +573,9 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "完整市场数据仍在准备" not in page.text
     assert "市场数据正在准备" not in page.text
     assert 'id="todayOverviewGrid" class="today-overview-grid"' in page.text
-    assert page.text.index('id="liveSection"') < page.text.index(
-        'id="marketDashboard"'
-    ) < page.text.index('id="todayOverviewGrid"') < page.text.index(
+    assert page.text.index('id="todayOverviewGrid"') < page.text.index(
+        'id="liveSection"'
+    ) < page.text.index('id="marketDashboard"') < page.text.index(
         'id="insightSection"'
     )
     assert "我的研究待办" in page.text
@@ -604,6 +609,8 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "保存线索并研究" in page.text
     assert "本次研究入口" in page.text
     assert "筛选线索待确认" in page.text
+    assert "error?.status === 503" in page.text
+    assert "服务器尚未配置选股数据" in page.text
     assert "⊕ 添加图片" in page.text
     assert "AI 图像研究" in page.text
     assert 'api("/me/uploads/images"' in page.text
@@ -791,7 +798,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'api("/research-method?limit=4")' in page.text
     assert 'api("/me/research-actions")' in page.text
     assert 'api("/me/chat/refine"' in page.text
-    assert "const directHermes = wantsHermes;" in page.text
+    assert "const directHermes = Boolean(state.health?.hermes_enabled);" in page.text
     assert "execute_agent: attachedImage ? true : directHermes" in page.text
     assert "prefer_precomputed: false" in page.text
     assert "AI 正在检索实时证据、资料库和金融研究工具" in page.text
@@ -812,6 +819,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'new URLSearchParams(window.location.search).get("qa") === "1"' in page.text
     assert 'quality_scope: state.evaluationMode ? "evaluation" : "user"' in page.text
     send_chat = page.text[page.text.index("async function sendChat(message)") :]
+    assert "setAgentProcessExpanded(true)" not in send_chat
     assert send_chat.index('$("sendButton").disabled = true') < send_chat.index(
         "privateStream = connectPrivateAgentStream(requestId, pending)"
     )
@@ -943,7 +951,7 @@ def test_research_method_explains_real_pipeline_without_internal_failures(client
         for item in payload["tools"]
     )
     assert any(item["name"] == "重要事件脉络分析器" for item in payload["tools"])
-    assert any("Hermes" in item["name"] for item in payload["tools"])
+    assert any("AI 引擎" in item["name"] for item in payload["tools"])
     assert any("不得由模型编造" in item for item in payload["boundaries"])
     serialized = str(payload)
     assert "API key" not in serialized

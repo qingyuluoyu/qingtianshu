@@ -16,7 +16,11 @@ from zoneinfo import ZoneInfo
 
 from app.config import PROJECT_ROOT, Settings
 from app.db import Database
-from app.hermes_runtime import resolve_hermes_executable, resolve_hermes_python
+from app.hermes_runtime import (
+    resolve_hermes_executable,
+    resolve_hermes_python,
+    resolve_hermes_stream_bridge,
+)
 from app.utils import write_json
 
 
@@ -1659,11 +1663,12 @@ def _has_unsupported_stock_failure_threshold(
             inline_condition.group("condition"), evidence
         ):
             return True
-        if re.search(
-            r"(?:假设|判断|框架|逻辑)[^。；\n]{0,24}(?:失效|不成立)",
-            line,
-        ) and _stock_failure_line_has_unsupported_threshold(line, evidence):
-            return True
+        for clause in re.split(r"[。；;]", line):
+            if re.search(
+                r"(?:假设|判断|框架|逻辑)[^。；\n]{0,24}(?:失效|不成立)",
+                clause,
+            ) and _stock_failure_line_has_unsupported_threshold(clause, evidence):
+                return True
     return False
 
 
@@ -6838,9 +6843,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
     ) -> tuple[str, dict[str, Any] | None]:
         hermes_bin = resolve_hermes_executable(self.settings.hermes_bin)
         python_bin = resolve_hermes_python(hermes_bin)
-        bridge = PROJECT_ROOT / "scripts" / "hermes_stream_bridge.py"
-        if not bridge.exists():
-            raise FileNotFoundError("Hermes streaming bridge runtime is unavailable")
+        bridge = resolve_hermes_stream_bridge()
 
         provider, model = _resolve_hermes_route(model_tier)
         command = [

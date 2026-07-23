@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DATA_DIR = Path.home() / ".qingshu"
 load_dotenv(PROJECT_ROOT / ".env")
 
 
@@ -52,7 +53,7 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        data_dir = Path(os.getenv("QINGSHU_DATA_DIR", PROJECT_ROOT / "data")).expanduser().resolve()
+        data_dir = Path(os.getenv("QINGSHU_DATA_DIR", DEFAULT_DATA_DIR)).expanduser().resolve()
         return cls(
             data_dir=data_dir,
             database_path=Path(os.getenv("QINGSHU_DB_PATH", data_dir / "qingshu.db")).expanduser().resolve(),

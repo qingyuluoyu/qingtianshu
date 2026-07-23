@@ -5,6 +5,7 @@ set -u
 ROOT_DIR="${0:A:h}"
 PYTHON_BIN="${PYTHON_BIN:-}"
 VENV_DIR="${QINGSHU_VENV_DIR:-$ROOT_DIR/.venv}"
+DATA_DIR="${QINGSHU_DATA_DIR:-$ROOT_DIR/data}"
 PORT="${QINGSHU_PORT:-8000}"
 BASE_URL="http://127.0.0.1:${PORT}"
 SERVER_PID=""
@@ -50,13 +51,21 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   exit 1
 fi
 
-if ! "$PYTHON_BIN" -c 'import fastapi, uvicorn' >/dev/null 2>&1; then
-  echo "首次运行：正在安装清数智算依赖…"
-  "$PYTHON_BIN" -m pip install --upgrade pip || exit 1
-  "$PYTHON_BIN" -m pip install -e "$ROOT_DIR" || exit 1
+echo "正在检查并更新清数智算运行环境…"
+if command -v uv >/dev/null 2>&1; then
+  uv pip install --python "$PYTHON_BIN" -e "$ROOT_DIR" || exit 1
+else
+  if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
+    "$PYTHON_BIN" -m ensurepip --upgrade >/dev/null 2>&1 || {
+      echo "❌ 当前 Python 环境缺少 pip，且无法自动安装。"
+      read -k 1 "?按任意键关闭..."
+      exit 1
+    }
+  fi
+  "$PYTHON_BIN" -m pip install --disable-pip-version-check -e "$ROOT_DIR" || exit 1
 fi
 
-mkdir -p "$ROOT_DIR/data"
+mkdir -p "$DATA_DIR"
 
 cleanup() {
   if [[ -n "$SERVER_PID" ]]; then
@@ -99,11 +108,12 @@ else
   HERMES_ECONOMY_MODEL="$HERMES_ECONOMY_MODEL_VALUE" \
   HERMES_DEEP_PROVIDER="$HERMES_DEEP_PROVIDER_VALUE" \
   HERMES_DEEP_MODEL="$HERMES_DEEP_MODEL_VALUE" \
+  QINGSHU_DATA_DIR="$DATA_DIR" \
   "$PYTHON_BIN" -m uvicorn app.main:app \
     --host 127.0.0.1 \
     --port "$PORT" \
     --timeout-graceful-shutdown 3 \
-    > "$ROOT_DIR/data/server.log" 2>&1 &
+    > "$DATA_DIR/server.log" 2>&1 &
   SERVER_PID=$!
 
   READY=false
@@ -116,8 +126,8 @@ else
   done
 
   if [[ "$READY" != "true" ]]; then
-    echo "❌ 启动失败。日志位置：$ROOT_DIR/data/server.log"
-    tail -20 "$ROOT_DIR/data/server.log"
+    echo "❌ 启动失败。日志位置：$DATA_DIR/server.log"
+    tail -20 "$DATA_DIR/server.log"
     read -k 1 "?按任意键关闭..."
     exit 1
   fi
@@ -135,7 +145,7 @@ echo "================================================"
 echo "✅ 产品页面已打开"
 echo "请保持这个窗口开启，数据与研究报告会自动更新。"
 if [[ "$HERMES_ENABLED_VALUE" != "true" ]]; then
-  echo "当前未检测到 Hermes，系统会使用无需模型费用的确定性研究模式。"
+  echo "当前未检测到 AI 运行环境，系统会使用无需模型费用的确定性研究模式。"
 fi
 echo "关闭这个窗口即可停止清数智算。"
 echo "================================================"

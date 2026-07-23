@@ -161,7 +161,7 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     symbol: str | None = Field(default=None, max_length=24)
     model_tier: Literal["economy", "deep", "vision"] = "economy"
-    execute_agent: bool = False
+    execute_agent: bool = True
     prefer_precomputed: bool = False
     image_id: str | None = Field(default=None, max_length=36)
     conversation_id: str | None = Field(default=None, max_length=36)
@@ -2959,7 +2959,7 @@ def create_app(
                     "detail": "按当前问题检索个人资料、已确认偏好、通用研究材料和服务器预计算报告，未确认记忆不会进入长期个性化。",
                 },
                 {
-                    "title": "Hermes 综合表达",
+                    "title": "AI 综合表达",
                     "detail": "Agent 只能引用已取得的证据，负责解释因果候选、指出反方证据与失效条件，不负责凭空生成行情数字。",
                 },
                 {
@@ -3033,8 +3033,8 @@ def create_app(
                     "role": "按固定 T+3/T+5/T+10 交易日复盘原条件、上下边界和价格路径；只核验研究过程，不计算荐股胜率。",
                 },
                 {
-                    "name": "资料库、Skills 与 Hermes",
-                    "role": "按问题检索用户/通用资料，选择对应金融 Skill，再由 Hermes 进行有边界的综合回答。",
+                    "name": "资料库、研究工具与 AI 引擎",
+                    "role": "按问题检索用户与通用资料，选择对应金融分析工具，再由 AI 引擎进行有边界的综合回答。",
                 },
             ],
             "recent_analyses": recent,
@@ -4259,7 +4259,7 @@ def create_app(
                             "连续对话上下文",
                             "已确认用户记忆",
                             "用户与通用资料库检索",
-                            "金融研究 Skills",
+                            "金融研究工具",
                         ],
                     }
             else:
@@ -4400,11 +4400,11 @@ def create_app(
 
         publish_agent_progress(
             "evidence_ready",
-            "证据与资料已准备，Hermes 正在组织针对性回答…",
+            "证据与资料已准备，AI 正在组织针对性回答…",
         )
 
         progress_labels = {
-            "model_started": "证据与资料已准备，Hermes 正在生成回答…",
+            "model_started": "证据与资料已准备，AI 正在生成回答…",
             "guard_started": "回答已生成，正在校验数字、来源与证据边界…",
             "fallback_started": "正在整理当前可确认的证据摘要…",
             "completed": "校验完成，正在保存回答与研究记录…",
@@ -4915,7 +4915,7 @@ def _public_run_review(
         ),
         "model_tier": str(run.get("model_tier") or "economy"),
         "model_state": (
-            "Hermes 已完成综合"
+            "AI 已完成综合"
             if usage.get("model") or usage.get("provider")
             else "确定性分析已完成"
         ),
