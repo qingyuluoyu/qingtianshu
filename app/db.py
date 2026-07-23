@@ -271,6 +271,7 @@ class Database:
                         'executed', 'cancelled', 'expired'
                     )),
                     expires_at TEXT,
+                    idempotency_key TEXT,
                     version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -483,6 +484,7 @@ class Database:
                     bias_tags_json TEXT NOT NULL DEFAULT '[]',
                     improvement_text TEXT,
                     created_source TEXT NOT NULL CHECK(created_source IN ('ai', 'user')),
+                    source_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
                     status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN (
                         'draft', 'confirmed', 'revised'
                     )),
@@ -1350,6 +1352,25 @@ class Database:
                 "strategy_screen_runs",
                 "warnings_json",
                 "TEXT NOT NULL DEFAULT '[]'",
+            )
+            self._ensure_column(
+                connection,
+                "trade_review_versions",
+                "source_run_id",
+                "TEXT REFERENCES runs(id) ON DELETE SET NULL",
+            )
+            self._ensure_column(
+                connection,
+                "action_plans",
+                "idempotency_key",
+                "TEXT",
+            )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_action_plans_idempotency
+                ON action_plans(user_id, idempotency_key)
+                WHERE idempotency_key IS NOT NULL
+                """
             )
             self._backfill_stock_domains(connection)
 

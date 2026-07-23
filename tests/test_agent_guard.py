@@ -312,6 +312,55 @@ def test_numeric_only_guard_failure_keeps_question_specific_model_answer(
     assert (run_dir / "answer.repaired.md").is_file()
 
 
+def test_trade_review_json_drops_only_unsupported_numeric_clauses(
+    tmp_path: Path, settings, monkeypatch
+):
+    guarded_settings = replace(
+        settings,
+        database_path=tmp_path / "trade-review-guard-repair.db",
+        workspace_root=tmp_path / "workspaces-trade-review-guard-repair",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Trade Review Guard Repair User")
+    service = AgentService(database, guarded_settings)
+    model_answer = json.dumps(
+        {
+            "logic_result": (
+                "操作前一日振幅约6.3%，这一计算没有直接写入冻结证据。"
+                "关键经营证据在操作时仍待核验，后续价格变化不能单独证明逻辑正确。"
+            ),
+            "plan_deviation": "实际操作与计划方向一致，但证据核验步骤尚未完成。",
+            "bias_tags": ["行动偏差"],
+            "improvement_text": "下次先记录证据核验节点，再由用户确认复盘。",
+        },
+        ensure_ascii=False,
+    )
+    monkeypatch.setattr(
+        service,
+        "_execute_hermes",
+        lambda **kwargs: (model_answer, {"model": "fake"}),
+    )
+
+    run = service.run(
+        user=user,
+        intent="trade_review",
+        message="复盘这次操作",
+        evidence={"type": "trade_review"},
+        model_tier="economy",
+        execute_agent=True,
+    )
+
+    assert run["status"] == "completed"
+    assert "6.3%" not in run["answer"]
+    assert "关键经营证据" in run["answer"]
+    assert json.loads(run["answer"])["bias_tags"] == ["行动偏差"]
+    assert run["usage"]["output_guard"]["repair"]["method"] == (
+        "drop_unsupported_trade_review_clauses_v1"
+    )
+
+
 def test_output_guard_accepts_numbers_from_prior_guarded_assistant_answer():
     evidence = {
         "type": "market_brief",

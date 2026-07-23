@@ -37,6 +37,7 @@ SKILL_BY_INTENT = {
     "research_priority": "research-priority",
     "research_actions": "research-actions",
     "research_outcome": "research-outcome",
+    "trade_review": "trade-review",
     "memory_candidate": "memory-candidate",
     "market_pulse_article": "market-pulse-article",
     "visual_research": "visual-research",
@@ -3191,7 +3192,13 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     status = "completed"
                 else:
                     (run_dir / "answer.rejected.md").write_text(answer, encoding="utf-8")
-                    repaired = self._repair_guard_failure(
+                    structured_repair = self._repair_trade_review_json_guard_failure(
+                        answer,
+                        prompt_evidence,
+                        output_guard,
+                        trusted_context=trusted_prior_answers,
+                    )
+                    repaired = structured_repair or self._repair_guard_failure(
                         answer,
                         prompt_evidence,
                         output_guard,
@@ -3202,7 +3209,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         semantic_repairs = set(
                             output_guard.get("semantic_conflicts") or []
                         )
-                        if semantic_repairs and (
+                        if structured_repair is not None:
+                            repair_method = "drop_unsupported_trade_review_clauses_v1"
+                        elif semantic_repairs and (
                             output_guard.get("unsupported_numbers")
                             or output_guard.get("unsupported_market_inferences")
                             or output_guard.get("private_operational_patterns")
@@ -4457,6 +4466,96 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             abs(value) for value in AgentService._numeric_values(classification_method)
         }
         return bool(claim_values) and claim_values.issubset(method_values)
+
+    @staticmethod
+    def _repair_trade_review_json_guard_failure(
+        answer: str,
+        evidence: dict[str, Any],
+        guard: dict[str, Any],
+        trusted_context: list[str] | None = None,
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Keep a useful structured review when only a few numeric clauses fail.
+
+        Trade-review answers are intentionally one JSON line, so the generic
+        line-based repair would otherwise discard the entire model response.
+        Remove only clauses containing unsupported numbers, then re-run the
+        same deterministic guard before accepting the repaired JSON.
+        """
+
+        if evidence.get("type") != "trade_review":
+            return None
+        unsupported = [
+            str(item).strip()
+            for item in (guard.get("unsupported_numbers") or [])
+            if str(item).strip()
+        ]
+        if not unsupported:
+            return None
+        if any(
+            guard.get(key)
+            for key in (
+                "prohibited_patterns",
+                "private_operational_patterns",
+                "semantic_conflicts",
+                "unsupported_market_inferences",
+            )
+        ):
+            return None
+        try:
+            payload = json.loads(answer)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        expected = {
+            "logic_result",
+            "plan_deviation",
+            "bias_tags",
+            "improvement_text",
+        }
+        if not expected.issubset(payload):
+            return None
+
+        removed = 0
+
+        def clean_text(value: Any) -> str:
+            nonlocal removed
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            clauses = re.split(r"(?<=[。！？；])|\n+", text)
+            kept: list[str] = []
+            for clause in clauses:
+                stripped = clause.strip()
+                if not stripped:
+                    continue
+                if any(token in stripped for token in unsupported):
+                    removed += 1
+                    continue
+                kept.append(stripped)
+            return "".join(kept).strip()
+
+        repaired_payload = dict(payload)
+        for key in ("logic_result", "plan_deviation", "improvement_text"):
+            repaired_payload[key] = clean_text(payload.get(key))
+        bias_tags = payload.get("bias_tags")
+        if not isinstance(bias_tags, list):
+            return None
+        repaired_payload["bias_tags"] = [
+            str(item).strip() for item in bias_tags if str(item).strip()
+        ][:3]
+        if not removed or not repaired_payload["logic_result"]:
+            return None
+
+        repaired = json.dumps(repaired_payload, ensure_ascii=False, separators=(",", ":"))
+        repaired_guard = AgentService._validate_model_output(
+            repaired,
+            evidence,
+            trusted_context=trusted_context,
+        )
+        if not repaired_guard["passed"]:
+            return None
+        return repaired, repaired_guard
 
     @staticmethod
     def _repair_guard_failure(

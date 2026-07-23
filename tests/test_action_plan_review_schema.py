@@ -158,6 +158,7 @@ def test_action_plan_and_trade_review_schema_is_idempotent(tmp_path: Path) -> No
         assert review_columns["data_status"]["dflt_value"] == "'missing'"
 
         review_version_columns = _columns(connection, "trade_review_versions")
+        assert "source_run_id" in review_version_columns
         assert review_version_columns["bias_tags_json"]["dflt_value"] == "'[]'"
         assert review_version_columns["status"]["dflt_value"] == "'draft'"
 

@@ -96,6 +96,7 @@ class BackgroundScheduler:
         settings: Settings,
         tushare_snapshots: TushareSnapshotService | None = None,
         li_zong_strategy: LiZongStrategyService | None = None,
+        trade_workflow: Any | None = None,
     ):
         self.database = database
         self.live_markets = live_markets
@@ -122,6 +123,7 @@ class BackgroundScheduler:
         self.settings = settings
         self.tushare_snapshots = tushare_snapshots
         self.li_zong_strategy = li_zong_strategy
+        self.trade_workflow = trade_workflow
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._li_zong_thread: threading.Thread | None = None
@@ -174,6 +176,7 @@ class BackgroundScheduler:
             "peer_valuation_refresh_seconds": self.settings.background_fundamentals_refresh_seconds,
             "research_refresh_seconds": self.settings.background_research_refresh_seconds,
             "research_outcome_refresh_seconds": self.settings.background_research_refresh_seconds,
+            "trade_review_refresh_seconds": self.settings.background_research_refresh_seconds,
             "market_news_refresh_seconds": self.settings.background_market_news_refresh_seconds,
             "evidence_task_refresh_seconds": self.settings.background_research_refresh_seconds,
             "calibration_refresh_seconds": self.settings.background_calibration_refresh_seconds,
@@ -205,6 +208,7 @@ class BackgroundScheduler:
         next_peer_valuation = 0.0
         next_research = 0.0
         next_research_outcomes = 0.0
+        next_trade_reviews = 0.0
         next_market_news = 0.0
         next_evidence_tasks = 0.0
         next_calibration = 0.0
@@ -314,6 +318,14 @@ class BackgroundScheduler:
                 next_research_outcomes = time.monotonic() + max(
                     300, self.settings.background_research_refresh_seconds
                 )
+            if self.trade_workflow is not None and now >= next_trade_reviews:
+                self._run_job(
+                    "trade_reviews_readiness_refresh",
+                    self.trade_workflow.refresh_pending_reviews,
+                )
+                next_trade_reviews = time.monotonic() + max(
+                    60, self.settings.background_research_refresh_seconds
+                )
             if now >= next_market_news:
                 self._run_job("market_news_refresh", self._refresh_market_news)
                 next_market_news = time.monotonic() + max(
@@ -347,6 +359,7 @@ class BackgroundScheduler:
                 next_calibration,
                 next_research,
                 next_research_outcomes,
+                next_trade_reviews,
                 next_market_news,
                 next_evidence_tasks,
                 next_data_quality,

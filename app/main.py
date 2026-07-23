@@ -88,6 +88,12 @@ from app.services.position_ledger import (
     PositionLedgerNotFound,
     PositionLedgerService,
 )
+from app.services.trade_workflow import (
+    TradeWorkflowConflict,
+    TradeWorkflowInvalidState,
+    TradeWorkflowNotFound,
+    TradeWorkflowService,
+)
 from app.services.tushare_snapshots import TushareSnapshotService
 from app.services.li_zong_strategy_service import LiZongStrategyService
 from app.services.today_overview import TodayOverviewService
@@ -277,6 +283,54 @@ class PositionAdjustmentCreate(BaseModel):
     cost_delta: str = Field(default="0", min_length=1, max_length=40)
     reason_text: str = Field(min_length=1, max_length=1200)
     evidence_text: str | None = Field(default=None, max_length=1200)
+
+
+class ActionPlanCreate(BaseModel):
+    action_type: Literal["buy", "add", "reduce", "sell", "hold"]
+    trigger_text: str = Field(min_length=1, max_length=2000)
+    target_quantity: str | None = Field(default=None, max_length=40)
+    target_amount: str | None = Field(default=None, max_length=40)
+    target_position_percent: str | None = Field(default=None, max_length=40)
+    thesis_version_id: str | None = Field(default=None, max_length=36)
+    expires_at: str | None = Field(default=None, max_length=40)
+
+
+class ActionPlanPatch(BaseModel):
+    base_version: int = Field(ge=1)
+    action_type: Literal["buy", "add", "reduce", "sell", "hold"] | None = None
+    trigger_text: str | None = Field(default=None, min_length=1, max_length=2000)
+    target_quantity: str | None = Field(default=None, max_length=40)
+    target_amount: str | None = Field(default=None, max_length=40)
+    target_position_percent: str | None = Field(default=None, max_length=40)
+    expires_at: str | None = Field(default=None, max_length=40)
+
+
+class ActionPlanTransition(BaseModel):
+    base_version: int = Field(ge=1)
+    status: Literal[
+        "checked",
+        "saved",
+        "cancelled",
+        "expired",
+    ]
+
+
+class TradeReviewGenerateDraft(BaseModel):
+    base_version: int = Field(default=0, ge=0)
+    model_tier: Literal["economy", "deep"] = "economy"
+
+
+class TradeReviewDraftPatch(BaseModel):
+    base_version: int = Field(ge=1)
+    price_result: str = Field(min_length=1, max_length=4000)
+    logic_result: str = Field(min_length=1, max_length=6000)
+    plan_deviation: str | None = Field(default=None, max_length=4000)
+    bias_tags: list[str] = Field(default_factory=list, max_length=12)
+    improvement_text: str | None = Field(default=None, max_length=4000)
+
+
+class TradeReviewConfirm(BaseModel):
+    base_version: int = Field(ge=1)
 
 
 class StockScreenFilters(BaseModel):
@@ -869,6 +923,7 @@ def create_app(
     structured_ai = StructuredAIService(database, stock_domain)
     observation_tasks = ObservationTaskService(database)
     position_ledger = PositionLedgerService(database)
+    trade_workflow = TradeWorkflowService(database)
     resolved_tushare_client = tushare_client
     if resolved_tushare_client is None and settings.tushare_enabled:
         try:
@@ -896,6 +951,7 @@ def create_app(
         observation_tasks=observation_tasks,
         li_zong_strategy=li_zong_strategy,
         position_ledger=position_ledger,
+        trade_workflow=trade_workflow,
     )
     stock_assets = StockAssetListService(database, stock_workspace)
     today_overview = TodayOverviewService(
@@ -934,6 +990,7 @@ def create_app(
         settings,
         tushare_snapshots=tushare_snapshots,
         li_zong_strategy=li_zong_strategy,
+        trade_workflow=trade_workflow,
     )
 
     @asynccontextmanager
@@ -985,6 +1042,7 @@ def create_app(
     app.state.structured_ai = structured_ai
     app.state.observation_tasks = observation_tasks
     app.state.position_ledger = position_ledger
+    app.state.trade_workflow = trade_workflow
     app.state.stock_workspace = stock_workspace
     app.state.stock_assets = stock_assets
     app.state.stock_screener = stock_screener
@@ -1083,7 +1141,7 @@ def create_app(
         if not 8 <= len(value) <= 128:
             raise HTTPException(
                 status_code=422,
-                detail="写入持仓事实时必须提供 8—128 位 Idempotency-Key",
+                detail="写入事实记录时必须提供 8—128 位 Idempotency-Key",
             )
         return value
 
@@ -1831,6 +1889,236 @@ def create_app(
         except PositionLedgerConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except PositionLedgerInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/v1/stocks/{symbol}/action-plans")
+    def list_my_action_plans(symbol: str, request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return trade_workflow.list_action_plans(user["id"], symbol)
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/stocks/{symbol}/action-plans", status_code=201)
+    def create_my_action_plan(
+        symbol: str, payload: ActionPlanCreate, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return trade_workflow.create_action_plan(
+                user_id=user["id"],
+                symbol=symbol,
+                action_type=payload.action_type,
+                trigger_text=payload.trigger_text,
+                target_quantity=payload.target_quantity,
+                target_amount=payload.target_amount,
+                target_position_percent=payload.target_position_percent,
+                thesis_version_id=payload.thesis_version_id,
+                expires_at=payload.expires_at,
+                idempotency_key=require_idempotency_key(request),
+            )
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except TradeWorkflowConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/v1/action-plans/{plan_id}")
+    def get_my_action_plan(plan_id: str, request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return trade_workflow.get_action_plan(user["id"], plan_id)
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/v1/action-plans/{plan_id}/history")
+    def get_my_action_plan_history(
+        plan_id: str, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            plan = trade_workflow.get_action_plan(user["id"], plan_id)
+            return {
+                "plan_id": plan_id,
+                "version": plan["version"],
+                "items": plan.get("history") or [],
+            }
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.patch("/v1/action-plans/{plan_id}")
+    def update_my_action_plan(
+        plan_id: str, payload: ActionPlanPatch, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        fields = payload.model_dump(exclude={"base_version"}, exclude_unset=True)
+        try:
+            return trade_workflow.update_action_plan(
+                user_id=user["id"],
+                plan_id=plan_id,
+                base_version=payload.base_version,
+                fields=fields,
+            )
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except TradeWorkflowConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/action-plans/{plan_id}/transition")
+    def transition_my_action_plan(
+        plan_id: str, payload: ActionPlanTransition, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return trade_workflow.transition_action_plan(
+                user_id=user["id"],
+                plan_id=plan_id,
+                base_version=payload.base_version,
+                status=payload.status,
+            )
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except TradeWorkflowConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/v1/operations/{operation_id}/context")
+    def get_my_operation_context(
+        operation_id: str, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return trade_workflow.get_operation_context(user["id"], operation_id)
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/v1/stocks/{symbol}/trade-reviews")
+    def list_my_trade_reviews(symbol: str, request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return trade_workflow.list_trade_reviews(user["id"], symbol)
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/v1/trade-reviews/{review_id}")
+    def get_my_trade_review(review_id: str, request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return trade_workflow.get_trade_review(user["id"], review_id)
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/trade-reviews/{review_id}/generate-draft", status_code=201)
+    def generate_my_trade_review_draft(
+        review_id: str, payload: TradeReviewGenerateDraft, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            evidence = trade_workflow.prepare_review_agent_evidence(
+                user["id"], review_id
+            )
+            run = agent.run(
+                user=user,
+                intent="trade_review",
+                message=(
+                    "请复盘这次真实操作。价格结果由系统确定性计算；请分别输出逻辑结果、"
+                    "计划偏离、候选偏差标签和下一步改进。不要把盈利等同于逻辑正确，"
+                    "也不要把亏损等同于逻辑错误。"
+                ),
+                evidence=evidence,
+                model_tier=payload.model_tier,
+                execute_agent=True,
+            )
+            if run.get("status") != "completed":
+                raise HTTPException(
+                    status_code=503,
+                    detail="复盘草稿暂未生成，请稍后重试。已记录的操作和快照不受影响。",
+                )
+            draft = trade_workflow.parse_review_agent_answer(run.get("answer") or "")
+            return trade_workflow.save_ai_draft(
+                user_id=user["id"],
+                review_id=review_id,
+                source_run_id=str(run["id"]),
+                base_version=payload.base_version,
+                logic_result=draft["logic_result"],
+                plan_deviation=draft["plan_deviation"],
+                bias_tags=draft["bias_tags"],
+                improvement_text=draft["improvement_text"],
+            )
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except TradeWorkflowConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.patch("/v1/trade-reviews/{review_id}/draft")
+    def update_my_trade_review_draft(
+        review_id: str, payload: TradeReviewDraftPatch, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return trade_workflow.save_user_draft(
+                user_id=user["id"],
+                review_id=review_id,
+                base_version=payload.base_version,
+                price_result=payload.price_result,
+                logic_result=payload.logic_result,
+                plan_deviation=payload.plan_deviation,
+                bias_tags=payload.bias_tags,
+                improvement_text=payload.improvement_text,
+            )
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except TradeWorkflowConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/trade-reviews/{review_id}/confirm")
+    def confirm_my_trade_review(
+        review_id: str, payload: TradeReviewConfirm, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return trade_workflow.confirm_trade_review(
+                user_id=user["id"],
+                review_id=review_id,
+                base_version=payload.base_version,
+            )
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except TradeWorkflowConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/trade-reviews/{review_id}/archive")
+    def archive_my_trade_review(
+        review_id: str, payload: TradeReviewConfirm, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return trade_workflow.archive_trade_review(
+                user_id=user["id"],
+                review_id=review_id,
+                base_version=payload.base_version,
+            )
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except TradeWorkflowConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/v1/observation-tasks")

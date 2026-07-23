@@ -77,6 +77,7 @@ class StockWorkspaceService:
         observation_tasks: ObservationTaskService,
         li_zong_strategy: Any | None = None,
         position_ledger: Any | None = None,
+        trade_workflow: Any | None = None,
     ):
         self.database = database
         self.deep_stock = deep_stock
@@ -85,6 +86,7 @@ class StockWorkspaceService:
         self.observation_tasks = observation_tasks
         self.li_zong_strategy = li_zong_strategy
         self.position_ledger = position_ledger
+        self.trade_workflow = trade_workflow
 
     def get_workspace(self, user_id: str, symbol: str) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
@@ -215,6 +217,19 @@ class StockWorkspaceService:
             else "partial"
         )
         position = self._position(user_id, canonical, formal_workspace)
+        action_plans = (
+            self.trade_workflow.list_action_plans(user_id, canonical)
+            if self.trade_workflow is not None and formal_workspace is not None
+            else {"items": [], "summary": {"total": 0, "active": 0}}
+        )
+        trade_reviews = (
+            self.trade_workflow.list_trade_reviews(user_id, canonical)
+            if self.trade_workflow is not None and formal_workspace is not None
+            else {
+                "items": [],
+                "summary": {"total": 0, "waiting_data": 0, "needs_confirmation": 0},
+            }
+        )
 
         return {
             "contract_version": self.CONTRACT_VERSION,
@@ -228,6 +243,8 @@ class StockWorkspaceService:
             },
             "relation": relation,
             "position_snapshot": position,
+            "action_plans": action_plans,
+            "trade_reviews": trade_reviews,
             "thesis": thesis,
             "important_changes": important_changes,
             "pending_actions": pending_actions,
@@ -268,6 +285,8 @@ class StockWorkspaceService:
                 ),
                 "position_operation_count": len(position.get("operations") or []),
                 "position_snapshot_count": len(position.get("snapshots") or []),
+                "action_plan_count": len(action_plans.get("items") or []),
+                "trade_review_count": len(trade_reviews.get("items") or []),
             },
             "completeness": {
                 "has_stock_space": formal_workspace is not None,
@@ -317,6 +336,7 @@ class StockWorkspaceService:
             "important_changes": workspace["important_changes"],
             "recent_research": workspace["recent_research"],
             "position": workspace["position_snapshot"],
+            "trade_reviews": workspace["trade_reviews"],
             "history_summary": workspace["history_summary"],
             "data_meta": workspace["data_meta"],
         }
@@ -332,6 +352,7 @@ class StockWorkspaceService:
             "pending_actions": workspace["pending_actions"],
             "observation_tasks": workspace["observation_tasks"],
             "position": workspace["position_snapshot"],
+            "action_plans": workspace["action_plans"],
             "next_evidence": workspace["next_evidence"],
             "boundary": (
                 "研究行动只用于核验事实、补充证据和复核判断；"

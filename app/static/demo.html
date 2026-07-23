@@ -1011,6 +1011,31 @@
     .stock-coverage-history-item:first-child { border-top: 0; padding-top: 2px; }
     .stock-coverage-history-time { color: #718096; font-size: 11px; }
     .stock-coverage-history-change { margin-top: 5px; color: #4f6078; font-size: 13px; line-height: 1.65; }
+    .action-plan-section, .trade-review-section { display: grid; gap: 12px; margin-bottom: 16px; padding: 16px; border: 1px solid #cbdcff; border-radius: 14px; background: linear-gradient(145deg,#fff,#f7faff); }
+    .action-plan-head, .trade-review-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+    .action-plan-title, .trade-review-title { color: #22314a; font-size: 15px; font-weight: 800; }
+    .action-plan-copy, .trade-review-copy { margin-top: 4px; color: #718096; font-size: 12px; line-height: 1.6; }
+    .action-plan-boundary, .trade-review-boundary { padding: 9px 11px; border-radius: 9px; color: #60718a; background: #eef4ff; font-size: 12px; line-height: 1.55; }
+    .action-plan-grid, .trade-review-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,280px),1fr)); gap: 10px; min-width: 0; }
+    .action-plan-card, .trade-review-card { min-width: 0; padding: 14px; border: 1px solid #dce5f2; border-radius: 11px; background: #fff; }
+    .action-plan-card-head, .trade-review-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .action-plan-card-title, .trade-review-card-title { min-width: 0; color: #263851; font-size: 14px; font-weight: 780; line-height: 1.5; overflow-wrap: anywhere; }
+    .action-plan-status, .trade-review-status { flex: 0 0 auto; display: inline-flex; padding: 4px 8px; border-radius: 999px; color: #55719d; background: #edf3ff; font-size: 11px; white-space: nowrap; }
+    .action-plan-trigger, .trade-review-result { margin-top: 9px; color: #53657d; font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+    .action-plan-meta, .trade-review-meta { margin-top: 8px; color: #7b889a; font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+    .action-plan-actions, .trade-review-actions { display: flex; gap: 7px; margin-top: 12px; flex-wrap: wrap; }
+    .action-plan-actions .btn, .trade-review-actions .btn { padding: 7px 10px; font-size: 12px; }
+    .action-plan-form, .trade-review-editor { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; padding-top: 12px; border-top: 1px solid #dce5f2; }
+    .action-plan-form label, .trade-review-editor label { display: grid; gap: 5px; min-width: 0; color: #65758b; font-size: 11px; }
+    .action-plan-form input, .action-plan-form select, .action-plan-form textarea, .trade-review-editor input, .trade-review-editor textarea { width: 100%; min-width: 0; border: 1px solid #d6dfed; border-radius: 9px; background: #fff; color: var(--text); padding: 9px 10px; font: inherit; }
+    .action-plan-form textarea, .trade-review-editor textarea { min-height: 78px; resize: vertical; }
+    .action-plan-form .form-wide, .trade-review-editor .form-wide, .action-plan-form .position-form-wide, .trade-review-editor .position-form-wide, .action-plan-form-status, .trade-review-editor-status, .action-plan-form-actions, .trade-review-editor-actions { grid-column: 1 / -1; }
+    .action-plan-form-status, .trade-review-editor-status { color: #718096; font-size: 12px; line-height: 1.55; }
+    .action-plan-form-actions, .trade-review-editor-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .trade-review-columns { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; margin-top: 10px; }
+    .trade-review-column { min-width: 0; padding: 10px; border: 1px solid #e4eaf3; border-radius: 9px; background: #fbfcff; }
+    .trade-review-column span { display: block; color: #78869a; font-size: 11px; }
+    .trade-review-column strong { display: block; margin-top: 5px; color: #344760; font-size: 12px; font-weight: 650; line-height: 1.62; white-space: pre-line; overflow-wrap: anywhere; }
     .deep-stage-title, .deep-stock-card-title, .deep-info-title, .deep-board-title { font-size: 14px; }
     .deep-stage-copy, .deep-stock-card-copy, .deep-stock-list, .deep-info-copy, .deep-info-list, .deep-board-list { font-size: 14px; line-height: 1.68; }
     .deep-stage-action, .deep-info-meta, .deep-stock-progress-meta { font-size: 12px; }
@@ -1082,6 +1107,9 @@
       .knowledge-item-controls { grid-column: 2; grid-row: 1 / span 4; }
       .deep-info-grid { grid-template-columns: 1fr; }
       .backend-context-grid { grid-template-columns: 1fr; }
+      .action-plan-head, .trade-review-head { flex-direction: column; }
+      .action-plan-form, .trade-review-editor, .trade-review-columns { grid-template-columns: 1fr; }
+      .action-plan-form .form-wide, .trade-review-editor .form-wide, .action-plan-form .position-form-wide, .trade-review-editor .position-form-wide, .action-plan-form-status, .trade-review-editor-status, .action-plan-form-actions, .trade-review-editor-actions { grid-column: auto; }
     }
 
     /* Task-oriented home entry aligned with the colleague prototype. */
@@ -2396,6 +2424,8 @@
       liZongLoadToken: 0,
       liZongFilter: "qualified",
       liZongRenderedFilter: "qualified",
+      stockActionPlans: {},
+      stockTradeReviews: {},
       deepStock: null,
       deepStockSessions: [],
       deepStockOverviewSymbol: null,
@@ -5432,7 +5462,7 @@
 
     function positionField(labelText, input) {
       const label = document.createElement("label");
-      if (input.classList.contains("position-form-wide")) label.classList.add("position-form-wide");
+      if (input.classList.contains("position-form-wide") || input.classList.contains("form-wide")) label.classList.add("position-form-wide");
       const text = document.createElement("span"); text.textContent = labelText;
       label.append(text, input); return label;
     }
@@ -5470,11 +5500,25 @@
       host.appendChild(form); quantity.focus();
     }
 
-    function showPositionOperationForm(host, symbol) {
+    function showPositionOperationForm(host, symbol, preferredPlanId = null) {
       if (host.querySelector(".position-entry-form")) return;
       const form = document.createElement("form"); form.className = "position-entry-form";
       const type = document.createElement("select");
       [["buy", "首次买入"], ["add", "增加持仓"], ["reduce", "减少持仓"], ["sell", "卖出"]].forEach(([value, label]) => { const option = document.createElement("option"); option.value = value; option.textContent = label; type.appendChild(option); });
+      const preferredPlan = (state.stockActionPlans[symbol] || []).find(item => ["saved", "partially_executed"].includes(item.status) && String(item.id) === String(preferredPlanId));
+      if (preferredPlan?.action_type) type.value = preferredPlan.action_type;
+      const plan = document.createElement("select");
+      const refreshPlanOptions = () => {
+        const selectedPlanId = plan.value || (preferredPlanId == null ? "" : String(preferredPlanId));
+        plan.innerHTML = "";
+        const noPlan = document.createElement("option"); noPlan.value = ""; noPlan.textContent = "不关联计划"; plan.appendChild(noPlan);
+        (state.stockActionPlans[symbol] || []).filter(item => ["saved", "partially_executed"].includes(item.status) && item.action_type === type.value).forEach(item => {
+          const option = document.createElement("option"); option.value = item.id; option.textContent = `${actionPlanTypeLabel(item.action_type)} · ${item.trigger_text || actionPlanTargetText(item)}`; plan.appendChild(option);
+        });
+        plan.value = [...plan.options].some(option => option.value === selectedPlanId) ? selectedPlanId : "";
+      };
+      type.addEventListener("change", refreshPlanOptions);
+      refreshPlanOptions();
       const operatedAt = document.createElement("input"); operatedAt.type = "datetime-local"; operatedAt.required = true; operatedAt.value = localDateTimeValue();
       const price = document.createElement("input"); price.inputMode = "decimal"; price.required = true; price.placeholder = "成交价格";
       const quantity = document.createElement("input"); quantity.inputMode = "decimal"; quantity.required = true; quantity.placeholder = "成交数量";
@@ -5485,14 +5529,14 @@
       const save = document.createElement("button"); save.type = "submit"; save.className = "btn primary"; save.textContent = "保存操作";
       const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "取消"; cancel.addEventListener("click", () => form.remove());
       actions.append(save, cancel);
-      form.append(positionField("操作类型", type), positionField("操作时间", operatedAt), positionField("成交价格", price), positionField("成交数量", quantity), positionField("已知费用", fees), positionField("操作事实与理由", reason), status, actions);
+      form.append(positionField("操作类型", type), positionField("关联已保存计划", plan), positionField("操作时间", operatedAt), positionField("成交价格", price), positionField("成交数量", quantity), positionField("已知费用", fees), positionField("操作事实与理由", reason), status, actions);
       form.addEventListener("submit", async event => {
         event.preventDefault(); save.disabled = true; cancel.disabled = true; status.textContent = "正在保存流水并生成新快照…";
         try {
           await api(`/v1/stocks/${encodeURIComponent(symbol)}/operations`, {
             method: "POST",
             headers: {"Idempotency-Key": positionIdempotencyKey("operation")},
-            body: JSON.stringify({operation_type: type.value, operated_at: new Date(operatedAt.value).toISOString(), price: price.value.trim(), quantity: quantity.value.trim(), fees: fees.value.trim() || null, reason_text: reason.value.trim()})
+            body: JSON.stringify({operation_type: type.value, plan_id: plan.value || null, operated_at: new Date(operatedAt.value).toISOString(), price: price.value.trim(), quantity: quantity.value.trim(), fees: fees.value.trim() || null, reason_text: reason.value.trim()})
           });
           await refreshPositionWorkspace(symbol);
         } catch (error) { save.disabled = false; cancel.disabled = false; status.textContent = error.message || "操作未保存，请检查输入。"; }
@@ -5603,7 +5647,268 @@
       return section;
     }
 
-    function renderStockSpaceTasks(symbol, session = null, workspace = null) {
+    function listPayloadItems(payload) {
+      if (Array.isArray(payload)) return payload;
+      return payload?.items || payload?.action_plans || payload?.trade_reviews || payload?.reviews || [];
+    }
+
+    function actionPlanStatusLabel(status) {
+      return {
+        draft: "草稿",
+        checked: "已检查",
+        saved: "已保存",
+        partially_executed: "部分执行",
+        executed: "已执行",
+        cancelled: "已取消",
+        expired: "已过期"
+      }[status] || "计划";
+    }
+
+    function actionPlanTypeLabel(actionType) {
+      return {buy: "买入", add: "增加持仓", reduce: "减少持仓", sell: "卖出", hold: "保持观察"}[actionType] || "自定义操作";
+    }
+
+    function actionPlanTargetText(plan) {
+      return [
+        plan.target_quantity != null ? `${plan.target_quantity} 股` : "",
+        plan.target_amount != null ? `金额 ${plan.target_amount}` : "",
+        plan.target_position_percent != null ? `目标仓位 ${plan.target_position_percent}%` : ""
+      ].filter(Boolean).join(" · ") || "尚未填写数量、金额或仓位";
+    }
+
+    function friendlyStructuredText(value, fallback = "尚未形成") {
+      if (value === null || value === undefined || value === "") return fallback;
+      if (typeof value === "string" || typeof value === "number") return String(value);
+      if (Array.isArray(value)) return value.map(item => friendlyStructuredText(item, "")).filter(Boolean).join("；") || fallback;
+      for (const key of ["summary", "conclusion", "label", "text", "description"]) {
+        if (value[key]) return friendlyStructuredText(value[key], fallback);
+      }
+      return Object.entries(value).slice(0, 6).map(([key, item]) => `${key}：${friendlyStructuredText(item, "—")}`).join("；") || fallback;
+    }
+
+    function actionPlanCheckText(checkResult) {
+      if (!checkResult || typeof checkResult !== "object") return "";
+      if (!checkResult.passed) {
+        const missing = Array.isArray(checkResult.missing_items) ? checkResult.missing_items.filter(Boolean) : [];
+        return missing.length ? `待补充：${missing.join("、")}` : "尚未通过完整性检查";
+      }
+      const targetCheck = Array.isArray(checkResult.checks)
+        ? checkResult.checks.find(item => String(item || "").includes("数量、金额或仓位"))
+        : "";
+      return targetCheck ? `检查通过；${targetCheck}` : "完整性检查通过";
+    }
+
+    async function refreshStockWorkflow(symbol, tab = "tasks") {
+      await loadDeepStockOverview(symbol);
+      activateStockSpaceTab(tab);
+    }
+
+    function showActionPlanForm(host, symbol, plan = null) {
+      host.querySelector(".action-plan-form")?.remove();
+      const form = document.createElement("form"); form.className = "action-plan-form";
+      const actionType = document.createElement("select");
+      [["buy", "买入"], ["add", "增加持仓"], ["reduce", "减少持仓"], ["sell", "卖出"], ["hold", "保持观察"]].forEach(([value, label]) => { const option = document.createElement("option"); option.value = value; option.textContent = label; actionType.appendChild(option); });
+      actionType.value = plan?.action_type || "buy";
+      const trigger = document.createElement("textarea"); trigger.className = "form-wide"; trigger.required = true; trigger.value = plan?.trigger_text || ""; trigger.placeholder = "写下你自己的触发条件，例如：公告确认订单变化后再重新评估";
+      const quantity = document.createElement("input"); quantity.inputMode = "decimal"; quantity.value = plan?.target_quantity ?? ""; quantity.placeholder = "可选，例如 500";
+      const amount = document.createElement("input"); amount.inputMode = "decimal"; amount.value = plan?.target_amount ?? ""; amount.placeholder = "可选，例如 20000";
+      const position = document.createElement("input"); position.inputMode = "decimal"; position.value = plan?.target_position_percent ?? ""; position.placeholder = "可选，例如 10";
+      const expiresAt = document.createElement("input"); expiresAt.type = "datetime-local"; expiresAt.value = plan?.expires_at ? localDateTimeValue(new Date(plan.expires_at)) : "";
+      const status = document.createElement("div"); status.className = "action-plan-form-status"; status.textContent = "系统只检查并保存你的条件，不生成建议。数量、金额和仓位都可以留空。";
+      const actions = document.createElement("div"); actions.className = "action-plan-form-actions";
+      const save = document.createElement("button"); save.type = "submit"; save.className = "btn primary"; save.textContent = plan ? "保存新版本" : "保存计划草稿";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "取消"; cancel.addEventListener("click", () => form.remove());
+      actions.append(save, cancel);
+      form.append(
+        positionField("方向", actionType),
+        positionField("到期时间", expiresAt),
+        positionField("用户触发条件", trigger),
+        positionField("目标数量", quantity),
+        positionField("目标金额", amount),
+        positionField("目标仓位（%）", position),
+        status,
+        actions
+      );
+      form.addEventListener("submit", async event => {
+        event.preventDefault();
+        if (!trigger.value.trim()) { status.textContent = "请先填写你自己的触发条件。"; trigger.focus(); return; }
+        save.disabled = true; cancel.disabled = true; status.textContent = "正在保存计划…";
+        const body = {
+          action_type: actionType.value,
+          trigger_text: trigger.value.trim(),
+          target_quantity: quantity.value.trim() || null,
+          target_amount: amount.value.trim() || null,
+          target_position_percent: position.value.trim() || null,
+          expires_at: expiresAt.value ? new Date(expiresAt.value).toISOString() : null
+        };
+        try {
+          if (plan) {
+            await api(`/v1/action-plans/${encodeURIComponent(plan.id)}`, {method: "PATCH", body: JSON.stringify({...body, base_version: plan.version})});
+          } else {
+            await api(`/v1/stocks/${encodeURIComponent(symbol)}/action-plans`, {
+              method: "POST",
+              headers: {"Idempotency-Key": `action-plan-${Date.now()}-${Math.random().toString(16).slice(2)}`},
+              body: JSON.stringify(body)
+            });
+          }
+          await refreshStockWorkflow(symbol, "tasks");
+        } catch {
+          save.disabled = false; cancel.disabled = false; status.textContent = "计划尚未保存，请检查内容后再次提交。";
+        }
+      });
+      host.appendChild(form); trigger.focus();
+    }
+
+    async function transitionActionPlan(symbol, plan, nextStatus, button) {
+      const original = button.textContent; button.disabled = true;
+      try {
+        await api(`/v1/action-plans/${encodeURIComponent(plan.id)}/transition`, {method: "POST", body: JSON.stringify({base_version: plan.version, status: nextStatus})});
+        await refreshStockWorkflow(symbol, "tasks");
+      } catch {
+        button.disabled = false; button.textContent = original;
+      }
+    }
+
+    function renderActionPlanWorkspace(symbol, plans, positionWorkspace) {
+      const section = document.createElement("section"); section.className = "action-plan-section";
+      const head = document.createElement("div"); head.className = "action-plan-head";
+      const copyWrap = document.createElement("div");
+      const title = document.createElement("div"); title.className = "action-plan-title"; title.textContent = "我的操作计划";
+      const copy = document.createElement("div"); copy.className = "action-plan-copy"; copy.textContent = "保存自己的触发条件与目标，实际操作仍需由你主动记录。";
+      copyWrap.append(title, copy);
+      const create = document.createElement("button"); create.type = "button"; create.className = "btn primary"; create.textContent = "新建计划"; create.addEventListener("click", () => showActionPlanForm(section, symbol));
+      head.append(copyWrap, create); section.appendChild(head);
+      const boundary = document.createElement("div"); boundary.className = "action-plan-boundary"; boundary.textContent = "系统只检查用户条件，不生成建议，也不会自动执行交易。"; section.appendChild(boundary);
+      const grid = document.createElement("div"); grid.className = "action-plan-grid";
+      if (!plans.length) {
+        const empty = document.createElement("div"); empty.className = "empty"; empty.textContent = "还没有保存的操作计划。你可以记录自己的条件，之后在真实操作时关联。"; grid.appendChild(empty);
+      }
+      plans.forEach(plan => {
+        const card = document.createElement("article"); card.className = "action-plan-card";
+        const cardHead = document.createElement("div"); cardHead.className = "action-plan-card-head";
+        const cardTitle = document.createElement("div"); cardTitle.className = "action-plan-card-title"; cardTitle.textContent = `${actionPlanTypeLabel(plan.action_type)} · ${actionPlanTargetText(plan)}`;
+        const status = document.createElement("span"); status.className = "action-plan-status"; status.textContent = actionPlanStatusLabel(plan.status);
+        cardHead.append(cardTitle, status);
+        const trigger = document.createElement("div"); trigger.className = "action-plan-trigger"; trigger.textContent = plan.trigger_text || "尚未填写用户触发条件。";
+        const checkText = actionPlanCheckText(plan.check_result);
+        const meta = document.createElement("div"); meta.className = "action-plan-meta"; meta.textContent = [plan.expires_at ? `到期 ${readableTime(plan.expires_at)}` : "未设置到期", `版本 ${plan.version || 1}`, checkText].filter(Boolean).join(" · ");
+        const actions = document.createElement("div"); actions.className = "action-plan-actions";
+        const addTransition = (label, nextStatus, primary = false) => { const button = document.createElement("button"); button.type = "button"; button.className = `btn${primary ? " primary" : ""}`; button.textContent = label; button.addEventListener("click", () => { void transitionActionPlan(symbol, plan, nextStatus, button); }); actions.appendChild(button); };
+        if (["draft", "checked", "saved"].includes(plan.status)) { const edit = document.createElement("button"); edit.type = "button"; edit.className = "btn"; edit.textContent = "编辑"; edit.addEventListener("click", () => showActionPlanForm(section, symbol, plan)); actions.appendChild(edit); }
+        if (plan.status === "draft") addTransition("检查条件", "checked", true);
+        if (plan.status === "checked") addTransition("保存计划", "saved", true);
+        if (plan.status === "saved") {
+          const record = document.createElement("button"); record.type = "button"; record.className = "btn primary"; record.textContent = "记录实际操作"; record.addEventListener("click", () => showPositionOperationForm(positionWorkspace, symbol, plan.id)); actions.appendChild(record);
+        }
+        if (["draft", "checked", "saved"].includes(plan.status)) addTransition("取消计划", "cancelled");
+        card.append(cardHead, trigger, meta, actions); grid.appendChild(card);
+      });
+      section.appendChild(grid); return section;
+    }
+
+    function tradeReviewVersion(review) {
+      return review?.current_version || review?.latest_version || review?.version_detail || review?.draft_version || review?.draft || null;
+    }
+
+    function tradeReviewStatusLabel(status) {
+      return {waiting_data: "等待数据", ready: "可生成", draft: "待确认草稿", confirmed: "已确认", archived: "已归档", revised: "已修订"}[status] || "等待复盘";
+    }
+
+    async function generateTradeReviewDraft(symbol, review, button) {
+      button.disabled = true;
+      try {
+        await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/generate-draft`, {method: "POST", body: JSON.stringify({base_version: tradeReviewVersion(review)?.version_no || 0})});
+        await refreshStockWorkflow(symbol, "history");
+      } catch { button.disabled = false; button.textContent = "重新生成草稿"; }
+    }
+
+    async function archiveTradeReview(symbol, review, button) {
+      button.disabled = true;
+      try {
+        await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/archive`, {method: "POST", body: JSON.stringify({base_version: tradeReviewVersion(review)?.version_no || 1})});
+        await refreshStockWorkflow(symbol, "history");
+      } catch { button.disabled = false; }
+    }
+
+    function showTradeReviewEditor(card, symbol, review) {
+      card.querySelector(".trade-review-editor")?.remove();
+      const version = tradeReviewVersion(review) || {};
+      if (!review?.id) return;
+      const editor = document.createElement("form"); editor.className = "trade-review-editor";
+      const priceResult = document.createElement("textarea"); priceResult.className = "form-wide"; priceResult.value = friendlyStructuredText(version.price_result || review.price_result, ""); priceResult.placeholder = "价格结果：只记录可核验价格路径、费用和数据边界";
+      const logicResult = document.createElement("textarea"); logicResult.className = "form-wide"; logicResult.value = friendlyStructuredText(version.logic_result || review.logic_result, ""); logicResult.placeholder = "逻辑结果：原理由哪些得到验证、哪些需要修正";
+      const deviation = document.createElement("textarea"); deviation.className = "form-wide"; deviation.value = friendlyStructuredText(version.plan_deviation, ""); deviation.placeholder = "与原计划的偏离（如有）";
+      const biasTags = document.createElement("input"); biasTags.value = (version.bias_tags || []).join("、"); biasTags.placeholder = "例如：追涨、提前卖出";
+      const improvement = document.createElement("textarea"); improvement.className = "form-wide"; improvement.value = version.improvement_text || ""; improvement.placeholder = "下一次要改进什么；不会自动生成交易建议";
+      const status = document.createElement("div"); status.className = "trade-review-editor-status"; status.textContent = "价格结果与逻辑结果必须分开；盈利不自动等于逻辑正确，亏损也不自动等于逻辑错误。";
+      const actions = document.createElement("div"); actions.className = "trade-review-editor-actions";
+      const save = document.createElement("button"); save.type = "button"; save.className = "btn"; save.textContent = "保存修改";
+      const confirm = document.createElement("button"); confirm.type = "button"; confirm.className = "btn primary"; confirm.textContent = "保存并确认";
+      const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "取消"; cancel.addEventListener("click", () => editor.remove());
+      const submitVersion = async shouldConfirm => {
+        save.disabled = true; confirm.disabled = true; cancel.disabled = true; status.textContent = shouldConfirm ? "正在保存并确认复盘…" : "正在保存复盘修改…";
+        try {
+          const updated = await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/draft`, {
+            method: "PATCH",
+            body: JSON.stringify({
+              base_version: version?.version_no || 1,
+              price_result: priceResult.value.trim(),
+              logic_result: logicResult.value.trim(),
+              plan_deviation: deviation.value.trim() || null,
+              bias_tags: biasTags.value.split(/[、,，]/).map(value => value.trim()).filter(Boolean),
+              improvement_text: improvement.value.trim() || null
+            })
+          });
+          const nextVersion = updated?.current_version || updated?.draft || updated?.version || updated?.item || updated || {};
+          if (shouldConfirm) {
+            await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/confirm`, {method: "POST", body: JSON.stringify({base_version: nextVersion.version_no ?? version?.version_no ?? 1})});
+          }
+          await refreshStockWorkflow(symbol, "history");
+        } catch {
+          save.disabled = false; confirm.disabled = false; cancel.disabled = false; status.textContent = "复盘尚未保存，请检查内容后再次提交。";
+        }
+      };
+      save.addEventListener("click", () => { void submitVersion(false); });
+      confirm.addEventListener("click", () => { void submitVersion(true); });
+      actions.append(save, confirm, cancel);
+      editor.append(positionField("价格结果", priceResult), positionField("逻辑结果", logicResult), positionField("计划偏离", deviation), positionField("偏差标签", biasTags), positionField("改进记录", improvement), status, actions);
+      card.appendChild(editor); priceResult.focus();
+    }
+
+    function renderTradeReviewWorkspace(symbol, reviews) {
+      const section = document.createElement("section"); section.className = "trade-review-section";
+      const head = document.createElement("div"); head.className = "trade-review-head";
+      const copyWrap = document.createElement("div");
+      const title = document.createElement("div"); title.className = "trade-review-title"; title.textContent = "真实交易复盘";
+      const copy = document.createElement("div"); copy.className = "trade-review-copy"; copy.textContent = "真实操作完成后，复盘按等待数据、可生成、AI草稿、已确认顺序推进。";
+      copyWrap.append(title, copy); head.appendChild(copyWrap); section.appendChild(head);
+      const boundary = document.createElement("div"); boundary.className = "trade-review-boundary"; boundary.textContent = "价格结果和逻辑结果分开呈现；数据不完整时不会给出伪精确净收益。"; section.appendChild(boundary);
+      const grid = document.createElement("div"); grid.className = "trade-review-grid";
+      if (!reviews.length) {
+        const empty = document.createElement("div"); empty.className = "empty"; empty.textContent = "完成并保存真实操作后，这里会形成复盘记录。"; grid.appendChild(empty);
+      }
+      reviews.forEach(review => {
+        const version = tradeReviewVersion(review) || {};
+        const reviewStatus = review.status || version.status;
+        const card = document.createElement("article"); card.className = "trade-review-card";
+        const cardHead = document.createElement("div"); cardHead.className = "trade-review-card-head";
+        const titleNode = document.createElement("div"); titleNode.className = "trade-review-card-title"; titleNode.textContent = review.title || `${actionPlanTypeLabel(review.operation?.operation_type || review.operation_type)}复盘`;
+        const status = document.createElement("span"); status.className = "trade-review-status"; status.textContent = tradeReviewStatusLabel(reviewStatus);
+        cardHead.append(titleNode, status);
+        const meta = document.createElement("div"); meta.className = "trade-review-meta"; meta.textContent = [review.operated_at || review.operation?.operated_at ? readableTime(review.operated_at || review.operation.operated_at) : "", review.plan_id || review.action_plan_id ? "已关联操作计划" : "未关联操作计划", version.version_no ? `版本 ${version.version_no}` : "", version.created_source ? `来源 ${version.created_source === "ai" ? "AI草稿" : "用户"}` : ""].filter(Boolean).join(" · ");
+        const columns = document.createElement("div"); columns.className = "trade-review-columns";
+        [["价格结果", version.price_result || review.price_result], ["逻辑结果", version.logic_result || review.logic_result]].forEach(([label, value]) => { const column = document.createElement("div"); column.className = "trade-review-column"; const labelNode = document.createElement("span"); labelNode.textContent = label; const valueNode = document.createElement("strong"); valueNode.textContent = friendlyStructuredText(value); column.append(labelNode, valueNode); columns.appendChild(column); });
+        const result = document.createElement("div"); result.className = "trade-review-result"; result.textContent = [version.plan_deviation ? `计划偏离：${friendlyStructuredText(version.plan_deviation)}` : "", version.bias_tags?.length ? `偏差标签：${version.bias_tags.join("、")}` : "", version.improvement_text ? `改进：${version.improvement_text}` : ""].filter(Boolean).join("\n");
+        const actions = document.createElement("div"); actions.className = "trade-review-actions";
+        if (reviewStatus === "ready") { const generate = document.createElement("button"); generate.type = "button"; generate.className = "btn primary"; generate.textContent = "立即生成草稿"; generate.addEventListener("click", () => { void generateTradeReviewDraft(symbol, review, generate); }); actions.appendChild(generate); }
+        if (["draft", "revised"].includes(reviewStatus)) { const edit = document.createElement("button"); edit.type = "button"; edit.className = "btn primary"; edit.textContent = "编辑并确认"; edit.addEventListener("click", () => showTradeReviewEditor(card, symbol, review)); actions.appendChild(edit); }
+        if (reviewStatus === "confirmed") { const archive = document.createElement("button"); archive.type = "button"; archive.className = "btn"; archive.textContent = "归档"; archive.addEventListener("click", () => { void archiveTradeReview(symbol, review, archive); }); actions.appendChild(archive); }
+        card.append(cardHead, meta, columns); if (result.textContent) card.appendChild(result); card.appendChild(actions); grid.appendChild(card);
+      });
+      section.appendChild(grid); return section;
+    }
+
+    function renderStockSpaceTasks(symbol, session = null, workspace = null, actionPlans = null) {
       const container = $("deepStockTasks");
       if (!container) return;
       const actionItem = state.researchActions.find(item => item.symbol === symbol) || null;
@@ -5636,7 +5941,9 @@
       const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn primary"; ask.textContent = "让 Agent 帮我处理";
       ask.addEventListener("click", () => { void continueDeepStockConversation(userTasks.find(task => !task.terminal)?.description || actions[0]?.next_step || session?.next_question); });
       head.append(copyWrap, ask); container.appendChild(head);
-      container.appendChild(renderPositionWorkspace(symbol, workspace));
+      const plans = actionPlans || state.stockActionPlans[symbol] || [];
+      const positionWorkspace = renderPositionWorkspace(symbol, workspace);
+      container.append(renderActionPlanWorkspace(symbol, plans, positionWorkspace), positionWorkspace);
       const grid = document.createElement("div"); grid.className = "stock-task-grid";
       if (userTasks.length) {
         const label = document.createElement("div"); label.className = "stock-task-section-label"; label.textContent = `我的观察任务 · ${workspace?.observation_tasks?.summary?.active || 0} 项进行中`; grid.appendChild(label);
@@ -5683,7 +5990,7 @@
       container.appendChild(grid);
     }
 
-    function renderStockSpaceHistory(session, workspace = null) {
+    function renderStockSpaceHistory(session, workspace = null, tradeReviews = null, symbol = null) {
       const container = $("deepStockHistory");
       if (!container) return;
       container.innerHTML = "";
@@ -5692,6 +5999,9 @@
       const title = document.createElement("div"); title.className = "stock-space-section-title"; title.textContent = "历史与复盘";
       const copy = document.createElement("div"); copy.className = "stock-space-section-copy"; copy.textContent = "报告和对话保留生成时的证据快照，后续新证据不会静默改写旧结论。";
       copyWrap.append(title, copy); head.appendChild(copyWrap); container.appendChild(head);
+      const currentSymbol = symbol || session?.symbol || $("deepStockSymbol").value;
+      const reviews = tradeReviews || state.stockTradeReviews[currentSymbol] || [];
+      container.appendChild(renderTradeReviewWorkspace(currentSymbol, reviews));
       const grid = document.createElement("div"); grid.className = "stock-history-grid";
       const conversation = document.createElement("article"); conversation.className = "stock-history-card";
       const conversationTitle = document.createElement("div"); conversationTitle.className = "stock-history-title"; conversationTitle.textContent = session ? "绑定的研究对话" : "尚未建立绑定对话";
@@ -5706,7 +6016,7 @@
       const latestReport = workspace?.latest_report || session?.latest_report || null;
       const report = document.createElement("article"); report.className = "stock-history-card";
       const reportTitle = document.createElement("div"); reportTitle.className = "stock-history-title"; reportTitle.textContent = latestReport?.title || "最新服务器研究报告";
-      const reportCopy = document.createElement("div"); reportCopy.className = "stock-history-copy"; reportCopy.textContent = readableResearchPreview(latestReport?.summary) || "最新报告正在后台按确定性数据更新，历史对话仍可继续使用。";
+      const reportCopy = document.createElement("div"); reportCopy.className = "stock-history-copy"; reportCopy.textContent = readableResearchPreview(latestReport?.summary) || "尚未形成最新研究报告，历史对话仍可继续使用。";
       report.append(reportTitle, reportCopy);
       if (latestReport) {
         const meta = document.createElement("div"); meta.className = "stock-history-meta"; meta.textContent = `数据时间 ${readableTime(latestReport.market_timestamp)} · 生成于 ${readableTime(latestReport.generated_at)}`;
@@ -5757,7 +6067,7 @@
       container.innerHTML = '<div class="empty">正在汇总行情、财务、股东、研报与事件…</div>';
       const encoded = encodeURIComponent(symbol);
       const isAShare = /\.(?:SS|SZ)$/i.test(symbol);
-      const [workspace, history, fundamentals, earnings, drivers, shareholders, expectations, events, information] = await Promise.all([
+      const [workspace, history, fundamentals, earnings, drivers, shareholders, expectations, events, information, actionPlansPayload, tradeReviewsPayload] = await Promise.all([
         optionalApi(`/v1/stocks/${encoded}/workspace`),
         optionalApi(`/stocks/${encoded}/history?range=1y`),
         optionalApi(isAShare ? `/a-share/${encoded}/fundamentals` : `/us-equity/${encoded}/fundamentals`),
@@ -5766,9 +6076,13 @@
         isAShare ? optionalApi(`/a-share/${encoded}/shareholders`) : Promise.resolve(null),
         isAShare ? optionalApi(`/a-share/${encoded}/analyst-expectations`) : Promise.resolve(null),
         optionalApi(`/stocks/${encoded}/event-timeline`),
-        isAShare ? optionalApi(`/a-share/${encoded}/information`) : Promise.resolve(null)
+        isAShare ? optionalApi(`/a-share/${encoded}/information`) : Promise.resolve(null),
+        optionalApi(`/v1/stocks/${encoded}/action-plans`),
+        optionalApi(`/v1/stocks/${encoded}/trade-reviews`)
       ]);
       if (state.deepStockOverviewSymbol !== symbol) return;
+      if (actionPlansPayload !== null) state.stockActionPlans[symbol] = listPayloadItems(actionPlansPayload);
+      if (tradeReviewsPayload !== null) state.stockTradeReviews[symbol] = listPayloadItems(tradeReviewsPayload);
 
       const valuation = fundamentals?.valuation || {};
       const workspaceQuote = workspace?.overview?.quote || {};
@@ -6424,8 +6738,8 @@
       }
       container.appendChild(shell);
       evidenceContainer.appendChild(evidenceShell);
-      renderStockSpaceTasks(symbol, session, workspace);
-      renderStockSpaceHistory(session, workspace);
+      renderStockSpaceTasks(symbol, session, workspace, state.stockActionPlans[symbol] || []);
+      renderStockSpaceHistory(session, workspace, state.stockTradeReviews[symbol] || [], symbol);
     }
 
     async function openDeepStockSymbol(symbol) {
@@ -6452,7 +6766,9 @@
 
     function renderDeepStock(session) {
       state.deepStock = session || null;
-      renderStockSpaceHistory(session);
+      const symbol = session?.symbol || $("deepStockSymbol").value || state.deepStockOverviewSymbol || "";
+      if (symbol) renderStockSpaceTasks(symbol, session, null, state.stockActionPlans[symbol] || []);
+      renderStockSpaceHistory(session, null, state.stockTradeReviews[symbol] || [], symbol);
       const container = $("deepStockContent");
       if (!session) {
         $("deepStockAgent").disabled = true;

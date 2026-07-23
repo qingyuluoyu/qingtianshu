@@ -6,7 +6,7 @@ import json
 from typing import Any
 from uuid import uuid4
 
-from app.catalog import normalize_symbol
+from app.catalog import INDEX_CATALOG, normalize_symbol
 from app.db import Database
 from app.utils import json_dumps, utc_now
 
@@ -190,13 +190,6 @@ class PositionLedgerService:
         with self.database.connect() as connection:
             workspace = self._workspace(connection, user_id, canonical)
             normalized_plan_id = self._clean_text(plan_id, 80)
-            plan = self._validated_plan(
-                connection,
-                user_id=user_id,
-                workspace_id=str(workspace["id"]),
-                operation_type=operation_type,
-                plan_id=normalized_plan_id,
-            )
             repeated = connection.execute(
                 """
                 SELECT id FROM position_operations
@@ -206,6 +199,13 @@ class PositionLedgerService:
             ).fetchone()
             if repeated is not None:
                 return self.get_position(user_id, canonical)
+            plan = self._validated_plan(
+                connection,
+                user_id=user_id,
+                workspace_id=str(workspace["id"]),
+                operation_type=operation_type,
+                plan_id=normalized_plan_id,
+            )
             opening = self._opening(connection, user_id, str(workspace["id"]))
             if operation_time.date() < date.fromisoformat(str(opening["as_of_date"])):
                 raise PositionLedgerInvalidState("操作时间不能早于期初持仓日期")
@@ -264,8 +264,6 @@ class PositionLedgerService:
                     connection,
                     plan=plan,
                     user_id=user_id,
-                    operation_quantity=quantity_value,
-                    operation_amount=price_value * quantity_value,
                     created_at=now,
                 )
         return self.get_position(user_id, canonical)
@@ -568,21 +566,64 @@ class PositionLedgerService:
                    adjusted_close, volume, source, fetched_at
             FROM market_bars
             WHERE symbol = ? AND interval = '1d'
-              AND substr(timestamp, 1, 10) <= ?
+              AND substr(timestamp, 1, 10) < ?
             ORDER BY timestamp DESC LIMIT 1
             """,
             (workspace["symbol"], operation_time.date().isoformat()),
         ).fetchone()
-        report_row = connection.execute(
+        report_rows = connection.execute(
             """
-            SELECT id, symbol, name, title, summary, status,
+            SELECT id, symbol, name, title, summary, status, evidence_json,
                    market_timestamp, generated_at
             FROM research_reports
-            WHERE symbol = ? AND generated_at <= ?
-            ORDER BY generated_at DESC LIMIT 1
+            WHERE symbol = ?
+            ORDER BY generated_at DESC LIMIT 50
             """,
-            (workspace["symbol"], operation_time.isoformat()),
-        ).fetchone()
+            (workspace["symbol"],),
+        ).fetchall()
+        report_row = self._latest_row_before(
+            report_rows, "generated_at", operation_time
+        )
+        valuation_rows = connection.execute(
+            """
+            SELECT * FROM valuation_snapshots
+            WHERE symbol = ?
+            ORDER BY market_timestamp DESC, fetched_at DESC LIMIT 50
+            """,
+            (workspace["symbol"],),
+        ).fetchall()
+        valuation_row = self._latest_row_before(
+            valuation_rows, "market_timestamp", operation_time
+        )
+        market_indices = self._market_index_context(
+            connection, workspace=workspace, operation_time=operation_time
+        )
+        change_rows = connection.execute(
+            """
+            SELECT * FROM research_change_events
+            WHERE symbol = ?
+            ORDER BY created_at DESC LIMIT 50
+            """,
+            (workspace["symbol"],),
+        ).fetchall()
+        change_row = self._latest_row_before(
+            change_rows, "created_at", operation_time
+        )
+        report = dict(report_row) if report_row is not None else None
+        report_evidence: dict[str, Any] = {}
+        if report is not None:
+            try:
+                report_evidence = json.loads(report.pop("evidence_json") or "{}")
+            except json.JSONDecodeError:
+                report_evidence = {}
+        important_change = dict(change_row) if change_row is not None else None
+        if important_change is not None:
+            try:
+                important_change["payload"] = json.loads(
+                    important_change.pop("payload_json") or "{}"
+                )
+            except json.JSONDecodeError:
+                important_change["payload"] = {}
         missing_items: list[str] = []
         if thesis is None:
             missing_items.append("操作时没有正式判断")
@@ -592,8 +633,22 @@ class PositionLedgerService:
             missing_items.append("操作时没有可冻结的已完成日线")
         if report_row is None:
             missing_items.append("操作时没有可冻结的研究报告")
+        if valuation_row is None:
+            missing_items.append("操作时没有可冻结的估值快照")
+        if not market_indices:
+            missing_items.append("操作时没有可冻结的市场指数背景")
         if fees is None:
             missing_items.append("操作费用未填写")
+        sources = self._context_sources(
+            market_bar=market_bar,
+            market_indices=market_indices,
+            valuation=valuation_row,
+            report=report,
+            change=important_change,
+        )
+        for source in self._evidence_sources(report_evidence):
+            if source not in sources:
+                sources.append(source)
         context = {
             "operation": {
                 "id": operation_id,
@@ -607,8 +662,13 @@ class PositionLedgerService:
             "action_plan": self._context_plan(plan),
             "thesis": self._context_thesis(thesis),
             "market_bar": dict(market_bar) if market_bar is not None else None,
-            "research_report": dict(report_row) if report_row is not None else None,
+            "market_indices": market_indices,
+            "industry_background": self._industry_context(report_evidence),
+            "valuation": dict(valuation_row) if valuation_row is not None else None,
+            "important_change": important_change,
+            "research_report": report,
             "position_snapshot": position_snapshot,
+            "sources": sources,
             "data_completeness": {
                 "status": "complete" if not missing_items else "partial",
                 "missing_items": missing_items,
@@ -618,14 +678,17 @@ class PositionLedgerService:
             """
             INSERT INTO operation_context_snapshots(
                 id, operation_id, workspace_id, user_id,
-                snapshot_json, data_time, snapshot_version, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, 'trade_context_v1', ?)
+                plan_id, thesis_version_id, snapshot_json, data_time,
+                snapshot_version, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'trade_context_v2', ?)
             """,
             (
                 str(uuid4()),
                 operation_id,
                 workspace["id"],
                 user_id,
+                plan.get("id") if plan else None,
+                thesis.get("id") if thesis else None,
                 json_dumps(context),
                 operation_time.isoformat(),
                 created_at,
@@ -649,7 +712,7 @@ class PositionLedgerService:
                 workspace["id"],
                 operation_id,
                 plan.get("id") if plan else None,
-                "fresh" if not missing_items else "missing",
+                "missing",
                 created_at,
                 created_at,
             ),
@@ -673,8 +736,6 @@ class PositionLedgerService:
         *,
         plan: dict[str, Any],
         user_id: str,
-        operation_quantity: Decimal,
-        operation_amount: Decimal,
         created_at: str,
     ) -> None:
         target_quantity = (
@@ -687,12 +748,33 @@ class PositionLedgerService:
             if plan.get("target_amount")
             else None
         )
+        operations = self._operation_rows(
+            connection,
+            user_id=user_id,
+            workspace_id=str(plan["workspace_id"]),
+        )
+        linked = [item for item in operations if item.get("plan_id") == plan["id"]]
+        cumulative_quantity = sum(
+            (
+                self._decimal(item["effective_quantity"], "累计操作数量")
+                for item in linked
+            ),
+            Decimal("0"),
+        )
+        cumulative_amount = sum(
+            (
+                self._decimal(item["effective_price"], "累计操作价格")
+                * self._decimal(item["effective_quantity"], "累计操作数量")
+                for item in linked
+            ),
+            Decimal("0"),
+        )
         completed = (
-            operation_quantity >= target_quantity
+            cumulative_quantity >= target_quantity
             if target_quantity is not None
-            else operation_amount >= target_amount
+            else cumulative_amount >= target_amount
             if target_amount is not None
-            else True
+            else False
         )
         next_status = "executed" if completed else "partially_executed"
         next_version = int(plan["version"]) + 1
@@ -701,6 +783,11 @@ class PositionLedgerService:
             "status": next_status,
             "version": next_version,
             "updated_at": created_at,
+            "execution_progress": {
+                "cumulative_quantity": self._quantity_text(cumulative_quantity),
+                "cumulative_amount": self._amount_text(cumulative_amount),
+                "target_position_percent_verified": False,
+            },
         }
         connection.execute(
             """
@@ -736,6 +823,138 @@ class PositionLedgerService:
                 created_at,
             ),
         )
+
+    def _market_index_context(
+        self, connection: Any, *, workspace: Any, operation_time: datetime
+    ) -> list[dict[str, Any]]:
+        market = str(workspace["market"] or "")
+        symbol = str(workspace["symbol"])
+        if symbol.endswith((".SS", ".SZ")) or "A股" in market:
+            groups = {"china"}
+        elif market in {"美股", "美国"} or not symbol.startswith("^"):
+            groups = {"us"}
+        else:
+            groups = {"china", "us"}
+        output: list[dict[str, Any]] = []
+        for index in INDEX_CATALOG:
+            if index["group"] not in groups:
+                continue
+            row = connection.execute(
+                """
+                SELECT symbol, interval, timestamp, open, high, low, close,
+                       adjusted_close, volume, source, fetched_at
+                FROM market_bars
+                WHERE symbol = ? AND interval = '1d'
+                  AND substr(timestamp, 1, 10) < ?
+                ORDER BY timestamp DESC LIMIT 1
+                """,
+                (index["symbol"], operation_time.date().isoformat()),
+            ).fetchone()
+            if row is None:
+                continue
+            output.append({**dict(row), "name": index["name"], "group": index["group"]})
+        return output
+
+    @classmethod
+    def _latest_row_before(
+        cls, rows: list[Any], field: str, boundary: datetime
+    ) -> Any | None:
+        for row in rows:
+            value = row[field]
+            if not value:
+                continue
+            try:
+                parsed = cls._datetime(str(value), field)
+            except PositionLedgerInvalidState:
+                continue
+            if parsed <= boundary:
+                return row
+        return None
+
+    @staticmethod
+    def _industry_context(evidence: dict[str, Any]) -> dict[str, Any] | None:
+        market_context = evidence.get("stock_market_context") or {}
+        peers = evidence.get("peer_comparison") or {}
+        industry_index = market_context.get("exact_industry_index")
+        mapping = market_context.get("industry_mapping")
+        if not industry_index and not mapping and not peers:
+            return None
+        return {
+            "exact_industry_index": industry_index,
+            "industry_mapping": mapping,
+            "peer_group": {
+                "label": peers.get("group_label"),
+                "selection_basis": peers.get("selection_basis"),
+                "as_of": peers.get("as_of"),
+            }
+            if peers
+            else None,
+        }
+
+    @staticmethod
+    def _evidence_sources(evidence: dict[str, Any]) -> list[dict[str, Any]]:
+        claims = (evidence.get("research_claims") or {}).get("claims") or []
+        output: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for claim in claims:
+            source_name = str(
+                claim.get("source_name") or claim.get("source") or "研究证据"
+            ).strip()
+            source_url = str(claim.get("source_url") or "").strip()
+            data_time = str(
+                claim.get("data_time") or claim.get("report_period") or ""
+            ).strip()
+            key = (source_name, source_url, data_time)
+            if key in seen:
+                continue
+            seen.add(key)
+            output.append(
+                {
+                    "source_name": source_name,
+                    "source_url": source_url or None,
+                    "data_time": data_time or None,
+                }
+            )
+            if len(output) >= 12:
+                break
+        return output
+
+    @classmethod
+    def _context_sources(
+        cls,
+        *,
+        market_bar: Any | None,
+        market_indices: list[dict[str, Any]],
+        valuation: Any | None,
+        report: dict[str, Any] | None,
+        change: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        output: list[dict[str, Any]] = []
+
+        def add(source_name: Any, source_url: Any, data_time: Any) -> None:
+            if not source_name and not source_url:
+                return
+            item = {
+                "source_name": str(source_name or "研究数据"),
+                "source_url": str(source_url) if source_url else None,
+                "data_time": str(data_time) if data_time else None,
+            }
+            if item not in output:
+                output.append(item)
+
+        if market_bar is not None:
+            row = dict(market_bar)
+            add(row.get("source"), None, row.get("timestamp"))
+        for row in market_indices:
+            add(row.get("source"), None, row.get("timestamp"))
+        if valuation is not None:
+            row = dict(valuation)
+            add(row.get("source"), row.get("source_url"), row.get("market_timestamp"))
+        if report is not None:
+            add("已保存研究报告", None, report.get("generated_at"))
+        if change is not None:
+            add("研究变化记录", None, change.get("created_at"))
+        return output
 
     @staticmethod
     def _context_plan(plan: dict[str, Any] | None) -> dict[str, Any] | None:
