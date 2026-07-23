@@ -9,3 +9,7 @@ data/
 .qa-*/
 .docx-product-report-assets/
 report_render*/
+.runtime/
+.codex-runtime/
+.agents/
+work/

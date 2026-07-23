@@ -46,6 +46,13 @@ class Settings:
     tushare_api_url: str = "https://teajoin.com"
     tushare_enabled: bool = False
     tushare_timeout_seconds: int = 20
+    # OpenAI-compatible research LLM gateway (e.g. TokenDance / Anthropic proxy).
+    llm_gateway_enabled: bool = False
+    llm_gateway_api_key: str = ""
+    llm_gateway_base_url: str = "https://tokendance.space/gateway/v1"
+    llm_gateway_model: str = "deepseek-v4-pro"
+    llm_gateway_timeout_seconds: int = 120
+    llm_gateway_max_tokens: int = 4096
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -133,6 +140,33 @@ class Settings:
             ).lower()
             in {"1", "true", "yes"},
             tushare_timeout_seconds=int(os.getenv("TUSHARE_TIMEOUT_SECONDS", "20")),
+            llm_gateway_api_key=(
+                os.getenv("LLM_GATEWAY_API_KEY", "").strip()
+                or os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip()
+            ),
+            llm_gateway_base_url=(
+                os.getenv("LLM_GATEWAY_BASE_URL", "").strip()
+                or os.getenv("ANTHROPIC_BASE_URL", "").strip()
+                or "https://tokendance.space/gateway/v1"
+            ).rstrip("/"),
+            llm_gateway_model=(
+                os.getenv("LLM_GATEWAY_MODEL", "").strip()
+                or os.getenv("ANTHROPIC_DEFAULT_OPUS_MODEL", "").strip()
+                or os.getenv("ANTHROPIC_DEFAULT_SONNET_MODEL", "").strip()
+                or "deepseek-v4-pro"
+            ),
+            llm_gateway_timeout_seconds=int(os.getenv("LLM_GATEWAY_TIMEOUT_SECONDS", "120")),
+            llm_gateway_max_tokens=int(os.getenv("LLM_GATEWAY_MAX_TOKENS", "4096")),
+            llm_gateway_enabled=os.getenv(
+                "LLM_GATEWAY_ENABLED",
+                "true"
+                if (
+                    os.getenv("LLM_GATEWAY_API_KEY", "").strip()
+                    or os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip()
+                )
+                else "false",
+            ).lower()
+            in {"1", "true", "yes"},
         )
 
     def ensure_directories(self) -> None:

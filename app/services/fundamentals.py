@@ -129,7 +129,7 @@ class FundamentalsService:
 
     def refresh_symbol(self, symbol: str) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
-        if not canonical.endswith((".SS", ".SZ")):
+        if not canonical.endswith((".SS", ".SZ", ".BJ")):
             raise ValueError("结构化财务与估值只支持 A 股证券")
         warnings = []
         valuation_saved = False

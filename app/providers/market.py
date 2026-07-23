@@ -530,7 +530,7 @@ class EastmoneySectorProvider:
             "invt": 2,
             "fid": "f3",
             "fs": "m:90+t:2+f:!50",
-            "fields": "f12,f14,f2,f3,f62,f104,f105,f106,f124",
+            "fields": "f12,f14,f2,f3,f6,f62,f104,f105,f106,f124",
         }
         try:
             response = self.http_get(
@@ -571,6 +571,7 @@ class EastmoneySectorProvider:
                     "name": row.get("f14"),
                     "latest": _number(row.get("f2")),
                     "pct_change": _number(row.get("f3")),
+                    "turnover": _number(row.get("f6")),
                     "main_net_inflow": _number(row.get("f62")),
                     "advancers": _integer(row.get("f104")),
                     "decliners": _integer(row.get("f105")),
@@ -2189,6 +2190,27 @@ class EastmoneyGlobalIndexProvider:
             "exchange": "SSE",
             "timezone": "Asia/Shanghai",
         },
+        "399001.SZ": {
+            "secid": "0.399001",
+            "name": "深证成指",
+            "currency": "CNY",
+            "exchange": "SZSE",
+            "timezone": "Asia/Shanghai",
+        },
+        "399006.SZ": {
+            "secid": "0.399006",
+            "name": "创业板指",
+            "currency": "CNY",
+            "exchange": "SZSE",
+            "timezone": "Asia/Shanghai",
+        },
+        "000688.SS": {
+            "secid": "1.000688",
+            "name": "科创50",
+            "currency": "CNY",
+            "exchange": "SSE",
+            "timezone": "Asia/Shanghai",
+        },
         "^N225": {
             "secid": "100.N225",
             "name": "日经225",
@@ -2289,6 +2311,7 @@ class EastmoneyGlobalIndexProvider:
                 "low": values[3],
                 "adjusted_close": None,
                 "volume": _integer(fields[5]) if len(fields) > 5 else None,
+                "amount": _number(fields[6]) if len(fields) > 6 else None,
             }
         points = [points_by_timestamp[key] for key in sorted(points_by_timestamp)]
         if not points:

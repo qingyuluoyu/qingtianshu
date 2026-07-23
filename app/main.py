@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import datetime
 from io import BytesIO
+import hashlib
 import re
 import time
 from pathlib import Path
@@ -14,6 +15,7 @@ from fastapi import FastAPI, File, HTTPException, Query, Request, Response, Uplo
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from starlette.middleware.gzip import GZipMiddleware
 
 from app.catalog import (
     INDEX_BY_SYMBOL,
@@ -67,7 +69,10 @@ from app.services.stock_domain import (
     StockDomainVersionConflict,
 )
 from app.services.stock_workspace import StockWorkspaceService
+from app.services.stock_dashboard import StockDashboardService
+from app.services.industry_comparison import IndustryComparisonService
 from app.services.tushare_snapshots import TushareSnapshotService
+from app.services.today_dashboard import TodayDashboardService
 from app.services.li_zong_strategy_service import LiZongStrategyService
 from app.services.calibration import OutlookCalibrationService
 from app.services.fundamentals import FundamentalsService
@@ -97,6 +102,46 @@ from app.services.research_actions import ResearchActionService
 from app.services.research_outcomes import ResearchOutcomeService
 from app.utils import utc_now
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+STATIC_MEDIA_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".woff2": "font/woff2",
+}
+PAGE_HEADERS = {"Cache-Control": "no-cache"}
+STATIC_HEADERS = {"Cache-Control": "no-cache"}
+
+
+def static_file_response(path: Path, request: Request, media_type: str, headers: dict[str, str]) -> Response:
+    """FileResponse + ETag revalidation (Starlette's FileResponse only sets the
+    header, it never answers If-None-Match with 304)."""
+    stat_result = path.stat()
+    etag_base = f"{stat_result.st_mtime}-{stat_result.st_size}"
+    etag = f'"{hashlib.md5(etag_base.encode(), usedforsecurity=False).hexdigest()}"'
+    response_headers = {**headers, "ETag": etag}
+    if_none_match = request.headers.get("if-none-match", "")
+    if etag in [candidate.strip() for candidate in if_none_match.split(",")]:
+        return Response(status_code=304, headers=response_headers)
+    return FileResponse(path, media_type=media_type, headers=response_headers)
+
+
+class GZipExceptSSE(GZipMiddleware):
+    """GZip everything except Server-Sent Events, which must flush per event."""
+
+    SSE_PATH_PREFIXES = ("/events", "/me/chat/stream")
+
+    async def __call__(self, scope, receive, send):  # type: ignore[override]
+        if scope["type"] == "http" and any(
+            scope.get("path", "").startswith(prefix) for prefix in self.SSE_PATH_PREFIXES
+        ):
+            await self.app(scope, receive, send)
+            return
+        await super().__call__(scope, receive, send)
+
 
 SESSION_COOKIE_NAME = "qingshu_session"
 Image.MAX_IMAGE_PIXELS = 25_000_000
@@ -115,6 +160,7 @@ class WatchlistUpsert(BaseModel):
     name: str | None = Field(default=None, max_length=80)
     market: str | None = Field(default=None, max_length=40)
     thesis: str | None = Field(default=None, max_length=1000)
+    focus_status: Literal["holding", "watching", "researching", "cleared"] | None = None
 
 
 class MemoryCandidateCreate(BaseModel):
@@ -770,6 +816,25 @@ def create_app(
         snapshot_ttl_seconds=settings.market_cache_seconds,
     )
     tushare_snapshots = TushareSnapshotService(database, resolved_tushare_client)
+    today_dashboard = TodayDashboardService(
+        database,
+        analysis,
+        intraday_index_provider=global_index_intraday_provider
+        or live_market_provider,
+        tushare_client=resolved_tushare_client,
+        cache_seconds=settings.sector_cache_seconds,
+    )
+    stock_dashboard = StockDashboardService(
+        market_provider=live_market_provider,
+        fundamentals_service=fundamentals,
+        tushare_client=resolved_tushare_client,
+        catalog_ttl_seconds=max(3600, settings.market_cache_seconds * 10),
+    )
+    industry_comparison = IndustryComparisonService(
+        resolved_tushare_client,
+        cache_seconds=max(900, settings.market_cache_seconds * 10),
+        batch_cache_seconds=max(21_600, settings.market_cache_seconds * 60),
+    )
     li_zong_strategy = LiZongStrategyService(database, tushare_snapshots)
     stock_workspace = StockWorkspaceService(
         database,
@@ -822,6 +887,7 @@ def create_app(
         description="后端优先的金融研究 Agent：确定性行情分析 + Hermes 解释 + 用户确认记忆。",
         lifespan=lifespan,
     )
+    app.add_middleware(GZipExceptSSE, minimum_size=1024)
     app.state.settings = settings
     app.state.database = database
     app.state.analysis = analysis
@@ -857,6 +923,9 @@ def create_app(
     app.state.stock_workspace = stock_workspace
     app.state.stock_screener = stock_screener
     app.state.tushare_snapshots = tushare_snapshots
+    app.state.today_dashboard = today_dashboard
+    app.state.stock_dashboard = stock_dashboard
+    app.state.industry_comparison = industry_comparison
     app.state.li_zong_strategy = li_zong_strategy
     app.state.event_broker = event_broker
     app.state.agent_streams = agent_streams
@@ -941,8 +1010,18 @@ def create_app(
         user = database.get_user_by_session(request.cookies.get(SESSION_COOKIE_NAME))
         if user is None:
             raise HTTPException(status_code=401, detail="需要有效个人会话")
-        seed_demo_watchlist(user)
         return user
+
+    def watchlist_brief_with_profiles(user_id: str) -> dict[str, Any]:
+        packet = analysis.watchlist_brief(user_id)
+        for item in packet.get("items", []):
+            try:
+                profile = stock_dashboard.profile(item["symbol"])
+            except (KeyError, ValueError):
+                profile = {}
+            item["industry"] = profile.get("industry")
+            item["board"] = profile.get("market") or item.get("market")
+        return packet
 
     def require_user(request: Request, user_id: str) -> dict[str, Any]:
         user = require_session_user(request)
@@ -954,15 +1033,27 @@ def create_app(
     def root() -> RedirectResponse:
         return RedirectResponse(url="/demo")
 
+    @app.get("/static/{filename}", include_in_schema=False)
+    def static_asset(filename: str, request: Request) -> Response:
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", filename):
+            raise HTTPException(status_code=404, detail="资源不存在")
+        path = STATIC_DIR / filename
+        media_type = STATIC_MEDIA_TYPES.get(path.suffix.lower())
+        if media_type is None or not path.is_file():
+            raise HTTPException(status_code=404, detail="资源不存在")
+        return static_file_response(path, request, media_type, STATIC_HEADERS)
+
     @app.get("/demo", include_in_schema=False)
-    def demo_page() -> FileResponse:
-        return FileResponse(
-            Path(__file__).resolve().parent / "static" / "demo.html",
-            headers={
-                "Cache-Control": "no-store, max-age=0",
-                "Pragma": "no-cache",
-            },
-        )
+    def demo_page(request: Request) -> Response:
+        return static_file_response(STATIC_DIR / "high-fidelity-demo.html", request, "text/html; charset=utf-8", PAGE_HEADERS)
+
+    @app.get("/old-demo", include_in_schema=False)
+    def old_demo_page(request: Request) -> Response:
+        return static_file_response(STATIC_DIR / "demo.html", request, "text/html; charset=utf-8", PAGE_HEADERS)
+
+    @app.get("/new-demo", include_in_schema=False)
+    def new_demo_page(request: Request) -> Response:
+        return static_file_response(STATIC_DIR / "high-fidelity-demo.html", request, "text/html; charset=utf-8", PAGE_HEADERS)
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -970,6 +1061,12 @@ def create_app(
             "status": "ok",
             "time": utc_now(),
             "hermes_enabled": settings.hermes_enabled,
+            "llm_gateway_enabled": bool(
+                settings.llm_gateway_enabled and settings.llm_gateway_api_key
+            ),
+            "llm_gateway_model": settings.llm_gateway_model
+            if settings.llm_gateway_enabled
+            else None,
             "data_health": data_health.public_summary(data_health.latest()),
             "background_jobs": background.status(),
         }
@@ -1740,6 +1837,71 @@ def create_app(
                 "fetched_at": latest.get("fetched_at"),
             }
 
+    @app.get("/api/v1/stocks/search")
+    def high_fidelity_stock_search(
+        q: str = Query(min_length=1, max_length=40),
+        limit: int = Query(default=10, ge=1, le=20),
+    ) -> dict[str, Any]:
+        try:
+            return {
+                "items": stock_dashboard.search(q, limit=limit),
+                "query": q,
+            }
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="股票目录暂不可用",
+            ) from exc
+
+    @app.get("/api/v1/stocks/{symbol}/score-card")
+    def high_fidelity_stock_score_card(symbol: str) -> dict[str, Any]:
+        try:
+            return stock_dashboard.score_card(symbol)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="个股行情与财务数据暂不可用",
+            ) from exc
+
+    @app.get("/api/v1/stocks/{symbol}/industry-comparison")
+    def high_fidelity_industry_comparison(
+        symbol: str,
+        refresh: bool = Query(default=False),
+    ) -> dict[str, Any]:
+        try:
+            return industry_comparison.get_packet(symbol, force=refresh)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="行业五维对比数据暂不可用",
+            ) from exc
+
+    @app.get("/api/v1/market/kline")
+    def high_fidelity_stock_kline(
+        symbol: str = Query(min_length=6, max_length=16),
+        period: Literal["1m", "1d", "1w", "1M", "1Y"] = "1d",
+        limit: int = Query(default=80, ge=1, le=240),
+        adjust: Literal["qfq", "none"] = "qfq",
+    ) -> dict[str, Any]:
+        try:
+            return stock_dashboard.kline(
+                symbol,
+                period=period,
+                limit=limit,
+                adjust=adjust,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="个股 K 线暂不可用",
+            ) from exc
+
     @app.get("/sectors/hot")
     def hot_sectors(limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
         return analysis.hot_sectors(limit=limit)
@@ -1747,6 +1909,67 @@ def create_app(
     @app.get("/markets/breadth")
     def market_breadth() -> dict[str, Any]:
         return analysis.market_breadth()
+
+    @app.get("/api/v1/market/index-quote")
+    def high_fidelity_index_quote(code: str = Query(min_length=6, max_length=16)) -> dict[str, Any]:
+        try:
+            return today_dashboard.index_quote(code)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="指数行情暂不可用") from exc
+
+    @app.get("/api/v1/market/overview")
+    def high_fidelity_market_overview() -> dict[str, Any]:
+        try:
+            return today_dashboard.market_overview()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="市场总览暂不可用") from exc
+
+    @app.get("/api/v1/market/rise-fall-distribution")
+    def high_fidelity_rise_fall_distribution() -> dict[str, Any]:
+        try:
+            return today_dashboard.rise_fall_distribution()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="涨跌结构暂不可用") from exc
+
+    @app.get("/api/v1/market/industry-rotation")
+    def high_fidelity_industry_rotation(
+        limit: int = Query(default=5, ge=1, le=20),
+        standard: str | None = None,
+    ) -> list[dict[str, Any]]:
+        del standard
+        try:
+            return today_dashboard.industry_rotation(limit=limit)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="行业轮动暂不可用") from exc
+
+    @app.get("/api/v1/market/hot-themes")
+    def high_fidelity_hot_themes(
+        limit: int = Query(default=5, ge=1, le=20),
+    ) -> list[dict[str, Any]]:
+        try:
+            return today_dashboard.hot_themes(limit=limit)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="热门方向暂不可用") from exc
+
+    @app.get("/api/v1/market/trading-activity")
+    def high_fidelity_trading_activity(
+        days: int = Query(default=7, ge=1, le=14),
+    ) -> dict[str, Any]:
+        try:
+            return today_dashboard.trading_activity(days=days)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="成交活跃度暂不可用") from exc
+
+    @app.get("/api/v1/market/sector-fund-flow")
+    def high_fidelity_sector_fund_flow(
+        limit: int = Query(default=10, ge=2, le=20),
+    ) -> list[dict[str, Any]]:
+        try:
+            return today_dashboard.sector_fund_flow(limit=limit)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="板块资金流暂不可用") from exc
 
     @app.get("/a-share/{symbol}/information")
     def get_a_share_information(symbol: str) -> dict[str, Any]:
@@ -1863,12 +2086,13 @@ def create_app(
             name=payload.name,
             market=payload.market,
             thesis=payload.thesis,
+            focus_status=payload.focus_status,
         )
 
     @app.get("/users/{user_id}/watchlist/brief")
     def watchlist_brief(user_id: str, request: Request) -> dict[str, Any]:
         require_user(request, user_id)
-        return analysis.watchlist_brief(user_id)
+        return watchlist_brief_with_profiles(user_id)
 
     @app.get("/me/watchlist")
     def list_my_watchlist(request: Request) -> dict[str, Any]:
@@ -1890,6 +2114,7 @@ def create_app(
             name=payload.name,
             market=payload.market,
             thesis=payload.thesis,
+            focus_status=payload.focus_status,
         )
 
     @app.delete("/me/watchlist/{symbol}", status_code=204)
@@ -1906,7 +2131,7 @@ def create_app(
     @app.get("/me/watchlist/brief")
     def my_watchlist_brief(request: Request) -> dict[str, Any]:
         user = require_session_user(request)
-        return analysis.watchlist_brief(user["id"])
+        return watchlist_brief_with_profiles(user["id"])
 
     @app.post("/users/{user_id}/memories/candidates", status_code=201)
     def create_memory_candidate(

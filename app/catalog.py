@@ -7,6 +7,7 @@ INDEX_CATALOG = [
     {"symbol": "000001.SS", "name": "上证综指", "region": "中国", "group": "china"},
     {"symbol": "399001.SZ", "name": "深证成指", "region": "中国", "group": "china"},
     {"symbol": "399006.SZ", "name": "创业板指", "region": "中国", "group": "china"},
+    {"symbol": "000688.SS", "name": "科创50", "region": "中国", "group": "china"},
     {"symbol": "000300.SS", "name": "沪深300", "region": "中国", "group": "china"},
     {"symbol": "000905.SS", "name": "中证500", "region": "中国", "group": "china"},
     {"symbol": "^HSI", "name": "恒生指数", "region": "中国香港", "group": "hong_kong"},
@@ -176,7 +177,13 @@ _SYMBOL_RE = re.compile(r"^[A-Z0-9^.=-]{1,24}$")
 def normalize_symbol(symbol: str) -> str:
     value = symbol.strip().upper()
     if re.fullmatch(r"\d{6}", value):
-        suffix = ".SS" if value[0] in {"5", "6", "9"} else ".SZ"
+        suffix = (
+            ".BJ"
+            if value.startswith(("4", "8", "920"))
+            else ".SS"
+            if value[0] in {"5", "6", "9"}
+            else ".SZ"
+        )
         return value + suffix
     if value.endswith(".SH"):
         value = value[:-3] + ".SS"

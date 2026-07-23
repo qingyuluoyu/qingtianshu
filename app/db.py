@@ -69,6 +69,8 @@ class Database:
                     name TEXT,
                     market TEXT,
                     thesis TEXT,
+                    focus_status TEXT NOT NULL DEFAULT 'watching'
+                        CHECK(focus_status IN ('holding', 'watching', 'researching', 'cleared')),
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (user_id, symbol)
@@ -942,6 +944,13 @@ class Database:
             self._ensure_column(
                 connection, "financial_periods", "total_liabilities", "REAL"
             )
+            self._ensure_column(
+                connection,
+                "watchlist",
+                "focus_status",
+                "TEXT NOT NULL DEFAULT 'watching' "
+                "CHECK(focus_status IN ('holding', 'watching', 'researching', 'cleared'))",
+            )
             self._backfill_stock_domains(connection)
 
     @staticmethod
@@ -1313,20 +1322,35 @@ class Database:
         name: str | None,
         market: str | None,
         thesis: str | None,
+        focus_status: str | None = None,
     ) -> dict[str, Any]:
         now = utc_now()
         with self.connect() as connection:
             connection.execute(
                 """
-                INSERT INTO watchlist(user_id, symbol, name, market, thesis, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO watchlist(
+                    user_id, symbol, name, market, thesis, focus_status,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, COALESCE(?, 'watching'), ?, ?)
                 ON CONFLICT(user_id, symbol) DO UPDATE SET
                     name = excluded.name,
                     market = excluded.market,
                     thesis = COALESCE(excluded.thesis, watchlist.thesis),
+                    focus_status = COALESCE(?, watchlist.focus_status),
                     updated_at = excluded.updated_at
                 """,
-                (user_id, symbol, name, market, thesis, now, now),
+                (
+                    user_id,
+                    symbol,
+                    name,
+                    market,
+                    thesis,
+                    focus_status,
+                    now,
+                    now,
+                    focus_status,
+                ),
             )
             row = connection.execute(
                 "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?", (user_id, symbol)

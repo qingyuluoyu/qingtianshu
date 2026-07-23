@@ -73,6 +73,8 @@ def _a_share_identity(symbol: str) -> tuple[str, str, str, str]:
         return canonical, code, f"sh{code}", f"{code}.SH"
     if canonical.endswith(".SZ"):
         return canonical, code, f"sz{code}", f"{code}.SZ"
+    if canonical.endswith(".BJ"):
+        return canonical, code, f"bj{code}", f"{code}.BJ"
     raise ProviderError("结构化财务与估值目前只支持 A 股证券")
 
 

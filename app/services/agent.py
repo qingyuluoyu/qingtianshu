@@ -2950,7 +2950,15 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
         prompt_ready_seconds = time.perf_counter() - agent_started
 
-        should_execute = execute_agent and self.settings.hermes_enabled
+        use_hermes = bool(execute_agent and self.settings.hermes_enabled)
+        use_llm_gateway = bool(
+            execute_agent
+            and not use_hermes
+            and self.settings.llm_gateway_enabled
+            and self.settings.llm_gateway_api_key
+            and image_path is None
+        )
+        should_execute = use_hermes or use_llm_gateway
         usage: dict[str, Any] | None = None
         error: str | None = None
         model_seconds = 0.0
@@ -2967,23 +2975,40 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             )
             model_started = time.perf_counter()
             try:
-                if stream_callback is not None and image_path is None:
-                    try:
-                        answer, usage = self._execute_hermes_streaming(
-                            model_tier=model_tier,
-                            run_dir=run_dir,
-                            user_workspace=workspace,
-                            evidence=prompt_evidence,
-                            trusted_context=trusted_prior_answers,
-                            stream_callback=notify_stream,
-                        )
-                    except Exception as stream_exc:
-                        notify_stream(
-                            {
-                                "type": "reset",
-                                "label": "实时生成连接已中断，正在恢复完整回答…",
+                if use_hermes:
+                    if stream_callback is not None and image_path is None:
+                        try:
+                            answer, usage = self._execute_hermes_streaming(
+                                model_tier=model_tier,
+                                run_dir=run_dir,
+                                user_workspace=workspace,
+                                evidence=prompt_evidence,
+                                trusted_context=trusted_prior_answers,
+                                stream_callback=notify_stream,
+                            )
+                        except Exception as stream_exc:
+                            notify_stream(
+                                {
+                                    "type": "reset",
+                                    "label": "实时生成连接已中断，正在恢复完整回答…",
+                                }
+                            )
+                            answer, usage = self._execute_hermes(
+                                prompt=prompt,
+                                model_tier=model_tier,
+                                run_dir=run_dir,
+                                user_workspace=workspace,
+                                image_path=image_path,
+                            )
+                            usage = {
+                                **(usage or {}),
+                                "streaming": {
+                                    "enabled": False,
+                                    "fallback": "oneshot_cli",
+                                    "bridge_error": type(stream_exc).__name__,
+                                },
                             }
-                        )
+                    else:
                         answer, usage = self._execute_hermes(
                             prompt=prompt,
                             model_tier=model_tier,
@@ -2991,21 +3016,11 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                             user_workspace=workspace,
                             image_path=image_path,
                         )
-                        usage = {
-                            **(usage or {}),
-                            "streaming": {
-                                "enabled": False,
-                                "fallback": "oneshot_cli",
-                                "bridge_error": type(stream_exc).__name__,
-                            },
-                        }
                 else:
-                    answer, usage = self._execute_hermes(
+                    answer, usage = self._execute_llm_gateway(
                         prompt=prompt,
                         model_tier=model_tier,
                         run_dir=run_dir,
-                        user_workspace=workspace,
-                        image_path=image_path,
                     )
                 model_seconds = time.perf_counter() - model_started
                 notify_progress(
@@ -3113,7 +3128,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     else:
                         answer = self._render_preview(evidence)
                         status = "guarded"
-                        error = "Hermes 输出未通过确定性证据守卫，已返回确定性摘要。"
+                        error = "模型输出未通过确定性证据守卫，已返回确定性摘要。"
                 usage = {**(usage or {}), "output_guard": output_guard}
                 write_json(run_dir / "output_guard.json", output_guard)
                 guard_seconds = time.perf_counter() - guard_started
@@ -3125,12 +3140,25 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 )
                 answer = self._render_preview(evidence)
                 status = "degraded"
-                error = f"Hermes 调用失败，已回退确定性摘要：{type(exc).__name__}: {exc}"
+                provider_label = "Hermes" if use_hermes else "LLM 网关"
+                error = (
+                    f"{provider_label} 调用失败，已回退确定性摘要："
+                    f"{type(exc).__name__}: {exc}"
+                )
         else:
             answer = self._render_preview(evidence)
             status = "preview"
-            if execute_agent and not self.settings.hermes_enabled:
-                error = "请求了 Hermes 执行，但 HERMES_ENABLED=false；已返回 preview。"
+            if execute_agent and not should_execute:
+                if image_path is not None and not self.settings.hermes_enabled:
+                    error = (
+                        "请求了图像研究，但当前仅配置了文本网关 LLM；"
+                        "图像解读需要 Hermes。已返回 preview。"
+                    )
+                else:
+                    error = (
+                        "请求了模型执行，但 HERMES_ENABLED=false 且 LLM 网关未启用；"
+                        "已返回 preview。"
+                    )
 
         if intent == "stock_research":
             answer = _normalize_stock_research_number_precision(answer)
@@ -6222,6 +6250,42 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 
 {message}
 """
+
+    def _execute_llm_gateway(
+        self,
+        *,
+        prompt: str,
+        model_tier: str,
+        run_dir: Path,
+    ) -> tuple[str, dict[str, Any] | None]:
+        from app.providers.llm_gateway import LLMGatewayClient, LLMGatewayError
+
+        client = LLMGatewayClient(self.settings)
+        if not client.enabled:
+            raise RuntimeError("LLM gateway is not enabled")
+
+        try:
+            answer, meta = client.complete(
+                prompt=prompt,
+                model=self.settings.llm_gateway_model,
+                temperature=0.2,
+                max_tokens=self.settings.llm_gateway_max_tokens,
+                timeout_seconds=self.settings.llm_gateway_timeout_seconds,
+            )
+        except LLMGatewayError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+        usage = {
+            "provider": "llm_gateway",
+            "model_tier": model_tier,
+            "model": meta.get("model"),
+            "gateway_base_url": meta.get("gateway_base_url"),
+            "response_id": meta.get("response_id"),
+            "raw_usage": meta.get("raw_usage") or {},
+            "streaming": {"enabled": False, "mode": "oneshot_gateway"},
+        }
+        write_json(run_dir / "usage.gateway.json", usage)
+        return answer, usage
 
     def _execute_hermes(
         self,

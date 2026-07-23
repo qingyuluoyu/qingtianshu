@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="清数智算 AI 智能投研平台七页交互演示">
+  <title>清数智算｜AI 智能投研平台</title>
+  <link rel="stylesheet" href="/static/high-fidelity-demo.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo"><i></i><i></i><i></i></div><div><strong>清数智算</strong><small>AI智能投研平台</small></div></div>
+    <nav class="nav" aria-label="主导航">
+      <button class="active" data-page="today"><span class="nav-ico">◔</span><span>今日观察</span><span class="nav-arrow">›</span></button>
+      <button data-page="score"><span class="nav-ico">☆</span><span>个股评分库</span><span class="nav-arrow">›</span></button>
+      <button data-page="research"><span class="nav-ico ai-ico">AI</span><span>AI研究</span><span class="nav-arrow">›</span></button>
+      <button data-page="watch"><span class="nav-ico">♡</span><span>我的关注</span><span class="nav-arrow">›</span></button>
+      <button data-page="review"><span class="nav-ico">▨</span><span>股票复盘</span><span class="nav-arrow">›</span></button>
+      <button data-page="profile"><span class="nav-ico">♙</span><span>个人中心</span><span class="nav-arrow">›</span></button>
+    </nav>
+    <div class="promo"><strong>AI赋能投研</strong><p>洞见价值　智赢未来</p><div class="promo-art"><div class="cube">AI</div></div></div>
+  </aside>
+
+  <header class="topbar">
+    <div class="search"><input id="searchInput" type="search" autocomplete="off" placeholder="搜索 A 股名称、代码或拼音" aria-label="搜索 A 股名称、代码或拼音" aria-controls="stockSearchResults" aria-expanded="false"><div class="search-results" id="stockSearchResults" role="listbox" aria-label="股票搜索结果"></div></div>
+    <div class="top-actions">
+      <button class="top-action" data-toast="暂无新消息"><span class="symbol">♧</span><span>消息</span><i class="badge">12</i></button>
+      <button class="top-action" data-toast="已打开收藏夹"><span class="symbol">☆</span><span>收藏</span></button>
+      <button class="top-action" data-toast="演示数据已导出"><span class="symbol">↗</span><span>导出</span></button>
+      <button class="top-action" data-toast="设置面板已打开"><span class="symbol">⚙</span><span>设置</span></button>
+      <button class="top-action" data-page="profile" aria-label="个人中心"><span class="avatar"></span><span>⌄</span></button>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="page active" id="page-today">
+      <div class="page-title-row"><div><h1>今日观察</h1><p class="muted" id="todayDataStatus" style="margin:0 0 10px">正在连接市场数据…</p></div><button class="btn small" id="refreshTodayData" type="button">刷新数据</button></div>
+      <div class="index-grid">
+        <article class="card index-card" data-index-code="000001.SH"><div><h3>上证主板</h3><strong class="up">3,426.18</strong><p class="up">+0.68%</p><p>成交额 3,842.56 亿元</p></div><canvas class="sparkline" data-color="#f3262d" data-fill="1" data-points="20,32,29,41,24,27,38,33,44,36,46,48,45,53,48,56,57,72"></canvas><div class="index-foot"><span>涨停数　<b class="up">68</b></span><span>跌停数　<b class="down">6</b></span></div></article>
+        <article class="card index-card" data-index-code="399001.SZ"><div><h3>深证主板</h3><strong class="up">10,894.21</strong><p class="up">+0.92%</p><p>成交额 4,872.35 亿元</p></div><canvas class="sparkline" data-color="#f3262d" data-fill="1" data-points="25,35,29,43,21,28,32,30,39,34,41,45,43,50,46,55,57,65"></canvas><div class="index-foot"><span>涨停数　<b class="up">92</b></span><span>跌停数　<b class="down">9</b></span></div></article>
+        <article class="card index-card" data-index-code="399006.SZ"><div><h3>创业板</h3><strong class="up">2,268.67</strong><p class="up">+1.35%</p><p>成交额 2,156.74 亿元</p></div><canvas class="sparkline" data-color="#f3262d" data-fill="1" data-points="18,31,28,42,26,24,36,33,43,41,47,53,50,58,56,64,63,66"></canvas><div class="index-foot"><span>涨停数　<b class="up">56</b></span><span>跌停数　<b class="down">7</b></span></div></article>
+        <article class="card index-card" data-index-code="000688.SH"><div><h3>科创板</h3><strong class="up">1,152.34</strong><p class="up">+1.20%</p><p>成交额 598.12 亿元</p></div><canvas class="sparkline" data-color="#f3262d" data-fill="1" data-points="30,42,38,51,49,27,31,43,39,29,40,36,44,40,47,43,55,66"></canvas><div class="index-foot"><span>涨停数　<b class="up">23</b></span><span>跌停数　<b class="down">3</b></span></div></article>
+      </div>
+      <div class="today-mid">
+        <article class="card" id="marketOverviewCard"><div class="card-title"><h3>市场总览 <span class="info" title="圆环统一使用当前市场快照；涨跌停按最近完整交易日单独标注">i</span></h3></div><div class="card-body"><div class="overview-wrap"><div><span class="dot up"></span>上涨<strong class="up" style="font-size:22px;display:block">--</strong><small>--</small></div><div class="donut"><div class="donut-center"><small>总交易只数</small><strong>--</strong><small>只</small></div></div><div><span class="dot down"></span>下跌<strong class="down" style="font-size:22px;display:block">--</strong><small>--</small></div></div><div class="legend"><span class="up"><i class="dot"></i>上涨</span><span style="color:#aeb6c3"><i class="dot"></i>平盘</span><span class="down"><i class="dot"></i>下跌</span></div><p class="tiny" id="marketOverviewMeta" style="text-align:center;margin:10px 0 0">正在核对市场日期与涨跌停数据…</p></div></article>
+        <article class="card" id="riseFallCard"><div class="card-title"><h3>涨跌结构 <span class="info">i</span></h3></div><div class="card-body"><div class="dist-head"><span>上涨　<b class="up">2,398</b>　45.80%</span><span>平盘　<b>316</b>　6.04%</span><span>下跌　<b class="down">2,523</b>　48.16%</span></div><div class="dist-chart"><div class="dist-col"><b>68</b><i style="height:8%"></i><small>涨停</small></div><div class="dist-col"><b>317</b><i style="height:25%"></i><small>&gt;7%</small></div><div class="dist-col"><b>625</b><i style="height:45%"></i><small>3~7%</small></div><div class="dist-col"><b>1,388</b><i style="height:83%"></i><small>0~3%</small></div><div class="dist-col gray"><b>316</b><i style="height:28%"></i><small>平盘</small></div><div class="dist-col green"><b>1,476</b><i style="height:88%"></i><small>0~-3%</small></div><div class="dist-col green"><b>786</b><i style="height:48%"></i><small>-3~-7%</small></div><div class="dist-col green"><b>236</b><i style="height:20%"></i><small>&lt;-7%</small></div><div class="dist-col green"><b>25</b><i style="height:5%"></i><small>跌停</small></div></div></div></article>
+        <article class="card" id="tradingActivityCard"><div class="card-title"><h3>成交活跃度</h3><span class="muted">近7日　⌄</span></div><div class="card-body"><div class="bar-chart"><div><b>12,846</b><i style="height:72%"></i><small>5/13</small></div><div><b>12,102</b><i style="height:67%"></i><small>5/14</small></div><div><b>11,635</b><i style="height:62%"></i><small>5/15</small></div><div><b>12,987</b><i style="height:74%"></i><small>5/16</small></div><div><b>13,421</b><i style="height:80%"></i><small>5/19</small></div><div><b>12,758</b><i style="height:70%"></i><small>5/20</small></div><div><b>13,469</b><i style="height:82%"></i><small>5/21</small></div></div><div class="chart-summary"><span>7日平均成交额　<b class="blue" style="font-size:18px">12,460</b> 亿元</span><span>较前7日　<b class="up">+8.10%</b></span></div></div></article>
+      </div>
+      <div class="today-bottom">
+        <article class="card"><div class="card-title"><h3>行业轮动 <small class="muted">（申万一级行业）</small> <span class="info">i</span></h3></div><div class="rank-list" id="industryRotationList">
+          <div class="rank-row"><i class="rank-no">1</i><b>电子</b><span class="up">+2.48%</span><canvas class="sparkline mini-line" data-color="#f3262d" data-points="18,20,24,23,30,29,37"></canvas><span class="up">+5.12%</span><span>1,953.37</span></div>
+          <div class="rank-row"><i class="rank-no">2</i><b>电力设备</b><span class="up">+2.10%</span><canvas class="sparkline mini-line" data-color="#f3262d" data-points="12,15,14,20,22,26,29"></canvas><span class="up">+4.37%</span><span>1,428.86</span></div>
+          <div class="rank-row"><i class="rank-no">3</i><b>有色金属</b><span class="up">+1.88%</span><canvas class="sparkline mini-line" data-color="#f3262d" data-points="8,15,13,17,19,25,23"></canvas><span class="up">+3.06%</span><span>1,122.45</span></div>
+          <div class="rank-row"><i class="rank-no">4</i><b>医药生物</b><span class="up">+1.35%</span><canvas class="sparkline mini-line" data-color="#f3262d" data-points="8,9,12,11,15,14,18"></canvas><span class="up">+2.21%</span><span>986.12</span></div>
+          <div class="rank-row"><i class="rank-no">5</i><b>计算机</b><span class="up">+1.12%</span><canvas class="sparkline mini-line" data-color="#f3262d" data-points="4,8,7,13,12,15,18"></canvas><span class="up">+2.85%</span><span>835.64</span></div>
+        </div></article>
+        <article class="card"><div class="card-title"><h3>热门方向概览 <span class="info">i</span></h3></div><div class="rank-list" id="hotThemesList">
+          <div class="rank-row" style="grid-template-columns:30px 86px 65px 1fr"><i class="rank-no">1</i><b>AI算力</b><span class="up">+3.21%</span><span>中际旭创　 <span class="pill blue">算力</span> <span class="pill blue">光模块</span></span></div>
+          <div class="rank-row" style="grid-template-columns:30px 86px 65px 1fr"><i class="rank-no">2</i><b>机器人</b><span class="up">+2.75%</span><span>埃斯顿　 <span class="pill blue">人形机器人</span></span></div>
+          <div class="rank-row" style="grid-template-columns:30px 86px 65px 1fr"><i class="rank-no">3</i><b>固态电池</b><span class="up">+2.33%</span><span>当升科技　 <span class="pill blue">电池材料</span></span></div>
+          <div class="rank-row" style="grid-template-columns:30px 86px 65px 1fr"><i class="rank-no">4</i><b>消费电子</b><span class="up">+1.98%</span><span>立讯精密　 <span class="pill blue">苹果链</span></span></div>
+          <div class="rank-row" style="grid-template-columns:30px 86px 65px 1fr"><i class="rank-no">5</i><b>低空经济</b><span class="up">+1.74%</span><span>万丰奥威　 <span class="pill blue">eVTOL</span></span></div>
+        </div></article>
+        <article class="card"><div class="card-title"><h3>板块净流入 <small class="muted">（亿元）</small> <span class="info">i</span></h3><button class="btn small">更多 ›</button></div><div class="flow-list" id="sectorFundFlowList">
+          <div class="flow-row"><span>电子</span><div class="flowbar positive"><span class="flow-axis"></span><i style="width:48%"></i></div><b class="up">+48.72</b></div><div class="flow-row"><span>电力设备</span><div class="flowbar positive"><span class="flow-axis"></span><i style="width:37%"></i></div><b class="up">+36.41</b></div><div class="flow-row"><span>计算机</span><div class="flowbar positive"><span class="flow-axis"></span><i style="width:27%"></i></div><b class="up">+23.87</b></div><div class="flow-row"><span>医药生物</span><div class="flowbar positive"><span class="flow-axis"></span><i style="width:20%"></i></div><b class="up">+18.34</b></div><div class="flow-row"><span>有色金属</span><div class="flowbar positive"><span class="flow-axis"></span><i style="width:15%"></i></div><b class="up">+14.62</b></div><div class="flow-row"><span>银行</span><div class="flowbar negative"><span class="flow-axis"></span><i style="width:14%"></i></div><b class="down">-15.42</b></div><div class="flow-row"><span>非银金融</span><div class="flowbar negative"><span class="flow-axis"></span><i style="width:20%"></i></div><b class="down">-19.83</b></div><div class="flow-row"><span>食品饮料</span><div class="flowbar negative"><span class="flow-axis"></span><i style="width:25%"></i></div><b class="down">-22.17</b></div><div class="flow-row"><span>房地产</span><div class="flowbar negative"><span class="flow-axis"></span><i style="width:31%"></i></div><b class="down">-28.56</b></div>
+        </div></article>
+      </div>
+      <p class="footer-note">演示数据，仅供参考</p>
+    </section>
+
+    <section class="page" id="page-score">
+      <div class="page-title-row"><div><h1>个股评分库</h1><p class="muted" id="stockDataStatus" style="margin:0 0 10px">正在加载真实个股数据…</p></div><button class="btn small" id="refreshStockData" type="button">刷新个股数据</button></div>
+      <article class="card stock-hero" id="stockHero">
+        <div class="stock-name"><h2><span data-stock-field="name">--</span>　<span class="muted" data-stock-field="symbol">--</span>　<span class="pill green" data-stock-field="market">--</span> <span class="pill blue" data-stock-field="industry">行业待更新</span></h2><strong class="quote" data-stock-field="price">-- <small>--</small></strong><p class="muted" data-stock-field="quoteMeta">正在连接行情接口…</p></div>
+        <div class="metrics-pair"><span>今开</span><b data-stock-field="open">--</b><span>昨收</span><b data-stock-field="previousClose">--</b><span>换手率</span><b data-stock-field="turnoverRatePct">--</b></div>
+        <div class="metrics-pair"><span>最高</span><b data-stock-field="high">--</b><span>最低</span><b data-stock-field="low">--</b><span>市盈率(TTM)</span><b data-stock-field="heroPeTtm">--</b></div>
+        <div class="metrics-pair"><span>成交量</span><b data-stock-field="volumeShares">--</b><span>成交额</span><b data-stock-field="amountCny">--</b><span>总市值</span><b data-stock-field="totalMarketCapCny">--</b></div>
+        <button class="btn" type="button" disabled title="关注功能将在后续阶段接入">关注功能待接入</button>
+      </article>
+      <div class="score-layout">
+        <div class="score-content">
+          <div class="score-top">
+            <article class="card stock-chart" id="klineCard"><div class="card-title"><h3>股价走势</h3><div class="kline-title-actions"><div class="chart-tabs" role="tablist" aria-label="K线周期"><button data-period="1m" role="tab">分时</button><button class="active" data-period="1d" role="tab" aria-selected="true">日K</button><button data-period="1w" role="tab">周K</button><button data-period="1M" role="tab">月K</button><button data-period="1Y" role="tab">年K</button></div><button class="btn kline-expand" id="klineExpand" aria-label="放大K线图" aria-expanded="false" title="放大K线图">⛶<span class="kline-expand-label">放大</span></button></div></div><div class="card-body"><div class="kline-meta"><div class="tiny"><b class="up" id="ma5Label">MA5 --</b>　<b class="blue" id="ma10Label">MA10 --</b>　<b style="color:#795add" id="ma20Label">MA20 --</b></div><span class="kline-status" id="klineStatus">日K · 正在连接真实行情…</span></div><canvas id="priceChart" class="price-chart" aria-label="个股K线图"></canvas><canvas id="volumeChart" class="volume-chart" aria-label="个股成交量图"></canvas></div></article>
+            <div>
+              <div class="ratio-grid"><div class="ratio"><small>PE (TTM)</small><strong data-stock-metric="peTtm">--</strong><span class="muted">实时估值</span></div><div class="ratio"><small>PB (LF)</small><strong data-stock-metric="pbLf">--</strong><span class="muted">最新账面口径</span></div><div class="ratio"><small>加权ROE（报告期）</small><strong data-stock-metric="roeWeightedReport">--</strong><span class="muted" data-stock-field="reportName">最新财报</span></div><div class="ratio"><small>营收同比</small><strong data-stock-metric="revenueYoy">--</strong><span class="muted" data-stock-field="reportName">最新财报</span></div><div class="ratio"><small>归母净利润同比</small><strong data-stock-metric="parentNetProfitYoy">--</strong><span class="muted" data-stock-field="reportName">最新财报</span></div></div>
+              <article class="card valuation-compare-card">
+                <div class="card-title"><h3>估值对比 <small class="muted">（同行业）</small></h3><span class="pill" id="valuationCompareStatus">正在加载</span></div>
+                <div class="valuation-compare-body">
+                  <canvas class="valuation-compare-chart" id="topMetricComparisonChart" aria-label="五项指标同行统计对比图"></canvas>
+                  <div class="valuation-compare-legend"><span><i style="background:#1768ef"></i>当前公司</span><span><i style="background:#72a7f5"></i>行业中位</span><span><i style="background:#10a25d"></i>行业上四分位</span></div>
+                  <p class="valuation-compare-meta" id="valuationCompareMeta">正在读取申万二级同行统计…</p>
+                </div>
+              </article>
+            </div>
+          </div>
+          <article class="card industry-factor-module" id="industryFactorCard">
+            <div class="card-title">
+              <div class="industry-factor-heading"><h3>五维行业数据对比</h3><small class="muted">· 申万二级同行相对排名</small></div>
+              <span class="pill" id="industryFactorStatus">正在计算</span>
+            </div>
+            <div class="industry-factor-body" id="industryFactorBody">
+              <div class="industry-factor-meta"><span id="industryFactorMeta">正在匹配同行并计算五个维度…</span><span id="industryFactorDate">--</span></div>
+              <div class="industry-factor-overview">
+                <div class="industry-factor-radar">
+                  <canvas class="radar" id="industryFactorRadar" data-labels="成长性,估值水平,盈利能力,财务稳健性,经营效率" data-values="0,0,0,0,0" data-values2="50,50,50,50,50" aria-label="五维行业对比雷达图"></canvas>
+                  <div class="industry-radar-legend"><span><i style="background:#1768ef"></i>当前公司</span><span><i style="background:#10a25d"></i>行业中位</span></div>
+                </div>
+                <div class="industry-factor-cards" id="industryFactorCards"><div class="industry-factor-empty">五维得分正在计算</div></div>
+              </div>
+              <p class="industry-factor-note" id="industryFactorNote">分数表示公司在同一申万二级行业内的相对位置，50分约为行业中位，不代表买卖建议。</p>
+            </div>
+          </article>
+          <article class="card reports stock-intelligence">
+            <div class="card-title"><h3>财报与研报 <small class="muted">· 后续逐项接入</small></h3><span class="pill blue" data-stock-field="intelSymbol">--</span></div>
+            <div class="card-body reports-grid">
+              <section class="intel-panel" aria-labelledby="stockNewsTitle">
+                <div class="intel-head"><div><h4 id="stockNewsTitle">市场新闻</h4><p>点击新闻，前往东方财富、同花顺等原平台查看</p></div><span class="pill">外部资讯 ↗</span></div>
+                <div class="news-list" id="stockNewsList" aria-live="polite">
+                  <div class="empty-state">新闻资讯将在后续阶段接入真实接口</div>
+                </div>
+              </section>
+              <section class="intel-panel ai-panel" aria-labelledby="stockInsightTitle">
+                <div class="intel-head"><div><h4 id="stockInsightTitle">AI精选 · 政策与利好</h4><p>由其他AI分析筛选，管理员审核后推送</p></div><span class="pill blue">管理员推送</span></div>
+                <div class="insight-list" id="stockInsightList" aria-live="polite">
+                  <div class="empty-state">AI精选将在后续阶段接入真实研究请求</div>
+                </div>
+              </section>
+            </div>
+          </article>
+        </div>
+        <aside class="score-side"><article class="card"><div class="card-title"><h3>数据状态</h3></div><div class="stock-status-panel"><strong data-stock-field="statusTitle">正在核对数据</strong><p class="muted" data-stock-field="statusTime">--</p><div class="stock-status-list"><div class="stock-status-item ok">✓ 基本行情与五周期K线使用真实接口</div><div class="stock-status-item ok">✓ PE、PB及最新报告期财务指标使用真实接口</div><div class="stock-status-item pending" id="industryStatusItem">行业五维对比正在计算</div><div class="stock-status-item pending">关注和AI研究后续接入</div></div></div><div class="judgement"><h3>口径说明</h3><p>顶部 ROE 为最新报告期加权值；五维模块中的 ROE、ROIC 与经营指标按 TTM 或单季度口径重新计算。</p><small class="muted" data-stock-field="warningSummary">暂无额外提示</small></div></article></aside>
+      </div>
+      <p class="footer-note">清数智算，仅供参考</p>
+    </section>
+
+    <section class="page" id="page-research">
+      <h1>AI研究</h1>
+      <article class="card research-form"><div class="field"><label>研究标的</label><input id="researchTarget" value="宁德时代  300750.SZ" placeholder="例如：宁德时代 300750.SZ"></div><div class="field"><label>研究问题</label><textarea id="researchQuestion" placeholder="例如：宁德时代未来12-18个月的投资价值如何？"></textarea></div><button class="btn primary" id="startResearch" style="height:57px;font-size:17px">✦ 开始研究</button></article>
+      <article class="card parallel"><div class="layers"><i></i><i></i><i></i></div><div><h3 style="margin-bottom:4px">并行分析 <small>（需手动启动）</small></h3><p class="muted" style="margin:0" id="parallelHint">开启后将同时对 5 大分析维度进行并行研究。五维共享同一证据快照时间点，主对话保持精简，详细结论在右侧维度弹窗查看。</p></div><div style="text-align:center"><b>可选增强</b><button class="btn block" style="margin-top:10px" id="startParallelAnalysis" type="button">启动并行分析</button></div></article>
+      <div class="research-work">
+        <article class="card assistant-card"><div class="assistant-head"><div class="bot">AI</div><div><h3 style="margin:0">AI研究助手　<small class="muted" id="researchAssistantMeta">等待研究问题</small></h3></div><span style="margin-left:auto" class="muted tiny" id="researchEvidenceMeta">证据快照未建立</span></div><div class="assistant-copy" id="assistantCopy"><p class="muted">请填写研究标的与问题后开始。主回答默认精简；右侧五维可按需深化，结果以弹窗展示并可再次查看。</p></div><div class="suggestions"><b>您可以继续问我：</b><div class="chips" style="margin-top:8px"><button class="chip" type="button">与行业可比公司对比</button><button class="chip" type="button">未来12个月业绩预测</button><button class="chip" type="button">机构观点与评级汇总</button><button class="chip" type="button">关键财务指标趋势</button><button class="chip" type="button">潜在风险点梳理</button></div></div><div class="message-box"><textarea id="researchFollowup" rows="1" placeholder="继续提问或补充研究需求，Enter 发送，Shift+Enter 换行"></textarea><button class="send" id="researchSend" type="button" aria-label="发送">➤</button></div></article>
+        <aside><article class="card" style="padding:12px 16px;margin-bottom:10px"><h3 style="margin:0">五大分析维度 <small>（可并行启动）</small></h3><p class="muted" style="margin:2px 0 0" id="dimensionHint">无标的时禁用；有标的后可按需启动。提示词边界后续可替换。</p></article><div class="dimension-list">
+          <article class="card dimension" data-dim="fundamentals"><div class="dim-icon">▥</div><div><h4>基本面分析</h4><p>财务表现、盈利质量、成长能力、经营效率等</p><small class="muted dim-status">●　未启动</small></div><button class="btn small dim-start" type="button" data-dim="fundamentals">启动分析</button></article>
+          <article class="card dimension" data-dim="technical"><div class="dim-icon">↗</div><div><h4>技术面分析</h4><p>趋势走势、量价结构、技术指标、支撑阻力等</p><small class="muted dim-status">●　未启动</small></div><button class="btn small dim-start" type="button" data-dim="technical">启动分析</button></article>
+          <article class="card dimension" data-dim="industry"><div class="dim-icon">◫</div><div><h4>行业分析</h4><p>行业格局、市场空间、竞争态势、产业链分析</p><small class="muted dim-status">●　未启动</small></div><button class="btn small dim-start" type="button" data-dim="industry">启动分析</button></article>
+          <article class="card dimension" data-dim="valuation"><div class="dim-icon">◒</div><div><h4>估值分析</h4><p>估值水平、历史分位、相对估值、合理区间等</p><small class="muted dim-status">●　未启动</small></div><button class="btn small dim-start" type="button" data-dim="valuation">启动分析</button></article>
+          <article class="card dimension" data-dim="risk"><div class="dim-icon">⬟</div><div><h4>风险分析</h4><p>经营风险、财务风险、政策风险、市场风险等</p><small class="muted dim-status">●　未启动</small></div><button class="btn small dim-start" type="button" data-dim="risk">启动分析</button></article>
+        </div></aside>
+      </div>
+      <p class="footer-note">研究结论仅供参考，不构成任何投资建议</p>
+    </section>
+
+    <section class="page" id="page-watch">
+      <div class="page-title-row"><h1>我的关注</h1></div>
+      <div class="watch-layout">
+        <div><div class="watch-head"><div class="watch-filters"><button class="active" data-filter="all">全部</button><button data-filter="holding">持仓中</button><button data-filter="watching">观望中</button><button data-filter="researching">研究中</button><button data-filter="cleared">已清仓</button></div><div class="watch-head-actions"><button class="btn watch-batch-delete" id="batchDeleteWatch" type="button" disabled>批量删除</button></div></div>
+          <form id="watchAddForm" class="watch-add-form">
+            <div class="watch-search-box"><input id="watchSearchInput" type="search" autocomplete="off" placeholder="搜索股票名称、代码或拼音" aria-label="搜索股票" aria-controls="watchSearchResults" aria-expanded="false"><div id="watchSearchResults" class="watch-search-results" role="listbox" aria-label="股票搜索结果"></div></div>
+            <input id="watchAddSymbol" type="hidden"><input id="watchAddName" type="hidden">
+            <select id="watchAddStatus" aria-label="关注状态"><option value="holding">持仓中</option><option value="watching" selected>观望中</option><option value="researching">研究中</option><option value="cleared">已清仓</option></select>
+            <input id="watchAddReason" maxlength="1000" autocomplete="off" placeholder="填写关注理由" required>
+            <button class="btn primary" id="watchAddSubmit" type="submit" disabled>加入关注</button>
+          </form>
+          <article class="card watch-table"><table><thead><tr><th><input id="watchSelectAll" type="checkbox" aria-label="选择当前列表全部股票"></th><th>股票 / 代码</th><th>最新价</th><th>日涨跌</th><th>状态</th><th>关注理由</th><th>行业 / 板块</th><th>最近更新</th><th>操作</th></tr></thead><tbody id="watchRows"><tr class="watch-loading"><td colspan="9">正在读取关注股票…</td></tr></tbody></table><div id="watchRecordCount" class="muted watch-record-count">正在读取关注股票…</div></article>
+        </div>
+        <aside class="watch-side">
+          <article class="card"><div class="card-title"><h3>关注概览 <span class="info">?</span></h3></div><div class="card-body watch-summary"><div class="summary-box"><span>我的关注</span><strong class="blue" id="watchTotalCount">—</strong></div><div class="summary-box"><span>持仓中</span><strong class="down" id="watchHoldingCount">—</strong></div><div class="summary-box"><span>观望中</span><strong class="orange" id="watchWatchingCount">—</strong></div><div class="summary-box"><span>研究中</span><strong class="blue" id="watchResearchingCount">—</strong></div></div></article>
+          <article class="card"><div class="card-title"><h3>状态分布 <span class="info">?</span></h3></div><div class="card-body status-wrap"><div class="status-donut" id="watchStatusDonut" data-count="0"></div><div class="status-legend" id="watchStatusLegend"><p class="muted">正在汇总状态…</p></div></div></article>
+          <article class="card"><div class="card-title"><h3>本周待处理 <span class="info">?</span></h3></div><div class="card-body" id="watchTodoList"><p class="muted">正在整理下一动作…</p></div></article>
+        </aside>
+      </div>
+      <p class="footer-note">关注状态和关注理由由你自行维护；行情数据仅供研究参考</p>
+    </section>
+
+    <section class="page" id="page-review">
+      <h1>股票复盘</h1>
+      <div class="tabs"><button class="tab-btn active" data-review="personal">个人交易复盘</button><button class="tab-btn" data-review="market">大盘/市场复盘</button><span class="tab-badge">一周复盘一次 ›</span></div>
+      <div class="review-pane active" id="review-personal">
+        <h2 style="font-size:18px">本周复盘（06.23 - 06.29）</h2>
+        <div class="review-grid"><div>
+          <article class="card personal-table"><div class="card-title"><h3>一、个人交易复盘</h3></div><div class="card-body"><p>本周已完成交易记录</p><table><thead><tr><th>交易日期</th><th>股票代码</th><th>股票名称</th><th>操作</th><th>成交价</th><th>数量</th><th>盈亏（元）</th><th>盈亏率</th><th>是否符合计划</th><th>备注</th><th>复盘状态</th></tr></thead><tbody><tr><td>06.23</td><td class="blue">300750</td><td>宁德时代</td><td class="up">买入</td><td>196.80</td><td>500</td><td class="up">+2,340.00</td><td class="up">+2.39%</td><td class="down">是</td><td>计划内低吸</td><td><span class="pill green">已复盘</span></td></tr><tr><td>06.24</td><td class="blue">002594</td><td>比亚迪</td><td class="down">卖出</td><td>257.60</td><td>300</td><td class="down">-1,860.00</td><td class="down">-2.39%</td><td class="up">否</td><td>冲高减仓过早</td><td><span class="pill orange">待复盘</span></td></tr><tr><td>06.25</td><td class="blue">600519</td><td>贵州茅台</td><td class="up">买入</td><td>1,618.00</td><td>100</td><td class="up">+1,580.00</td><td class="up">+0.98%</td><td class="down">是</td><td>长期配置计划</td><td><span class="pill green">已复盘</span></td></tr><tr><td>06.26</td><td class="blue">688036</td><td>传音控股</td><td class="down">卖出</td><td>124.30</td><td>600</td><td class="up">+3,720.00</td><td class="up">+5.31%</td><td class="down">是</td><td>止盈执行良好</td><td><span class="pill green">已复盘</span></td></tr><tr><td>06.27</td><td class="blue">000858</td><td>五粮液</td><td class="up">买入</td><td>139.20</td><td>200</td><td class="down">-560.00</td><td class="down">-2.00%</td><td class="up">否</td><td>追涨导致回撤</td><td><span class="pill orange">待复盘</span></td></tr></tbody></table><span class="muted">共 5 笔交易</span></div></article>
+          <article class="card"><div class="card-title"><h3>二、选中交易复盘对比 <small>（06.23　300750 宁德时代　买入）</small></h3></div><div class="card-body compare-cards"><div class="compare-card bluebox"><h3 class="blue" style="text-align:center">原计划（交易前计划）</h3><dl><dt>计划类型：</dt><dd>低吸布局</dd><dt>买入逻辑：</dt><dd>动力电池需求改善，公司份额稳步提升</dd><dt>计划买入价：</dt><dd>195.00 - 198.00</dd><dt>计划仓位：</dt><dd>20%</dd><dt>止损位：</dt><dd>188.00</dd><dt>止盈位：</dt><dd>210.00</dd><dt>时间预期：</dt><dd>2-4 周</dd><dt>关键跟踪点：</dt><dd>装机量数据、原材料价格走势</dd></dl></div><div class="vs">VS</div><div class="compare-card greenbox"><h3 class="down" style="text-align:center">实际执行（交易结果）</h3><dl><dt>实际成交价：</dt><dd>196.80</dd><dt>成交数量：</dt><dd>500 股</dd><dt>成交金额：</dt><dd>98,400.00 元</dd><dt>持仓仓位：</dt><dd>19.8%</dd><dt>持仓周期：</dt><dd>持有中（3天）</dd><dt>当前价格：</dt><dd>201.50</dd><dt>盈亏：</dt><dd class="up">+2,340.00 元</dd><dt>盈亏率：</dt><dd class="up">+2.39%</dd></dl></div><div class="compare-card bluebox"><h3>本笔交易复盘小结</h3><ul class="check-list"><li>计划匹配度：<span class="down">90%</span></li><li>执行纪律性：<span class="down">良好</span></li><li>操作亮点：按计划区间买入，仓位控制得当</li><li class="warn">改进点：可设置分批止盈，锁定部分利润</li><li>情绪复盘：市场回调时保持耐心，执行计划</li></ul><p><b>结论：</b>本次交易符合计划，执行良好，继续跟踪基本面与技术信号。</p></div></div></article>
+        </div><aside class="stack review-side">
+          <article class="card"><div class="card-title"><h3>本周复盘概览</h3></div><div class="card-body review-metrics"><div class="review-metric">交易次数<strong>5</strong></div><div class="review-metric">盈利次数<strong class="down">3</strong></div><div class="review-metric">亏损次数<strong>2</strong></div><div class="review-metric">总盈亏（元）<strong class="up">+5,220.00</strong></div><div class="review-metric">盈亏率<strong class="up">+1.62%</strong></div><div class="review-metric">胜率<strong>60.00%</strong></div><div class="review-metric">平均持仓周期<strong>2.6 天</strong></div><div class="review-metric">计划符合率<strong>60.00%</strong></div><div class="review-metric">纪律评分<strong>78 分</strong></div></div></article>
+          <article class="card"><div class="card-title"><h3>本周亮点</h3></div><div class="card-body"><ul class="check-list"><li>严格执行止盈策略，传音控股止盈及时</li><li>优先布局主线赛道，宁德时代低吸效果良好</li><li>仓位整体控制合理，单笔最大仓位不超过 20%</li></ul></div></article>
+          <article class="card"><div class="card-title"><h3>主要执行问题</h3></div><div class="card-body"><ul class="side-list"><li><span class="up">●</span>比亚迪冲高减仓过早，错失后续上涨空间</li><li><span class="up">●</span>五粮液追涨买入，导致短期回撤</li><li><span class="up">●</span>止损执行率偏低，需加强风险控制意识</li></ul></div></article>
+          <article class="card"><div class="card-title"><h3>下周交易计划</h3></div><div class="card-body"><ul class="side-list"><li><span class="n">1</span>关注新能源车产业链机会，等待回调买入信号</li><li><span class="n">2</span>控制仓位波动，单笔仓位不超过 20%</li><li><span class="n">3</span>严格执行止损止盈，避免情绪化交易</li><li><span class="n">4</span>重点跟踪：宁德时代、比亚迪、贵州茅台</li></ul></div></article>
+        </aside></div>
+      </div>
+      <div class="review-pane" id="review-market">
+        <h2 style="font-size:18px">本周复盘（06.23 - 06.29）　<span class="muted" style="font-size:12px">数据截至 2025-06-29（周日）</span></h2>
+        <div class="review-grid"><div>
+          <article class="card"><div class="market-cards"><div class="market-card"><b>上证指数</b><strong class="up">3,426.18</strong><p class="up">+0.68%</p><canvas class="sparkline" data-color="#f3262d" data-points="18,30,26,40,29,33,41,38,47,49,58"></canvas><small>周涨跌 23.16 点</small></div><div class="market-card"><b>深证成指</b><strong class="up">10,894.21</strong><p class="up">+0.92%</p><canvas class="sparkline" data-color="#f3262d" data-points="20,34,27,40,31,38,45,41,49,51,60"></canvas><small>周涨跌 99.34 点</small></div><div class="market-card"><b>创业板指</b><strong class="up">2,268.67</strong><p class="up">+1.35%</p><canvas class="sparkline" data-color="#f3262d" data-points="18,39,29,44,36,42,48,44,54,55,64"></canvas><small>周涨跌 30.26 点</small></div><div class="market-card"><b>沪深300</b><strong class="up">3,959.88</strong><p class="up">+0.55%</p><canvas class="sparkline" data-color="#f3262d" data-points="20,31,25,38,29,36,42,39,48,50,57"></canvas><small>周涨跌 30.73 点</small></div><div class="market-card"><b>科创50</b><strong class="up">1,052.34</strong><p class="up">+1.42%</p><canvas class="sparkline" data-color="#f3262d" data-points="19,37,27,43,34,39,48,42,51,54,62"></canvas><small>周涨跌 14.72 点</small></div></div></article>
+          <div class="review-row"><article class="card"><div class="card-title"><h3>板块强弱</h3></div><div class="card-body two-cols"><div><b>涨幅TOP5</b><ol class="numbered"><li><span>军工装备 <b class="up" style="float:right">+5.62%</b></span></li><li><span>创新药 <b class="up" style="float:right">+4.38%</b></span></li><li><span>光伏设备 <b class="up" style="float:right">+3.92%</b></span></li><li><span>AI算力 <b class="up" style="float:right">+3.21%</b></span></li><li><span>半导体 <b class="up" style="float:right">+2.78%</b></span></li></ol></div><div><b class="down">跌幅TOP5</b><ol class="numbered"><li><span>贵金属 <b class="down" style="float:right">-3.21%</b></span></li><li><span>煤炭开采 <b class="down" style="float:right">-2.65%</b></span></li><li><span>航运港口 <b class="down" style="float:right">-2.18%</b></span></li><li><span>房地产开发 <b class="down" style="float:right">-1.89%</b></span></li><li><span>传统零售 <b class="down" style="float:right">-1.42%</b></span></li></ol></div></div></article><article class="card"><div class="card-title"><h3>市场结构总结</h3></div><div class="card-body" style="display:flex;align-items:center;gap:20px"><div class="donut-market"></div><div><p><i class="dot up"></i>上涨<br><b>2,532家（48.16%）</b></p><p style="color:#aeb6c3"><i class="dot"></i>平盘<br><b>316家（6.04%）</b></p><p><i class="dot down"></i>下跌<br><b>2,523家（45.80%）</b></p></div></div></article><article class="card"><div class="card-title"><h3>资金与风格</h3></div><div class="card-body"><table><tr><td>主力资金</td><td class="up">+186.72</td></tr><tr><td>北向资金</td><td class="up">+72.36</td></tr><tr><td>融资净买入</td><td class="up">+54.21</td></tr><tr><td>ETF净流入</td><td class="up">+38.65</td></tr></table><table style="margin-top:10px"><tr><td>成长风格</td><td class="up">+1.32%</td></tr><tr><td>均衡风格</td><td class="up">+0.73%</td></tr><tr><td>价值风格</td><td class="down">-0.28%</td></tr></table></div></article></div>
+          <div class="grid-2" style="margin-top:12px"><article class="card"><div class="card-title"><h3>本周核心事件</h3></div><div class="card-body"><table><tr><td>06.24</td><td>国务院常务会议：研究推动数字经济高质量发展相关举措</td><td><span class="pill green">偏正面</span></td></tr><tr><td>06.25</td><td>国家发改委：加快推动“两重两新”项目建设进度</td><td><span class="pill green">偏正面</span></td></tr><tr><td>06.26</td><td>美联储官员讲话：通胀仍高于目标，需保持耐心</td><td><span class="pill">中性</span></td></tr><tr><td>06.27</td><td>工信部：推动人工智能赋能制造业高质量发展</td><td><span class="pill green">偏正面</span></td></tr></table></div></article><article class="card line-panel"><div class="card-title"><h3>市场情绪与成交</h3></div><div class="card-body"><div style="display:flex;justify-content:space-around"><span>市场情绪<strong style="display:block;font-size:20px">58</strong></span><span>日均成交额<strong style="display:block;font-size:20px">12,460</strong></span><span>换手率中位数<strong style="display:block;font-size:20px">1.82%</strong></span></div><canvas id="marketLine"></canvas></div></article></div>
+          <article class="card" style="margin-top:12px"><div class="card-title"><h3>市场结论</h3></div><div class="card-body">本周A股整体震荡上行，结构性机会为主，政策面持续发力支撑市场信心，增量资金温和流入。市场情绪维持中性偏暖，板块方面，科技成长与部分政策受益方向表现较好，但高位题材分化加剧，轮动加快。整体来看，市场仍处于震荡修复阶段，建议保持均衡配置，关注业绩确定性与政策主线的共振机会。</div></article>
+        </div><aside class="stack"><article class="card"><div class="card-title"><h3>本周市场复盘概览</h3></div><div class="card-body"><canvas class="radar market-score" data-values="60,65,58,40,55" data-labels="赚钱效应,资金面,情绪面,风险水平,趋势强度"></canvas></div></article><article class="card"><div class="card-title"><h3>市场亮点</h3></div><div class="card-body"><ul class="bullet-list"><li>军工、创新药等方向表现活跃，板块轮动加快</li><li>北向资金本周净流入 72.36 亿元，连续 2 周净流入</li><li>AI算力、半导体保持较高热度</li><li>市场成交量温和放大，情绪保持中性偏暖</li></ul></div></article><article class="card"><div class="card-title"><h3>主要风险点</h3></div><div class="card-body"><ul class="bullet-list"><li>外部地缘政治不确定性仍存</li><li>部分高位题材股出现回调，分化加剧</li><li>美元指数反弹，对外资流动有一定影响</li><li>经济数据恢复节奏仍需观察</li></ul></div></article><article class="card"><div class="card-title"><h3>下周观察方向</h3></div><div class="card-body"><ul class="bullet-list"><li>关注7月政治局会议及重要政策信号</li><li>留意中报预告期个股业绩分化</li><li>观察北向资金流向与外资动态</li><li>关注美联储议息会议及外围市场走向</li></ul></div></article></aside></div>
+      </div>
+      <p class="footer-note">演示数据，仅供参考</p>
+    </section>
+
+    <section class="page" id="page-profile">
+      <h1>个人中心</h1>
+      <div class="profile-top"><article class="card profile-card"><div class="identity"><div class="profile-pic"></div><div><h2 style="font-size:18px;margin-bottom:4px">投资探索者</h2><span class="pill orange">▼ 尊享会员</span><p style="margin:7px 0">ID：10003628</p><span class="muted">专注AI投研，洞见市场价值</span></div></div></article><article class="card profile-card"><h3>会员状态</h3><div class="member-line"><div class="crown">♛</div><div><h2 style="margin:0">尊享会员</h2><span class="muted">有效期至 2025-06-01</span></div></div><button class="btn" style="margin-top:28px">查看会员权益　›</button></article><article class="card profile-card"><h3>积分余额 <span class="info">?</span></h3><strong class="points">12,860</strong> 积分<p class="muted">今日获得 +120　　累计获得 25,680</p><button class="btn">积分明细　›</button></article><article class="card profile-card"><h3>账户概览</h3><div class="account-overview"><div>♡<span>我的关注</span><strong>128</strong></div><div>▤<span>研究报告</span><strong>56</strong></div><div>◔<span>API 调用</span><strong>2,568<small> 次</small></strong></div></div><button class="btn block">查看全部数据　›</button></article></div>
+      <div class="profile-main"><div class="stack"><article class="card api-card"><div class="card-title"><div><h3>API 自建 <span class="info">?</span></h3><span class="muted">接入自建API，扩展模型能力，支持多模型并行调用</span></div><button class="btn primary">♟　接入自建API　›</button></div><table><thead><tr><th>名称</th><th>模型</th><th>接口地址</th><th>状态</th><th>最近调用</th><th>操作</th></tr></thead><tbody><tr><td>DeepSeek-R1</td><td>deepseek-r1</td><td>https://api.deepseek.com/v1</td><td class="down">● 正常</td><td>1分钟前</td><td class="blue">调用测试　 编辑　 <span class="up">删除</span></td></tr><tr><td>通义千问-Max</td><td>qwen-max</td><td>https://dashscope.aliyuncs.com/compatible-mode/v1</td><td class="down">● 正常</td><td>8分钟前</td><td class="blue">调用测试　 编辑　 <span class="up">删除</span></td></tr><tr><td>Moonshot-v1</td><td>moonshot-v1-128k</td><td>https://api.moonshot.cn/v1</td><td class="orange">● 受限</td><td>1小时前</td><td class="blue">调用测试　 编辑　 <span class="up">删除</span></td></tr><tr><td>智谱清言-Plus</td><td>glm-4-plus</td><td>https://open.bigmodel.cn/api/paas/v4</td><td class="up">● 异常</td><td>昨天 18:23</td><td class="blue">调用测试　 编辑　 <span class="up">删除</span></td></tr></tbody></table><div class="api-config">查看全部 API 配置　<span class="blue">→</span></div></article><article class="card"><div class="card-title"><h3>账户信息</h3></div><div class="account-info"><div class="account-item"><span class="account-ico">▯</span><span>手机号<br>138*****5628<br><small class="muted">已绑定</small></span></div><div class="account-item"><span class="account-ico">✉</span><span>邮箱<br>inv****@qq.com<br><small class="muted">已绑定</small></span></div><div class="account-item"><span class="account-ico">☵</span><span>微信<br>未绑定<br><small class="blue">去绑定</small></span></div><div class="account-item"><span class="account-ico">♙</span><span>登录密码<br>********<br><small class="blue">修改</small></span></div><div class="account-item"><span class="account-ico">⬟</span><span>实名认证<br>已认证<br><small class="blue">查看</small></span></div></div></article></div><aside><article class="card" style="padding:16px 20px"><div style="display:flex;justify-content:space-between"><h2 style="font-size:18px">会员权益</h2><span class="pill orange">♛ 尊享会员</span></div><div class="benefit"><span class="benefit-ico">∞</span><span><b>AI深度研究</b><br><small class="muted">每日享100次深度研究，覆盖多维数据分析</small></span></div><div class="benefit"><span class="benefit-ico">▤</span><span><b>高级数据权限</b><br><small class="muted">解锁更多核心数据与实时行情权限</small></span></div><div class="benefit"><span class="benefit-ico">♟</span><span><b>自建API接入</b><br><small class="muted">支持多模型接入与并发调用管理</small></span></div><div class="benefit"><span class="benefit-ico">♧</span><span><b>专属客服支持</b><br><small class="muted">7×12小时专属客服，优先响应</small></span></div><div class="benefit"><span class="benefit-ico">▥</span><span><b>报告导出特权</b><br><small class="muted">无限制导出研究报告与数据图片</small></span></div><button class="btn gold block" style="margin-top:13px">了解更多会员权益</button></article></aside></div>
+      <p class="footer-note">演示数据，仅供参考</p>
+    </section>
+  </main>
+</div>
+
+<div class="kline-backdrop" id="klineBackdrop" aria-hidden="true"></div>
+<nav class="mobile-nav" aria-label="移动端导航"><button class="active" data-page="today">今日</button><button data-page="score">评分</button><button data-page="research">AI研究</button><button data-page="watch">关注</button><button data-page="review">复盘</button><button data-page="profile">我的</button></nav>
+<div class="toast" id="toast" role="status">操作成功</div>
+  <script src="/static/high-fidelity-demo.js" defer></script>
+</body>
+</html>
