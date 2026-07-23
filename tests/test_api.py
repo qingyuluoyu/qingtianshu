@@ -567,7 +567,11 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "确认保存" in page.text
     assert "暂不保存" in page.text
     assert "李总策略" in page.text
-    assert 'api("/v1/stock-strategies/li-zong/candidates?limit=200")' in page.text
+    assert (
+        "candidates?status=${encodeURIComponent(filter)}&limit=200"
+        in page.text
+    )
+    assert "const loadToken = ++state.liZongLoadToken" in page.text
     assert 'data-li-zong-filter="data_incomplete"' in page.text
     assert "function enterScreenCandidateResearch(" in page.text
     assert "entry_context: entryContext" in page.text
@@ -753,9 +757,9 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'api("/research-method?limit=4")' in page.text
     assert 'api("/me/research-actions")' in page.text
     assert 'api("/me/chat/refine"' in page.text
-    assert 'const directHermes = wantsHermes && state.workspacePage === "agent"' in page.text
+    assert "const directHermes = wantsHermes;" in page.text
     assert "execute_agent: attachedImage ? true : directHermes" in page.text
-    assert "prefer_precomputed: wantsHermes && !directHermes" in page.text
+    assert "prefer_precomputed: false" in page.text
     assert "AI 正在检索实时证据、资料库和金融研究工具" in page.text
     assert "function renderMarkdown(text)" in page.text
     assert "navigator.clipboard.writeText(text)" in page.text
@@ -1158,6 +1162,56 @@ def test_chat_understands_natural_language_market_questions(client):
         assert payload["status"] != "clarification"
         assert payload["evidence"]["market_drivers"]["items"]
         assert payload["conversation_id"]
+
+
+def test_chat_routes_named_industry_to_live_market_research(client, app, monkeypatch):
+    create_user(client, "Industry Question User")
+    captured = {}
+
+    def fake_industry_snapshot(industry_name, market_date=None):
+        captured.update({"industry_name": industry_name, "market_date": market_date})
+        return {
+            "status": "available",
+            "industry_name": industry_name,
+            "index_code": "H30184",
+            "index_name": "半导体",
+            "metrics": {
+                "return_1d_pct": -1.17,
+                "return_5d_pct": 2.35,
+                "return_20d_pct": 5.42,
+                "trend_state": "中期偏强",
+            },
+            "points": [
+                {
+                    "market_date": "2026-07-20",
+                    "close": 14568.12,
+                    "pct_change": -1.17,
+                    "constituent_count": 87,
+                }
+            ],
+            "component_analysis": {
+                "status": "available",
+                "market_date": "2026-07-20",
+                "breadth": {"advancers": 22, "decliners": 63, "unchanged": 2},
+            },
+        }
+
+    monkeypatch.setattr(app.state.analysis, "industry_snapshot", fake_industry_snapshot)
+
+    response = client.post("/me/chat", json={"message": "半导体行业怎么样"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "market_brief"
+    assert payload["evidence"]["question_focus"]["key"] == "sector_rotation"
+    assert payload["evidence"]["industry_focus"] == {
+        "name": "半导体",
+        "market_scope": "A股",
+        "requested_by_user": True,
+    }
+    assert payload["evidence"]["industry_snapshot"]["index_code"] == "H30184"
+    assert captured["industry_name"] == "半导体"
+    assert captured["market_date"]
 
 
 def test_market_questions_have_distinct_focus_and_direct_hermes_answers(
@@ -2059,6 +2113,44 @@ def test_stock_chat_uses_latest_server_report_when_live_price_refresh_fails(
     assert "最多四个小标题" in prompt
     assert "不得解释内部行情为何未返回" in prompt
     assert "独立于大盘/行业" in prompt
+
+
+def test_stock_chat_uses_saved_report_only_as_evidence_for_live_hermes_answer(
+    client, app, monkeypatch
+):
+    create_user(client, "即时研究用户")
+    report = client.get("/research-reports/000063")
+    assert report.status_code == 200
+
+    def fail_live_build(*args, **kwargs):
+        raise ProviderError("temporary live failure")
+
+    calls = []
+
+    def fake_hermes(**kwargs):
+        calls.append(kwargs)
+        return (
+            "这是针对‘中兴通讯为什么大跌’本轮问题即时生成的回答；"
+            "历史报告只作为证据，不是直接返回的答案。",
+            {"backend": "test-live"},
+        )
+
+    object.__setattr__(app.state.settings, "hermes_enabled", True)
+    monkeypatch.setattr(app.state.research_evidence, "build", fail_live_build)
+    monkeypatch.setattr(app.state.agent, "_execute_hermes", fake_hermes)
+
+    response = client.post(
+        "/me/chat",
+        json={"message": "中兴通讯为什么大跌", "execute_agent": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["evidence"]["precomputed_report"]["title"].startswith("中兴通讯")
+    assert "本轮问题即时生成" in payload["answer"]
+    assert calls
+    assert "中兴通讯为什么大跌" in calls[0]["prompt"]
 
 
 def test_memory_requires_confirmation_and_is_user_scoped(app):

@@ -1363,7 +1363,10 @@ class CSIIndustryIndexProvider:
                 else str(row.get("Name") or "").strip() == industry_name
             )
             and row.get("SecurityTypeName") == "指数"
-            and re.fullmatch(r"\d{6}", str(row.get("Code") or ""))
+            and re.fullmatch(
+                r"(?:\d{6}|[A-Z]\d{5})",
+                str(row.get("Code") or "").strip().upper(),
+            )
             and str(row.get("QuoteID") or "").strip()
         ]
         if not exact:

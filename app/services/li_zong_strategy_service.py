@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import date, datetime
 import hashlib
@@ -71,6 +72,8 @@ class LiZongStrategyService:
     ROE_FALLBACK_VERSION = "eastmoney_reported_roe_v1"
     PRICE_HISTORY_WINDOW_VERSION = "market_days_700_v1"
     INCOMPLETE_BOUNDARY_VERSION = "data_incomplete_v2"
+    MAX_DEEP_SYNC_WORKERS = 2
+    MAX_TRANSIENT_SYNC_RETRIES = 3
     PRICE_HISTORY_RULE_IDS = {
         "LZ-C-01",
         "LZ-C-02",
@@ -160,14 +163,61 @@ class LiZongStrategyService:
             supplemental_roe[symbol] = rows
             roe_fallback_attempted[symbol] = attempted
 
+        retry_metadata: dict[str, dict[str, Any]] = {}
+        for symbol, packet in packets.items():
+            current_state = self.database.latest_strategy_candidate_snapshot(
+                strategy_id=STRATEGY_ID,
+                strategy_version=STRATEGY_VERSION,
+                parameter_version=params.parameter_version,
+                symbol=symbol,
+            )
+            retryable_sync_issue = self._packet_has_retryable_sync_issue(packet)
+            packet_as_of = self._packet_as_of(packet)
+            same_market_date = bool(
+                current_state
+                and packet_as_of
+                and str(current_state.get("as_of_date") or "") == packet_as_of
+            )
+            previous_retry_count = (
+                int(
+                    ((current_state or {}).get("result") or {}).get(
+                        "sync_retry_count"
+                    )
+                    or 0
+                )
+                if same_market_date
+                else 0
+            )
+            sync_retry_count = (
+                previous_retry_count + 1 if retryable_sync_issue else 0
+            )
+            retry_metadata[symbol] = {
+                "current_state": current_state,
+                "retryable": retryable_sync_issue,
+                "retry_count": sync_retry_count,
+                "retry_exhausted": bool(
+                    retryable_sync_issue
+                    and sync_retry_count >= self.MAX_TRANSIENT_SYNC_RETRIES
+                ),
+                "as_of_date": packet_as_of,
+            }
+
         data_versions: dict[str, str] = {}
         for symbol, packet in packets.items():
             packet_version = self._packet_data_version(symbol, packet)
+            retry = retry_metadata[symbol]
             version_payload: dict[str, Any] = {
                 "packet_data_version": packet_version,
                 "price_history_window_version": self.PRICE_HISTORY_WINDOW_VERSION,
                 "incomplete_boundary_version": self.INCOMPLETE_BOUNDARY_VERSION,
             }
+            if retry["retryable"]:
+                version_payload.update(
+                    {
+                        "sync_retry_attempt": retry["retry_count"],
+                        "sync_retry_as_of_date": retry["as_of_date"],
+                    }
+                )
             if roe_fallback_attempted[symbol]:
                 version_payload.update(
                     {
@@ -214,6 +264,8 @@ class LiZongStrategyService:
             packet = packets[symbol]
             data_version = data_versions[symbol]
             stock_basic = self._packet_stock_basic(packet)
+            retry = retry_metadata[symbol]
+            current_state = retry["current_state"]
             try:
                 evaluation = deterministic_li_zong_v1(
                     self._build_input(
@@ -243,7 +295,32 @@ class LiZongStrategyService:
             evaluation["incomplete_boundary_version"] = (
                 self.INCOMPLETE_BOUNDARY_VERSION
             )
-            evaluation["evaluation_depth"] = "full_rules"
+            retryable_sync_issue = bool(retry["retryable"])
+            if retryable_sync_issue:
+                evaluation = self._force_incomplete(
+                    evaluation,
+                    "本轮必要数据接口未完整返回；既有稳定快照仅作历史参考，"
+                    "本轮不会进入候选或触发池。",
+                )
+                if retry["as_of_date"]:
+                    evaluation["as_of_date"] = retry["as_of_date"]
+            evaluation["evaluation_depth"] = (
+                "sync_incomplete" if retryable_sync_issue else "full_rules"
+            )
+            evaluation["sync_retry_count"] = int(retry["retry_count"])
+            evaluation["sync_retry_exhausted"] = bool(
+                retry["retry_exhausted"]
+            )
+            if retry["retry_exhausted"]:
+                limitation = (
+                    "必要数据接口连续多次未完成，本交易日停止自动重试；"
+                    "下一个交易日将重新核验。"
+                )
+                evaluation["limitations"] = list(
+                    dict.fromkeys(
+                        [*(evaluation.get("limitations") or []), limitation]
+                    )
+                )
             evaluation["stock_basic"] = stock_basic
 
             previous = self.database.latest_strategy_candidate_snapshot(
@@ -414,73 +491,47 @@ class LiZongStrategyService:
             strategy_version=STRATEGY_VERSION,
             parameter_version=params.parameter_version,
         )
-        pending_eligible = [
-            item
-            for item in deep_eligible_items
-            if current_dates.get(str(item.get("symbol"))) != universe_as_of
-            or self._evaluation_depth(
-                (
-                    previous_states.get(str(item.get("symbol"))) or {}
-                ).get("result")
-                or {}
-            )
-            != "full_rules"
-            or (
+        def needs_deep_processing(item: Mapping[str, Any]) -> bool:
+            symbol = str(item.get("symbol") or "")
+            if current_dates.get(symbol) != universe_as_of:
+                return True
+            state = previous_states.get(symbol) or {}
+            result = state.get("result") or {}
+            depth = self._evaluation_depth(result)
+            retry_exhausted = bool(result.get("sync_retry_exhausted"))
+            if depth == "sync_incomplete":
+                return bool(
+                    not retry_exhausted
+                    and self._latest_snapshot_has_retryable_sync_issue(symbol)
+                )
+            if depth != "full_rules":
+                return True
+            if (
                 self.fundamentals_provider is not None
-                and self._roe_rule_incomplete(
-                    (
-                        previous_states.get(str(item.get("symbol"))) or {}
-                    ).get("result")
-                    or {}
-                )
-                and str(
-                    (
-                        (
-                            previous_states.get(str(item.get("symbol"))) or {}
-                        ).get("result")
-                        or {}
-                    ).get("roe_fallback_version")
-                    or ""
-                )
+                and self._roe_rule_incomplete(result)
+                and str(result.get("roe_fallback_version") or "")
                 != self.ROE_FALLBACK_VERSION
-            )
-            or (
-                self._price_history_rule_incomplete(
-                    (
-                        previous_states.get(str(item.get("symbol"))) or {}
-                    ).get("result")
-                    or {}
-                )
-                and str(
-                    (
-                        (
-                            previous_states.get(str(item.get("symbol"))) or {}
-                        ).get("result")
-                        or {}
-                    ).get("price_history_window_version")
-                    or ""
-                )
+            ):
+                return True
+            if (
+                self._price_history_rule_incomplete(result)
+                and str(result.get("price_history_window_version") or "")
                 != self.PRICE_HISTORY_WINDOW_VERSION
-            )
-            or (
-                str(
-                    (
-                        previous_states.get(str(item.get("symbol"))) or {}
-                    ).get("status")
-                    or ""
-                )
-                == "data_incomplete"
-                and str(
-                    (
-                        (
-                            previous_states.get(str(item.get("symbol"))) or {}
-                        ).get("result")
-                        or {}
-                    ).get("incomplete_boundary_version")
-                    or ""
-                )
+            ):
+                return True
+            if (
+                str(state.get("status") or "") == "data_incomplete"
+                and str(result.get("incomplete_boundary_version") or "")
                 != self.INCOMPLETE_BOUNDARY_VERSION
+            ):
+                return True
+            return bool(
+                not retry_exhausted
+                and self._latest_snapshot_has_retryable_sync_issue(symbol)
             )
+
+        pending_eligible = [
+            item for item in deep_eligible_items if needs_deep_processing(item)
         ]
         pending_eligible.sort(
             key=lambda item: (
@@ -496,31 +547,43 @@ class LiZongStrategyService:
             )
         )
         selected = pending_eligible[:size]
-        sync_results: list[dict[str, Any]] = []
-        for item in selected:
+        def sync_selected_item(item: dict[str, Any]) -> dict[str, Any]:
             symbol = str(item["symbol"])
             try:
-                result = self.snapshot_service.sync_symbol(
-                    symbol, as_of_date=universe_as_of
+                strategy_sync = getattr(
+                    self.snapshot_service, "sync_strategy_symbol", None
                 )
-                sync_results.append(
-                    {
-                        "symbol": symbol,
-                        "status": (result.get("run") or {}).get("status"),
-                        "published": bool(result.get("published")),
-                        "previous_stable_retained": bool(
-                            result.get("previous_stable_retained")
-                        ),
-                    }
-                )
+                if callable(strategy_sync):
+                    result = strategy_sync(
+                        symbol,
+                        as_of_date=universe_as_of,
+                        universe_item=item,
+                    )
+                else:
+                    result = self.snapshot_service.sync_symbol(
+                        symbol, as_of_date=universe_as_of
+                    )
+                return {
+                    "symbol": symbol,
+                    "status": (result.get("run") or {}).get("status"),
+                    "published": bool(result.get("published")),
+                    "previous_stable_retained": bool(
+                        result.get("previous_stable_retained")
+                    ),
+                }
             except Exception as exc:
-                sync_results.append(
-                    {
-                        "symbol": symbol,
-                        "status": "unavailable",
-                        "error_type": type(exc).__name__,
-                    }
-                )
+                return {
+                    "symbol": symbol,
+                    "status": "unavailable",
+                    "error_type": type(exc).__name__,
+                }
+
+        sync_workers = min(self.MAX_DEEP_SYNC_WORKERS, len(selected))
+        if sync_workers > 1:
+            with ThreadPoolExecutor(max_workers=sync_workers) as executor:
+                sync_results = list(executor.map(sync_selected_item, selected))
+        else:
+            sync_results = [sync_selected_item(item) for item in selected]
 
         batch_result: dict[str, Any] | None = None
         if selected:
@@ -1076,6 +1139,8 @@ class LiZongStrategyService:
         if not state:
             return 2
         result = state.get("result") or {}
+        if cls._evaluation_depth(result) == "sync_incomplete":
+            return 3
         if cls._evaluation_depth(result) != "full_rules":
             return 2
         return 0 if cls._candidate_rules_complete(
@@ -1123,6 +1188,52 @@ class LiZongStrategyService:
             and str(rule.get("status") or "") == "data_incomplete"
             for rule in result.get("rule_results") or []
         )
+
+    @staticmethod
+    def _snapshot_has_retryable_sync_issue(snapshot: Mapping[str, Any]) -> bool:
+        missing = set((snapshot.get("coverage") or {}).get("missing") or [])
+        return any(
+            str(issue.get("dataset") or "") in missing
+            and bool(issue.get("error_type"))
+            for issue in snapshot.get("issues") or []
+        )
+
+    @staticmethod
+    def _snapshot_is_newer(
+        candidate: Mapping[str, Any], baseline: Mapping[str, Any]
+    ) -> bool:
+        candidate_time = str(candidate.get("generated_at") or "")
+        baseline_time = str(baseline.get("generated_at") or "")
+        return bool(candidate_time and baseline_time and candidate_time > baseline_time)
+
+    @classmethod
+    def _retryable_sync_snapshot(
+        cls, packet: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None:
+        snapshot = packet.get("snapshot") or {}
+        latest_incomplete = packet.get("latest_incomplete") or {}
+        if str(packet.get("status") or "") != "stable":
+            for candidate in (latest_incomplete, snapshot):
+                if cls._snapshot_has_retryable_sync_issue(candidate):
+                    return candidate
+            return None
+        if (
+            cls._snapshot_has_retryable_sync_issue(latest_incomplete)
+            and cls._snapshot_is_newer(latest_incomplete, snapshot)
+        ):
+            return latest_incomplete
+        return None
+
+    @classmethod
+    def _packet_has_retryable_sync_issue(cls, packet: Mapping[str, Any]) -> bool:
+        return cls._retryable_sync_snapshot(packet) is not None
+
+    def _latest_snapshot_has_retryable_sync_issue(self, symbol: str) -> bool:
+        try:
+            packet = self.snapshot_service.get_symbol_snapshot(symbol)
+        except Exception:
+            return False
+        return self._packet_has_retryable_sync_issue(packet)
 
     @staticmethod
     def _parse_date(value: Any) -> date | None:
@@ -1644,9 +1755,9 @@ class LiZongStrategyService:
             {"symbol": symbol, "status": packet.get("status")}
         )[:24]
 
-    @staticmethod
-    def _packet_as_of(packet: dict[str, Any]) -> str | None:
-        snapshot = packet.get("snapshot") or {}
+    @classmethod
+    def _packet_as_of(cls, packet: dict[str, Any]) -> str | None:
+        snapshot = cls._retryable_sync_snapshot(packet) or packet.get("snapshot") or {}
         value = snapshot.get("as_of_date")
         return str(value) if value else None
 

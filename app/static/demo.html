@@ -1220,7 +1220,7 @@
     .insight-layout .pulse { min-height: 240px; }
 
     .watchlist-workspace { grid-template-columns: minmax(0,1fr) 310px; align-items: start; }
-    .watchlist-table-card { grid-column: 1; }
+    .watchlist-table-card { grid-column: 1; overflow: visible; }
     .watchlist-side { grid-column: 2; display: flex; flex-direction: column; gap: 10px; }
     .watchlist-summary-card, .watchlist-task-card { border: 1px solid var(--line); border-radius: 13px; background: #fff; overflow: hidden; }
     .watchlist-side-head { padding: 13px 14px 9px; color: #263650; font-size: 12px; font-weight: 760; }
@@ -1434,6 +1434,140 @@
       .li-zong-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
       .evidence-coverage-grid { grid-template-columns: 1fr; }
     }
+
+    /* Product frame v2: PRD-first hierarchy and progressive disclosure. */
+    :root {
+      --bg: #f6f9fd;
+      --panel: #ffffff;
+      --panel-2: #f7faff;
+      --line: #e5ebf4;
+      --text: #172744;
+      --muted: #75849a;
+      --green: #16845f;
+      --red: #d94b55;
+      --amber: #a86f15;
+      --blue: #1768ef;
+      --shadow: 0 8px 24px rgba(33,68,122,.055);
+    }
+    body { background: #f8fbff; color: var(--text); }
+    .app-shell { grid-template-columns: 224px minmax(0,1fr); }
+    .sidebar { gap: 12px; padding: 18px 14px; background: #fff; box-shadow: none; }
+    .sidebar .brand { padding: 0 8px 12px; }
+    .sidebar .logo { width: 38px; height: 38px; border-radius: 11px; font-size: 16px; }
+    .sidebar .brand h1 { font-size: 18px; letter-spacing: 0; }
+    .sidebar .tagline { margin-top: 2px; color: #8a98ab; font-size: 11px; }
+    .sidebar-nav { gap: 6px; }
+    .nav-item { min-height: 43px; padding: 10px 12px; border-radius: 10px; color: #40516d; font-size: 14px; }
+    .nav-item.active, .nav-item.primary-entry.active { background: linear-gradient(110deg,#1768ef,#4d91f8); box-shadow: 0 7px 16px rgba(23,104,239,.16); }
+    .nav-icon { width: 24px; color: #6f85a4; }
+    .sidebar-conversations { display: none; min-height: 0; flex: 1; flex-direction: column; gap: 9px; margin-top: 2px; }
+    body.agent-page .sidebar-conversations { display: flex; }
+    body.agent-page .sidebar-spacer { display: none; }
+    body.agent-page .sidebar-foot { display: none; }
+    body.agent-page .conversation-list { max-height: none; flex: 1; }
+    .new-chat { min-height: 40px; border-style: solid; border-radius: 10px; background: #f1f6ff; font-size: 12px; font-weight: 700; }
+    .sidebar-resource-btn { margin-top: auto; background: #fff; }
+    .workspace-header { min-height: 64px; padding: 10px 24px; background: rgba(255,255,255,.96); box-shadow: none; }
+    .workspace-title { color: #152540; font-size: 16px; }
+    .workspace-subtitle { color: #8a97a9; }
+    .global-search { width: min(440px,42vw); }
+    .global-search input { border-radius: 999px; background: #f6f8fc; }
+    .header-actions { flex-wrap: nowrap; }
+    .internal-status { display: none !important; }
+    .header-icon-button, .header-avatar-button { display: grid; place-items: center; border: 1px solid var(--line); background: #fff; color: #5e718e; }
+    .header-icon-button { width: 36px; height: 36px; border-radius: 10px; }
+    .header-avatar-button { width: 36px; height: 36px; border-radius: 50%; color: #fff; background: linear-gradient(135deg,#1768ef,#68a5ff); font-weight: 800; }
+    .content { width: min(1360px,calc(100% - 40px)); padding: 20px 0 44px; }
+    .panel { border-radius: 14px; box-shadow: var(--shadow); }
+    .panel-head { padding: 16px 18px; }
+    .panel-title { color: #1f304b; font-size: 16px; }
+    .btn { border-radius: 9px; }
+
+    /* The first screen answers what needs attention and what the market is doing. */
+    #homeFocus { display: none !important; }
+    .today-overview-grid { grid-template-columns: minmax(0,1.18fr) minmax(320px,.82fr); gap: 14px; margin-bottom: 14px; }
+    .today-overview-card { box-shadow: none; }
+    .live-panel { margin-bottom: 16px; }
+    .market-section { margin-top: 18px; }
+    .market-section-heading { align-items: center; }
+    .market-section-actions { display: flex; align-items: center; gap: 10px; }
+    .market-detail-toggle { min-width: 118px; color: #356dcc; background: #f4f7ff; }
+    #marketDashboard .market-dashboard-grid,
+    #marketDashboard .market-lower-grid { display: none; }
+    #marketDashboard.expanded .market-dashboard-grid { display: grid; }
+    #marketDashboard.expanded .market-lower-grid { display: grid; }
+    #marketDashboard.expanded .market-detail-toggle { color: #fff; border-color: transparent; background: #1768ef; }
+    .ashare-index-grid { margin-bottom: 4px; }
+
+    /* DeepSeek-like research surface: conversation first, evidence on demand. */
+    body.agent-page .workspace-header { display: none; }
+    body.agent-page .content { width: min(1240px,calc(100% - 28px)); height: 100dvh; padding: 12px 0; }
+    body.agent-page #agentSection { min-height: 0; height: calc(100dvh - 24px); border-radius: 16px; grid-template-columns: minmax(0,1fr) minmax(300px,330px); grid-template-rows: auto auto minmax(0,1fr) auto auto; box-shadow: 0 14px 40px rgba(40,70,116,.08); }
+    body.agent-page #agentSection.context-collapsed { grid-template-columns: minmax(0,1fr); }
+    body.agent-page #agentSection .panel-head { min-height: 66px; padding: 14px 18px; }
+    body.agent-page #agentSection .panel-subtitle { margin-top: 2px; }
+    #agentMode { display: none; }
+    .agent-head-actions { gap: 7px; }
+    .research-mode-switch { padding: 3px; border-radius: 9px; background: #f5f7fb; }
+    .research-mode-button { padding: 6px 9px; font-size: 10px; }
+    .agent-view-toggle { padding: 7px 9px; font-size: 10px; }
+    .agent-research-bar { grid-template-columns: minmax(0,1fr); gap: 0; padding: 9px 18px; background: #fbfcff; }
+    .agent-research-target { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+    .agent-research-target span { flex-shrink: 0; }
+    .agent-research-target strong { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-research-target small { margin: 0 0 0 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .agent-research-stats, .agent-research-actions { display: none; }
+    .agent-research-process.collapsed { display: none; }
+    .agent-research-process:not(.collapsed) { margin-top: 10px; }
+    body.agent-page #agentSection .messages { padding: 28px clamp(30px,6vw,88px); background: #fff; }
+    body.agent-page #agentSection .message { width: min(860px,100%); }
+    body.agent-page #agentSection .message.agent { margin-left: auto; margin-right: auto; }
+    body.agent-page #agentSection .message.user { margin-left: auto; }
+    body.agent-page #agentSection .quick-actions { width: min(920px,100%); margin: 0 auto; border-top: 0; background: #fff; }
+    body.agent-page #agentSection .composer { width: min(900px,calc(100% - 36px)); margin: 0 auto 16px; border-radius: 16px; box-shadow: 0 10px 28px rgba(43,72,119,.08); }
+    body.agent-page #agentSection .diagnosis-context { border-radius: 12px; box-shadow: none; }
+
+    /* Research assets stay scannable; secondary summaries follow the main list. */
+    .watchlist-workspace { grid-template-columns: minmax(0,1fr); gap: 12px; }
+    .watchlist-table-card { grid-column: 1; }
+    .watchlist-detail { grid-column: 1; }
+    .watchlist-side { grid-column: 1; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+    .watchlist-table-head, .watchlist-stock-row { grid-template-columns: minmax(150px,.78fr) 96px minmax(190px,1.25fr) minmax(170px,1fr) 146px; }
+    .watchlist-stock-row { padding-top: 13px; padding-bottom: 13px; }
+    .watchlist-stock-actions { position: relative; align-items: center; flex-wrap: nowrap; }
+    .watchlist-stock-actions .primary-action { color: #fff; border-color: #1768ef; background: #1768ef; }
+    .watchlist-manage { position: relative; }
+    .watchlist-manage summary { list-style: none; }
+    .watchlist-manage summary::-webkit-details-marker { display: none; }
+    .watchlist-manage-menu { position: absolute; z-index: 12; top: calc(100% + 7px); right: 0; width: 190px; display: grid; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 11px; background: #fff; box-shadow: 0 14px 34px rgba(32,56,94,.14); }
+    .watchlist-manage:not([open]) .watchlist-manage-menu { display: none; }
+    .watchlist-manage-menu label { display: grid; gap: 4px; color: #7a889b; font-size: 10px; }
+    .watchlist-manage-menu select { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 7px 8px; background: #fff; color: #40516a; }
+    .watchlist-manage-menu .icon-button { width: 100%; text-align: center; }
+
+    @media (max-width: 980px) {
+      .app-shell { grid-template-columns: 76px minmax(0,1fr); }
+      .sidebar-conversations { display: none !important; }
+      .workspace-header { padding-left: 16px; padding-right: 16px; }
+      body.agent-page #agentSection { grid-template-columns: minmax(0,1fr); }
+      .agent-research-target small { display: none; }
+    }
+    @media (max-width: 760px) {
+      .content { width: min(100% - 20px,1360px); }
+      .today-overview-grid, .watchlist-side { grid-template-columns: 1fr; }
+      .market-section-heading { align-items: flex-start; flex-direction: column; }
+      .market-section-actions { width: 100%; justify-content: space-between; }
+      body.agent-page #agentSection { height: calc(100dvh - 16px); border-radius: 12px; }
+      body.agent-page #agentSection .messages { padding: 18px 14px; }
+      body.agent-page #agentSection .composer { width: calc(100% - 20px); margin-bottom: 10px; }
+      .agent-head-actions .research-mode-switch { display: none; }
+      .agent-research-target span { display: none; }
+      .watchlist-table-head { display: none; }
+      .watchlist-stock-row { grid-template-columns: minmax(0,1fr) auto; }
+      .watchlist-stock-row > :not(:first-child):not(.watchlist-stock-actions) { grid-column: 1 / -1; }
+      .watchlist-stock-actions { grid-column: 1 / -1; justify-content: flex-start; }
+      .watchlist-manage-menu { right: auto; left: 0; }
+    }
   </style>
 </head>
 <body>
@@ -1446,12 +1580,6 @@
           <div class="tagline">金融研究 Agent</div>
         </div>
       </div>
-      <button id="newConversation" class="new-chat">＋ 新建研究对话</button>
-      <div class="nav-label">研究对话</div>
-      <div id="conversationList" class="conversation-list">
-        <div class="knowledge-summary">正在读取历史对话…</div>
-      </div>
-      <div class="nav-label">工作台</div>
       <nav class="sidebar-nav">
         <button class="nav-item primary-entry active" data-page="insights" aria-label="今日观察" title="今日观察"><span class="nav-icon">◈</span><span class="nav-text">今日观察</span></button>
         <button class="nav-item primary-entry" data-page="watchlist" aria-label="我的关注" title="我的关注"><span class="nav-icon">☆</span><span class="nav-text">我的关注</span></button>
@@ -1460,6 +1588,13 @@
         <button class="nav-item" data-page="review" aria-label="复盘中心" title="复盘中心"><span class="nav-icon">◇</span><span class="nav-text">复盘中心</span></button>
         <button class="nav-item" data-page="account" aria-label="个人中心" title="个人中心"><span class="nav-icon">○</span><span class="nav-text">个人中心</span></button>
       </nav>
+      <div class="sidebar-conversations">
+        <button id="newConversation" class="new-chat">＋ 新建研究对话</button>
+        <div class="nav-label">最近对话</div>
+        <div id="conversationList" class="conversation-list">
+          <div class="knowledge-summary">正在读取历史对话…</div>
+        </div>
+      </div>
       <div class="sidebar-spacer"></div>
       <button class="sidebar-resource-btn" data-page="knowledge" type="button" aria-label="资料库"><span>▤</span> 全部资料</button>
       <div class="sidebar-foot">
@@ -1476,8 +1611,10 @@
         </div>
         <div class="global-search"><span>⌕</span><input id="globalSearch" type="search" autocomplete="off" placeholder="搜索股票、代码、行业或研究"></div>
         <div class="header-actions">
-          <span id="systemStatus" class="status-pill">正在连接后端</span>
-          <span id="userStatus" class="status-pill">准备用户空间</span>
+          <button class="header-icon-button" type="button" data-open-page="knowledge" aria-label="打开资料库">▤</button>
+          <button class="header-avatar-button" type="button" data-open-page="account" aria-label="打开个人中心">清</button>
+          <span id="systemStatus" class="status-pill internal-status" hidden>正在连接后端</span>
+          <span id="userStatus" class="status-pill internal-status" hidden>准备用户空间</span>
         </div>
       </header>
 
@@ -1687,9 +1824,12 @@
           <div class="market-section-heading">
             <div>
               <div class="market-section-title">A 股市场全景</div>
-              <div class="market-section-copy">全市场广度、涨跌结构与成交额按同一市场日期；指数卡分别标注自身数据时点</div>
+              <div class="market-section-copy">先看核心指数；需要时再展开市场广度、成交和行业结构</div>
             </div>
-            <div id="marketDashboardDate" class="market-date">正在对齐市场数据…</div>
+            <div class="market-section-actions">
+              <div id="marketDashboardDate" class="market-date">正在对齐市场数据…</div>
+              <button id="marketDetailToggle" class="btn market-detail-toggle" type="button" aria-expanded="false">展开市场结构</button>
+            </div>
           </div>
           <div id="aShareIndexCards" class="ashare-index-grid"><div class="empty">正在读取 A 股指数…</div></div>
 
@@ -2146,7 +2286,7 @@
             <button class="chip secondary-research-action" data-quick-secondary hidden data-message="我的研究行动和观察条件是什么？">研究行动</button>
             <button id="financialDriversAction" class="chip secondary-research-action" data-quick-secondary hidden>利润现金流</button>
             <button id="shareholderAction" class="chip secondary-research-action" data-quick-secondary hidden>股东结构</button>
-            <button id="analystExpectationsAction" class="chip secondary-research-action" data-quick-secondary hidden>分析师预期</button>
+            <button id="analystExpectationsAction" class="chip secondary-research-action" data-quick-secondary data-intent="analyst_expectations" hidden>分析师预期</button>
             <button id="eventTimelineAction" class="chip secondary-research-action" data-quick-secondary hidden>事件脉络</button>
             <button id="toggleQuickActions" class="chip quick-actions-toggle" type="button" aria-expanded="false">更多能力 · 9</button>
           </div>
@@ -2233,6 +2373,7 @@
       stockScreenerLoading: false,
       liZongStrategy: null,
       liZongLoading: false,
+      liZongLoadToken: 0,
       liZongFilter: "qualified",
       deepStock: null,
       deepStockSessions: [],
@@ -2699,17 +2840,21 @@
     }
 
     async function loadLiZongStrategy() {
-      if (state.liZongLoading) return;
+      const filter = state.liZongFilter || "qualified";
+      const loadToken = ++state.liZongLoadToken;
       state.liZongLoading = true;
       $("liZongState").textContent = "正在读取已发布快照";
       try {
-        renderLiZongStrategy(await api("/v1/stock-strategies/li-zong/candidates?limit=200"));
+        const payload = await api(`/v1/stock-strategies/li-zong/candidates?status=${encodeURIComponent(filter)}&limit=200`);
+        if (loadToken !== state.liZongLoadToken) return;
+        renderLiZongStrategy(payload);
       } catch {
+        if (loadToken !== state.liZongLoadToken) return;
         state.liZongStrategy = null;
         $("liZongState").textContent = "首批快照准备中";
         $("liZongResults").innerHTML = '<div class="screener-empty">系统正在准备可追溯策略快照；现有选股工具和个股研究仍可正常使用。</div>';
       } finally {
-        state.liZongLoading = false;
+        if (loadToken === state.liZongLoadToken) state.liZongLoading = false;
       }
     }
 
@@ -4186,7 +4331,7 @@
       });
       if (visibleItems.length) {
         const head = document.createElement("div"); head.className = "watchlist-table-head";
-        for (const label of ["股票 / 代码", "关系与跟踪", "最新行情", "当前判断", "下一事项", "操作"]) {
+        for (const label of ["研究资产", "最新行情", "当前判断", "下一事项", "操作"]) {
           const cell = document.createElement("span"); cell.textContent = label; head.appendChild(cell);
         }
         container.appendChild(head);
@@ -4201,12 +4346,19 @@
         const name = document.createElement("div"); name.className = "watchlist-stock-name"; name.textContent = item.name || item.symbol;
         const symbol = document.createElement("span"); symbol.className = "watchlist-stock-symbol"; symbol.textContent = item.symbol;
         const identityMeta = document.createElement("div"); identityMeta.className = "watchlist-asset-meta";
-        for (const label of [item.market, item.position_snapshot?.available ? "持仓事实已配置" : item.relation_type === "holding" ? "持仓事实待配置" : "研究空间已保存"].filter(Boolean)) {
+        const relationLabel = {watching: "关注", holding: "持仓", ended: "已结束"}[item.relation_type] || "关注";
+        const priorityLabel = {high: "高优先级", normal: "普通优先级", low: "低优先级"}[item.priority || "normal"];
+        const trackingLabel = item.relation_type === "ended" ? "历史保留" : item.tracking_status === "paused" ? "已暂停" : item.workflow_status === "waiting_data" ? "等待数据" : "跟踪中";
+        for (const label of [item.market, relationLabel, item.relation_type === "watching" ? priorityLabel : null, trackingLabel].filter(Boolean)) {
           const tag = document.createElement("span"); tag.className = "watchlist-asset-tag"; tag.textContent = label; identityMeta.appendChild(tag);
         }
         identity.append(name, symbol, identityMeta);
 
-        const relation = document.createElement("div"); relation.className = "watchlist-asset-state";
+        const management = document.createElement("details"); management.className = "watchlist-manage";
+        management.addEventListener("click", event => event.stopPropagation());
+        const managementSummary = document.createElement("summary"); managementSummary.className = "icon-button"; managementSummary.textContent = "更多";
+        const managementMenu = document.createElement("div"); managementMenu.className = "watchlist-manage-menu";
+        const relationField = document.createElement("label"); relationField.textContent = "关系";
         const relationSelect = document.createElement("select"); relationSelect.setAttribute("aria-label", `${item.name || item.symbol}关系状态`);
         for (const [value, label] of [["watching", "关注研究"], ["holding", "持仓研究"], ["ended", "已结束"]]) {
           const option = document.createElement("option"); option.value = value; option.textContent = label; option.selected = item.relation_type === value; relationSelect.appendChild(option);
@@ -4221,8 +4373,9 @@
           }
           void updateStockAssetRelation(item, {relation_type: relationSelect.value});
         });
-        relation.appendChild(relationSelect);
+        relationField.appendChild(relationSelect); managementMenu.appendChild(relationField);
         if (item.relation_type === "watching") {
+          const priorityField = document.createElement("label"); priorityField.textContent = "优先级";
           const prioritySelect = document.createElement("select"); prioritySelect.setAttribute("aria-label", `${item.name || item.symbol}关注优先级`);
           for (const [value, label] of [["high", "高优先级"], ["normal", "普通优先级"], ["low", "低优先级"]]) {
             const option = document.createElement("option"); option.value = value; option.textContent = label; option.selected = (item.priority || "normal") === value; prioritySelect.appendChild(option);
@@ -4230,9 +4383,9 @@
           prioritySelect.disabled = !item.workspace_id || !item.version;
           prioritySelect.addEventListener("click", event => event.stopPropagation());
           prioritySelect.addEventListener("change", event => { event.stopPropagation(); void updateStockAssetRelation(item, {priority: prioritySelect.value}); });
-          relation.appendChild(prioritySelect);
+          priorityField.appendChild(prioritySelect); managementMenu.appendChild(priorityField);
         }
-        const tracking = document.createElement("small"); tracking.textContent = item.relation_type === "ended" ? "历史与判断继续保留" : item.tracking_status === "paused" ? "已暂停跟踪" : item.workflow_status === "waiting_data" ? "等待数据" : "跟踪中"; relation.appendChild(tracking);
+        management.append(managementSummary, managementMenu);
 
         const quote = document.createElement("div"); quote.className = "watchlist-quote-cell";
         const quoteData = watchlistQuote(item);
@@ -4249,22 +4402,23 @@
 
         const report = reportMap.get(item.symbol);
         const actions = document.createElement("div"); actions.className = "watchlist-stock-actions";
-        const researchButton = document.createElement("button"); researchButton.type = "button"; researchButton.className = "icon-button"; researchButton.textContent = "进入研究";
+        const researchButton = document.createElement("button"); researchButton.type = "button"; researchButton.className = "icon-button primary-action"; researchButton.textContent = "查看研究";
         researchButton.title = `进入 ${item.name || item.symbol} 的长期研究空间`;
         researchButton.addEventListener("click", event => { event.stopPropagation(); void openDeepStockSymbol(item.symbol); });
         actions.appendChild(researchButton);
         if (report) {
           const reportButton = document.createElement("button"); reportButton.type = "button"; reportButton.className = "icon-button"; reportButton.textContent = "最新报告";
           reportButton.addEventListener("click", event => { event.stopPropagation(); void openResearchReport(item.symbol, reportButton); });
-          actions.appendChild(reportButton);
+          managementMenu.appendChild(reportButton);
         }
         if (item.relation_type !== "ended") {
           const trackingButton = document.createElement("button"); trackingButton.type = "button"; trackingButton.className = "icon-button"; trackingButton.textContent = item.tracking_status === "paused" ? "恢复跟踪" : "暂停跟踪";
           trackingButton.disabled = !item.workspace_id || !item.version;
           trackingButton.addEventListener("click", event => { event.stopPropagation(); void updateStockAssetRelation(item, {tracking_status: item.tracking_status === "paused" ? "active" : "paused"}); });
-          actions.appendChild(trackingButton);
+          managementMenu.appendChild(trackingButton);
         }
-        row.append(identity, relation, quote, reason, next, actions);
+        actions.appendChild(management);
+        row.append(identity, quote, reason, next, actions);
         row.addEventListener("click", () => { void loadWatchlistDetail(item, state.watchlistTimeframe); });
         row.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); void loadWatchlistDetail(item, state.watchlistTimeframe); } });
         container.appendChild(row);
@@ -6981,7 +7135,10 @@
       setAgentProcessExpanded(true);
       renderAgentResearchContext(state.agentContextMetadata, question);
       const wantsHermes = !attachedImage && Boolean($("useHermes").checked) && Boolean(state.health?.hermes_enabled);
-      const directHermes = wantsHermes && state.workspacePage === "agent";
+      // The user-facing research chat always asks Hermes to generate against
+      // the current question. Saved reports may enrich the evidence packet,
+      // but they are never shown as a temporary or final chat answer.
+      const directHermes = wantsHermes;
       const requestId = directHermes
         ? (globalThis.crypto?.randomUUID?.() || `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`)
         : null;
@@ -7007,7 +7164,7 @@
             message: question,
             model_tier: attachedImage ? "vision" : $("modelTier").value,
             execute_agent: attachedImage ? true : directHermes,
-            prefer_precomputed: wantsHermes && !directHermes,
+            prefer_precomputed: false,
             image_id: attachedImage?.id || null,
             conversation_id: state.conversationId,
             request_id: requestId,
@@ -7055,13 +7212,6 @@
         if (data.deep_stock_session) state.deepStock = data.deep_stock_session;
         await maybeUpdateDiagnosis(data, question);
         await loadConversations(false);
-        if (
-          wantsHermes &&
-          data.status === "preview" &&
-          ["market_brief", "stock_screen", "stock_research", "earnings_quality", "financial_drivers", "business_structure", "shareholder_structure", "analyst_expectations", "event_timeline", "research_tracking", "research_priority", "research_actions", "research_outcome", "watchlist_brief", "general_research"].includes(data.intent)
-        ) {
-          void refineChat(data, responseNode, responseMetadata);
-        }
       } catch (error) {
         finalizeStreamingMessage(
           pending,
@@ -7258,8 +7408,7 @@
     });
     document.querySelectorAll("[data-li-zong-filter]").forEach(button => button.addEventListener("click", () => {
       state.liZongFilter = button.dataset.liZongFilter;
-      if (state.liZongStrategy) renderLiZongStrategy(state.liZongStrategy);
-      else void loadLiZongStrategy();
+      void loadLiZongStrategy();
     }));
     $("conversationSwitcher").addEventListener("change", async event => {
       if (event.target.value) await openConversation(event.target.value);
@@ -7285,6 +7434,11 @@
         activateWorkspace("watchlist");
       }
     }));
+    $("marketDetailToggle").addEventListener("click", () => {
+      const expanded = $("marketDashboard").classList.toggle("expanded");
+      $("marketDetailToggle").textContent = expanded ? "收起市场结构" : "展开市场结构";
+      $("marketDetailToggle").setAttribute("aria-expanded", expanded ? "true" : "false");
+    });
     $("agentProcessToggle").addEventListener("click", () => setAgentProcessExpanded(!state.agentProcessExpanded));
     $("agentContextToggle").addEventListener("click", () => setAgentContextCollapsed(!state.agentContextCollapsed));
     document.querySelectorAll("[data-agent-context-tab]").forEach(button => button.addEventListener("click", () => {

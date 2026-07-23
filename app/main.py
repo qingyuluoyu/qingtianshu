@@ -1478,9 +1478,14 @@ def create_app(
         coverage = li_zong_strategy.coverage_packet()
         has_universe = bool(coverage.get("universe_count"))
         counts = coverage.get("counts") if has_universe else visible_counts
+        published_status = (
+            "ready"
+            if items or coverage.get("status") == "stable"
+            else "preparing"
+        )
         return {
             "strategy": li_zong_strategy.get_definition(),
-            "status": "ready" if items else "preparing",
+            "status": published_status,
             "items": items,
             "counts": counts,
             "data_meta": {
@@ -2791,6 +2796,7 @@ def create_app(
         prior_intent = _intent_from_history(history)
         contextual_followup = _is_contextual_followup(message)
         explicit_market_query = _is_market_query(message)
+        explicit_industry_topic = _extract_industry_topic(message)
         explicit_stock_screen_query = _is_stock_screen_query(message)
         prior_screen_profile = _stock_screen_profile_from_history(history)
         stock_screen_query = explicit_stock_screen_query or (
@@ -3619,6 +3625,19 @@ def create_app(
                 market_key=focused_market_key,
                 focus_key=question_focus["key"],
             )
+            if explicit_industry_topic:
+                target_market_date = str(
+                    (evidence.get("analysis_target") or {}).get("market_date") or ""
+                ).strip() or None
+                evidence["industry_focus"] = {
+                    "name": explicit_industry_topic,
+                    "market_scope": "A股",
+                    "requested_by_user": True,
+                }
+                evidence["industry_snapshot"] = analysis.industry_snapshot(
+                    explicit_industry_topic,
+                    market_date=target_market_date,
+                )
             if evidence["market_drivers"].get("market_key") == "gold":
                 try:
                     live_snapshot = live_markets.snapshot()
@@ -4579,6 +4598,7 @@ def _is_market_query(message: str) -> bool:
         "大盘",
         "市场",
         "板块",
+        "行业",
         "指数",
         "行情",
         "美股",
@@ -4616,6 +4636,29 @@ def _is_market_query(message: str) -> bool:
     # default A-share market.  Explicit market routing therefore requires an
     # actual market, index, sector, or asset-class reference.
     return any(term in folded for term in market_terms)
+
+
+def _extract_industry_topic(message: str) -> str | None:
+    folded = re.sub(r"\s+", "", str(message or ""))
+    match = re.search(
+        r"(?P<topic>[A-Za-z0-9\u4e00-\u9fff]{2,18}?)(?:行业|板块)",
+        folded,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    topic = match.group("topic")
+    topic = re.sub(
+        r"^(?:请|帮我|麻烦|我想|我想看|我想了解|看看|看下|分析|研究|聊聊|说说|"
+        r"当前|今天|最近|目前|A股|a股)+",
+        "",
+        topic,
+        flags=re.IGNORECASE,
+    )
+    topic = topic.strip("，。！？,.!?：:")
+    if topic in {"这个", "该", "什么", "哪个", "整体", "当前", "最近"}:
+        return None
+    return topic or None
 
 
 def _market_question_focus(message: str) -> dict[str, Any]:

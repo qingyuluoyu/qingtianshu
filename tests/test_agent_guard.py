@@ -31,6 +31,34 @@ class _FakeStreamingProcess:
         self.terminated = True
 
 
+def test_hermes_text_routes_default_to_deepseek_v4_pro(monkeypatch):
+    for tier in ("ECONOMY", "DEEP"):
+        monkeypatch.delenv(f"HERMES_{tier}_PROVIDER", raising=False)
+        monkeypatch.delenv(f"HERMES_{tier}_MODEL", raising=False)
+
+    assert agent_module._resolve_hermes_route("economy") == (
+        "deepseek",
+        "deepseek-v4-pro",
+    )
+    assert agent_module._resolve_hermes_route("deep") == (
+        "deepseek",
+        "deepseek-v4-pro",
+    )
+
+
+def test_hermes_route_keeps_explicit_override_and_vision_route(monkeypatch):
+    monkeypatch.setenv("HERMES_ECONOMY_PROVIDER", "custom-provider")
+    monkeypatch.setenv("HERMES_ECONOMY_MODEL", "custom-model")
+    monkeypatch.delenv("HERMES_VISION_PROVIDER", raising=False)
+    monkeypatch.delenv("HERMES_VISION_MODEL", raising=False)
+
+    assert agent_module._resolve_hermes_route("economy") == (
+        "custom-provider",
+        "custom-model",
+    )
+    assert agent_module._resolve_hermes_route("vision") == (None, None)
+
+
 def test_numeric_guard_accepts_evidence_rounding_and_rejects_new_targets():
     evidence = {
         "type": "stock_research",
@@ -4866,16 +4894,61 @@ def test_market_downtrend_guard_allows_explicit_negation():
         "中期偏弱不等于已确认下行趋势。",
         evidence,
     )
+    natural_safe = AgentService._validate_model_output(
+        "整体格局是轻微收跌，而非大幅下行。",
+        evidence,
+    )
     overclaim = AgentService._validate_model_output(
         "当前趋势依然向下。",
         evidence,
     )
 
     assert safe["passed"] is True
+    assert natural_safe["passed"] is True
     assert overclaim["passed"] is False
     assert overclaim["unsupported_market_inferences"] == [
         "中期偏弱不能直接改写为已确认的下行趋势"
     ]
+
+
+def test_market_guard_accepts_natural_unconfirmed_boundary_wording():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "说明反方证据和还不能确认的原因",
+        "indices": [],
+    }
+
+    guard = AgentService._validate_model_output(
+        "### 反方证据或未能确认之处\n当前缺少充分交叉验证，具体驱动仍有待核验。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
+def test_market_cause_guard_accepts_natural_down_wording_and_major_index_scope():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "美股为什么收盘跌了，请说明还不能确认的原因",
+        "question_focus": {"key": "market_cause"},
+        "analysis_target": {"market_date": "2026-07-22"},
+        "indices": [
+            {"name": "标普500", "symbol": "^GSPC", "same_date_as_analysis_target": True, "metrics": {"return_1d_pct": -0.1364}},
+            {"name": "纳斯达克综合", "symbol": "^IXIC", "same_date_as_analysis_target": True, "metrics": {"return_1d_pct": -0.5663}},
+            {"name": "道琼斯工业指数", "symbol": "^DJI", "same_date_as_analysis_target": True, "metrics": {"return_1d_pct": -0.0116}},
+            {"name": "罗素2000", "symbol": "^RUT", "same_date_as_analysis_target": True, "metrics": {"return_1d_pct": -0.9192}},
+        ],
+    }
+    answer = (
+        "2026年7月22日美股三大指数收跌：标普500跌0.14%，"
+        "纳斯达克综合跌0.57%，道琼斯工业指数跌0.01%。"
+        "纳斯达克综合在三大指数中跌幅最大；罗素2000下跌0.92%。"
+        "当前尚不能把收跌归因到单一原因。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is True
 
 
 def test_market_risk_prompt_precomputes_ma_distance_and_volatility_ratio():

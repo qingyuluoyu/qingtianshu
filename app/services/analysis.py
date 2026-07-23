@@ -1168,9 +1168,15 @@ class MarketAnalysisService:
                 "constituents": [],
             }
         try:
-            return self.industry_index_provider.fetch(
+            result = self.industry_index_provider.fetch(
                 industry_name, market_date=market_date
             )
+            if result.get("status") == "available" and result.get("points"):
+                result = dict(result)
+                result["metrics"] = analyze_history(
+                    {"points": list(result.get("points") or [])}
+                )
+            return result
         except ProviderError as exc:
             return {
                 "type": "industry_index",

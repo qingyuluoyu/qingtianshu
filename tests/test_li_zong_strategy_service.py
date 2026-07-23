@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import Counter
 from copy import deepcopy
 import json
+import threading
+import time
 
 import pandas as pd
 
@@ -40,6 +42,7 @@ class UniverseSnapshotStub(SnapshotStub):
         self.data_version = data_version
         self.universe_sync_calls = 0
         self.symbol_sync_calls: list[str] = []
+        self.strategy_sync_items: list[dict] = []
         self.failed_symbols: set[str] = set()
 
     def sync_a_share_universe(self, *, as_of_date: str | None = None) -> dict:
@@ -70,6 +73,16 @@ class UniverseSnapshotStub(SnapshotStub):
             "previous_stable_retained": False,
         }
 
+    def sync_strategy_symbol(
+        self,
+        symbol: str,
+        *,
+        as_of_date: str | None = None,
+        universe_item: dict | None = None,
+    ) -> dict:
+        self.strategy_sync_items.append(deepcopy(universe_item or {}))
+        return self.sync_symbol(symbol, as_of_date=as_of_date)
+
     def _snapshot(self) -> dict:
         with_market_cap = sum(
             item.get("total_mv_yi") is not None for item in self.items
@@ -86,6 +99,35 @@ class UniverseSnapshotStub(SnapshotStub):
                 ),
             },
         }
+
+
+class ConcurrentUniverseSnapshotStub(UniverseSnapshotStub):
+    def __init__(self, packets: dict[str, dict], items: list[dict]):
+        super().__init__(packets, items)
+        self._active_lock = threading.Lock()
+        self.active_syncs = 0
+        self.max_active_syncs = 0
+
+    def sync_strategy_symbol(
+        self,
+        symbol: str,
+        *,
+        as_of_date: str | None = None,
+        universe_item: dict | None = None,
+    ) -> dict:
+        with self._active_lock:
+            self.active_syncs += 1
+            self.max_active_syncs = max(self.max_active_syncs, self.active_syncs)
+        try:
+            time.sleep(0.03)
+            return super().sync_strategy_symbol(
+                symbol,
+                as_of_date=as_of_date,
+                universe_item=universe_item,
+            )
+        finally:
+            with self._active_lock:
+                self.active_syncs -= 1
 
 
 def _snapshot_packet(
@@ -236,6 +278,25 @@ def _dataset(name: str, rows: list[dict]) -> dict:
         "rows": rows,
         "row_count": len(rows),
     }
+
+
+def _with_transient_issue(
+    packet: dict,
+    *,
+    dataset: str = "daily",
+    generated_at: str = "2026-07-21T10:00:00+00:00",
+) -> dict:
+    value = deepcopy(packet)
+    value["status"] = "incomplete"
+    value["snapshot"]["generated_at"] = generated_at
+    value["snapshot"]["data_status"] = "incomplete"
+    value["snapshot"]["coverage"]["available"] = 8
+    value["snapshot"]["coverage"]["missing"] = [dataset]
+    value["snapshot"]["datasets"][dataset] = _dataset(dataset, [])
+    value["snapshot"]["issues"] = [
+        {"dataset": dataset, "error_type": "TushareProviderError"}
+    ]
+    return value
 
 
 def _table_count(database, table: str) -> int:
@@ -595,6 +656,187 @@ def test_universe_batch_skips_recent_listing_and_reports_real_deep_progress(app)
     assert coverage["deep_processed_symbols"] == 1
     assert coverage["deep_remaining_symbols"] == 0
     assert coverage["deep_check_complete"] is True
+
+
+def test_universe_batch_uses_two_bounded_workers_for_deep_sync(app):
+    items = [
+        {
+            "symbol": "000063.SZ",
+            "name": "中兴通讯",
+            "industry": "通信设备",
+            "market": "主板",
+            "list_date": "19971118",
+            "total_mv_yi": 220.0,
+        },
+        {
+            "symbol": "300308.SZ",
+            "name": "中际旭创",
+            "industry": "通信设备",
+            "market": "创业板",
+            "list_date": "20120410",
+            "total_mv_yi": 180.0,
+        },
+    ]
+    snapshots = ConcurrentUniverseSnapshotStub(
+        {
+            "000063.SZ": _snapshot_packet(symbol="000063.SZ"),
+            "300308.SZ": _snapshot_packet(
+                symbol="300308.SZ", stock_name="中际旭创", market="创业板"
+            ),
+        },
+        items,
+    )
+    service = LiZongStrategyService(app.state.database, snapshots)
+
+    result = service.run_universe_batch(batch_size=2)
+
+    assert result["selected_symbols"] == ["000063.SZ", "300308.SZ"]
+    assert snapshots.max_active_syncs == 2
+    assert set(snapshots.symbol_sync_calls) == {"000063.SZ", "300308.SZ"}
+    assert [item["symbol"] for item in result["sync_results"]] == [
+        "000063.SZ",
+        "300308.SZ",
+    ]
+
+
+def test_transient_sync_issue_retries_three_times_without_false_completion(app):
+    item = {
+        "symbol": "000063.SZ",
+        "name": "中兴通讯",
+        "industry": "通信设备",
+        "market": "主板",
+        "list_date": "19971118",
+        "total_mv_yi": 220.0,
+    }
+    snapshots = UniverseSnapshotStub(
+        {
+            "000063.SZ": _with_transient_issue(
+                _snapshot_packet(symbol="000063.SZ")
+            )
+        },
+        [item],
+    )
+    service = LiZongStrategyService(app.state.database, snapshots)
+
+    attempts = [service.run_universe_batch(batch_size=1) for _ in range(4)]
+
+    assert [result["selected_symbols"] for result in attempts] == [
+        ["000063.SZ"],
+        ["000063.SZ"],
+        ["000063.SZ"],
+        [],
+    ]
+    candidate = service.get_candidate("000063.SZ")
+    assert candidate["status"] == "data_incomplete"
+    assert candidate["result"]["evaluation_depth"] == "sync_incomplete"
+    assert candidate["result"]["sync_retry_count"] == 3
+    assert candidate["result"]["sync_retry_exhausted"] is True
+    assert "本交易日停止自动重试" in " ".join(
+        candidate["result"]["limitations"]
+    )
+    coverage = attempts[-1]["coverage"]
+    assert coverage["deep_processed_symbols"] == 0
+    assert coverage["deep_remaining_symbols"] == 1
+    assert coverage["deep_check_complete"] is False
+    assert snapshots.symbol_sync_calls == ["000063.SZ"] * 3
+    assert _table_count(app.state.database, "strategy_candidate_snapshots") == 3
+
+    snapshots.as_of_date = "2026-07-22"
+    snapshots.packets["000063.SZ"]["snapshot"]["as_of_date"] = "2026-07-22"
+    snapshots.packets["000063.SZ"]["snapshot"]["generated_at"] = (
+        "2026-07-22T10:00:00+00:00"
+    )
+    next_day = service.run_universe_batch(
+        batch_size=1, as_of_date="2026-07-22"
+    )
+
+    assert next_day["selected_symbols"] == ["000063.SZ"]
+    candidate = service.get_candidate("000063.SZ")
+    assert candidate["as_of_date"] == "2026-07-22"
+    assert candidate["result"]["sync_retry_count"] == 1
+    assert candidate["result"]["sync_retry_exhausted"] is False
+
+
+def test_real_empty_dataset_does_not_trigger_transient_retry_loop(app):
+    item = {
+        "symbol": "000063.SZ",
+        "name": "中兴通讯",
+        "industry": "通信设备",
+        "market": "主板",
+        "list_date": "19971118",
+        "total_mv_yi": 220.0,
+    }
+    packet = _with_transient_issue(_snapshot_packet(symbol="000063.SZ"))
+    packet["snapshot"]["issues"] = []
+    snapshots = UniverseSnapshotStub({"000063.SZ": packet}, [item])
+    service = LiZongStrategyService(app.state.database, snapshots)
+
+    first = service.run_universe_batch(batch_size=1)
+    second = service.run_universe_batch(batch_size=1)
+
+    assert first["selected_symbols"] == ["000063.SZ"]
+    assert second["selected_symbols"] == []
+    candidate = service.get_candidate("000063.SZ")
+    assert candidate["status"] == "data_incomplete"
+    assert candidate["result"]["evaluation_depth"] == "full_rules"
+    assert candidate["result"]["sync_retry_count"] == 0
+    assert snapshots.symbol_sync_calls == ["000063.SZ"]
+
+
+def test_legacy_full_rules_incomplete_requeues_when_transient_issue_appears(app):
+    item = {
+        "symbol": "000063.SZ",
+        "name": "中兴通讯",
+        "industry": "通信设备",
+        "market": "主板",
+        "list_date": "19971118",
+        "total_mv_yi": 220.0,
+    }
+    packet = _with_transient_issue(_snapshot_packet(symbol="000063.SZ"))
+    packet["snapshot"]["issues"] = []
+    snapshots = UniverseSnapshotStub({"000063.SZ": packet}, [item])
+    service = LiZongStrategyService(app.state.database, snapshots)
+    first = service.run_universe_batch(batch_size=1)
+    assert first["selected_symbols"] == ["000063.SZ"]
+    assert service.get_candidate("000063.SZ")["result"][
+        "evaluation_depth"
+    ] == "full_rules"
+
+    snapshots.packets["000063.SZ"]["snapshot"]["issues"] = [
+        {"dataset": "daily", "error_type": "TushareProviderError"}
+    ]
+    retried = service.run_universe_batch(batch_size=1)
+
+    assert retried["selected_symbols"] == ["000063.SZ"]
+    candidate = service.get_candidate("000063.SZ")
+    assert candidate["result"]["evaluation_depth"] == "sync_incomplete"
+    assert candidate["result"]["sync_retry_count"] == 1
+
+
+def test_newer_incomplete_snapshot_overrides_retained_stable_for_retry_state(app):
+    stable = _snapshot_packet(symbol="000063.SZ")
+    stable["snapshot"]["generated_at"] = "2026-07-21T09:00:00+00:00"
+    incomplete = _with_transient_issue(
+        _snapshot_packet(symbol="000063.SZ", data_version="incomplete-v1"),
+        generated_at="2026-07-21T10:00:00+00:00",
+    )["snapshot"]
+    packet = {
+        **stable,
+        "status": "stable",
+        "latest_incomplete": incomplete,
+    }
+    service = LiZongStrategyService(
+        app.state.database, SnapshotStub({"000063.SZ": packet})
+    )
+
+    result = service.run_symbols(["000063.SZ"])
+
+    candidate = result["items"][0]
+    assert candidate["status"] == "data_incomplete"
+    assert candidate["as_of_date"] == AS_OF
+    assert candidate["result"]["evaluation_depth"] == "sync_incomplete"
+    assert candidate["result"]["sync_retry_count"] == 1
+    assert candidate["result"]["sync_retry_exhausted"] is False
 
 
 def test_universe_batch_requeues_same_day_legacy_history_precheck_for_deep_rules(
@@ -1136,6 +1378,41 @@ def test_tushare_snapshot_api_keeps_external_ts_code_and_neutral_empty_state(cli
     assert payload["symbol"] == "600519.SH"
     assert payload["internal_symbol"] == "600519.SS"
     assert "Token" not in response.text
+
+
+def test_empty_li_zong_filter_is_ready_after_stable_universe_publish(
+    app, client, monkeypatch
+):
+    assert client.post("/users", json={"name": "Stable Empty Strategy"}).status_code == 201
+    monkeypatch.setattr(app.state.li_zong_strategy, "list_candidates", lambda **_: [])
+    monkeypatch.setattr(
+        app.state.li_zong_strategy,
+        "coverage_packet",
+        lambda: {
+            "status": "stable",
+            "as_of_date": "2026-07-22",
+            "universe_count": 5530,
+            "evaluated_symbols": 5530,
+            "coverage_ratio": 1.0,
+            "counts": {
+                "total": 5530,
+                "qualified": 0,
+                "triggered": 0,
+                "not_qualified": 5530,
+                "data_incomplete": 0,
+                "invalidated": 0,
+            },
+        },
+    )
+
+    response = client.get(
+        "/v1/stock-strategies/li-zong/candidates?status=qualified&limit=200"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    assert response.json()["items"] == []
+    assert response.json()["counts"]["qualified"] == 0
 
 
 def test_trigger_enters_stock_workspace_and_agent_uses_strategy_evidence(app, client):

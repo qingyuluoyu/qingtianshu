@@ -12,6 +12,7 @@ class FakeSnapshotTushareClient:
     def __init__(self) -> None:
         self.calls: dict[str, int] = defaultdict(int)
         self.missing: set[str] = set()
+        self.errors: set[str] = set()
         self.fail_trade_cal = False
         self.empty_daily_basic_dates: set[str] = set()
         self.trade_dates = [
@@ -50,6 +51,8 @@ class FakeSnapshotTushareClient:
 
     def query(self, api_name: str, **params):
         self.calls[api_name] += 1
+        if api_name in self.errors:
+            raise RuntimeError(f"temporary {api_name} error")
         if api_name in self.missing:
             return pd.DataFrame()
         if api_name == "trade_cal":
@@ -428,6 +431,68 @@ def test_symbol_snapshot_publishes_traceable_stable_version(app):
     ] == "20260721"
 
 
+def test_strategy_symbol_sync_reuses_universe_rows_and_skips_optional_calls(app):
+    fake = FakeSnapshotTushareClient()
+    service = TushareSnapshotService(app.state.database, fake)
+    universe = service.sync_a_share_universe(as_of_date="2026-07-21")
+    universe_item = universe["snapshot"]["items"][0]
+    fake.calls.clear()
+
+    result = service.sync_strategy_symbol(
+        "000063.SZ",
+        as_of_date="2026-07-21",
+        universe_item=universe_item,
+    )
+
+    assert result["published"] is True
+    snapshot = result["snapshot"]
+    assert snapshot["sync_profile"] == "strategy_required_only_v1"
+    assert snapshot["coverage"]["required"] == 9
+    assert snapshot["coverage"]["available"] == 9
+    assert snapshot["coverage"]["optional_skipped"] == [
+        "income",
+        "balancesheet",
+        "cashflow",
+        "forecast",
+        "express",
+        "disclosure_date",
+    ]
+    assert snapshot["datasets"]["stock_basic"][
+        "reused_from_universe_snapshot"
+    ] is True
+    assert snapshot["datasets"]["daily_basic"][
+        "reused_from_universe_snapshot"
+    ] is True
+    assert fake.calls["stock_basic"] == 0
+    assert fake.calls["daily_basic"] == 0
+    assert fake.calls["trade_cal"] == 1
+    for dataset in snapshot["coverage"]["optional_skipped"]:
+        assert fake.calls[dataset] == 0
+
+
+def test_strategy_symbol_sync_reuses_trade_calendar_within_same_market_date(app):
+    fake = FakeSnapshotTushareClient()
+    service = TushareSnapshotService(app.state.database, fake)
+    universe = service.sync_a_share_universe(as_of_date="2026-07-21")
+    universe_item = universe["snapshot"]["items"][0]
+    fake.calls.clear()
+
+    first = service.sync_strategy_symbol(
+        "000063.SZ",
+        as_of_date="2026-07-21",
+        universe_item=universe_item,
+    )
+    second = service.sync_strategy_symbol(
+        "000063.SZ",
+        as_of_date="2026-07-21",
+        universe_item=universe_item,
+    )
+
+    assert first["published"] is True
+    assert second["published"] is True
+    assert fake.calls["trade_cal"] == 1
+
+
 def test_same_snapshot_content_keeps_same_data_version(app):
     fake = FakeSnapshotTushareClient()
     service = TushareSnapshotService(app.state.database, fake)
@@ -456,8 +521,71 @@ def test_incomplete_or_failed_sync_never_overwrites_previous_stable_snapshot(app
     assert service.get_symbol_snapshot("000063")["data_version"] == stable_version
 
     fake.fail_trade_cal = True
+    service._trade_calendar_cache.clear()
     failed = service.sync_symbol("000063", as_of_date="2026-07-21")
     assert failed["published"] is False
     assert failed["run"]["status"] == "failed"
     assert failed["previous_stable_retained"] is True
     assert service.get_symbol_snapshot("000063")["data_version"] == stable_version
+
+
+def test_transient_dataset_error_is_persisted_with_incomplete_snapshot(app):
+    fake = FakeSnapshotTushareClient()
+    service = TushareSnapshotService(app.state.database, fake)
+    fake.errors.add("fina_indicator")
+
+    result = service.sync_strategy_symbol(
+        "000063.SZ",
+        as_of_date="2026-07-21",
+        universe_item={
+            "symbol": "000063.SZ",
+            "name": "中兴通讯",
+            "industry": "通信设备",
+            "market": "主板",
+            "list_date": "19971118",
+            "total_mv_yi": 220.0,
+        },
+    )
+
+    assert result["published"] is False
+    assert result["snapshot"]["coverage"]["missing"] == ["fina_indicator"]
+    assert result["snapshot"]["issues"] == [
+        {"dataset": "fina_indicator", "error_type": "TushareProviderError"}
+    ]
+    stored = service.get_symbol_snapshot("000063.SZ")
+    assert stored["status"] == "incomplete"
+    assert stored["latest_incomplete"]["issues"] == result["snapshot"]["issues"]
+
+
+def test_legacy_incomplete_snapshot_recovers_issues_from_sync_run(app):
+    fake = FakeSnapshotTushareClient()
+    service = TushareSnapshotService(app.state.database, fake)
+    fake.errors.add("fina_indicator")
+    result = service.sync_strategy_symbol(
+        "000063.SZ",
+        as_of_date="2026-07-21",
+        universe_item={
+            "symbol": "000063.SZ",
+            "name": "中兴通讯",
+            "industry": "通信设备",
+            "market": "主板",
+            "list_date": "19971118",
+            "total_mv_yi": 220.0,
+        },
+    )
+    assert result["run"]["status"] == "partial"
+    with app.state.database.connect() as connection:
+        connection.execute(
+            """
+            UPDATE tushare_dataset_snapshots
+            SET payload_json = json_remove(payload_json, '$.issues')
+            WHERE dataset = 'li_zong_inputs_incomplete'
+                AND scope_key = '000063.SZ'
+            """
+        )
+
+    stored = service.get_symbol_snapshot("000063.SZ")
+
+    assert stored["latest_incomplete"]["issues"] == [
+        {"dataset": "fina_indicator", "error_type": "TushareProviderError"}
+    ]

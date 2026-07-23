@@ -83,6 +83,24 @@ _VISION_FINAL_BLOCK_RE = re.compile(
     rf"{re.escape(_VISION_FINAL_START)}\s*(.*?)\s*{re.escape(_VISION_FINAL_END)}",
     re.DOTALL,
 )
+
+
+def _resolve_hermes_route(model_tier: str) -> tuple[str | None, str | None]:
+    """Resolve the product model route without depending on Hermes globals.
+
+    Text conversations default to DeepSeek so a fresh installation cannot
+    silently fall back to another provider configured in the user's Hermes
+    environment. Vision remains explicit because ``deepseek-v4-pro`` is not a
+    multimodal model. Every route can still be overridden through environment
+    variables.
+    """
+
+    provider = os.getenv(f"HERMES_{model_tier.upper()}_PROVIDER") or None
+    model = os.getenv(f"HERMES_{model_tier.upper()}_MODEL") or None
+    if model_tier in {"economy", "deep"}:
+        provider = provider or "deepseek"
+        model = model or "deepseek-v4-pro"
+    return provider, model
 _EVIDENCE_MAGNITUDE_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _NEGATIVE_NUMBER_CONTEXT_RE = re.compile(
     r"(?:下跌|跌|下降|减少|回撤|亏损|负增长|转负|"
@@ -859,13 +877,21 @@ def _market_cause_fact_required_but_missing(
     if not candidates:
         return False
     for clause in re.split(r"[。；\n]", answer):
-        values = [
-            parsed
-            for match in _NUMBER_RE.finditer(clause)
-            if (parsed := _number_value(match.group(0))) is not None
-        ]
         for name, expected in candidates:
-            if name and name in clause and any(
+            if not name or name not in clause:
+                continue
+            values = []
+            for match in _NUMBER_RE.finditer(clause):
+                parsed = _number_value(match.group(0))
+                if parsed is None:
+                    continue
+                prefix = clause[max(0, match.start() - 8) : match.start()]
+                if any(term in prefix for term in ("跌", "下跌", "下降", "回落")):
+                    parsed = -abs(parsed)
+                elif any(term in prefix for term in ("涨", "上涨", "上升", "走高")):
+                    parsed = abs(parsed)
+                values.append(parsed)
+            if any(
                 abs(value - expected) <= max(0.06, abs(expected) * 0.01)
                 for value in values
             ):
@@ -991,6 +1017,7 @@ def _has_unproven_downtrend_claim(text: str) -> bool:
         "尚未确认",
         "不是",
         "并非",
+        "而非",
     )
     for clause in re.split(r"[。；\n]", text):
         if not _MARKET_DOWNTREND_OVERCLAIM_RE.search(clause):
@@ -1028,9 +1055,22 @@ def _has_wrong_index_return_extreme_claim(
         ("涨幅最大", max),
         ("领涨", max),
     )
-    values = [float((item.get("metrics") or {})["return_1d_pct"]) for item in available]
     for clause in re.split(r"[。；\n]", text):
         normalized_clause = re.sub(r"\s+", "", clause)
+        comparison_items = available
+        if "三大指数" in normalized_clause:
+            major_symbols = {"^GSPC", "^IXIC", "^DJI"}
+            scoped = [
+                item
+                for item in available
+                if str(item.get("symbol") or "") in major_symbols
+            ]
+            if len(scoped) >= 2:
+                comparison_items = scoped
+        values = [
+            float((item.get("metrics") or {})["return_1d_pct"])
+            for item in comparison_items
+        ]
         for term, reducer in claims:
             claim_position = normalized_clause.find(term)
             if claim_position < 0:
@@ -1048,6 +1088,8 @@ def _has_wrong_index_return_extreme_claim(
             if not subjects:
                 continue
             subject = max(subjects, key=lambda row: row[0])[1]
+            if subject not in comparison_items:
+                continue
             subject_value = float((subject.get("metrics") or {})["return_1d_pct"])
             expected = reducer(values)
             if abs(subject_value - expected) > 1e-6:
@@ -3997,8 +4039,15 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     "不能确认",
                     "无法确认",
                     "尚不能确认",
+                    "尚不能",
+                    "未能确认",
+                    "尚未能确认",
                     "不能判断",
                     "无法判断",
+                    "有待确认",
+                    "有待核验",
+                    "尚待确认",
+                    "证据边界",
                 )
             ):
                 unsupported_market_inferences.append(
@@ -5578,6 +5627,100 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             )
         compact["indices"] = compact_indices
         compact["market_drivers"] = compact_drivers
+        industry_focus = evidence.get("industry_focus") or {}
+        industry_snapshot = evidence.get("industry_snapshot") or {}
+        if industry_focus.get("name"):
+            compact["industry_focus"] = {
+                key: industry_focus.get(key)
+                for key in ("name", "market_scope", "requested_by_user")
+                if industry_focus.get(key) is not None
+            }
+        if industry_snapshot:
+            points = list(industry_snapshot.get("points") or [])
+            target_point = next(
+                (
+                    point
+                    for point in reversed(points)
+                    if str(point.get("market_date") or "") == target_market_date
+                ),
+                points[-1] if points else None,
+            )
+            component_analysis = industry_snapshot.get("component_analysis") or {}
+            compact["industry_snapshot"] = {
+                key: industry_snapshot.get(key)
+                for key in (
+                    "status",
+                    "industry_name",
+                    "index_code",
+                    "index_name",
+                    "index_full_name",
+                    "index_description",
+                    "market_timestamp",
+                    "coverage",
+                    "constituents_as_of",
+                    "weights_as_of",
+                    "industry_mapping",
+                )
+                if industry_snapshot.get(key) is not None
+            }
+            compact_industry_metrics = {
+                key: (industry_snapshot.get("metrics") or {}).get(key)
+                for key in (
+                    "latest_close",
+                    "return_1d_pct",
+                    "return_5d_pct",
+                    "return_20d_pct",
+                    "return_60d_pct",
+                    "ma20",
+                    "ma60",
+                    "volatility_20d_annualized_pct",
+                    "max_drawdown_60d_pct",
+                    "trend_state",
+                )
+                if (industry_snapshot.get("metrics") or {}).get(key) is not None
+            }
+            latest_close = compact_industry_metrics.get("latest_close")
+            for moving_average_key in ("ma20", "ma60"):
+                moving_average = compact_industry_metrics.get(moving_average_key)
+                if not isinstance(latest_close, (int, float)) or not isinstance(
+                    moving_average, (int, float)
+                ):
+                    continue
+                compact_industry_metrics[
+                    f"distance_to_{moving_average_key}_pct"
+                ] = round(
+                    (float(latest_close) / float(moving_average) - 1) * 100,
+                    1,
+                )
+            compact["industry_snapshot"]["metrics"] = compact_industry_metrics
+            if target_point:
+                compact["industry_snapshot"]["target_point"] = {
+                    key: target_point.get(key)
+                    for key in (
+                        "market_date",
+                        "close",
+                        "change",
+                        "pct_change",
+                        "volume",
+                        "turnover",
+                        "constituent_count",
+                    )
+                    if target_point.get(key) is not None
+                }
+            if component_analysis:
+                compact["industry_snapshot"]["component_analysis"] = {
+                    key: component_analysis.get(key)
+                    for key in (
+                        "status",
+                        "market_date",
+                        "coverage",
+                        "breadth",
+                        "top_positive_contributors",
+                        "top_negative_contributors",
+                        "source_fallbacks",
+                    )
+                    if component_analysis.get(key) is not None
+                }
         if "volume_ratio_5_20" in metric_keys:
             compact["metric_definitions"] = {
                 "volume_ratio_5_20": (
@@ -6363,8 +6506,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
     ) -> tuple[str, dict[str, Any] | None]:
         hermes_bin = resolve_hermes_executable(self.settings.hermes_bin)
 
-        provider = os.getenv(f"HERMES_{model_tier.upper()}_PROVIDER")
-        model = os.getenv(f"HERMES_{model_tier.upper()}_MODEL")
+        provider, model = _resolve_hermes_route(model_tier)
         usage_path = run_dir / "usage.json"
 
         if image_path:
@@ -6442,8 +6584,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         if not bridge.exists():
             raise FileNotFoundError("Hermes streaming bridge runtime is unavailable")
 
-        provider = os.getenv(f"HERMES_{model_tier.upper()}_PROVIDER")
-        model = os.getenv(f"HERMES_{model_tier.upper()}_MODEL")
+        provider, model = _resolve_hermes_route(model_tier)
         command = [
             str(python_bin),
             str(bridge),
@@ -7102,6 +7243,50 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             return "\n".join(lines)
         if kind == "market_brief":
             state = evidence.get("market_state", {})
+            industry_focus = evidence.get("industry_focus") or {}
+            industry_snapshot = evidence.get("industry_snapshot") or {}
+            if industry_focus.get("name") and industry_snapshot.get("status") == "available":
+                metrics = industry_snapshot.get("metrics") or {}
+                component_analysis = industry_snapshot.get("component_analysis") or {}
+                breadth = component_analysis.get("breadth") or {}
+                market_date = (
+                    component_analysis.get("market_date")
+                    or (evidence.get("analysis_target") or {}).get("market_date")
+                    or "最近完整交易日"
+                )
+                lines = [
+                    f"按A股口径看，{industry_focus.get('name')}行业在 {market_date} 当日承压。",
+                    f"{industry_snapshot.get('index_full_name') or industry_snapshot.get('index_name') or industry_focus.get('name')}"
+                    f"当日涨跌 {fmt(metrics.get('return_1d_pct'))}%，"
+                    f"近5日 {fmt(metrics.get('return_5d_pct'))}%，"
+                    f"近20日 {fmt(metrics.get('return_20d_pct'))}%，"
+                    f"当前为{metrics.get('trend_state') or '趋势待确认'}。",
+                ]
+                if breadth.get("status") == "available":
+                    lines.append(
+                        f"行业 {breadth.get('total_constituents')} 只成分股中，"
+                        f"上涨 {breadth.get('advancers')} 只、下跌 {breadth.get('decliners')} 只、"
+                        f"平盘 {breadth.get('unchanged')} 只；"
+                        f"成分涨跌幅中位数 {fmt(breadth.get('median_pct_change'))}%，"
+                        f"固定广度分类为“{breadth.get('state')}”。"
+                    )
+                if state.get("whole_market_breadth_available"):
+                    lines.append(
+                        f"同日沪深京A股上涨 {state.get('whole_market_advancers')} 家、"
+                        f"下跌 {state.get('whole_market_decliners')} 家，"
+                        f"全市场同样为“{state.get('whole_market_breadth_state')}”；"
+                        "因此当日行业走弱与市场整体承压同步。"
+                    )
+                lines.append(
+                    f"风险上，行业近60日累计涨跌 {fmt(metrics.get('return_60d_pct'))}%，"
+                    f"同期最大回撤 {fmt(metrics.get('max_drawdown_60d_pct'))}%；"
+                    "短期回落与中期累计表现需要分开看。"
+                )
+                lines.append(
+                    "当前没有足够的行业专属事件证据把这次下跌归结为单一原因，"
+                    "但已经可以确认行业价格、成分广度和大盘环境。"
+                )
+                return "\n\n".join(lines)
             indices = evidence.get("indices", [])
             aligned_indices = AgentService._aligned_market_indices(evidence, indices)
             available = [
