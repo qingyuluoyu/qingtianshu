@@ -2473,6 +2473,18 @@ class Database:
             for row in rows
         ]
 
+    def list_distinct_deep_stock_symbols(self) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT symbol, MAX(updated_at) AS latest_updated_at
+                FROM deep_stock_sessions
+                GROUP BY symbol
+                ORDER BY latest_updated_at DESC, symbol ASC
+                """
+            ).fetchall()
+        return [str(row["symbol"]) for row in rows if row["symbol"]]
+
     @staticmethod
     def _deep_stock_session_row(
         row: sqlite3.Row | None,

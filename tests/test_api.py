@@ -573,9 +573,9 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "完整市场数据仍在准备" not in page.text
     assert "市场数据正在准备" not in page.text
     assert 'id="todayOverviewGrid" class="today-overview-grid"' in page.text
-    assert page.text.index('id="todayOverviewGrid"') < page.text.index(
-        'id="liveSection"'
-    ) < page.text.index('id="marketDashboard"') < page.text.index(
+    assert page.text.index('id="liveSection"') < page.text.index(
+        'id="marketDashboard"'
+    ) < page.text.index('id="todayOverviewGrid"') < page.text.index(
         'id="insightSection"'
     )
     assert "我的研究待办" in page.text
@@ -641,10 +641,10 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'api("/v1/stock-workspaces")' in page.text
     assert "function renderTodayOverview(data)" in page.text
     assert '$("todayOverviewGrid").hidden = !insightsVisible' in page.text
-    open_stock = page.text[page.text.index("async function openDeepStockSymbol(symbol)") :]
+    open_stock = page.text[page.text.index("async function openDeepStockSymbol(symbol") :]
     assert "state.pendingDeepStockSymbol = symbol" in open_stock
     assert open_stock.index("select.value = symbol") < open_stock.index(
-        'activateWorkspace("deep_stock")'
+        'activateWorkspace("deep_stock", {historyMode: "none"})'
     )
     assert 'const order = ["000001.SS", "399001.SZ", "399006.SZ", "000688.SS"]' in page.text
     assert "error.status = response.status" in page.text

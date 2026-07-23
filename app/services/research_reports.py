@@ -370,6 +370,7 @@ class ResearchReportService:
                     *self.database.list_distinct_watchlist_symbols(
                         exclude_user_id=self.editor_user["id"]
                     ),
+                    *self.database.list_distinct_deep_stock_symbols(),
                 )
             }
         )

@@ -1535,6 +1535,18 @@
     .workspace-subtitle { color: #8a97a9; }
     .global-search { width: min(440px,42vw); }
     .global-search input { border-radius: 999px; background: #f6f8fc; }
+    .global-search-results { position: absolute; z-index: 70; top: calc(100% + 9px); right: 0; left: 0; max-height: min(640px,calc(100dvh - 98px)); overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 22px 54px rgba(31,57,99,.2); }
+    .global-search-results[hidden] { display: none !important; }
+    .global-search-status { padding: 20px 16px; color: #718096; font-size: 13px; line-height: 1.6; text-align: center; }
+    .global-search-group + .global-search-group { border-top: 1px solid var(--line); }
+    .global-search-group-title { padding: 10px 14px 6px; color: #8a97a9; font-size: 11px; font-weight: 720; letter-spacing: .04em; }
+    .global-search-item { width: 100%; display: flex; align-items: center; gap: 11px; padding: 10px 14px; border: 0; background: #fff; color: inherit; text-align: left; }
+    .global-search-item:hover, .global-search-item.active { background: #edf4ff; }
+    .global-search-item-icon { flex: 0 0 auto; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 9px; color: #356dcc; background: #edf3ff; font-size: 11px; font-weight: 780; }
+    .global-search-item-copy { min-width: 0; flex: 1; }
+    .global-search-item-title, .global-search-item-subtitle { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .global-search-item-title { color: #21324b; font-size: 13px; font-weight: 740; }
+    .global-search-item-subtitle { margin-top: 3px; color: #7a899d; font-size: 11px; }
     .header-actions { flex-wrap: nowrap; }
     .internal-status { display: none !important; }
     .header-icon-button, .header-avatar-button { display: grid; place-items: center; border: 1px solid var(--line); background: #fff; color: #5e718e; }
@@ -1689,7 +1701,7 @@
           <div id="workspaceTitle" class="workspace-title">市场与研究工作台</div>
           <div id="workspaceSubtitle" class="workspace-subtitle">实时行情、市场洞察、个人自选与 Agent 共用同一份证据</div>
         </div>
-        <div class="global-search"><span>⌕</span><input id="globalSearch" type="search" autocomplete="off" placeholder="搜索股票、代码、行业或研究"></div>
+        <div class="global-search"><span>⌕</span><input id="globalSearch" type="search" autocomplete="off" placeholder="搜索股票、代码、行业或研究" aria-expanded="false" aria-controls="globalSearchResults"><div id="globalSearchResults" class="global-search-results" role="listbox" hidden></div></div>
         <div class="header-actions">
           <div class="notification-wrap">
             <button id="notificationButton" class="header-icon-button notification-button" type="button" aria-label="打开提醒" aria-expanded="false">◷<span id="notificationCount" class="notification-count" hidden>0</span></button>
@@ -1893,31 +1905,6 @@
           </div>
         </section>
 
-        <section id="todayOverviewGrid" class="today-overview-grid" aria-label="我的研究待办与重要变化" hidden>
-          <article class="panel today-overview-card">
-            <div class="today-overview-head">
-              <div>
-                <div class="today-overview-title">我的研究待办</div>
-                <div class="today-overview-copy">按风险和时间优先级排列，先处理最需要核验的事项</div>
-              </div>
-              <span id="todaySessionBadge" class="today-session-badge">状态待确认</span>
-            </div>
-            <div id="todayPrioritySummary" class="today-overview-summary">正在读取个人研究事项…</div>
-            <div id="todayPriorityItems" class="today-item-list"><div class="empty">正在加载今日事项…</div></div>
-          </article>
-          <article class="panel today-overview-card">
-            <div class="today-overview-head">
-              <div>
-                <div class="today-overview-title">与我相关的重要变化</div>
-                <div class="today-overview-copy">只展示与你的关注或持仓有关、且尚未列入左侧待办的变化</div>
-              </div>
-              <span id="todayChangeCount" class="today-session-badge">0 项</span>
-            </div>
-            <div id="todayRelatedChanges" class="today-item-list"><div class="empty">正在加载研究变化…</div></div>
-            <div id="todayRelatedBoundary" class="today-boundary">点击变化可查看事实、证据和下一步核验。</div>
-          </article>
-        </section>
-
         <section id="liveSection" class="panel live-panel">
           <div class="panel-head">
             <div>
@@ -1988,6 +1975,31 @@
               <div id="watchlistPulseSource" class="source-note">只显示当前用户空间中的关注与研究状态。</div>
             </article>
           </div>
+        </section>
+
+        <section id="todayOverviewGrid" class="today-overview-grid" aria-label="我的研究待办与重要变化" hidden>
+          <article class="panel today-overview-card">
+            <div class="today-overview-head">
+              <div>
+                <div class="today-overview-title">我的研究待办</div>
+                <div class="today-overview-copy">按风险和时间优先级排列，先处理最需要核验的事项</div>
+              </div>
+              <span id="todaySessionBadge" class="today-session-badge">状态待确认</span>
+            </div>
+            <div id="todayPrioritySummary" class="today-overview-summary">正在读取个人研究事项…</div>
+            <div id="todayPriorityItems" class="today-item-list"><div class="empty">正在加载今日事项…</div></div>
+          </article>
+          <article class="panel today-overview-card">
+            <div class="today-overview-head">
+              <div>
+                <div class="today-overview-title">与我相关的重要变化</div>
+                <div class="today-overview-copy">只展示与你的关注或持仓有关、且尚未列入左侧待办的变化</div>
+              </div>
+              <span id="todayChangeCount" class="today-session-badge">0 项</span>
+            </div>
+            <div id="todayRelatedChanges" class="today-item-list"><div class="empty">正在加载研究变化…</div></div>
+            <div id="todayRelatedBoundary" class="today-boundary">点击变化可查看事实、证据和下一步核验。</div>
+          </article>
         </section>
 
         <div id="insightSection" class="insight-layout">
@@ -2523,6 +2535,10 @@
       selectedReviewRunId: null,
       reviewRunSearchTimer: null,
       reviewQuality: null,
+      globalSearchTimer: null,
+      globalSearchToken: 0,
+      globalSearchItems: [],
+      globalSearchActiveIndex: -1,
       agentContextMetadata: {},
       agentContextQuestion: "",
       agentProcessExpanded: false,
@@ -2711,7 +2727,57 @@
       renderAgentResearchContext();
     }
 
-    function activateWorkspace(page = "insights") {
+    function readWorkspaceRoute() {
+      const path = window.location.pathname.replace(/\/+$/, "") || "/";
+      const params = new URLSearchParams(window.location.search);
+      if (path === "/watchlist") return {page: "watchlist"};
+      if (path === "/account") return {page: "account"};
+      if (path === "/knowledge") return {page: "knowledge"};
+      if (path === "/reviews") return {page: "review", reviewTab: params.get("tab") || "trades", reviewId: params.get("review") || null};
+      if (path.startsWith("/stocks/")) {
+        let symbol = path.slice("/stocks/".length);
+        try { symbol = decodeURIComponent(symbol); } catch {}
+        return {page: "deep_stock", symbol, stockTab: params.get("tab") || "overview"};
+      }
+      if (path === "/research" && params.get("mode") === "screening") return {page: "screening"};
+      if (path === "/research" || path.startsWith("/research/")) {
+        let conversationId = path.startsWith("/research/") ? path.slice("/research/".length) : "new";
+        try { conversationId = decodeURIComponent(conversationId); } catch {}
+        return {page: "agent", conversationId, question: params.get("question") || ""};
+      }
+      return {page: "insights"};
+    }
+
+    function workspaceUrl(page = state.workspacePage) {
+      if (page === "watchlist") return "/watchlist";
+      if (page === "account") return "/account";
+      if (page === "knowledge") return "/knowledge";
+      if (page === "screening") return "/research?mode=screening";
+      if (page === "agent") return `/research/${encodeURIComponent(state.conversationId || "new")}`;
+      if (page === "review") {
+        const params = new URLSearchParams({tab: state.reviewTab || "trades"});
+        if (state.selectedTradeReviewId && state.reviewTab === "trades") params.set("review", state.selectedTradeReviewId);
+        return `/reviews?${params.toString()}`;
+      }
+      if (page === "deep_stock") {
+        const symbol = state.deepStockOverviewSymbol || $("deepStockSymbol")?.value || state.pendingDeepStockSymbol;
+        if (!symbol) return "/stocks/000063.SZ";
+        const params = new URLSearchParams({tab: state.stockSpaceTab || "overview"});
+        return `/stocks/${encodeURIComponent(symbol)}?${params.toString()}`;
+      }
+      return "/today";
+    }
+
+    function syncWorkspaceUrl(mode = "push") {
+      if (mode === "none") return;
+      const target = workspaceUrl();
+      const current = `${window.location.pathname}${window.location.search}`;
+      if (target === current) return;
+      const method = mode === "replace" ? "replaceState" : "pushState";
+      window.history[method]({qingshu: true}, "", target);
+    }
+
+    function activateWorkspace(page = "insights", options = {}) {
       const pages = {
         insights: ["今日观察", "全球行情、A股全景、行业轮动与个人研究脉冲"],
         agent: ["AI 研究", "连续对话、历史研究、自动 K 线与证据链"],
@@ -2764,7 +2830,8 @@
       }
       if (page === "knowledge") void loadKnowledge();
       if (page === "account") renderAccountCenter();
-      window.scrollTo({top: 0, behavior: "smooth"});
+      syncWorkspaceUrl(options.historyMode || "push");
+      if (options.scroll !== false) window.scrollTo({top: 0, behavior: "smooth"});
     }
 
     async function api(path, options = {}) {
@@ -2786,6 +2853,130 @@
         throw error;
       }
       return payload;
+    }
+
+    function hideGlobalSearch() {
+      $("globalSearchResults").hidden = true;
+      $("globalSearch").setAttribute("aria-expanded", "false");
+      state.globalSearchItems = [];
+      state.globalSearchActiveIndex = -1;
+    }
+
+    function setGlobalSearchActive(index) {
+      if (!state.globalSearchItems.length) return;
+      const next = Math.max(0, Math.min(index, state.globalSearchItems.length - 1));
+      state.globalSearchActiveIndex = next;
+      $("globalSearchResults").querySelectorAll(".global-search-item").forEach((node, nodeIndex) => {
+        const active = nodeIndex === next;
+        node.classList.toggle("active", active);
+        node.setAttribute("aria-selected", active ? "true" : "false");
+        if (active) node.scrollIntoView({block: "nearest"});
+      });
+    }
+
+    async function openGlobalSearchItem(item) {
+      hideGlobalSearch();
+      $("globalSearch").value = "";
+      if (item.type === "stock" || item.type === "workspace") {
+        await openDeepStockSymbol(item.symbol);
+        return;
+      }
+      if (item.type === "conversation") {
+        await openConversation(item.id, true);
+        return;
+      }
+      if (item.type === "review") {
+        state.pendingTradeReviewId = item.id;
+        activateWorkspace("review", {historyMode: "none"});
+        activateReviewTab("trades", {historyMode: "none"});
+        await loadTradeReviewCenter(item.id);
+        syncWorkspaceUrl("push");
+        return;
+      }
+      startNewConversation(true);
+      $("chatInput").value = item.question || `请研究“${item.title}”，给出当前事实、核心驱动、反方证据和下一步核验项。`;
+      $("chatInput").focus();
+    }
+
+    function renderGlobalSearch(data, query) {
+      const container = $("globalSearchResults");
+      container.innerHTML = "";
+      state.globalSearchItems = [];
+      state.globalSearchActiveIndex = -1;
+      const icons = {stock: "股", industry: "业", workspace: "研", conversation: "聊", review: "盘", ai: "AI"};
+      for (const group of (data.groups || [])) {
+        const section = document.createElement("section"); section.className = "global-search-group";
+        const label = document.createElement("div"); label.className = "global-search-group-title"; label.textContent = group.label;
+        section.appendChild(label);
+        for (const item of (group.items || [])) {
+          const index = state.globalSearchItems.length;
+          state.globalSearchItems.push(item);
+          const button = document.createElement("button"); button.type = "button"; button.className = "global-search-item"; button.dataset.searchIndex = String(index); button.setAttribute("role", "option"); button.setAttribute("aria-selected", "false");
+          const icon = document.createElement("span"); icon.className = "global-search-item-icon"; icon.textContent = icons[item.type] || "搜";
+          const copy = document.createElement("span"); copy.className = "global-search-item-copy";
+          const title = document.createElement("span"); title.className = "global-search-item-title"; title.textContent = item.title || "搜索结果";
+          const subtitle = document.createElement("span"); subtitle.className = "global-search-item-subtitle"; subtitle.textContent = item.subtitle || "打开查看";
+          copy.append(title, subtitle); button.append(icon, copy); button.addEventListener("click", () => { void openGlobalSearchItem(item); }); section.appendChild(button);
+        }
+        container.appendChild(section);
+      }
+      if (!state.globalSearchItems.length) {
+        const item = {type: "ai", title: `问 AI：${query}`, subtitle: "没有匹配的已存资产，直接开始针对性研究", question: `请研究“${query}”，先识别研究对象，再给出当前事实、反方证据和下一步核验项。`};
+        state.globalSearchItems.push(item);
+        const button = document.createElement("button"); button.type = "button"; button.className = "global-search-item"; button.setAttribute("role", "option"); button.setAttribute("aria-selected", "false");
+        const icon = document.createElement("span"); icon.className = "global-search-item-icon"; icon.textContent = "AI";
+        const copy = document.createElement("span"); copy.className = "global-search-item-copy";
+        const title = document.createElement("span"); title.className = "global-search-item-title"; title.textContent = item.title;
+        const subtitle = document.createElement("span"); subtitle.className = "global-search-item-subtitle"; subtitle.textContent = item.subtitle;
+        copy.append(title, subtitle); button.append(icon, copy); button.addEventListener("click", () => { void openGlobalSearchItem(item); }); container.appendChild(button);
+      }
+      container.hidden = false;
+      $("globalSearch").setAttribute("aria-expanded", "true");
+    }
+
+    async function performGlobalSearch(query) {
+      const token = ++state.globalSearchToken;
+      const container = $("globalSearchResults");
+      container.innerHTML = '<div class="global-search-status">正在搜索股票和你的研究记录…</div>';
+      container.hidden = false;
+      $("globalSearch").setAttribute("aria-expanded", "true");
+      try {
+        const data = await api(`/v1/search?q=${encodeURIComponent(query)}&limit=8`);
+        if (token !== state.globalSearchToken) return;
+        renderGlobalSearch(data, query);
+      } catch {
+        if (token !== state.globalSearchToken) return;
+        container.innerHTML = '<div class="global-search-status">搜索暂时未完成，请稍后重试。</div>';
+      }
+    }
+
+    async function restoreWorkspaceRoute(route, historyMode = "none") {
+      if (route.page === "deep_stock" && route.symbol) {
+        await openDeepStockSymbol(route.symbol, route.stockTab || "overview", {historyMode});
+        return;
+      }
+      if (route.page === "agent") {
+        activateWorkspace("agent", {historyMode: "none", scroll: false});
+        if (route.conversationId && route.conversationId !== "new") {
+          try { await openConversation(route.conversationId, false, historyMode); }
+          catch { startNewConversation(false, historyMode); }
+        } else {
+          startNewConversation(false, historyMode);
+        }
+        if (route.question) $("chatInput").value = route.question;
+        return;
+      }
+      if (route.page === "review") {
+        activateWorkspace("review", {historyMode: "none", scroll: false});
+        activateReviewTab(route.reviewTab || "trades", {historyMode: "none"});
+        if (state.reviewTab === "trades") {
+          state.pendingTradeReviewId = route.reviewId || null;
+          await loadTradeReviewCenter(route.reviewId || null).catch(() => {});
+        }
+        syncWorkspaceUrl(historyMode);
+        return;
+      }
+      activateWorkspace(route.page || "insights", {historyMode, scroll: false});
     }
 
     function pct(value) {
@@ -3823,8 +4014,8 @@
       }
     }
 
-    async function openConversation(conversationId, activatePage = true) {
-      if (activatePage) activateWorkspace("agent");
+    async function openConversation(conversationId, activatePage = true, historyMode = null) {
+      if (activatePage) activateWorkspace("agent", {historyMode: "none"});
       const data = await api(`/me/conversations/${encodeURIComponent(conversationId)}`);
       state.conversationId = data.id;
       state.conversationMessages = data.messages || [];
@@ -3865,10 +4056,11 @@
       clearImageAttachment();
       await loadMemoryCandidates();
       if (state.workspacePage === "agent") $("chatInput").focus();
+      if (state.workspacePage === "agent") syncWorkspaceUrl(historyMode || (activatePage ? "push" : "replace"));
     }
 
-    function startNewConversation(activatePage = true) {
-      if (activatePage) activateWorkspace("agent");
+    function startNewConversation(activatePage = true, historyMode = null) {
+      if (activatePage) activateWorkspace("agent", {historyMode: "none"});
       state.conversationId = null;
       state.conversationMessages = [];
       state.agentContextMetadata = {};
@@ -3882,6 +4074,7 @@
       clearImageAttachment();
       $("chatInput").value = "";
       if (state.workspacePage === "agent") $("chatInput").focus();
+      if (state.workspacePage === "agent") syncWorkspaceUrl(historyMode || (activatePage ? "push" : "replace"));
     }
 
     async function archiveConversation(conversationId) {
@@ -5461,7 +5654,7 @@
       ];
     }
 
-    function activateStockSpaceTab(tabKey = "overview") {
+    function activateStockSpaceTab(tabKey = "overview", options = {}) {
       const allowed = new Set(["overview", "ai", "evidence", "tasks", "history"]);
       if (!allowed.has(tabKey)) tabKey = "overview";
       state.stockSpaceTab = tabKey;
@@ -5475,6 +5668,7 @@
       panel.querySelectorAll("[data-stock-space-pane]").forEach(pane => {
         pane.hidden = pane.dataset.stockSpacePane !== tabKey;
       });
+      if (state.workspacePage === "deep_stock") syncWorkspaceUrl(options.historyMode || "none");
     }
 
     function appendStockWorkspaceItem(container, title, meta = "", detail = null) {
@@ -6199,6 +6393,7 @@
       state.selectedTradeReviewId = reviewId;
       document.querySelectorAll("#tradeReviewList .review-run-item").forEach(item => item.classList.toggle("active", item.dataset.reviewId === reviewId));
       renderTradeReviewCenterDetail(state.tradeReviewCenter.find(item => item.id === reviewId), {boundary: state.tradeReviewCenterBoundary});
+      if (state.workspacePage === "review" && state.reviewTab === "trades") syncWorkspaceUrl("replace");
     }
 
     function renderTradeReviewCenter(data, preferredId = null) {
@@ -7113,7 +7308,7 @@
       renderStockSpaceHistory(session, workspace, state.stockTradeReviews[symbol] || [], symbol);
     }
 
-    async function openDeepStockSymbol(symbol) {
+    async function openDeepStockSymbol(symbol, tabKey = "overview", options = {}) {
       state.pendingDeepStockSymbol = symbol;
       refreshDeepStockSymbolOptions();
       const select = $("deepStockSymbol");
@@ -7122,13 +7317,14 @@
       }
       select.value = symbol;
       state.deepStockOverviewSymbol = symbol;
-      activateWorkspace("deep_stock");
-      activateStockSpaceTab("overview");
+      activateWorkspace("deep_stock", {historyMode: "none"});
+      activateStockSpaceTab(tabKey, {historyMode: "none"});
       const session = state.deepStockSessions.find(item => item.symbol === symbol) || null;
       renderDeepStock(session);
-      activateStockSpaceTab("overview");
+      activateStockSpaceTab(tabKey, {historyMode: "none"});
       await loadDeepStockOverview(symbol);
       if ($("deepStockSymbol").value === symbol) state.pendingDeepStockSymbol = null;
+      syncWorkspaceUrl(options.historyMode || "push");
     }
 
     function deepStageStateLabel(status) {
@@ -7444,7 +7640,7 @@
       return row.result_status === "available" ? row.close_return_pct : row.partial_return_pct;
     }
 
-    function activateReviewTab(tabName = "trades") {
+    function activateReviewTab(tabName = "trades", options = {}) {
       state.reviewTab = ["trades", "outcomes", "runs", "evidence", "quality"].includes(tabName) ? tabName : "trades";
       document.querySelectorAll("[data-review-tab]").forEach(button => {
         const active = button.dataset.reviewTab === state.reviewTab;
@@ -7454,6 +7650,7 @@
       document.querySelectorAll("[data-review-panel]").forEach(panel => {
         panel.hidden = panel.dataset.reviewPanel !== state.reviewTab;
       });
+      if (state.workspacePage === "review") syncWorkspaceUrl(options.historyMode || "none");
     }
 
     function renderReviewStats(outcomesData) {
@@ -8097,6 +8294,7 @@
           })
         });
         state.conversationId = data.conversation_id || state.conversationId;
+        if (state.workspacePage === "agent") syncWorkspaceUrl("replace");
         $("conversationTitle").textContent = data.conversation_title || $("conversationTitle").textContent;
         if (attachedImage) clearImageAttachment();
         const responseMetadata = {
@@ -8237,14 +8435,15 @@
     $("deepStockAgent").addEventListener("click", () => { void continueDeepStockConversation(); });
     $("deepStockSymbol").addEventListener("change", () => {
       const symbol = $("deepStockSymbol").value;
+      state.deepStockOverviewSymbol = symbol;
       const session = state.deepStockSessions.find(item => item.symbol === symbol) || null;
-      activateStockSpaceTab("overview");
+      activateStockSpaceTab("overview", {historyMode: "none"});
       renderDeepStock(session);
-      activateStockSpaceTab("overview");
-      void loadDeepStockOverview(symbol);
+      activateStockSpaceTab("overview", {historyMode: "none"});
+      void loadDeepStockOverview(symbol).then(() => syncWorkspaceUrl("push"));
     });
     document.querySelectorAll("[data-stock-space-tab]").forEach(button => button.addEventListener("click", () => {
-      activateStockSpaceTab(button.dataset.stockSpaceTab || "overview");
+      activateStockSpaceTab(button.dataset.stockSpaceTab || "overview", {historyMode: "push"});
     }));
     $("addWatchlist").addEventListener("click", () => {
       resetWatchlistForm();
@@ -8284,19 +8483,30 @@
       state.watchlistSecondaryFilter = event.currentTarget.value || "all";
       void loadWatchlist();
     });
-    $("globalSearch").addEventListener("keydown", event => {
-      if (event.key !== "Enter" || event.isComposing) return;
-      event.preventDefault();
+    $("globalSearch").addEventListener("input", event => {
       const query = event.currentTarget.value.trim();
-      if (!query) return;
-      const folded = query.toLowerCase().replace(/[.\s]/g, "");
-      const matched = state.watchlist.find(item =>
-        String(item.name || "").toLowerCase().includes(query.toLowerCase()) ||
-        String(item.symbol || "").toLowerCase().replace(/[.\s]/g, "").includes(folded)
-      );
-      const symbol = matched?.symbol || inferDiagnosisSymbol({}, query);
-      if (symbol) void openDeepStockSymbol(symbol);
+      window.clearTimeout(state.globalSearchTimer);
+      if (!query) { hideGlobalSearch(); return; }
+      state.globalSearchTimer = window.setTimeout(() => { void performGlobalSearch(query); }, 260);
     });
+    $("globalSearch").addEventListener("keydown", event => {
+      if (event.isComposing) return;
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setGlobalSearchActive(state.globalSearchActiveIndex + 1);
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setGlobalSearchActive(state.globalSearchActiveIndex <= 0 ? state.globalSearchItems.length - 1 : state.globalSearchActiveIndex - 1);
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        const item = state.globalSearchItems[state.globalSearchActiveIndex < 0 ? 0 : state.globalSearchActiveIndex];
+        if (item) void openGlobalSearchItem(item);
+        else if (event.currentTarget.value.trim()) void performGlobalSearch(event.currentTarget.value.trim());
+      } else if (event.key === "Escape") {
+        hideGlobalSearch();
+      }
+    });
+    $("globalSearchResults").addEventListener("click", event => event.stopPropagation());
     $("knowledgeSearch").addEventListener("input", event => {
       state.knowledgeQuery = event.currentTarget.value;
       renderKnowledge();
@@ -8377,7 +8587,7 @@
       $("agentContextCapabilities").hidden = key !== "capabilities";
     }));
     document.querySelectorAll("[data-review-tab]").forEach(button => button.addEventListener("click", () => {
-      activateReviewTab(button.dataset.reviewTab);
+      activateReviewTab(button.dataset.reviewTab, {historyMode: "push"});
       if (button.dataset.reviewTab === "trades") void loadTradeReviewCenter().catch(() => { $("tradeReviewSummary").textContent = "暂时无法读取交易复盘"; });
     }));
     $("tradeReviewStatus").addEventListener("change", () => { void loadTradeReviewCenter().catch(() => { $("tradeReviewSummary").textContent = "筛选结果暂时无法读取"; }); });
@@ -8405,22 +8615,34 @@
       activateWorkspace("insights");
     });
     document.addEventListener("click", () => {
+      hideGlobalSearch();
       $("notificationPanel").hidden = true;
       $("notificationButton").setAttribute("aria-expanded", "false");
     });
 
+    window.addEventListener("popstate", () => { void restoreWorkspaceRoute(readWorkspaceRoute(), "none"); });
+
     (async function boot() {
-      activateWorkspace("insights");
+      const initialRoute = readWorkspaceRoute();
+      activateWorkspace(initialRoute.page || "insights", {historyMode: "none", scroll: false});
+      if (initialRoute.page === "deep_stock") {
+        state.pendingDeepStockSymbol = initialRoute.symbol || state.pendingDeepStockSymbol;
+        state.deepStockOverviewSymbol = initialRoute.symbol || state.deepStockOverviewSymbol;
+        activateStockSpaceTab(initialRoute.stockTab || "overview", {historyMode: "none"});
+      } else if (initialRoute.page === "review") {
+        activateReviewTab(initialRoute.reviewTab || "trades", {historyMode: "none"});
+      }
       connectServerEvents();
       try {
         await Promise.all([loadHealth(), ensureUser()]);
         await loadWatchlist();
         await Promise.all([loadTodayOverview(), loadMarketDashboard(), loadSectors(), loadLiveMarkets(), loadArticles(), loadKnowledge(), loadDeepStock()]);
-        await loadConversations(true, false);
+        await loadConversations(false, false);
         if (!state.conversationId) {
-          startNewConversation(false);
+          startNewConversation(false, "none");
           await loadMemoryCandidates();
         }
+        await restoreWorkspaceRoute(initialRoute, "replace");
       } catch (error) {
         $("systemStatus").textContent = "正在重新连接";
         addMessage("agent", "页面正在重新连接数据，请稍后刷新。");

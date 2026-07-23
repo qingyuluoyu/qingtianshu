@@ -107,6 +107,7 @@ from app.services.event_timeline import EventTimelineService
 from app.services.financial_drivers import FinancialDriverAnalysisService
 from app.services.filings import AShareFilingService
 from app.services.global_info import GlobalInformationService
+from app.services.global_search import GlobalSearchService
 from app.services.us_fundamentals import USEquityFundamentalsService
 from app.services.peer_comparison import PeerComparisonService
 from app.services.data_health import DataHealthService
@@ -965,6 +966,7 @@ def create_app(
     observation_tasks = ObservationTaskService(database)
     position_ledger = PositionLedgerService(database)
     trade_workflow = TradeWorkflowService(database)
+    global_search = GlobalSearchService(database, trade_workflow)
     resolved_tushare_client = tushare_client
     if resolved_tushare_client is None and settings.tushare_enabled:
         try:
@@ -1090,6 +1092,7 @@ def create_app(
     app.state.observation_tasks = observation_tasks
     app.state.position_ledger = position_ledger
     app.state.trade_workflow = trade_workflow
+    app.state.global_search = global_search
     app.state.stock_workspace = stock_workspace
     app.state.stock_assets = stock_assets
     app.state.stock_screener = stock_screener
@@ -1222,6 +1225,20 @@ def create_app(
                 "Pragma": "no-cache",
             },
         )
+
+    @app.get("/today", include_in_schema=False)
+    @app.get("/watchlist", include_in_schema=False)
+    @app.get("/research", include_in_schema=False)
+    @app.get("/research/{conversation_id}", include_in_schema=False)
+    @app.get("/reviews", include_in_schema=False)
+    @app.get("/account", include_in_schema=False)
+    @app.get("/knowledge", include_in_schema=False)
+    @app.get("/stocks/{symbol}", include_in_schema=False)
+    def demo_route(
+        conversation_id: str | None = None, symbol: str | None = None
+    ) -> FileResponse:
+        del conversation_id, symbol
+        return demo_page()
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -1384,6 +1401,15 @@ def create_app(
                 for item in database.list_conversations(user["id"], limit=limit)
             ]
         }
+
+    @app.get("/v1/search")
+    def search_my_workspace(
+        request: Request,
+        q: str = Query(min_length=1, max_length=120),
+        limit: int = Query(default=8, ge=1, le=20),
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        return global_search.search(user["id"], q, limit=limit)
 
     @app.post("/me/conversations", status_code=201)
     def create_my_conversation(
