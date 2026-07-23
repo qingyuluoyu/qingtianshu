@@ -338,6 +338,84 @@ class TradeWorkflowService:
             ),
         }
 
+    def list_user_trade_reviews(
+        self,
+        user_id: str,
+        *,
+        status: str | None = None,
+        symbol: str | None = None,
+        query: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """List one user's reviews across stock workspaces for the review center."""
+
+        requested_status = str(status or "").strip()
+        if requested_status and requested_status not in self.REVIEW_STATUSES:
+            raise TradeWorkflowInvalidState("复盘状态不受支持")
+        try:
+            requested_symbol = normalize_symbol(symbol) if symbol else None
+        except ValueError as exc:
+            raise TradeWorkflowInvalidState("证券代码不受支持") from exc
+        search = str(query or "").strip().casefold()
+        safe_limit = max(1, min(int(limit), 200))
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT review.id
+                FROM trade_reviews AS review
+                JOIN stock_workspaces AS workspace
+                  ON workspace.id = review.workspace_id
+                 AND workspace.user_id = review.user_id
+                WHERE review.user_id = ?
+                  AND (? IS NULL OR workspace.symbol = ?)
+                ORDER BY review.updated_at DESC, review.rowid DESC
+                LIMIT 500
+                """,
+                (user_id, requested_symbol, requested_symbol),
+            ).fetchall()
+
+        refreshed: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                refreshed.append(self.refresh_trade_review(user_id, str(row["id"])))
+            except (TradeWorkflowNotFound, TradeWorkflowInvalidState):
+                continue
+
+        counts = {
+            key: sum(item.get("status") == key for item in refreshed)
+            for key in self.REVIEW_STATUSES
+        }
+        filtered = [
+            item
+            for item in refreshed
+            if (not requested_status or item.get("status") == requested_status)
+            and (not search or self._review_matches_query(item, search))
+        ]
+        return {
+            "contract_version": "trade_review_center_v1",
+            "items": filtered[:safe_limit],
+            "summary": {
+                "total": len(refreshed),
+                "filtered": len(filtered),
+                "actionable": counts["ready"] + counts["draft"],
+                "waiting_data": counts["waiting_data"],
+                "ready": counts["ready"],
+                "needs_confirmation": counts["draft"],
+                "confirmed": counts["confirmed"],
+                "archived": counts["archived"],
+            },
+            "filters": {
+                "status": requested_status or None,
+                "symbol": requested_symbol,
+                "query": str(query or "").strip() or None,
+                "limit": safe_limit,
+            },
+            "boundary": (
+                "价格结果由数据库确定性计算；逻辑结果由 Agent 生成草稿，"
+                "只有用户确认后才成为正式复盘。"
+            ),
+        }
+
     def refresh_pending_reviews(self, limit: int = 200) -> dict[str, Any]:
         with self.database.connect() as connection:
             rows = connection.execute(
@@ -365,6 +443,26 @@ class TradeWorkflowService:
             "promoted_to_ready": promoted,
             "failed": failed,
         }
+
+    @staticmethod
+    def _review_matches_query(item: dict[str, Any], query: str) -> bool:
+        operation = item.get("operation") or {}
+        plan = item.get("action_plan") or {}
+        version = item.get("current_version") or {}
+        searchable = " ".join(
+            str(value or "")
+            for value in (
+                item.get("symbol"),
+                item.get("name"),
+                operation.get("operation_type"),
+                operation.get("reason_text"),
+                plan.get("trigger_text"),
+                version.get("logic_result"),
+                version.get("plan_deviation"),
+                version.get("improvement_text"),
+            )
+        ).casefold()
+        return query in searchable
 
     def get_trade_review(self, user_id: str, review_id: str) -> dict[str, Any]:
         return self.refresh_trade_review(user_id, review_id)

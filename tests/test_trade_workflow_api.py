@@ -263,6 +263,16 @@ def test_review_flow_uses_frozen_context_hermes_draft_and_version_conflicts(
     assert review["price_observation"]["fees_complete"] is False
     assert "不计算精确净收益" in review["price_observation"]["summary"]
 
+    center = client.get("/v1/trade-reviews?status=ready&q=中兴")
+    assert center.status_code == 200
+    center_payload = center.json()
+    assert center_payload["contract_version"] == "trade_review_center_v1"
+    assert center_payload["summary"]["actionable"] == 1
+    assert [item["id"] for item in center_payload["items"]] == [review["id"]]
+
+    invalid_filter = client.get("/v1/trade-reviews?status=unknown")
+    assert invalid_filter.status_code == 422
+
     answer = (
         '{"logic_result":"冻结判断得到部分价格路径支持，但当时缺少研究报告与估值快照，'
         '反方证据仍需核验。","plan_deviation":"实际数量与冻结计划一致。",'
@@ -343,7 +353,12 @@ def test_review_flow_uses_frozen_context_hermes_draft_and_version_conflicts(
     assert archived.status_code == 200
     assert archived.json()["status"] == "archived"
 
+    archived_center = client.get("/v1/trade-reviews?status=archived").json()
+    assert archived_center["summary"]["archived"] == 1
+    assert archived_center["items"][0]["id"] == review["id"]
+
     other = TestClient(app)
     _create_user(other, "Review Other")
+    assert other.get("/v1/trade-reviews").json()["items"] == []
     assert other.get(f"/v1/trade-reviews/{review['id']}").status_code == 404
     assert other.get(f"/v1/operations/{operation_id}/context").status_code == 404

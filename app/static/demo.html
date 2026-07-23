@@ -356,6 +356,10 @@
     .review-status.completed { color: #16835f; background: #eaf8f2; }
     .review-status.guarded, .review-status.degraded { color: #9b6811; background: #fff6de; }
     .review-status.failed { color: #b6434b; background: #fff0f1; }
+    .review-status.ready { color: #1768ef; background: #eaf1ff; }
+    .review-status.draft { color: #9b6811; background: #fff6de; }
+    .review-status.confirmed, .review-status.archived { color: #16835f; background: #eaf8f2; }
+    .review-status.waiting_data { color: #68788e; background: #eef2f7; }
     .review-guard-dot { width: 6px; height: 6px; display: inline-block; border-radius: 50%; background: #2f6fec; }
     .review-guard-dot.clean { background: #a7b3c2; }
     .review-run-detail { min-width: 0; padding: 22px 24px 28px; overflow-y: auto; }
@@ -438,6 +442,11 @@
     .review-outcome-context-item span { display: block; color: #7a899d; font-size: 10px; }
     .review-outcome-context-item strong { display: block; margin-top: 6px; overflow: hidden; color: #2c3f5b; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
     .review-outcome-boundary { margin-top: 20px; padding: 12px 14px; border: 1px solid #e8dcbd; border-radius: 10px; color: #78673f; background: #fffaf0; font-size: 11px; line-height: 1.7; }
+    .trade-center-item-price { margin-top: 7px; color: #53657e; font-size: 11px; line-height: 1.55; }
+    .trade-center-detail-copy { margin-top: 8px; color: #52647d; font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
+    .trade-center-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+    .trade-center-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+    .trade-center-tag { padding: 5px 8px; border-radius: 999px; color: #53657e; background: #eef3fa; font-size: 10px; }
     .evidence-task-state.pending, .evidence-task-state.collecting { color: #f5dda1; background: rgba(244,201,107,.1); }
     .evidence-task-state.resolved { color: #bff4e5; background: rgba(85,219,182,.09); }
     .evidence-task-state.pending_external { color: #bfd3ff; background: rgba(112,167,255,.1); }
@@ -1525,6 +1534,21 @@
     .header-icon-button, .header-avatar-button { display: grid; place-items: center; border: 1px solid var(--line); background: #fff; color: #5e718e; }
     .header-icon-button { width: 36px; height: 36px; border-radius: 10px; }
     .header-avatar-button { width: 36px; height: 36px; border-radius: 50%; color: #fff; background: linear-gradient(135deg,#1768ef,#68a5ff); font-weight: 800; }
+    .notification-wrap { position: relative; }
+    .notification-button { position: relative; }
+    .notification-count { position: absolute; top: -5px; right: -5px; min-width: 18px; height: 18px; display: grid; place-items: center; padding: 0 4px; border: 2px solid #fff; border-radius: 999px; color: #fff; background: #d94b55; font-size: 9px; font-weight: 800; }
+    .notification-count[hidden], .notification-panel[hidden] { display: none !important; }
+    .notification-panel { position: absolute; z-index: 40; top: calc(100% + 9px); right: 0; width: min(380px, calc(100vw - 28px)); overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 18px 48px rgba(34,61,103,.18); }
+    .notification-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 14px 15px 11px; border-bottom: 1px solid var(--line); }
+    .notification-head strong { color: #21324b; font-size: 14px; }
+    .notification-head button { border: 0; background: transparent; color: #356dcc; font-size: 11px; }
+    .notification-list { max-height: 430px; overflow-y: auto; }
+    .notification-item { width: 100%; display: block; padding: 12px 15px; border: 0; border-bottom: 1px solid var(--line); color: inherit; background: #fff; text-align: left; }
+    .notification-item:hover { background: #f5f8ff; }
+    .notification-item strong, .notification-item span { display: block; }
+    .notification-item strong { color: #263851; font-size: 12px; }
+    .notification-item span { margin-top: 4px; color: #718096; font-size: 10px; line-height: 1.55; }
+    .notification-empty { padding: 24px 18px; color: #718096; font-size: 12px; text-align: center; }
     .content { width: min(1360px,calc(100% - 40px)); padding: 20px 0 44px; }
     .panel { border-radius: 14px; box-shadow: var(--shadow); }
     .panel-head { padding: 16px 18px; }
@@ -1602,6 +1626,8 @@
     }
     @media (max-width: 760px) {
       .content { width: min(100% - 20px,1360px); }
+      .notification-panel { position: fixed; top: 126px; right: 10px; left: 10px; width: auto; max-height: calc(100dvh - 142px); }
+      .notification-list { max-height: calc(100dvh - 198px); }
       .today-overview-grid, .watchlist-side { grid-template-columns: 1fr; }
       .market-section-heading { align-items: flex-start; flex-direction: column; }
       .market-section-actions { width: 100%; justify-content: space-between; }
@@ -1659,6 +1685,13 @@
         </div>
         <div class="global-search"><span>⌕</span><input id="globalSearch" type="search" autocomplete="off" placeholder="搜索股票、代码、行业或研究"></div>
         <div class="header-actions">
+          <div class="notification-wrap">
+            <button id="notificationButton" class="header-icon-button notification-button" type="button" aria-label="打开提醒" aria-expanded="false">◷<span id="notificationCount" class="notification-count" hidden>0</span></button>
+            <div id="notificationPanel" class="notification-panel" hidden>
+              <div class="notification-head"><strong>今日提醒</strong><button id="notificationOpenAll" type="button">查看今日观察</button></div>
+              <div id="notificationList" class="notification-list"><div class="notification-empty">正在读取个人研究事项…</div></div>
+            </div>
+          </div>
           <button class="header-icon-button" type="button" data-open-page="knowledge" aria-label="打开资料库">▤</button>
           <button class="header-avatar-button" type="button" data-open-page="account" aria-label="打开个人中心">清</button>
           <span id="systemStatus" class="status-pill internal-status" hidden>正在连接后端</span>
@@ -1682,13 +1715,39 @@
             </div>
           </section>
           <div class="review-tabs" role="tablist" aria-label="复盘中心视图">
-            <button class="review-tab active" type="button" data-review-tab="outcomes" role="tab" aria-selected="true">研究结果</button>
+            <button class="review-tab active" type="button" data-review-tab="trades" role="tab" aria-selected="true">交易复盘</button>
+            <button class="review-tab" type="button" data-review-tab="outcomes" role="tab" aria-selected="false">研究结果</button>
             <button class="review-tab" type="button" data-review-tab="runs" role="tab" aria-selected="false">回答记录</button>
             <button class="review-tab" type="button" data-review-tab="evidence" role="tab" aria-selected="false">证据链</button>
             <button class="review-tab" type="button" data-review-tab="quality" role="tab" aria-selected="false">质量与缺口</button>
           </div>
 
-          <section id="reviewOutcomesPanel" class="review-tab-panel" data-review-panel="outcomes">
+          <section id="reviewTradesPanel" class="review-tab-panel" data-review-panel="trades">
+            <div class="panel review-run-workspace">
+              <aside class="review-run-sidebar">
+                <div class="review-run-toolbar">
+                  <input id="tradeReviewSearch" type="search" placeholder="搜索股票、操作理由或复盘内容" autocomplete="off">
+                  <div class="review-filter-row">
+                    <select id="tradeReviewStatus" aria-label="交易复盘状态">
+                      <option value="">全部状态</option>
+                      <option value="ready">可生成</option>
+                      <option value="draft">待确认草稿</option>
+                      <option value="waiting_data">等待数据</option>
+                      <option value="confirmed">已确认</option>
+                      <option value="archived">已归档</option>
+                    </select>
+                    <span id="tradeReviewSummary" class="review-run-summary">正在读取真实操作…</span>
+                  </div>
+                </div>
+                <div id="tradeReviewList" class="review-run-list"><div class="empty">正在读取跨股票交易复盘…</div></div>
+              </aside>
+              <article id="tradeReviewDetail" class="review-run-detail">
+                <div class="review-detail-empty"><div class="review-detail-empty-icon">◇</div><strong>选择一条真实操作</strong><span>价格结果、操作时上下文和逻辑复盘会分开显示。</span></div>
+              </article>
+            </div>
+          </section>
+
+          <section id="reviewOutcomesPanel" class="review-tab-panel" data-review-panel="outcomes" hidden>
             <div class="panel review-outcome-workspace">
               <aside class="review-outcome-sidebar">
                 <div class="review-outcome-intro">
@@ -2436,7 +2495,12 @@
       marketBreadth: null,
       todayOverview: null,
       todayOverviewAvailable: false,
-      reviewTab: "outcomes",
+      reviewTab: "trades",
+      tradeReviewCenter: [],
+      tradeReviewCenterSummary: {},
+      selectedTradeReviewId: null,
+      pendingTradeReviewId: null,
+      tradeReviewSearchTimer: null,
       researchOutcomes: null,
       selectedOutcomeSymbol: null,
       reviewRuns: [],
@@ -4010,6 +4074,43 @@
       $("homeFocusCopy").textContent = state.todayOverview?.summary?.headline || `${marketCopy}${breadthCopy}${researchCopy}`;
     }
 
+    async function openPriorityItem(item) {
+      const action = item?.action || {};
+      $("notificationPanel").hidden = true;
+      $("notificationButton").setAttribute("aria-expanded", "false");
+      if (action.type === "open_trade_review" && action.review_id) {
+        state.pendingTradeReviewId = action.review_id;
+        state.reviewTab = "trades";
+        $("tradeReviewStatus").value = "";
+        $("tradeReviewSearch").value = "";
+        activateWorkspace("review");
+        return;
+      }
+      if (item?.symbol) {
+        await openDeepStockSymbol(item.symbol);
+        if (action.type === "open_stock_tasks") activateStockSpaceTab("tasks");
+        return;
+      }
+      activateWorkspace("agent");
+    }
+
+    function renderNotificationCenter(priority) {
+      const items = priority?.items || [];
+      const count = $("notificationCount");
+      count.textContent = String(items.length);
+      count.hidden = !items.length;
+      const container = $("notificationList"); container.innerHTML = "";
+      for (const item of items) {
+        const row = document.createElement("button"); row.type = "button"; row.className = "notification-item";
+        const title = document.createElement("strong"); title.textContent = item.title || "待处理研究事项";
+        const detail = document.createElement("span"); detail.textContent = [item.name || item.symbol, item.rank_reason, item.due_at ? readableTime(item.due_at) : null].filter(Boolean).join(" · ");
+        row.append(title, detail);
+        row.addEventListener("click", () => { void openPriorityItem(item); });
+        container.appendChild(row);
+      }
+      if (!container.children.length) container.innerHTML = '<div class="notification-empty">今天没有需要立即处理的研究事项。</div>';
+    }
+
     function renderTodayOverview(data) {
       state.todayOverview = data;
       state.todayOverviewAvailable = true;
@@ -4028,12 +4129,9 @@
         const badge = document.createElement("span"); badge.className = `today-item-badge ${item.category || "research_task"}`; badge.textContent = item.status_label || "待处理";
         const detail = document.createElement("span"); detail.className = "today-item-detail"; detail.textContent = item.detail || item.rank_reason || "进入研究空间继续核验";
         const meta = document.createElement("span"); meta.className = "today-item-meta";
-        const parts = [item.name || item.symbol, item.rank_reason, item.due_at ? `截止 ${readableTime(item.due_at)}` : null].filter(Boolean);
+        const parts = [item.name || item.symbol, item.rank_reason, item.due_at ? `${item.kind === "trade_review" ? "就绪" : "截止"} ${readableTime(item.due_at)}` : null].filter(Boolean);
         meta.textContent = parts.join(" · "); row.append(title, badge, detail, meta);
-        row.addEventListener("click", () => {
-          if (item.symbol) void openDeepStockSymbol(item.symbol);
-          else activateWorkspace("agent");
-        });
+        row.addEventListener("click", () => { void openPriorityItem(item); });
         priorityContainer.appendChild(row);
       }
       if (!priorityContainer.children.length) priorityContainer.innerHTML = `<div class="empty">${escapeHtml(priority.empty_message || "当前没有需要立即处理的个人研究事项。")}</div>`;
@@ -4053,6 +4151,7 @@
       }
       if (!changesContainer.children.length) changesContainer.innerHTML = `<div class="empty">${escapeHtml(personalized.empty_message || "当前没有新的可追溯研究变化。")}</div>`;
       $("todayRelatedBoundary").textContent = personalized.boundary || data.boundary || "未验收事件不会展示。";
+      renderNotificationCenter(priority);
       renderHomeFocus();
     }
 
@@ -5830,7 +5929,7 @@
       } catch { button.disabled = false; }
     }
 
-    function showTradeReviewEditor(card, symbol, review) {
+    function showTradeReviewEditor(card, symbol, review, refreshCallback = null) {
       card.querySelector(".trade-review-editor")?.remove();
       const version = tradeReviewVersion(review) || {};
       if (!review?.id) return;
@@ -5863,7 +5962,8 @@
           if (shouldConfirm) {
             await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/confirm`, {method: "POST", body: JSON.stringify({base_version: nextVersion.version_no ?? version?.version_no ?? 1})});
           }
-          await refreshStockWorkflow(symbol, "history");
+          if (refreshCallback) await refreshCallback();
+          else await refreshStockWorkflow(symbol, "history");
         } catch {
           save.disabled = false; confirm.disabled = false; cancel.disabled = false; status.textContent = "复盘尚未保存，请检查内容后再次提交。";
         }
@@ -5873,6 +5973,148 @@
       actions.append(save, confirm, cancel);
       editor.append(positionField("价格结果", priceResult), positionField("逻辑结果", logicResult), positionField("计划偏离", deviation), positionField("偏差标签", biasTags), positionField("改进记录", improvement), status, actions);
       card.appendChild(editor); priceResult.focus();
+    }
+
+    async function generateTradeReviewCenterDraft(review, button) {
+      button.disabled = true;
+      button.textContent = "AI 正在复盘…";
+      try {
+        await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/generate-draft`, {method: "POST", body: JSON.stringify({base_version: tradeReviewVersion(review)?.version_no || 0})});
+        await loadTradeReviewCenter(review.id);
+        void loadTodayOverview();
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "重新生成草稿";
+        openReader("交易复盘暂未生成", error?.message || "已记录的操作和价格结果仍然保留，请稍后重试。", "真实操作数据不会被覆盖");
+      }
+    }
+
+    async function archiveTradeReviewCenter(review, button) {
+      button.disabled = true;
+      try {
+        await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/archive`, {method: "POST", body: JSON.stringify({base_version: tradeReviewVersion(review)?.version_no || 1})});
+        await loadTradeReviewCenter(review.id);
+        void loadTodayOverview();
+      } catch { button.disabled = false; }
+    }
+
+    function appendTradeReviewMetric(container, label, value) {
+      const card = document.createElement("div"); card.className = "review-detail-metric";
+      const labelNode = document.createElement("span"); labelNode.textContent = label;
+      const valueNode = document.createElement("strong"); valueNode.textContent = value || "—";
+      card.append(labelNode, valueNode); container.appendChild(card);
+    }
+
+    function appendTradeReviewSection(container, titleText, copyText, metaText = "") {
+      const section = document.createElement("section"); section.className = "review-detail-section";
+      const title = document.createElement("div"); title.className = "review-detail-section-title";
+      title.append(document.createTextNode(titleText));
+      if (metaText) title.appendChild(Object.assign(document.createElement("small"), {textContent: metaText}));
+      const copy = document.createElement("div"); copy.className = "trade-center-detail-copy"; copy.textContent = copyText || "当前没有可展示内容。";
+      section.append(title, copy); container.appendChild(section);
+    }
+
+    function renderTradeReviewCenterDetail(review, packet = null) {
+      const container = $("tradeReviewDetail"); container.innerHTML = "";
+      if (!review) {
+        container.innerHTML = '<div class="review-detail-empty"><div class="review-detail-empty-icon">◇</div><strong>选择一条真实操作</strong><span>价格结果、操作时上下文和逻辑复盘会分开显示。</span></div>';
+        return;
+      }
+      const operation = review.operation || {};
+      const plan = review.action_plan || {};
+      const observation = review.price_observation || {};
+      const version = tradeReviewVersion(review) || {};
+      const head = document.createElement("div"); head.className = "review-detail-head";
+      const identity = document.createElement("div");
+      const title = document.createElement("div"); title.className = "review-detail-title"; title.textContent = `${review.name || review.symbol} · ${actionPlanTypeLabel(operation.operation_type)}复盘`;
+      const subtitle = document.createElement("div"); subtitle.className = "review-detail-subtitle"; subtitle.textContent = `${review.symbol} · ${readableTime(operation.operated_at || review.created_at)} · ${review.horizon_sessions || 3} 个后续交易日`;
+      identity.append(title, subtitle);
+      const badge = document.createElement("span"); badge.className = `review-status ${review.status}`; badge.textContent = tradeReviewStatusLabel(review.status);
+      head.append(identity, badge); container.appendChild(head);
+
+      const metrics = document.createElement("div"); metrics.className = "review-detail-metrics";
+      appendTradeReviewMetric(metrics, "操作方向", actionPlanTypeLabel(operation.operation_type));
+      appendTradeReviewMetric(metrics, "操作价格", operation.price ? numeric(operation.price) : "—");
+      appendTradeReviewMetric(metrics, "操作数量", operation.quantity ? numeric(operation.quantity) : "—");
+      appendTradeReviewMetric(metrics, "价格变化", observation.price_change_pct == null ? "等待数据" : pct(observation.price_change_pct));
+      container.appendChild(metrics);
+
+      appendTradeReviewSection(container, "确定性价格结果", observation.summary || version.price_result || "后续交易日数据仍在积累。", observation.end_date ? `数据截至 ${observation.end_date}` : "来自已落库日线");
+      appendTradeReviewSection(container, "操作时记录", operation.reason_text || "没有填写操作理由。", plan.id ? "已关联用户操作计划" : "未关联操作计划");
+      if (plan.trigger_text) appendTradeReviewSection(container, "原操作计划", plan.trigger_text, actionPlanTargetText(plan));
+      if (version.logic_result) appendTradeReviewSection(container, "逻辑复盘", version.logic_result, `版本 ${version.version_no || 1} · ${version.created_source === "ai" ? "AI草稿" : "用户版本"}`);
+      if (version.plan_deviation) appendTradeReviewSection(container, "计划偏离", version.plan_deviation);
+      if (version.improvement_text) appendTradeReviewSection(container, "下一次改进", version.improvement_text);
+      if (version.bias_tags?.length) {
+        const tags = document.createElement("div"); tags.className = "trade-center-tags";
+        version.bias_tags.forEach(value => { const tag = document.createElement("span"); tag.className = "trade-center-tag"; tag.textContent = value; tags.appendChild(tag); });
+        container.appendChild(tags);
+      }
+
+      const actions = document.createElement("div"); actions.className = "trade-center-actions";
+      if (review.status === "ready") {
+        const generate = document.createElement("button"); generate.type = "button"; generate.className = "btn primary"; generate.textContent = "生成 AI 逻辑草稿"; generate.addEventListener("click", () => { void generateTradeReviewCenterDraft(review, generate); }); actions.appendChild(generate);
+      }
+      if (["draft", "revised"].includes(review.status)) {
+        const edit = document.createElement("button"); edit.type = "button"; edit.className = "btn primary"; edit.textContent = "编辑并确认"; edit.addEventListener("click", () => showTradeReviewEditor(container, review.symbol, review, async () => { await loadTradeReviewCenter(review.id); void loadTodayOverview(); })); actions.appendChild(edit);
+      }
+      if (review.status === "confirmed") {
+        const archive = document.createElement("button"); archive.type = "button"; archive.className = "btn"; archive.textContent = "归档复盘"; archive.addEventListener("click", () => { void archiveTradeReviewCenter(review, archive); }); actions.appendChild(archive);
+      }
+      const stock = document.createElement("button"); stock.type = "button"; stock.className = "btn"; stock.textContent = "进入股票研究空间"; stock.addEventListener("click", () => { void openDeepStockSymbol(review.symbol); }); actions.appendChild(stock);
+      container.appendChild(actions);
+      const boundary = document.createElement("div"); boundary.className = "review-outcome-boundary"; boundary.textContent = packet?.boundary || "价格结果与逻辑结果分开；盈利不自动等于逻辑正确，亏损也不自动等于逻辑错误。"; container.appendChild(boundary);
+    }
+
+    function openTradeReviewCenterItem(reviewId) {
+      state.selectedTradeReviewId = reviewId;
+      document.querySelectorAll("#tradeReviewList .review-run-item").forEach(item => item.classList.toggle("active", item.dataset.reviewId === reviewId));
+      renderTradeReviewCenterDetail(state.tradeReviewCenter.find(item => item.id === reviewId), {boundary: state.tradeReviewCenterBoundary});
+    }
+
+    function renderTradeReviewCenter(data, preferredId = null) {
+      state.tradeReviewCenter = data.items || [];
+      state.tradeReviewCenterSummary = data.summary || {};
+      state.tradeReviewCenterBoundary = data.boundary || "";
+      const summary = state.tradeReviewCenterSummary;
+      $("tradeReviewSummary").textContent = `显示 ${summary.filtered || 0} / ${summary.total || 0} 条 · ${summary.actionable || 0} 条待处理`;
+      const container = $("tradeReviewList"); container.innerHTML = "";
+      for (const review of state.tradeReviewCenter) {
+        const operation = review.operation || {};
+        const observation = review.price_observation || {};
+        const row = document.createElement("button"); row.type = "button"; row.className = "review-run-item"; row.dataset.reviewId = review.id;
+        const head = document.createElement("div"); head.className = "review-run-item-head";
+        const title = document.createElement("div"); title.className = "review-run-item-title"; title.textContent = `${review.name || review.symbol} · ${actionPlanTypeLabel(operation.operation_type)}`;
+        const badge = document.createElement("span"); badge.className = `review-status ${review.status}`; badge.textContent = tradeReviewStatusLabel(review.status);
+        head.append(title, badge);
+        const detail = document.createElement("div"); detail.className = "review-run-item-question"; detail.textContent = operation.reason_text || review.action_plan?.trigger_text || "已保存真实操作，等待复盘。";
+        const price = document.createElement("div"); price.className = "trade-center-item-price"; price.textContent = observation.ready ? `T+${review.horizon_sessions || 3} · ${observation.price_change_pct == null ? "价格结果已就绪" : pct(observation.price_change_pct)}` : `后续数据 ${observation.available_sessions || 0}/${observation.required_sessions || review.horizon_sessions || 3}`;
+        const meta = document.createElement("div"); meta.className = "review-run-item-meta"; meta.textContent = [readableTime(operation.operated_at || review.created_at), review.action_plan ? "已关联计划" : "未关联计划"].join(" · ");
+        row.append(head, detail, price, meta); row.addEventListener("click", () => openTradeReviewCenterItem(review.id)); container.appendChild(row);
+      }
+      if (!container.children.length) {
+        container.innerHTML = '<div class="empty">当前筛选条件下没有交易复盘。真实操作完成后会自动进入这里。</div>';
+        renderTradeReviewCenterDetail(null);
+        return;
+      }
+      const nextId = preferredId && state.tradeReviewCenter.some(item => item.id === preferredId)
+        ? preferredId
+        : state.selectedTradeReviewId && state.tradeReviewCenter.some(item => item.id === state.selectedTradeReviewId)
+          ? state.selectedTradeReviewId
+          : state.tradeReviewCenter[0].id;
+      openTradeReviewCenterItem(nextId);
+    }
+
+    async function loadTradeReviewCenter(preferredId = null) {
+      const params = new URLSearchParams({limit: "100"});
+      const status = $("tradeReviewStatus").value;
+      const query = $("tradeReviewSearch").value.trim();
+      if (status) params.set("status", status);
+      if (query) params.set("q", query);
+      const data = await api(`/v1/trade-reviews?${params.toString()}`);
+      renderTradeReviewCenter(data, preferredId || state.pendingTradeReviewId);
+      state.pendingTradeReviewId = null;
+      return data;
     }
 
     function renderTradeReviewWorkspace(symbol, reviews) {
@@ -7073,8 +7315,8 @@
       return row.result_status === "available" ? row.close_return_pct : row.partial_return_pct;
     }
 
-    function activateReviewTab(tabName = "outcomes") {
-      state.reviewTab = ["outcomes", "runs", "evidence", "quality"].includes(tabName) ? tabName : "outcomes";
+    function activateReviewTab(tabName = "trades") {
+      state.reviewTab = ["trades", "outcomes", "runs", "evidence", "quality"].includes(tabName) ? tabName : "trades";
       document.querySelectorAll("[data-review-tab]").forEach(button => {
         const active = button.dataset.reviewTab === state.reviewTab;
         button.classList.toggle("active", active);
@@ -7594,6 +7836,9 @@
         renderEvidenceTasks(tasks);
         renderConversationQuality(quality);
         state.reviewQuality = quality;
+        void loadTradeReviewCenter(state.pendingTradeReviewId).catch(() => {
+          $("tradeReviewSummary").textContent = "暂时无法读取交易复盘";
+        });
         void loadRunReviews().catch(() => { $("reviewRunSummary").textContent = "暂时无法读取回答记录"; });
         activateReviewTab(state.reviewTab);
       }
@@ -8006,13 +8251,35 @@
     }));
     document.querySelectorAll("[data-review-tab]").forEach(button => button.addEventListener("click", () => {
       activateReviewTab(button.dataset.reviewTab);
+      if (button.dataset.reviewTab === "trades") void loadTradeReviewCenter().catch(() => { $("tradeReviewSummary").textContent = "暂时无法读取交易复盘"; });
     }));
+    $("tradeReviewStatus").addEventListener("change", () => { void loadTradeReviewCenter().catch(() => { $("tradeReviewSummary").textContent = "筛选结果暂时无法读取"; }); });
+    $("tradeReviewSearch").addEventListener("input", () => {
+      window.clearTimeout(state.tradeReviewSearchTimer);
+      state.tradeReviewSearchTimer = window.setTimeout(() => { void loadTradeReviewCenter().catch(() => { $("tradeReviewSummary").textContent = "筛选结果暂时无法读取"; }); }, 260);
+    });
     [$("reviewRunStatus"), $("reviewRunRepair"), $("reviewRunDays")].forEach(control => {
       control.addEventListener("change", () => { void refreshRunReviews(); });
     });
     $("reviewRunSearch").addEventListener("input", () => {
       window.clearTimeout(state.reviewRunSearchTimer);
       state.reviewRunSearchTimer = window.setTimeout(() => { void refreshRunReviews(); }, 260);
+    });
+    $("notificationButton").addEventListener("click", event => {
+      event.stopPropagation();
+      const panel = $("notificationPanel");
+      panel.hidden = !panel.hidden;
+      $("notificationButton").setAttribute("aria-expanded", panel.hidden ? "false" : "true");
+    });
+    $("notificationPanel").addEventListener("click", event => event.stopPropagation());
+    $("notificationOpenAll").addEventListener("click", () => {
+      $("notificationPanel").hidden = true;
+      $("notificationButton").setAttribute("aria-expanded", "false");
+      activateWorkspace("insights");
+    });
+    document.addEventListener("click", () => {
+      $("notificationPanel").hidden = true;
+      $("notificationButton").setAttribute("aria-expanded", "false");
     });
 
     (async function boot() {

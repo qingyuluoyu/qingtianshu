@@ -182,6 +182,27 @@ class FakeWritebacks:
         }
 
 
+class FakeTradeWorkflow:
+    def list_user_trade_reviews(self, user_id: str, *, limit: int) -> dict[str, Any]:
+        assert (user_id, limit) == ("user-1", 100)
+        return {
+            "items": [
+                {
+                    "id": "review-1",
+                    "symbol": "000063.SZ",
+                    "name": "中兴通讯",
+                    "status": "ready",
+                    "horizon_sessions": 3,
+                    "ready_at": "2026-07-23T00:30:00+00:00",
+                    "updated_at": "2026-07-23T00:30:00+00:00",
+                    "operation": {"operation_type": "reduce"},
+                    "price_observation": {"summary": "三个后续交易日数据已经齐备。"},
+                    "current_version": None,
+                }
+            ]
+        }
+
+
 def post_market_session() -> dict[str, Any]:
     return {
         "key": "post_market",
@@ -250,3 +271,30 @@ def test_today_overview_preserves_personal_items_when_one_market_component_fails
     assert packet["priority_items"]["total_visible"] == 3
     assert packet["market"]["indices"][0]["status"] == "unavailable"
     assert packet["warnings"] == ["指数数据暂未完整返回"]
+
+
+def test_today_overview_surfaces_ready_trade_review_as_actionable_reminder():
+    service = TodayOverviewService(
+        FakeDatabase(),
+        FakeAnalysis(),
+        FakeTasks(),
+        FakeActions(),
+        FakeTracking(),
+        FakeWritebacks(),
+        trade_workflow=FakeTradeWorkflow(),
+        session_provider=post_market_session,
+    )
+
+    packet = service.get_overview("user-1")
+    reminder = next(
+        item
+        for item in packet["priority_items"]["items"]
+        if item["kind"] == "trade_review"
+    )
+    assert reminder["status_label"] == "可生成"
+    assert reminder["action"] == {
+        "type": "open_trade_review",
+        "review_id": "review-1",
+        "symbol": "000063.SZ",
+    }
+    assert packet["coverage"]["components"]["trade_reviews"] == "ready"

@@ -961,6 +961,7 @@ def create_app(
         research_actions,
         research_tracking,
         structured_ai,
+        trade_workflow=trade_workflow,
     )
     event_broker = EventBroker()
     agent_streams = AgentStreamBroker()
@@ -2003,6 +2004,24 @@ def create_app(
         user = require_session_user(request)
         try:
             return trade_workflow.list_trade_reviews(user["id"], symbol)
+        except TradeWorkflowNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/v1/trade-reviews")
+    def list_my_trade_review_center(
+        request: Request,
+        status: str | None = Query(default=None, max_length=24),
+        symbol: str | None = Query(default=None, max_length=24),
+        q: str | None = Query(default=None, max_length=120),
+        limit: int = Query(default=100, ge=1, le=200),
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return trade_workflow.list_user_trade_reviews(
+                user["id"], status=status, symbol=symbol, query=q, limit=limit
+            )
         except TradeWorkflowNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except TradeWorkflowInvalidState as exc:

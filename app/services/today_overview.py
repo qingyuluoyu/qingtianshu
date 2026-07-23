@@ -18,10 +18,11 @@ class TodayOverviewService:
     INDEX_SYMBOLS = ("000001.SS", "399001.SZ", "399006.SZ", "000688.SS")
     _CATEGORY_RANK = {
         "risk_review": 0,
-        "due_task": 1,
-        "draft_confirmation": 2,
-        "evidence_gap": 3,
-        "research_task": 4,
+        "trade_review": 1,
+        "due_task": 2,
+        "draft_confirmation": 3,
+        "evidence_gap": 4,
+        "research_task": 5,
     }
     _PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
 
@@ -34,6 +35,7 @@ class TodayOverviewService:
         research_tracking: Any,
         structured_ai: Any,
         *,
+        trade_workflow: Any | None = None,
         session_provider: Callable[[], dict[str, Any]] | None = None,
     ):
         self.database = database
@@ -42,6 +44,7 @@ class TodayOverviewService:
         self.research_actions = research_actions
         self.research_tracking = research_tracking
         self.structured_ai = structured_ai
+        self.trade_workflow = trade_workflow
         self.session_provider = session_provider or self._default_session
 
     def get_overview(self, user_id: str) -> dict[str, Any]:
@@ -58,6 +61,10 @@ class TodayOverviewService:
                 user_id=user_id, status="pending_confirmation", limit=20
             ),
         }
+        if self.trade_workflow is not None:
+            calls["trade_reviews"] = lambda: self.trade_workflow.list_user_trade_reviews(
+                user_id, limit=100
+            )
         results, component_status = self._collect(calls)
         session = self.session_provider()
         watchlist = self.database.list_watchlist(user_id)
@@ -73,6 +80,7 @@ class TodayOverviewService:
             tasks=results.get("tasks") or {},
             actions=results.get("actions") or {},
             writebacks=results.get("writebacks") or {},
+            trade_reviews=results.get("trade_reviews") or {},
             names=watchlist_names,
         )
         market = self._market_packet(
@@ -95,8 +103,9 @@ class TodayOverviewService:
                 ("actions", "研究行动暂未完整返回"),
                 ("changes", "与我相关的研究变化暂未完整返回"),
                 ("writebacks", "待确认判断草稿暂未完整返回"),
+                ("trade_reviews", "个人交易复盘暂未完整返回"),
             )
-            if component_status.get(key) != "ready"
+            if key in calls and component_status.get(key) != "ready"
         ]
         return {
             "contract_version": self.CONTRACT_VERSION,
@@ -157,10 +166,59 @@ class TodayOverviewService:
         tasks: dict[str, Any],
         actions: dict[str, Any],
         writebacks: dict[str, Any],
+        trade_reviews: dict[str, Any],
         names: dict[str, str],
     ) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         now = datetime.now(timezone.utc)
+        for review in trade_reviews.get("items") or []:
+            status = str(review.get("status") or "")
+            if status not in {"ready", "draft"}:
+                continue
+            symbol = str(review.get("symbol") or "")
+            name = str(review.get("name") or names.get(symbol) or symbol)
+            observation = review.get("price_observation") or {}
+            operation = review.get("operation") or {}
+            ready_at = review.get("ready_at") or review.get("updated_at")
+            items.append(
+                {
+                    "id": f"trade-review:{review.get('id')}",
+                    "kind": "trade_review",
+                    "category": "trade_review",
+                    "title": (
+                        f"确认{name}的交易复盘草稿"
+                        if status == "draft"
+                        else f"复盘{name}的已记录操作"
+                    ),
+                    "detail": (
+                        (review.get("current_version") or {}).get("logic_result")
+                        if status == "draft"
+                        else observation.get("summary")
+                    ),
+                    "symbol": symbol or None,
+                    "name": name or None,
+                    "status": status,
+                    "status_label": "待确认" if status == "draft" else "可生成",
+                    "priority": "high" if status == "draft" else "normal",
+                    "due_at": ready_at,
+                    "overdue": True,
+                    "rank_reason": (
+                        "交易复盘草稿等待用户确认"
+                        if status == "draft"
+                        else "后续交易日数据已经齐备"
+                    ),
+                    "source_type": "trade_review_workflow",
+                    "source_ref_id": review.get("id"),
+                    "updated_at": review.get("updated_at") or ready_at,
+                    "action": {
+                        "type": "open_trade_review",
+                        "review_id": review.get("id"),
+                        "symbol": symbol,
+                    },
+                    "operation_type": operation.get("operation_type"),
+                }
+            )
+
         for task in tasks.get("items") or []:
             if task.get("status") not in {"pending", "in_progress", "waiting_data"}:
                 continue
