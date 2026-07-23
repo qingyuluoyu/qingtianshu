@@ -58,7 +58,10 @@ from app.services.analyst_expectations import AnalystExpectationsService
 from app.services.china_info import ChinaInformationService
 from app.services.change_events import ChangeEventNotFound, ChangeEventService
 from app.services.conversation_quality import ConversationQualityService
-from app.services.deep_stock import DeepStockResearchService
+from app.services.deep_stock import (
+    DeepStockConversationConflict,
+    DeepStockResearchService,
+)
 from app.services.stock_screener import (
     StockScreenerService,
     StockScreenerUnavailable,
@@ -1227,6 +1230,7 @@ def create_app(
         )
 
     @app.get("/today", include_in_schema=False)
+    @app.get("/search", include_in_schema=False)
     @app.get("/watchlist", include_in_schema=False)
     @app.get("/research", include_in_schema=False)
     @app.get("/research/{conversation_id}", include_in_schema=False)
@@ -1777,6 +1781,8 @@ def create_app(
                     else None
                 ),
             )
+        except DeepStockConversationConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 

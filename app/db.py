@@ -1413,6 +1413,12 @@ class Database:
                 WHERE idempotency_key IS NOT NULL
                 """
             )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_deep_stock_user_conversation
+                ON deep_stock_sessions(user_id, conversation_id)
+                """
+            )
             self._ensure_ai_writeback_candidate_types(connection)
             self._backfill_stock_domains(connection)
 

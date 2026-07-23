@@ -90,6 +90,47 @@ def test_deep_stock_api_binds_existing_conversation_and_is_user_isolated(app):
     assert other.get("/me/deep-stock/000063").status_code == 404
 
 
+def test_deep_stock_rejects_silent_primary_conversation_rebinding(app):
+    client = TestClient(app)
+    _create_user(client, "Deep Stock Binding User")
+    first = client.post("/me/conversations", json={"title": "中兴主会话"}).json()
+    second = client.post("/me/conversations", json={"title": "另一条会话"}).json()
+
+    created = client.post(
+        "/me/deep-stock",
+        json={"symbol": "000063", "conversation_id": first["id"]},
+    )
+    assert created.status_code == 201
+
+    replaced = client.post(
+        "/me/deep-stock",
+        json={"symbol": "000063", "conversation_id": second["id"]},
+    )
+    assert replaced.status_code == 409
+    assert "不能静默替换" in replaced.json()["detail"]
+    assert client.get("/me/deep-stock/000063").json()["conversation_id"] == first["id"]
+
+
+def test_deep_stock_rejects_one_conversation_bound_to_two_stocks(app):
+    client = TestClient(app)
+    _create_user(client, "Deep Stock Shared Conversation User")
+    conversation = client.post(
+        "/me/conversations", json={"title": "单股主会话"}
+    ).json()
+
+    assert client.post(
+        "/me/deep-stock",
+        json={"symbol": "000063", "conversation_id": conversation["id"]},
+    ).status_code == 201
+    shared = client.post(
+        "/me/deep-stock",
+        json={"symbol": "300308", "conversation_id": conversation["id"]},
+    )
+
+    assert shared.status_code == 409
+    assert "另一只股票" in shared.json()["detail"]
+
+
 def test_screening_candidate_entry_is_saved_without_completing_research_stage(app):
     client = TestClient(app)
     _create_user(client, "Screening Entry User")

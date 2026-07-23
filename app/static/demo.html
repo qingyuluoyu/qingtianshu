@@ -1547,6 +1547,45 @@
     .global-search-item-title, .global-search-item-subtitle { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .global-search-item-title { color: #21324b; font-size: 13px; font-weight: 740; }
     .global-search-item-subtitle { margin-top: 3px; color: #7a899d; font-size: 11px; }
+    .global-search-actions { display: flex; gap: 8px; padding: 11px 14px 13px; border-top: 1px solid var(--line); background: #f8faff; }
+    .global-search-actions .btn { flex: 1; padding: 8px 10px; font-size: 11px; }
+    .search-page { min-height: calc(100dvh - 118px); }
+    .search-page-body { display: grid; gap: 16px; padding: 18px; background: #f6f8fc; }
+    .search-page-summary { color: #6f7e91; font-size: 12px; line-height: 1.6; }
+    .search-page-groups { display: grid; gap: 14px; }
+    .search-page-group { overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
+    .search-page-group-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 15px; border-bottom: 1px solid var(--line); color: #263850; font-size: 13px; font-weight: 760; }
+    .search-page-group-title span { color: #8a97a9; font-size: 10px; font-weight: 600; }
+    .search-page-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0; }
+    .search-page-item { min-width: 0; display: flex; align-items: center; gap: 11px; padding: 14px 15px; border: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); color: inherit; background: #fff; text-align: left; }
+    .search-page-item:nth-child(2n) { border-right: 0; }
+    .search-page-item:hover { background: #f2f6ff; }
+    .search-ai-card { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 17px 18px; border: 1px solid #cfe0ff; border-radius: 14px; background: linear-gradient(120deg,#f7faff,#edf4ff); }
+    .search-ai-copy strong { display: block; color: #263850; font-size: 14px; }
+    .search-ai-copy span { display: block; margin-top: 5px; color: #6d7d91; font-size: 11px; line-height: 1.55; }
+    .market-review-list { display: grid; gap: 10px; padding: 16px; }
+    .market-review-item { width: 100%; display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 7px 14px; padding: 14px 15px; border: 1px solid var(--line); border-radius: 12px; color: inherit; background: #fff; text-align: left; }
+    .market-review-item:hover { border-color: #b9cdf5; background: #f8faff; }
+    .market-review-item strong { color: #263850; font-size: 13px; }
+    .market-review-item time { color: #8794a6; font-size: 10px; }
+    .market-review-item span { grid-column: 1 / -1; color: #65758b; font-size: 11px; line-height: 1.6; }
+    .market-review-boundary { margin: 0 16px 16px; padding: 11px 12px; border-radius: 10px; color: #64758d; background: #f1f5fb; font-size: 10px; line-height: 1.6; }
+    .stock-research-journey { border-top: 1px solid var(--line); }
+    body.stock-agent-page { overflow: auto; }
+    body.stock-agent-page .content { width: min(1500px, calc(100% - 28px)); height: auto; padding: 10px 0 24px; }
+    body.stock-agent-page #stockSpaceAiPane { min-height: 0; padding: 14px; background: #f6f8fc; }
+    body.stock-agent-page #agentSection { height: calc(100dvh - 238px); min-height: 640px; margin: 0; border-radius: 14px; }
+    body.stock-agent-page #agentSection .conversation-switcher { display: none !important; }
+    body.stock-agent-page #agentSection .agent-research-actions [data-open-page="deep_stock"] { display: none; }
+    body.stock-agent-page #agentSection .research-mode-switch { display: none; }
+    [data-review-whitebox][hidden] { display: none !important; }
+    @media (max-width: 760px) {
+      .search-page-list { grid-template-columns: 1fr; }
+      .search-page-item { border-right: 0; }
+      .search-ai-card { align-items: stretch; flex-direction: column; }
+      body.stock-agent-page #stockSpaceAiPane { padding: 8px; }
+      body.stock-agent-page #agentSection { min-height: 680px; height: calc(100dvh - 205px); }
+    }
     .header-actions { flex-wrap: nowrap; }
     .internal-status { display: none !important; }
     .header-icon-button, .header-avatar-button { display: grid; place-items: center; border: 1px solid var(--line); background: #fff; color: #5e718e; }
@@ -1721,11 +1760,11 @@
         <section id="methodSection" class="method-review" hidden>
           <section class="panel review-hero">
             <div class="review-hero-main">
-              <div class="method-eyebrow">RESEARCH TRACKING</div>
-              <div class="method-heading">研究不是回答完就结束，而是持续验证原判断。</div>
-              <div class="method-copy">系统会保存每次研究快照，并在后续第 3、5、10 个交易日回填价格路径、原条件是否维持和需要修正的地方。未到期的样本只显示观察进度，不把短期波动包装成结论。</div>
+              <div class="method-eyebrow">REVIEW</div>
+              <div class="method-heading">复盘自己的判断、操作与市场变化。</div>
+              <div class="method-copy">个人操作与市场环境分开复盘：先还原当时计划和实际发生，再记录哪些判断需要修正。价格事实由数据计算，逻辑结论仍由用户确认。</div>
             </div>
-            <div id="reviewStats" class="review-stat-grid">
+            <div id="reviewStats" class="review-stat-grid" data-review-whitebox hidden>
               <div class="review-stat"><span>跟踪标的</span><strong>—</strong><small>来自我的关注</small></div>
               <div class="review-stat"><span>已有研究快照</span><strong>—</strong><small>可持续复核</small></div>
               <div class="review-stat"><span>已完成观察</span><strong>—</strong><small>累计历史节点</small></div>
@@ -1733,11 +1772,12 @@
             </div>
           </section>
           <div class="review-tabs" role="tablist" aria-label="复盘中心视图">
-            <button class="review-tab active" type="button" data-review-tab="trades" role="tab" aria-selected="true">交易复盘</button>
-            <button class="review-tab" type="button" data-review-tab="outcomes" role="tab" aria-selected="false">研究结果</button>
-            <button class="review-tab" type="button" data-review-tab="runs" role="tab" aria-selected="false">回答记录</button>
-            <button class="review-tab" type="button" data-review-tab="evidence" role="tab" aria-selected="false">证据链</button>
-            <button class="review-tab" type="button" data-review-tab="quality" role="tab" aria-selected="false">质量与缺口</button>
+            <button class="review-tab active" type="button" data-review-tab="trades" role="tab" aria-selected="true">我的交易复盘</button>
+            <button class="review-tab" type="button" data-review-tab="market" role="tab" aria-selected="false">市场复盘</button>
+            <button class="review-tab" type="button" data-review-tab="outcomes" data-review-whitebox role="tab" aria-selected="false" hidden>研究结果</button>
+            <button class="review-tab" type="button" data-review-tab="runs" data-review-whitebox role="tab" aria-selected="false" hidden>回答记录</button>
+            <button class="review-tab" type="button" data-review-tab="evidence" data-review-whitebox role="tab" aria-selected="false" hidden>证据链</button>
+            <button class="review-tab" type="button" data-review-tab="quality" data-review-whitebox role="tab" aria-selected="false" hidden>质量与缺口</button>
           </div>
 
           <section id="reviewTradesPanel" class="review-tab-panel" data-review-panel="trades">
@@ -1765,7 +1805,20 @@
             </div>
           </section>
 
-          <section id="reviewOutcomesPanel" class="review-tab-panel" data-review-panel="outcomes" hidden>
+          <section id="reviewMarketPanel" class="review-tab-panel" data-review-panel="market" hidden>
+            <div class="panel">
+              <div class="panel-head">
+                <div>
+                  <div class="panel-title">市场复盘</div>
+                  <div class="panel-subtitle">按时间回看已经保存的市场判断、实际变化与后续观察</div>
+                </div>
+              </div>
+              <div id="marketReviewList" class="market-review-list"><div class="empty">正在整理市场复盘…</div></div>
+              <div class="market-review-boundary">当前 MVP 先使用已保存的市场短文形成复盘档案，不展示胜率或纪律评分；后续将继续补齐“原预期—实际发生—判断修正—下一步观察”的结构化记录。</div>
+            </div>
+          </section>
+
+          <section id="reviewOutcomesPanel" class="review-tab-panel" data-review-panel="outcomes" data-review-whitebox hidden>
             <div class="panel review-outcome-workspace">
               <aside class="review-outcome-sidebar">
                 <div class="review-outcome-intro">
@@ -1780,7 +1833,7 @@
             </div>
           </section>
 
-          <section id="reviewRunsPanel" class="review-tab-panel" data-review-panel="runs" hidden>
+          <section id="reviewRunsPanel" class="review-tab-panel" data-review-panel="runs" data-review-whitebox hidden>
             <div class="panel review-run-workspace">
               <aside class="review-run-sidebar">
                 <div class="review-run-toolbar">
@@ -1817,7 +1870,7 @@
             </div>
           </section>
 
-          <section id="reviewEvidencePanel" class="review-tab-panel" data-review-panel="evidence" hidden>
+          <section id="reviewEvidencePanel" class="review-tab-panel" data-review-panel="evidence" data-review-whitebox hidden>
             <section class="panel backend-flow-panel review-evidence-flow">
               <div class="backend-flow-title">一条回答怎样从数据走到用户面前</div>
               <div class="backend-flow-copy">价格和结构化指标先由确定性工具生成；资料库负责补充语境；AI 研究引擎只在证据包范围内组织解释、反方证据和失效条件。</div>
@@ -1852,7 +1905,7 @@
             </div>
           </section>
 
-          <section id="reviewQualityPanel" class="review-tab-panel" data-review-panel="quality" hidden>
+          <section id="reviewQualityPanel" class="review-tab-panel" data-review-panel="quality" data-review-whitebox hidden>
             <div class="review-quality-grid">
               <section class="panel method-action-panel">
                 <div class="method-card-title">对话质量复盘</div>
@@ -2029,6 +2082,27 @@
           </form>
         </section>
 
+        <section id="searchPanel" class="panel research-page-panel search-page" hidden>
+          <div class="panel-head">
+            <div>
+              <div id="searchPageTitle" class="panel-title">搜索结果</div>
+              <div id="searchPageSummary" class="panel-subtitle">股票、行业和你的研究记录会分组显示；搜索不会自动发送给 AI。</div>
+            </div>
+            <button id="searchPageBack" class="btn" type="button">返回今日观察</button>
+          </div>
+          <div class="search-page-body">
+            <div id="searchPageStatus" class="search-page-summary">输入关键词后查看完整结果。</div>
+            <div id="searchPageGroups" class="search-page-groups"></div>
+            <div class="search-ai-card">
+              <div class="search-ai-copy">
+                <strong>现有结果没有回答你的问题？</strong>
+                <span>可以把当前关键词带到 AI 研究页。系统只会预填问题，仍需你确认发送。</span>
+              </div>
+              <button id="searchAskAi" class="btn primary" type="button">向 AI 提问</button>
+            </div>
+          </div>
+        </section>
+
         <section id="stockScreenerPanel" class="panel research-page-panel screener-page" hidden>
           <div class="panel-head">
             <div>
@@ -2199,8 +2273,8 @@
                 <option value="300308.SZ">中际旭创 · 300308.SZ</option>
                 <option value="NVDA">英伟达 · NVDA</option>
               </select>
-              <button id="deepStockAgent" class="btn" type="button" disabled hidden>先建立研究</button>
-              <button id="startDeepStock" class="btn primary" type="button">开始 AI 深度研究</button>
+              <button id="deepStockAgent" class="btn" type="button" disabled hidden>继续与 AI 研究</button>
+              <button id="startDeepStock" class="btn primary" type="button" hidden>建立研究空间</button>
             </div>
           </div>
           <div class="stock-space-tabs" role="tablist" aria-label="股票研究空间">
@@ -2212,9 +2286,10 @@
           </div>
           <section id="stockSpaceOverviewPane" class="stock-space-pane" data-stock-space-pane="overview">
             <div id="deepStockOverview" class="deep-stock-overview"><div class="empty">正在准备当前判断、重要变化、待处理事项与行情证据…</div></div>
+            <div id="deepStockJourney" class="stock-research-journey"></div>
           </section>
           <section id="stockSpaceAiPane" class="stock-space-pane" data-stock-space-pane="ai" hidden>
-            <div id="deepStockContent" class="deep-stock-empty">选择股票后建立长期研究。系统会保留七个研究阶段、证据、未决问题和绑定对话，不会用一次模板回答冒充研究完成。</div>
+            <div id="deepStockContent" class="deep-stock-empty">正在恢复绑定对话。系统会读取已有研究阶段、证据和历史消息，不会新建重复会话。</div>
           </section>
           <section id="stockSpaceEvidencePane" class="stock-space-pane" data-stock-space-pane="evidence" hidden>
             <div id="deepStockEvidence" class="stock-space-evidence"><div class="empty">正在整理数据与证据…</div></div>
@@ -2320,6 +2395,7 @@
           <div id="knowledgeList" class="knowledge-page-list"><div class="empty">正在读取资料…</div></div>
         </section>
 
+        <div id="agentSectionHome" hidden></div>
         <section id="agentSection" class="panel chat-panel" hidden>
           <div class="panel-head">
             <div>
@@ -2514,6 +2590,8 @@
       stockTradeReviews: {},
       deepStock: null,
       deepStockSessions: [],
+      deepStockLoaded: false,
+      deepStockLoadPromise: null,
       deepStockOverviewSymbol: null,
       pendingDeepStockSymbol: null,
       stockSpaceTab: "overview",
@@ -2539,6 +2617,8 @@
       globalSearchToken: 0,
       globalSearchItems: [],
       globalSearchActiveIndex: -1,
+      searchQuery: "",
+      searchResults: null,
       agentContextMetadata: {},
       agentContextQuestion: "",
       agentProcessExpanded: false,
@@ -2548,6 +2628,7 @@
       evaluationMode
     };
     const $ = (id) => document.getElementById(id);
+    $("insightSection").after($("todayOverviewGrid"));
 
     function currentWelcomeMessage() {
       return welcomeMessage;
@@ -2733,6 +2814,7 @@
       if (path === "/watchlist") return {page: "watchlist"};
       if (path === "/account") return {page: "account"};
       if (path === "/knowledge") return {page: "knowledge"};
+      if (path === "/search") return {page: "search", query: params.get("q") || ""};
       if (path === "/reviews") return {page: "review", reviewTab: params.get("tab") || "trades", reviewId: params.get("review") || null};
       if (path.startsWith("/stocks/")) {
         let symbol = path.slice("/stocks/".length);
@@ -2752,6 +2834,7 @@
       if (page === "watchlist") return "/watchlist";
       if (page === "account") return "/account";
       if (page === "knowledge") return "/knowledge";
+      if (page === "search") return `/search?q=${encodeURIComponent(state.searchQuery || "")}`;
       if (page === "screening") return "/research?mode=screening";
       if (page === "agent") return `/research/${encodeURIComponent(state.conversationId || "new")}`;
       if (page === "review") {
@@ -2777,9 +2860,36 @@
       window.history[method]({qingshu: true}, "", target);
     }
 
+    function stockAgentIsEmbedded() {
+      return state.workspacePage === "deep_stock"
+        && state.stockSpaceTab === "ai"
+        && Boolean(state.deepStock?.conversation_id);
+    }
+
+    function syncAgentPlacement() {
+      const agent = $("agentSection");
+      const embedded = stockAgentIsEmbedded();
+      if (embedded) {
+        if (agent.parentElement !== $("stockSpaceAiPane")) $("stockSpaceAiPane").appendChild(agent);
+      } else if (agent.previousElementSibling !== $("agentSectionHome")) {
+        $("agentSectionHome").after(agent);
+      }
+      const visible = state.workspacePage === "agent" || embedded;
+      agent.hidden = !visible;
+      document.body.classList.toggle("agent-page", visible);
+      document.body.classList.toggle("stock-agent-page", embedded);
+    }
+
+    function syncReviewModeVisibility() {
+      document.querySelectorAll("[data-review-whitebox]").forEach(node => {
+        node.hidden = !state.evaluationMode;
+      });
+    }
+
     function activateWorkspace(page = "insights", options = {}) {
       const pages = {
         insights: ["今日观察", "全球行情、A股全景、行业轮动与个人研究脉冲"],
+        search: ["搜索", "查找股票、行业和已保存的个人研究资产"],
         agent: ["AI 研究", "连续对话、历史研究、自动 K 线与证据链"],
         screening: ["AI 研究 · 透明选股", "用确定性规则生成可解释研究候选，再进入个股空间继续核验"],
         deep_stock: ["个股研究", "围绕一只股票持续保存判断、变化、证据、任务、对话和报告"],
@@ -2797,15 +2907,15 @@
       $("marketDashboard").hidden = !insightsVisible;
       $("insightSection").hidden = !insightsVisible;
       $("insightAsk").hidden = !insightsVisible;
+      $("searchPanel").hidden = page !== "search";
       $("watchlistPanel").hidden = page !== "watchlist";
       $("stockScreenerPanel").hidden = page !== "screening";
       $("deepStockPanel").hidden = page !== "deep_stock";
       $("knowledgePanel").hidden = page !== "knowledge";
       $("accountPanel").hidden = page !== "account";
-      $("agentSection").hidden = page !== "agent";
       $("methodSection").hidden = page !== "review";
       $("productNotice").hidden = page === "agent" || page === "review";
-      document.body.classList.toggle("agent-page", page === "agent");
+      syncAgentPlacement();
       document.body.classList.toggle("review-page", page === "review");
       $("workspaceTitle").textContent = pages[page][0];
       $("workspaceSubtitle").textContent = pages[page][1];
@@ -2817,7 +2927,11 @@
       if (page === "agent" && state.conversationMessages.length) {
         requestAnimationFrame(() => { void syncDiagnosisFromConversation(state.conversationMessages); });
       }
-      if (page === "review") void loadResearchMethod();
+      if (page === "review") {
+        syncReviewModeVisibility();
+        if (state.evaluationMode) void loadResearchMethod();
+        else void loadReviewCenter();
+      }
       if (page === "watchlist") void loadWatchlist();
       if (page === "screening") {
         if (!state.liZongStrategy) void loadLiZongStrategy();
@@ -2856,6 +2970,8 @@
     }
 
     function hideGlobalSearch() {
+      window.clearTimeout(state.globalSearchTimer);
+      state.globalSearchToken += 1;
       $("globalSearchResults").hidden = true;
       $("globalSearch").setAttribute("aria-expanded", "false");
       state.globalSearchItems = [];
@@ -2893,9 +3009,30 @@
         syncWorkspaceUrl("push");
         return;
       }
+      if (item.type === "industry") {
+        activateWorkspace("screening", {historyMode: "none"});
+        $("stockScreenIndustry").value = item.industry || item.title || "";
+        await loadStockScreener();
+        syncWorkspaceUrl("push");
+      }
+    }
+
+    function openAiFromSearch(query = state.searchQuery) {
+      const question = String(query || "").trim();
       startNewConversation(true);
-      $("chatInput").value = item.question || `请研究“${item.title}”，给出当前事实、核心驱动、反方证据和下一步核验项。`;
+      $("chatInput").value = question
+        ? `请研究“${question}”，先识别对象，再说明当前事实、核心驱动、反方证据和下一步核验项。`
+        : "";
       $("chatInput").focus();
+    }
+
+    function appendGlobalSearchActions(container, query, hasResults) {
+      const actions = document.createElement("div"); actions.className = "global-search-actions";
+      const all = document.createElement("button"); all.type = "button"; all.className = "btn"; all.textContent = hasResults ? "查看全部结果" : "打开搜索页";
+      all.addEventListener("click", () => { void openGlobalSearchPage(query); });
+      const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn primary"; ask.textContent = "向 AI 提问";
+      ask.addEventListener("click", () => openAiFromSearch(query));
+      actions.append(all, ask); container.appendChild(actions);
     }
 
     function renderGlobalSearch(data, query) {
@@ -2921,17 +3058,58 @@
         container.appendChild(section);
       }
       if (!state.globalSearchItems.length) {
-        const item = {type: "ai", title: `问 AI：${query}`, subtitle: "没有匹配的已存资产，直接开始针对性研究", question: `请研究“${query}”，先识别研究对象，再给出当前事实、反方证据和下一步核验项。`};
-        state.globalSearchItems.push(item);
-        const button = document.createElement("button"); button.type = "button"; button.className = "global-search-item"; button.setAttribute("role", "option"); button.setAttribute("aria-selected", "false");
-        const icon = document.createElement("span"); icon.className = "global-search-item-icon"; icon.textContent = "AI";
-        const copy = document.createElement("span"); copy.className = "global-search-item-copy";
-        const title = document.createElement("span"); title.className = "global-search-item-title"; title.textContent = item.title;
-        const subtitle = document.createElement("span"); subtitle.className = "global-search-item-subtitle"; subtitle.textContent = item.subtitle;
-        copy.append(title, subtitle); button.append(icon, copy); button.addEventListener("click", () => { void openGlobalSearchItem(item); }); container.appendChild(button);
+        const empty = document.createElement("div"); empty.className = "global-search-status"; empty.textContent = `没有找到与“${query}”匹配的股票、行业或已保存研究。`;
+        container.appendChild(empty);
       }
+      appendGlobalSearchActions(container, query, Boolean(state.globalSearchItems.length));
       container.hidden = false;
       $("globalSearch").setAttribute("aria-expanded", "true");
+    }
+
+    function renderSearchPage(data, query) {
+      state.searchQuery = query;
+      state.searchResults = data;
+      $("searchPageTitle").textContent = `搜索“${query}”`;
+      $("searchPageSummary").textContent = "结果按股票、行业和你的研究资产分组；任何搜索都不会自动创建对话或运行 Agent。";
+      $("searchPageStatus").textContent = data.total
+        ? `共找到 ${data.total} 个结果。选择一个对象继续查看。`
+        : "没有匹配的已存对象。你可以修改关键词，或主动选择向 AI 提问。";
+      const container = $("searchPageGroups"); container.innerHTML = "";
+      const icons = {stock: "股", industry: "业", workspace: "研", conversation: "聊", review: "盘"};
+      for (const group of (data.groups || [])) {
+        const section = document.createElement("section"); section.className = "search-page-group";
+        const heading = document.createElement("div"); heading.className = "search-page-group-title"; heading.textContent = group.label;
+        const count = document.createElement("span"); count.textContent = `${(group.items || []).length} 项`; heading.appendChild(count);
+        const list = document.createElement("div"); list.className = "search-page-list";
+        for (const item of (group.items || [])) {
+          const button = document.createElement("button"); button.type = "button"; button.className = "search-page-item";
+          const icon = document.createElement("span"); icon.className = "global-search-item-icon"; icon.textContent = icons[item.type] || "搜";
+          const copy = document.createElement("span"); copy.className = "global-search-item-copy";
+          const title = document.createElement("span"); title.className = "global-search-item-title"; title.textContent = item.title || "搜索结果";
+          const subtitle = document.createElement("span"); subtitle.className = "global-search-item-subtitle"; subtitle.textContent = item.subtitle || "打开查看";
+          copy.append(title, subtitle); button.append(icon, copy); button.addEventListener("click", () => { void openGlobalSearchItem(item); }); list.appendChild(button);
+        }
+        section.append(heading, list); container.appendChild(section);
+      }
+    }
+
+    async function openGlobalSearchPage(query, options = {}) {
+      const normalized = String(query || "").trim();
+      if (!normalized) return;
+      hideGlobalSearch();
+      state.searchQuery = normalized;
+      $("globalSearch").value = normalized;
+      activateWorkspace("search", {historyMode: "none"});
+      $("searchPageTitle").textContent = `搜索“${normalized}”`;
+      $("searchPageStatus").textContent = "正在查找股票、行业和你的研究记录…";
+      $("searchPageGroups").innerHTML = "";
+      try {
+        const data = await api(`/v1/search?q=${encodeURIComponent(normalized)}&limit=20`);
+        renderSearchPage(data, normalized);
+      } catch {
+        $("searchPageStatus").textContent = "搜索暂时未完成，请稍后重试。";
+      }
+      syncWorkspaceUrl(options.historyMode || "push");
     }
 
     async function performGlobalSearch(query) {
@@ -2951,6 +3129,10 @@
     }
 
     async function restoreWorkspaceRoute(route, historyMode = "none") {
+      if (route.page === "search" && route.query) {
+        await openGlobalSearchPage(route.query, {historyMode});
+        return;
+      }
       if (route.page === "deep_stock" && route.symbol) {
         await openDeepStockSymbol(route.symbol, route.stockTab || "overview", {historyMode});
         return;
@@ -3374,7 +3556,7 @@
         });
         state.deepStock = session;
         await loadConversations(false);
-        await loadDeepStock();
+        await loadDeepStock({force: true});
         await openDeepStockSymbol(symbol);
         button.textContent = "已进入研究空间";
       } catch (error) {
@@ -3397,7 +3579,7 @@
         });
         state.deepStock = session;
         await loadConversations(false);
-        await loadDeepStock();
+        await loadDeepStock({force: true});
         await continueDeepStockConversation(question);
         button.textContent = "已进入研究对话";
       } catch (error) {
@@ -4053,13 +4235,16 @@
         state.agentContextMetadata = {symbol: boundDeepStockSession.symbol, intent: "stock_research"};
         state.agentContextQuestion = boundDeepStockSession.next_question || data.title || "";
         await loadStockDiagnosis(boundDeepStockSession.symbol);
-        if (boundDeepStockSession.next_question) $("chatInput").value = boundDeepStockSession.next_question;
+        if (boundDeepStockSession.next_question && !$("chatInput").value.trim()) {
+          $("chatInput").value = boundDeepStockSession.next_question;
+        }
       }
       renderConversationList(state.conversations);
       clearImageAttachment();
       await loadMemoryCandidates();
-      if (state.workspacePage === "agent") $("chatInput").focus();
+      if (state.workspacePage === "agent" || stockAgentIsEmbedded()) $("chatInput").focus();
       if (state.workspacePage === "agent") syncWorkspaceUrl(historyMode || (activatePage ? "push" : "replace"));
+      else if (stockAgentIsEmbedded()) syncWorkspaceUrl(historyMode || "replace");
     }
 
     function startNewConversation(activatePage = true, historyMode = null) {
@@ -5671,6 +5856,15 @@
       panel.querySelectorAll("[data-stock-space-pane]").forEach(pane => {
         pane.hidden = pane.dataset.stockSpacePane !== tabKey;
       });
+      syncAgentPlacement();
+      if (
+        tabKey === "ai"
+        && state.workspacePage === "deep_stock"
+        && state.deepStock?.conversation_id
+        && state.conversationId !== state.deepStock.conversation_id
+      ) {
+        void openBoundStockConversation();
+      }
       if (state.workspacePage === "deep_stock") syncWorkspaceUrl(options.historyMode || "none");
     }
 
@@ -7339,14 +7533,32 @@
       const symbol = session?.symbol || $("deepStockSymbol").value || state.deepStockOverviewSymbol || "";
       if (symbol) renderStockSpaceTasks(symbol, session, null, state.stockActionPlans[symbol] || []);
       renderStockSpaceHistory(session, null, state.stockTradeReviews[symbol] || [], symbol);
-      const container = $("deepStockContent");
+      const journey = $("deepStockJourney");
+      const aiEmpty = $("deepStockContent");
+      journey.innerHTML = "";
+      aiEmpty.innerHTML = "";
       if (!session) {
         $("deepStockAgent").disabled = true;
         $("deepStockAgent").hidden = true;
         $("deepStockAgent").textContent = "先建立研究";
-        $("startDeepStock").hidden = false;
-        container.className = "";
-        container.innerHTML = "";
+        $("startDeepStock").hidden = true;
+        journey.hidden = true;
+        aiEmpty.hidden = false;
+        aiEmpty.className = "";
+        if (!state.deepStockLoaded) {
+          const loading = document.createElement("section"); loading.className = "deep-session-cta";
+          loading.setAttribute("aria-live", "polite");
+          const copyWrap = document.createElement("div");
+          const title = document.createElement("div"); title.className = "deep-session-cta-title"; title.textContent = "正在恢复绑定对话";
+          const copy = document.createElement("div"); copy.className = "deep-session-cta-copy"; copy.textContent = "正在读取这只股票已有的研究对话、阶段和证据，不会新建重复会话。";
+          const points = document.createElement("div"); points.className = "deep-session-cta-points";
+          for (const text of ["恢复历史消息", "同步研究阶段", "核对唯一绑定关系"]) {
+            const point = document.createElement("span"); point.className = "deep-session-cta-point"; point.textContent = text; points.appendChild(point);
+          }
+          copyWrap.append(title, copy, points); loading.appendChild(copyWrap); aiEmpty.appendChild(loading);
+          syncAgentPlacement();
+          return;
+        }
         const cta = document.createElement("section"); cta.className = "deep-session-cta";
         const copyWrap = document.createElement("div");
         const title = document.createElement("div"); title.className = "deep-session-cta-title"; title.textContent = "开始这只股票的 AI 深度研究";
@@ -7356,18 +7568,20 @@
           const point = document.createElement("span"); point.className = "deep-session-cta-point"; point.textContent = text; points.appendChild(point);
         }
         copyWrap.append(title, copy, points);
-        const action = document.createElement("button"); action.type = "button"; action.className = "btn primary"; action.textContent = "开始 AI 深度研究"; action.addEventListener("click", startDeepStockSession);
-        cta.append(copyWrap, action); container.appendChild(cta);
-        $("startDeepStock").textContent = "开始 AI 深度研究";
+        const action = document.createElement("button"); action.type = "button"; action.className = "btn primary"; action.textContent = "建立并打开 AI 研究"; action.addEventListener("click", () => { void continueDeepStockConversation(); });
+        cta.append(copyWrap, action); aiEmpty.appendChild(cta);
+        syncAgentPlacement();
         return;
       }
       $("deepStockSymbol").value = session.symbol;
       $("deepStockAgent").disabled = false;
-      $("deepStockAgent").hidden = false;
-      $("deepStockAgent").textContent = "继续 AI 研究";
+      $("deepStockAgent").hidden = true;
+      $("deepStockAgent").textContent = "继续与 AI 研究";
       $("startDeepStock").hidden = true;
-      container.className = "deep-stock-body";
-      container.innerHTML = "";
+      journey.hidden = false;
+      aiEmpty.hidden = true;
+      journey.className = "stock-research-journey deep-stock-body";
+      const container = journey;
 
       const main = document.createElement("div"); main.className = "deep-stock-main";
       const progress = document.createElement("section"); progress.className = "deep-stock-progress";
@@ -7381,9 +7595,7 @@
           ? "七个阶段已完成，后续继续复核新增证据"
           : `仍有 ${(session.progress?.total || 7) - (session.progress?.completed || 0)} 个阶段待研究或复核`);
       progressIdentity.append(progressValue, progressMeta);
-      const continueButton = document.createElement("button"); continueButton.type = "button"; continueButton.className = "btn primary"; continueButton.textContent = "继续深聊";
-      continueButton.addEventListener("click", () => { void continueDeepStockConversation(); });
-      progressHead.append(progressIdentity, continueButton);
+      progressHead.append(progressIdentity);
       const track = document.createElement("div"); track.className = "deep-stock-track";
       const trackFill = document.createElement("span"); trackFill.style.width = `${session.progress?.percent || 0}%`; track.appendChild(trackFill);
       progress.append(progressHead, track);
@@ -7465,28 +7677,46 @@
       }
       side.append(next, unresolved, report);
       container.append(main, side);
+      syncAgentPlacement();
     }
 
-    async function loadDeepStock() {
-      if (!state.user) return;
-      try {
-        const data = await api("/me/deep-stock?limit=50");
-        state.deepStockSessions = data.items || [];
-        renderAccountCenter();
-        refreshDeepStockSymbolOptions();
-        if (state.pendingDeepStockSymbol && [...$("deepStockSymbol").options].some(option => option.value === state.pendingDeepStockSymbol)) {
-          $("deepStockSymbol").value = state.pendingDeepStockSymbol;
-        } else if (!state.deepStock && state.deepStockSessions.length) {
-          $("deepStockSymbol").value = state.deepStockSessions[0].symbol;
-        }
-        const selected = $("deepStockSymbol").value;
-        renderDeepStock(state.deepStockSessions.find(item => item.symbol === selected) || null);
-        if (selected) void loadDeepStockOverview(selected);
-        if (selected === state.pendingDeepStockSymbol) state.pendingDeepStockSymbol = null;
-      } catch {
-        $("deepStockContent").className = "deep-stock-empty";
-        $("deepStockContent").textContent = "个股研究状态正在重新连接。";
+    async function loadDeepStock({force = false} = {}) {
+      if (!state.user) return null;
+      if (state.deepStockLoadPromise) {
+        if (!force) return state.deepStockLoadPromise;
+        await state.deepStockLoadPromise;
       }
+      if (!force && state.deepStockLoaded) return {items: state.deepStockSessions};
+      if (!state.deepStockLoaded && state.workspacePage === "deep_stock") renderDeepStock(null);
+      state.deepStockLoadPromise = (async () => {
+        try {
+          const data = await api("/me/deep-stock?limit=50");
+          state.deepStockSessions = data.items || [];
+          state.deepStockLoaded = true;
+          renderAccountCenter();
+          refreshDeepStockSymbolOptions();
+          if (state.pendingDeepStockSymbol && [...$("deepStockSymbol").options].some(option => option.value === state.pendingDeepStockSymbol)) {
+            $("deepStockSymbol").value = state.pendingDeepStockSymbol;
+          } else if (!state.deepStock && state.deepStockSessions.length) {
+            $("deepStockSymbol").value = state.deepStockSessions[0].symbol;
+          }
+          const selected = $("deepStockSymbol").value;
+          renderDeepStock(state.deepStockSessions.find(item => item.symbol === selected) || null);
+          if (selected) void loadDeepStockOverview(selected);
+          if (selected === state.pendingDeepStockSymbol) state.pendingDeepStockSymbol = null;
+          return data;
+        } catch {
+          $("deepStockJourney").innerHTML = "";
+          $("deepStockContent").className = "deep-stock-empty";
+          $("deepStockContent").hidden = false;
+          $("deepStockContent").textContent = "个股研究状态正在重新连接。";
+          syncAgentPlacement();
+          return null;
+        } finally {
+          state.deepStockLoadPromise = null;
+        }
+      })();
+      return state.deepStockLoadPromise;
     }
 
     async function startDeepStockSession() {
@@ -7500,7 +7730,7 @@
         });
         state.deepStock = session;
         await loadConversations(false);
-        await loadDeepStock();
+        await loadDeepStock({force: true});
         await loadDeepStockOverview(symbol);
         return session;
       } catch (error) {
@@ -7510,16 +7740,38 @@
       } finally { $("startDeepStock").disabled = false; }
     }
 
+    async function openBoundStockConversation(prefillQuestion = null) {
+      const selected = $("deepStockSymbol").value;
+      const session = state.deepStock?.symbol === selected
+        ? state.deepStock
+        : state.deepStockSessions.find(item => item.symbol === selected) || null;
+      if (!session?.conversation_id) return false;
+      state.deepStock = session;
+      if (state.conversationId !== session.conversation_id) {
+        await loadConversations(false);
+        await openConversation(session.conversation_id, false, "none");
+      }
+      syncAgentPlacement();
+      $("modelTier").value = "deep";
+      updateAgentMode();
+      if (prefillQuestion) $("chatInput").value = prefillQuestion;
+      else if (!$("chatInput").value.trim() && !(state.conversationMessages || []).length) {
+        $("chatInput").value = session.next_question || "请继续当前个股研究阶段。";
+      }
+      $("chatInput").focus();
+      return true;
+    }
+
     async function continueDeepStockConversation(prefillQuestion = null) {
       const session = state.deepStock || await startDeepStockSession();
       if (!session?.conversation_id) return;
-      await loadConversations(false);
-      await openConversation(session.conversation_id, false);
-      activateWorkspace("agent");
-      $("modelTier").value = "deep";
-      updateAgentMode();
-      $("chatInput").value = prefillQuestion || session.next_question || "请继续当前个股研究阶段。";
-      $("chatInput").focus();
+      if (state.workspacePage !== "deep_stock" || $("deepStockSymbol").value !== session.symbol) {
+        await openDeepStockSymbol(session.symbol, "ai", {historyMode: "none"});
+      } else {
+        activateStockSpaceTab("ai", {historyMode: "none"});
+      }
+      await openBoundStockConversation(prefillQuestion);
+      syncWorkspaceUrl("push");
     }
 
     async function openResearchReport(symbol, button) {
@@ -7582,7 +7834,25 @@
         container.appendChild(row);
       }
       if (!container.children.length) container.innerHTML = '<div class="empty">新的市场洞察正在形成</div>';
+      renderMarketReviewCenter(items);
       renderHomeFocus();
+    }
+
+    function renderMarketReviewCenter(items = state.insightItems) {
+      const container = $("marketReviewList");
+      if (!container) return;
+      container.innerHTML = "";
+      const marketItems = (items || []).filter(item => item.category === "market");
+      for (const article of marketItems) {
+        const row = document.createElement("button"); row.type = "button"; row.className = "market-review-item";
+        const title = document.createElement("strong"); title.textContent = article.title || "市场复盘";
+        const time = document.createElement("time"); time.textContent = readableTime(article.created_at);
+        const summary = document.createElement("span"); summary.textContent = humanizeInsightText(article.summary || article.body || "");
+        row.append(title, time, summary);
+        row.addEventListener("click", () => openReader(article.title, humanizeInsightText(article.body || article.summary), `市场复盘 · ${readableTime(article.created_at)}`));
+        container.appendChild(row);
+      }
+      if (!container.children.length) container.innerHTML = '<div class="empty">还没有已保存的市场复盘。后台形成新的市场短文后会按时间出现在这里。</div>';
     }
 
     async function loadArticles() {
@@ -7644,7 +7914,10 @@
     }
 
     function activateReviewTab(tabName = "trades", options = {}) {
-      state.reviewTab = ["trades", "outcomes", "runs", "evidence", "quality"].includes(tabName) ? tabName : "trades";
+      const allowed = state.evaluationMode
+        ? ["trades", "market", "outcomes", "runs", "evidence", "quality"]
+        : ["trades", "market"];
+      state.reviewTab = allowed.includes(tabName) ? tabName : "trades";
       document.querySelectorAll("[data-review-tab]").forEach(button => {
         const active = button.dataset.reviewTab === state.reviewTab;
         button.classList.toggle("active", active);
@@ -7653,6 +7926,7 @@
       document.querySelectorAll("[data-review-panel]").forEach(panel => {
         panel.hidden = panel.dataset.reviewPanel !== state.reviewTab;
       });
+      if (state.reviewTab === "market") renderMarketReviewCenter();
       if (state.workspacePage === "review") syncWorkspaceUrl(options.historyMode || "none");
     }
 
@@ -8150,6 +8424,16 @@
       if (!container.children.length) container.innerHTML = `<div class="empty">当前没有检测到明确问题。Run 状态：completed ${statuses.completed || 0}，guarded ${statuses.guarded || 0}，degraded ${statuses.degraded || 0}。</div>`;
     }
 
+    async function loadReviewCenter() {
+      const results = await Promise.allSettled([
+        loadTradeReviewCenter(state.pendingTradeReviewId),
+        loadArticles()
+      ]);
+      if (results[0].status === "rejected") $("tradeReviewSummary").textContent = "暂时无法读取交易复盘";
+      renderMarketReviewCenter();
+      activateReviewTab(state.reviewTab);
+    }
+
     async function loadResearchMethod() {
       try {
         const [method, actions, tasks, quality, outcomes] = await Promise.all([
@@ -8194,9 +8478,9 @@
             loadWatchlist();
             loadArticles();
             loadTodayOverview();
-            if (state.workspacePage === "review") loadResearchMethod();
+            if (state.workspacePage === "review" && state.evaluationMode) loadResearchMethod();
           }
-          if (data.type === "evidence_tasks_updated" && state.workspacePage === "review") loadResearchMethod();
+          if (data.type === "evidence_tasks_updated" && state.workspacePage === "review" && state.evaluationMode) loadResearchMethod();
           if (data.type === "stock_strategy_updated" && data.strategy_id === "li_zong") {
             if (state.workspacePage === "screening") void loadLiZongStrategy();
           }
@@ -8298,6 +8582,7 @@
         });
         state.conversationId = data.conversation_id || state.conversationId;
         if (state.workspacePage === "agent") syncWorkspaceUrl("replace");
+        else if (stockAgentIsEmbedded()) syncWorkspaceUrl("replace");
         $("conversationTitle").textContent = data.conversation_title || $("conversationTitle").textContent;
         if (attachedImage) clearImageAttachment();
         const responseMetadata = {
@@ -8333,7 +8618,13 @@
         }
         if (["watchlist_update", "watchlist_brief"].includes(data.intent)) await loadWatchlist();
         if (["research_priority", "research_outcome"].includes(data.intent)) await loadKnowledge();
-        if (data.deep_stock_session) state.deepStock = data.deep_stock_session;
+        if (data.deep_stock_session) {
+          state.deepStock = data.deep_stock_session;
+          const index = state.deepStockSessions.findIndex(item => item.symbol === data.deep_stock_session.symbol);
+          if (index >= 0) state.deepStockSessions[index] = data.deep_stock_session;
+          else state.deepStockSessions.unshift(data.deep_stock_session);
+          renderDeepStock(data.deep_stock_session);
+        }
         await maybeUpdateDiagnosis(data, question);
         await loadConversations(false);
       } catch (error) {
@@ -8502,14 +8793,18 @@
         setGlobalSearchActive(state.globalSearchActiveIndex <= 0 ? state.globalSearchItems.length - 1 : state.globalSearchActiveIndex - 1);
       } else if (event.key === "Enter") {
         event.preventDefault();
-        const item = state.globalSearchItems[state.globalSearchActiveIndex < 0 ? 0 : state.globalSearchActiveIndex];
+        const item = state.globalSearchActiveIndex >= 0
+          ? state.globalSearchItems[state.globalSearchActiveIndex]
+          : null;
         if (item) void openGlobalSearchItem(item);
-        else if (event.currentTarget.value.trim()) void performGlobalSearch(event.currentTarget.value.trim());
+        else if (event.currentTarget.value.trim()) void openGlobalSearchPage(event.currentTarget.value.trim());
       } else if (event.key === "Escape") {
         hideGlobalSearch();
       }
     });
     $("globalSearchResults").addEventListener("click", event => event.stopPropagation());
+    $("searchAskAi").addEventListener("click", () => openAiFromSearch());
+    $("searchPageBack").addEventListener("click", () => activateWorkspace("insights"));
     $("knowledgeSearch").addEventListener("input", event => {
       state.knowledgeQuery = event.currentTarget.value;
       renderKnowledge();

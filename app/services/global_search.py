@@ -174,7 +174,6 @@ class GlobalSearchService:
                 for item in items
                 if str(item.get("industry") or "").strip() == industry
             ][:3]
-            question = f"分析{industry}板块的当前行情、核心驱动、反方证据和失效条件"
             matches.append(
                 (
                     score,
@@ -186,8 +185,11 @@ class GlobalSearchService:
                         "subtitle": f"{count} 只股票" + (
                             f" · {'、'.join(examples)}" if examples else ""
                         ),
-                        "question": question,
-                        "url": f"/research/new?question={quote(question)}",
+                        "industry": industry,
+                        "url": (
+                            "/research?mode=screening"
+                            f"&industry={quote(industry)}"
+                        ),
                     },
                 )
             )

@@ -100,7 +100,9 @@ def test_global_search_finds_market_and_private_research_assets(app) -> None:
     industry = _group(industry_search.json(), "industries")[0]
     assert industry["title"] == "通信设备"
     assert "2 只股票" in industry["subtitle"]
-    assert industry["question"].startswith("分析通信设备板块")
+    assert "question" not in industry
+    assert industry["industry"] == "通信设备"
+    assert industry["url"].startswith("/research?mode=screening&industry=")
 
 
 def test_global_search_keeps_conversations_user_isolated(app) -> None:
@@ -123,6 +125,7 @@ def test_global_search_keeps_conversations_user_isolated(app) -> None:
 def test_human_routes_and_frontend_state_contract_are_refreshable(client) -> None:
     for path in (
         "/today",
+        "/search?q=通信设备",
         "/watchlist",
         "/stocks/000063.SZ?tab=ai",
         "/research/new",
@@ -143,5 +146,10 @@ def test_human_routes_and_frontend_state_contract_are_refreshable(client) -> Non
         'state.selectedTradeReviewId && state.reviewTab === "trades"',
         'activateStockSpaceTab(initialRoute.stockTab || "overview", {historyMode: "none"})',
         'id="globalSearchResults"',
+        'async function openGlobalSearchPage(query, options = {})',
+        'function openAiFromSearch(query = state.searchQuery)',
+        'if (item.type === "industry")',
+        'else if (event.currentTarget.value.trim()) void openGlobalSearchPage',
     ):
         assert fragment in page
+    assert 'const item = {type: "ai"' not in page

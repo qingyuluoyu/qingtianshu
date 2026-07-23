@@ -739,7 +739,14 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "打开原始公告或信息源" in page.text
     assert 'api("/me/deep-stock?limit=50")' in page.text
     assert 'api("/me/deep-stock", {' in page.text
-    assert "七个研究阶段" in page.text
+    assert "deepStockLoaded: false" in page.text
+    assert "deepStockLoadPromise: null" in page.text
+    assert "正在恢复绑定对话" in page.text
+    assert "不会新建重复会话" in page.text
+    assert "if (state.deepStockLoadPromise)" in page.text
+    assert "if (!force && state.deepStockLoaded)" in page.text
+    assert "await loadDeepStock({force: true})" in page.text
+    assert "七阶段研究进度" in page.text
     assert 'data-page="watchlist"' in page.text
     assert 'id="watchlistAddForm"' in page.text
     assert 'api(`/stocks/${encodeURIComponent(item.symbol)}/intraday`)' in page.text

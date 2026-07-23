@@ -8,6 +8,10 @@ from app.services.research_claims import build_research_claim_ledger
 from app.utils import utc_now
 
 
+class DeepStockConversationConflict(ValueError):
+    """A stock workspace cannot silently replace or share its primary chat."""
+
+
 class DeepStockResearchService:
     """Persist one guided stock-research space per user and security."""
 
@@ -138,8 +142,24 @@ class DeepStockResearchService:
         existing = self.database.get_deep_stock_session(user_id, canonical)
         if existing is not None:
             existing = self._reconcile_legacy_stages(user_id, existing)
+            if conversation_id and str(existing["conversation_id"]) != conversation_id:
+                raise DeepStockConversationConflict(
+                    "这只股票已经绑定长期研究对话，不能静默替换主会话"
+                )
         bound_conversation = None
         if conversation_id:
+            conversation_session = (
+                self.database.get_deep_stock_session_by_conversation(
+                    user_id, conversation_id
+                )
+            )
+            if (
+                conversation_session is not None
+                and str(conversation_session["symbol"]) != canonical
+            ):
+                raise DeepStockConversationConflict(
+                    "这个研究对话已经属于另一只股票，不能重复绑定"
+                )
             bound_conversation = self.database.get_conversation(
                 user_id, conversation_id
             )
