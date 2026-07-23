@@ -59,6 +59,57 @@ def test_hermes_route_keeps_explicit_override_and_vision_route(monkeypatch):
     assert agent_module._resolve_hermes_route("vision") == (None, None)
 
 
+def test_market_brief_uses_compact_runtime_skill_without_removing_full_rules():
+    skill_dir = agent_module.PROJECT_ROOT / "app" / "skills" / "market-brief"
+    runtime_path = skill_dir / "PROMPT.md"
+    full_path = skill_dir / "SKILL.md"
+
+    assert runtime_path.exists()
+    assert full_path.exists()
+    assert AgentService._load_skill("market-brief") == runtime_path.read_text(
+        encoding="utf-8"
+    )
+    assert runtime_path.stat().st_size < full_path.stat().st_size * 0.6
+
+
+def test_market_knowledge_context_keeps_two_short_excerpts():
+    compact = AgentService._compact_market_knowledge_context(
+        {
+            "query": "美股为什么跌",
+            "coverage": {"count": 3},
+            "items": [
+                {
+                    "title": f"资料{i}",
+                    "excerpt": "证据" * 400,
+                    "scope": "common",
+                }
+                for i in range(3)
+            ],
+        }
+    )
+
+    assert len(compact["items"]) == 2
+    assert all(len(item["excerpt"]) <= 500 for item in compact["items"])
+
+
+def test_market_knowledge_context_prefers_specific_market_rules():
+    compact = AgentService._compact_market_knowledge_context(
+        {
+            "query": "那主要风险是什么",
+            "items": [
+                {"title": "清数智算证据层级", "excerpt": "通用"},
+                {"title": "市场涨跌原因的证据规则", "excerpt": "原因"},
+                {"title": "市场趋势与风险分析规则", "excerpt": "风险"},
+            ],
+        }
+    )
+
+    assert [item["title"] for item in compact["items"]] == [
+        "市场涨跌原因的证据规则",
+        "市场趋势与风险分析规则",
+    ]
+
+
 def test_numeric_guard_accepts_evidence_rounding_and_rejects_new_targets():
     evidence = {
         "type": "stock_research",

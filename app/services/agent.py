@@ -5691,14 +5691,14 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         )
         compact_drivers["items"] = [
             {
-                key: item.get(key)
-                for key in (
-                    "category",
-                    "title",
-                    "summary",
-                    "published_at",
-                    "engagement",
+                key: (
+                    str(item.get(key))[:220]
+                    if key == "title"
+                    else str(item.get(key))[:320]
+                    if key == "summary"
+                    else item.get(key)
                 )
+                for key in ("category", "title", "summary", "published_at")
                 if item.get(key) is not None
             }
             for item in (market_drivers.get("items") or [])[:driver_limit]
@@ -6084,6 +6084,27 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
     def _compact_market_knowledge_context(
         context: dict[str, Any],
     ) -> dict[str, Any]:
+        items = list(context.get("items") or [])
+
+        def relevance_priority(indexed_item: tuple[int, dict[str, Any]]) -> tuple[int, int]:
+            index, item = indexed_item
+            title = str(item.get("title") or "")
+            if item.get("scope") == "user":
+                return (0, index)
+            if any(
+                phrase in title
+                for phrase in ("市场涨跌原因", "市场趋势与风险", "大盘分析")
+            ):
+                return (1, index)
+            return (2, index)
+
+        selected_items = [
+            item
+            for _, item in sorted(
+                enumerate(items),
+                key=relevance_priority,
+            )[:2]
+        ]
         return {
             "query": context.get("query"),
             "coverage": context.get("coverage") or {},
@@ -6100,11 +6121,11 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     if item.get(key) is not None
                 }
                 | (
-                    {"excerpt": str(item.get("excerpt") or "")[:800]}
+                    {"excerpt": str(item.get("excerpt") or "")[:500]}
                     if item.get("excerpt")
                     else {}
                 )
-                for item in (context.get("items") or [])[:3]
+                for item in selected_items
             ],
         }
 
@@ -6519,7 +6540,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 
     @staticmethod
     def _load_skill(skill_name: str) -> str:
-        path = PROJECT_ROOT / "app" / "skills" / skill_name / "SKILL.md"
+        skill_dir = PROJECT_ROOT / "app" / "skills" / skill_name
+        runtime_path = skill_dir / "PROMPT.md"
+        path = runtime_path if runtime_path.exists() else skill_dir / "SKILL.md"
         return path.read_text(encoding="utf-8")
 
     @staticmethod

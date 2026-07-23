@@ -654,3 +654,14 @@ uv run pytest
 - 全量 `495 tests collected` 全部通过；`uv run ruff check .`、内联 JavaScript 解析和 `git diff --check` 均通过。
 
 当前边界：顶部提醒是由今日事项实时聚合的 MVP 入口，尚未实现持久化已读状态、邮件/短信/微信投递、用户订阅规则和通知审计；真实操作仍由用户手工记录，不连接券商、不自动交易。
+
+## 2026-07-23 大盘 Agent 运行上下文与真实响应延迟优化
+
+- 保留 `app/skills/market-brief/SKILL.md` 作为完整开发与审计规则，新增 `PROMPT.md` 作为运行时精简规则；`AgentService._load_skill` 对存在运行时版本的 Skill 优先加载 `PROMPT.md`，其他 Skill 保持原兼容路径。
+- 市场资料库运行时上下文从最多 3 项收敛为 2 项，单项摘录从 800 字收敛为 500 字；在相同数量下优先保留用户资料和“市场涨跌原因 / 市场趋势与风险”等针对性规则，连续追问仍继承当前市场焦点。市场资讯不再传入 `engagement`，标题和摘要分别限制为 220/320 字；完整证据仍保留在 Run 证据文件和数据库中。
+- 使用与上一轮完全相同的问题，在 `/demo?qa=1` 新建隔离对话并按 Enter 发送。新 Run `820f92ef-4a8a-4d57-abac-72ed4a26f9e7` 为 `market_brief / economy / completed`，Provider `deepseek`、Model `deepseek-v4-pro`，输出守卫通过、无错误。
+- 前后对照：Prompt 从 `26,162` 降至 `17,853` 字节；输入从 `7,256` 降至 `5,308` tokens；首 Token 从 `26.015s` 降至 `14.245s`；首个安全可见内容从 `27.783s` 降至 `14.843s`；请求总耗时从 `34.196s` 降至 `23.684s`。原始 `evidence.json` 均为 `32,496` 字节，证明没有通过删除底层证据换取速度。
+- 最终页面正确识别“美国股市 · 标普500”，加载最近收盘分钟 K 线；即时回答包含四个指数价格事实、三组市场资讯线索、成交/趋势反方证据和下一步财报、油价、市场广度核验。页面控制台无 warning/error，没有出现固定摘要替代模型回答或前后两段跳变。
+- 全量 `498 tests collected` 并全部通过；`uv run ruff check .`、内联 JavaScript `node --check`、`git diff --check` 和 `uv lock --check` 均通过。运行中 `/health=ok`、`hermes_enabled=true`、数据健康 `54/54`。
+
+当前边界：本次同题实测明显改善，但 Provider 侧推理时间会随问题和服务负载波动，不能把单次 `14.843s` 当成固定 SLA；下一阶段应继续优先优化真实用户路径和金融证据质量，而不是增加固定回复或更多低收益守卫。
