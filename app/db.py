@@ -188,7 +188,10 @@ class Database:
                         REFERENCES stock_workspaces(id) ON DELETE CASCADE,
                     symbol TEXT NOT NULL,
                     candidate_type TEXT NOT NULL
-                        CHECK(candidate_type IN ('thesis', 'observation_task')),
+                        CHECK(candidate_type IN (
+                            'thesis', 'observation_task',
+                            'action_plan', 'review_draft'
+                        )),
                     status TEXT NOT NULL CHECK(status IN (
                         'pending_confirmation', 'confirmed', 'rejected', 'stale'
                     )),
@@ -1440,7 +1443,14 @@ class Database:
             ("ai_writeback_candidates",),
         ).fetchone()
         schema = str(row["sql"] or "") if row is not None else ""
-        if "observation_task" in schema:
+        if all(
+            candidate_type in schema
+            for candidate_type in (
+                "observation_task",
+                "action_plan",
+                "review_draft",
+            )
+        ):
             return
         connection.executescript(
             """
@@ -1458,7 +1468,10 @@ class Database:
                     REFERENCES stock_workspaces(id) ON DELETE CASCADE,
                 symbol TEXT NOT NULL,
                 candidate_type TEXT NOT NULL
-                    CHECK(candidate_type IN ('thesis', 'observation_task')),
+                    CHECK(candidate_type IN (
+                        'thesis', 'observation_task',
+                        'action_plan', 'review_draft'
+                    )),
                 status TEXT NOT NULL CHECK(status IN (
                     'pending_confirmation', 'confirmed', 'rejected', 'stale'
                 )),

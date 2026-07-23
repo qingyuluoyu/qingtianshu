@@ -90,11 +90,19 @@ def _evidence() -> dict:
     }
 
 
-def _run(app, user_id: str, status: str, message: str, evidence: dict) -> dict:
+def _run(
+    app,
+    user_id: str,
+    status: str,
+    message: str,
+    evidence: dict,
+    *,
+    intent: str = "stock_research",
+) -> dict:
     database = app.state.database
     run = database.create_run(
         user_id,
-        "stock_research",
+        intent,
         "economy",
         {"message": message},
         app.state.settings.workspace_root,
@@ -177,6 +185,7 @@ def test_normal_question_does_not_create_writeback_and_negated_request_is_respec
         "分析中兴通讯当前最强的反方证据。",
         "分析中兴通讯，但不要形成判断草稿。",
         "分析中兴通讯，但先不要创建观察任务。",
+        "分析中兴通讯，但不要生成操作计划。",
     ):
         run = _run(app, user["id"], "completed", message, evidence)
         result = app.state.structured_ai.build_and_persist(
@@ -189,6 +198,121 @@ def test_normal_question_does_not_create_writeback_and_negated_request_is_respec
             symbol="000063.SZ",
         )
         assert result["candidate_writebacks"] == []
+
+
+def test_action_plan_writeback_requires_confirmation_and_keeps_targets_empty(app):
+    owner = TestClient(app)
+    owner_user = _create_user(owner, "Structured AI Plan Owner")
+    _add_stock(owner, "关注订单、利润和经营现金流")
+    message = (
+        "分析中兴通讯并生成操作计划，核验条件：如果下一期经营现金流继续恶化，"
+        "由我重新评估是否减仓；不要填写目标价、数量或仓位。"
+    )
+    run = _run(app, owner_user["id"], "completed", message, _evidence())
+    result = app.state.structured_ai.build_and_persist(
+        user_id=owner_user["id"],
+        run=run,
+        evidence=_evidence(),
+        answer=run["answer"],
+        message=message,
+        conversation_id=None,
+        symbol="000063.SZ",
+    )
+
+    assert len(result["candidate_writebacks"]) == 1
+    candidate = result["candidate_writebacks"][0]
+    assert candidate["candidate_type"] == "action_plan"
+    assert candidate["status"] == "pending_confirmation"
+    assert candidate["payload"]["action_type"] == "reduce"
+    assert "经营现金流继续恶化" in candidate["payload"]["trigger_text"]
+    assert candidate["payload"]["target_quantity"] is None
+    assert candidate["payload"]["target_amount"] is None
+    assert candidate["payload"]["target_position_percent"] is None
+    assert owner.get("/v1/stocks/000063/action-plans").json()["items"] == []
+
+    path = f"/v1/ai-writebacks/{candidate['id']}"
+    confirmed = owner.post(f"{path}/confirm")
+    assert confirmed.status_code == 200
+    plan = confirmed.json()["action_plan"]
+    assert plan["status"] == "draft"
+    assert plan["action_type"] == "reduce"
+    assert plan["target_quantity"] is None
+    assert plan["target_amount"] is None
+    assert plan["target_position_percent"] is None
+    assert owner.post(f"{path}/confirm").json()["action_plan"]["id"] == plan["id"]
+    assert [
+        item["id"]
+        for item in owner.get("/v1/stocks/000063/action-plans").json()["items"]
+    ] == [plan["id"]]
+
+    stale_run = _run(app, owner_user["id"], "completed", message, _evidence())
+    stale_result = app.state.structured_ai.build_and_persist(
+        user_id=owner_user["id"],
+        run=stale_run,
+        evidence=_evidence(),
+        answer=stale_run["answer"],
+        message=message,
+        conversation_id=None,
+        symbol="000063.SZ",
+    )
+    stale_candidate = stale_result["candidate_writebacks"][0]
+    _add_stock(owner, "正式判断已经由用户更新")
+    stale_path = f"/v1/ai-writebacks/{stale_candidate['id']}"
+    assert owner.post(f"{stale_path}/confirm").status_code == 409
+    assert owner.get(stale_path).json()["status"] == "stale"
+    assert len(owner.get("/v1/stocks/000063/action-plans").json()["items"]) == 1
+
+
+def test_focused_earnings_run_creates_action_plan_candidate_from_user_condition(app):
+    owner = TestClient(app)
+    owner_user = _create_user(owner, "Focused Earnings Plan Owner")
+    _add_stock(owner, "关注经营现金流兑现")
+    message = (
+        "分析中兴通讯并生成操作计划，核验条件：如果下一期经营现金流继续恶化，"
+        "由我重新评估是否减仓；不要填写目标价、数量或仓位。"
+    )
+    evidence = {
+        "type": "earnings_quality",
+        "symbol": "000063.SZ",
+        "name": "中兴通讯",
+        "generated_at": "2026-07-23T08:00:00+08:00",
+        "latest_report": {"report_date": "2026-03-31"},
+        "contradictions": ["经营现金流对归母净利润覆盖低于 0.8。"],
+        "review_points": ["核验下一报告期经营现金流是否改善。"],
+    }
+    run = _run(
+        app,
+        owner_user["id"],
+        "completed",
+        message,
+        evidence,
+        intent="earnings_quality",
+    )
+
+    result = app.state.structured_ai.build_and_persist(
+        user_id=owner_user["id"],
+        run=run,
+        evidence=evidence,
+        answer=run["answer"],
+        message=message,
+        conversation_id=None,
+        symbol="000063.SZ",
+    )
+
+    assert result["status"] == "complete"
+    assert result["citations"]
+    assert len(result["candidate_writebacks"]) == 1
+    candidate = result["candidate_writebacks"][0]
+    assert candidate["candidate_type"] == "action_plan"
+    assert candidate["citation_ids"]
+    assert candidate["payload"]["action_type"] == "reduce"
+    assert candidate["payload"]["trigger_text"].count("经营现金流继续恶化") == 1
+    assert "不要填写目标价" not in candidate["payload"]["trigger_text"]
+    assert "低于 0.8" not in candidate["payload"]["trigger_text"]
+    assert "本轮核验条件" not in candidate["payload"]["boundary"]
+    assert candidate["payload"]["target_quantity"] is None
+    assert candidate["payload"]["target_amount"] is None
+    assert candidate["payload"]["target_position_percent"] is None
 
 
 def test_observation_task_writeback_requires_confirmation_and_is_idempotent(app):
@@ -287,6 +411,8 @@ def test_database_migrates_existing_thesis_only_writeback_schema(tmp_path: Path)
             "SELECT sql FROM sqlite_master WHERE name = 'ai_writeback_candidates'"
         ).fetchone()["sql"]
     assert "observation_task" in schema
+    assert "action_plan" in schema
+    assert "review_draft" in schema
 
 
 def test_writeback_confirm_reject_stale_and_user_isolation(app):

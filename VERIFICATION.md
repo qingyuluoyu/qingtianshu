@@ -737,3 +737,15 @@ uv run pytest
 - 最终自动化验收：`549 passed`；`uv run ruff check .`、`uv run python -m compileall -q app tests`、`uv lock --check` 和 `git diff --check` 全部通过。打包测试会忽略编译检查生成的 `__pycache__/*.pyc`，不再把本地编译产物误认为产品静态资产。最终服务 `/health=ok`、Hermes 已启用、数据健康 `54/54`。
 
 当前边界：大模型首个可见回答仍受 Provider 推理时间影响；“为什么涨跌”的具体因果只有在同日官方归因或可验证事件研究存在时才能升级为确认结论，否则必须保持候选线索与未确认边界。
+
+## 2026-07-23 统一操作计划与交易复盘候选写回
+
+- `StructuredAIService` 的股票研究范围从单一 `stock_research` 扩展到财报质量、利润现金流、主营、股东、分析师预期和事件等专项 Run。专项模块现从既有确定性结论生成同一份 Claim Ledger，并保留报告期、来源、限制和下一步核验，不再因为路由到 `earnings_quality` 等意图而跳过结构化卡片。
+- `candidate_type` 现统一支持 `thesis`、`observation_task`、`action_plan` 和 `review_draft`。操作计划与交易复盘都先创建 `pending_confirmation` 候选；确认前不修改正式领域对象，确认后复用原领域服务，重复确认幂等，版本冲突会把候选标记为 `stale`，跨用户读取和确认返回 `404`。
+- 操作计划候选只使用用户本轮明确给出的核验条件。模型运行提示要求触发条件逐字保留用户原句，不得用“即、例如、或、且”等扩写比率、比较基准或技术价位；确定性候选同时把目标数量、金额和仓位固定留空。
+- 真实浏览器在 `http://127.0.0.1:8773` 用 Enter 发送“分析中兴通讯并生成操作计划，核验条件：如果下一期经营现金流继续恶化，由我重新评估是否减仓；不要填写目标价、数量或仓位。”。Run `004182f2-12d0-4cdd-a5db-1f80caa93039` 为 `earnings_quality / completed`，页面即时生成针对性财务回答和 5 项可展开引用，并显示待确认操作计划卡。
+- 确认前当前用户的 `action_plans` 为 0；点击确认后 candidate `eeb6f8e0-d30d-4875-96fb-88b1dd330a4d` 变为 `confirmed`，创建计划 `24c04e15-0448-4411-a026-d457aa5ffde1`。计划只包含用户原条件，`target_quantity`、`target_amount`、`target_position_percent` 均为空；刷新原对话仍显示已确认，并可在中兴通讯“任务与操作”页恢复为“减少持仓 · 草稿”。
+- 复盘 API 回归覆盖：`generate-draft` 只返回 `review_draft` 候选，确认前 `current_version` 为空；确认候选后才保存 AI 版本并关联原 `trade_review / completed` Run，之后仍可由用户编辑、确认和归档。
+- 全量 `553 tests collected` 全部通过；Ruff、`compileall`、内联 JavaScript、`uv lock --check`、`git diff --check` 和敏感文件检查全部通过。运行中 `/health=ok`、Hermes 已启用、数据健康 `54/54`。
+
+当前边界：候选确认与正式领域写入在 MVP 中已经可恢复和幂等，但生产环境仍需把跨表确认收敛为单事务或补偿事务，并补齐 Outbox、正式通知和失败模块独立重试。

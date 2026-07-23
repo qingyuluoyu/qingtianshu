@@ -967,9 +967,11 @@ def create_app(
     deep_stock = DeepStockResearchService(database)
     stock_domain = StockDomainService(database)
     observation_tasks = ObservationTaskService(database)
-    structured_ai = StructuredAIService(database, stock_domain, observation_tasks)
     position_ledger = PositionLedgerService(database)
     trade_workflow = TradeWorkflowService(database)
+    structured_ai = StructuredAIService(
+        database, stock_domain, observation_tasks, trade_workflow
+    )
     global_search = GlobalSearchService(database, trade_workflow)
     resolved_tushare_client = tushare_client
     if resolved_tushare_client is None and settings.tushare_enabled:
@@ -2117,16 +2119,19 @@ def create_app(
                     detail="复盘草稿暂未生成，请稍后重试。已记录的操作和快照不受影响。",
                 )
             draft = trade_workflow.parse_review_agent_answer(run.get("answer") or "")
-            return trade_workflow.save_ai_draft(
+            return structured_ai.create_review_draft_writeback(
                 user_id=user["id"],
-                review_id=review_id,
-                source_run_id=str(run["id"]),
+                run=run,
+                evidence=evidence,
+                draft=draft,
                 base_version=payload.base_version,
-                logic_result=draft["logic_result"],
-                plan_deviation=draft["plan_deviation"],
-                bias_tags=draft["bias_tags"],
-                improvement_text=draft["improvement_text"],
             )
+        except StructuredAINotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except StructuredAIConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except StructuredAIInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         except TradeWorkflowNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except TradeWorkflowConflict as exc:
@@ -4479,6 +4484,7 @@ def create_app(
                 conversation_history=history,
             )
             evidence.setdefault("research_plan", context_plan)
+            evidence["research_claims"] = build_research_claim_ledger(evidence)
             try:
                 workspace_packet = stock_workspace.get_workspace(user_id, symbol)
                 evidence["stock_workspace_context"] = (

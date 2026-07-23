@@ -3923,6 +3923,94 @@
       node.appendChild(sources);
     }
 
+    function aiWritebackPresentation(candidate) {
+      const payload = candidate.payload || {};
+      if (candidate.candidate_type === "observation_task") return {
+        title: "AI 整理的观察任务 · 需要你确认",
+        copy: [`任务：${payload.title || "本轮证据核验"}`, `核验内容：${payload.description || ""}`].join("\n\n"),
+        confirm: "确认创建观察任务",
+        pending: "确认前不会创建个人任务。",
+        working: "正在创建观察任务…",
+        confirmed: "已由你确认，并保存为个人观察任务。",
+        rejected: "已放弃，本次没有创建观察任务。",
+        stale: "股票研究空间已变化，这份任务候选已失效。"
+      };
+      if (candidate.candidate_type === "action_plan") return {
+        title: "AI 整理的操作计划草稿 · 需要你确认",
+        copy: [`计划方向：${actionPlanTypeLabel(payload.action_type)}`, `复核条件：${payload.trigger_text || ""}`, payload.boundary || ""].filter(Boolean).join("\n\n"),
+        confirm: "确认保存计划草稿",
+        pending: "确认前不会创建计划；AI 不填写目标价、仓位或收益承诺。",
+        working: "正在保存计划草稿…",
+        confirmed: "已由你确认，并保存为可继续检查的操作计划草稿。",
+        rejected: "已放弃，本次没有创建操作计划。",
+        stale: "正式判断或股票空间已变化，这份计划候选已失效。"
+      };
+      if (candidate.candidate_type === "review_draft") return {
+        title: "AI 生成的交易复盘草稿 · 需要你确认",
+        copy: [`确定性价格结果：${payload.price_result || ""}`, `逻辑复盘：${payload.logic_result || ""}`, payload.plan_deviation ? `计划偏离：${payload.plan_deviation}` : "", payload.improvement_text ? `下一次改进：${payload.improvement_text}` : ""].filter(Boolean).join("\n\n"),
+        confirm: "确认写入可编辑草稿",
+        pending: "确认前不会改变复盘；写入后仍需你编辑并最终确认。",
+        working: "正在写入可编辑复盘草稿…",
+        confirmed: "已写入可编辑草稿；最终复盘仍需你确认。",
+        rejected: "已放弃，原复盘没有变化。",
+        stale: "复盘状态或版本已变化，这份草稿已失效。"
+      };
+      return {
+        title: "AI 提出的判断草稿 · 需要你确认",
+        copy: [payload.current_reason_text ? `当前判断：${payload.current_reason_text}` : "当前尚无正式判断", `建议草稿：${payload.reason_text || ""}`].join("\n\n"),
+        confirm: "确认写入当前判断",
+        pending: "确认前不会修改正式判断。",
+        working: "正在写入版本化判断…",
+        confirmed: "已由你确认，并写入版本化当前判断。",
+        rejected: "已拒绝，正式判断没有变化。",
+        stale: "正式判断已更新，这份草稿已失效。"
+      };
+    }
+
+    function appendAIWritebackCandidate(host, candidate, options = {}) {
+      const presentation = aiWritebackPresentation(candidate);
+      const card = document.createElement("div"); card.className = "ai-writeback-card";
+      const title = document.createElement("div"); title.className = "ai-writeback-title"; title.textContent = presentation.title;
+      const copy = document.createElement("div"); copy.className = "ai-writeback-copy"; copy.textContent = presentation.copy;
+      const actions = document.createElement("div"); actions.className = "ai-writeback-actions";
+      const confirm = document.createElement("button"); confirm.type = "button"; confirm.className = "btn primary"; confirm.textContent = presentation.confirm;
+      const reject = document.createElement("button"); reject.type = "button"; reject.className = "btn ghost"; reject.textContent = "暂不采用";
+      const status = document.createElement("div"); status.className = "ai-writeback-status";
+      const applyStatus = value => {
+        candidate.status = value;
+        const pending = value === "pending_confirmation";
+        confirm.hidden = !pending; reject.hidden = !pending;
+        status.textContent = presentation[value] || presentation.pending;
+      };
+      confirm.addEventListener("click", async () => {
+        confirm.disabled = true; reject.disabled = true; status.textContent = presentation.working;
+        try {
+          const result = await api(`/v1/ai-writebacks/${encodeURIComponent(candidate.id)}/confirm`, {method: "POST"});
+          applyStatus(result.status || "confirmed");
+          await loadWatchlist();
+          if (candidate.symbol && $("deepStockSymbol")?.value === candidate.symbol) await loadDeepStockOverview(candidate.symbol);
+          if (options.onConfirmed) await options.onConfirmed(result);
+        } catch (error) {
+          status.textContent = error.message || "暂时无法确认这份 AI 草稿。";
+          confirm.disabled = false; reject.disabled = false;
+        }
+      });
+      reject.addEventListener("click", async () => {
+        confirm.disabled = true; reject.disabled = true; status.textContent = "正在保留现有数据…";
+        try {
+          const result = await api(`/v1/ai-writebacks/${encodeURIComponent(candidate.id)}/reject`, {method: "POST"});
+          applyStatus(result.status || "rejected");
+          if (options.onRejected) await options.onRejected(result);
+        } catch (error) {
+          status.textContent = error.message || "暂时无法处理这份 AI 草稿。";
+          confirm.disabled = false; reject.disabled = false;
+        }
+      });
+      actions.append(confirm, reject); card.append(title, copy, actions, status); host.appendChild(card); applyStatus(candidate.status);
+      void api(`/v1/ai-writebacks/${encodeURIComponent(candidate.id)}`).then(current => applyStatus(current.status)).catch(() => {});
+      return card;
+    }
+
     function appendStructuredAnswer(node, metadata) {
       const structured = metadata?.structured_answer || metadata?.structuredAnswer;
       if (!structured || structured.contract_version !== "structured_ai_response_v1") return;
@@ -3979,50 +4067,7 @@
       details.append(summary, body); node.appendChild(details);
 
       for (const candidate of (structured.candidate_writebacks || [])) {
-        const card = document.createElement("div"); card.className = "ai-writeback-card";
-        const isObservationTask = candidate.candidate_type === "observation_task";
-        const title = document.createElement("div"); title.className = "ai-writeback-title"; title.textContent = isObservationTask ? "AI 整理的观察任务 · 需要你确认" : "AI 提出的判断草稿 · 需要你确认";
-        const copy = document.createElement("div"); copy.className = "ai-writeback-copy";
-        const payload = candidate.payload || {};
-        copy.textContent = isObservationTask
-          ? [`任务：${payload.title || "本轮证据核验"}`, `核验内容：${payload.description || ""}`].join("\n\n")
-          : [payload.current_reason_text ? `当前判断：${payload.current_reason_text}` : "当前尚无正式判断", `建议草稿：${payload.reason_text || ""}`].join("\n\n");
-        const actions = document.createElement("div"); actions.className = "ai-writeback-actions";
-        const confirm = document.createElement("button"); confirm.type = "button"; confirm.className = "btn primary"; confirm.textContent = isObservationTask ? "确认创建观察任务" : "确认写入当前判断";
-        const reject = document.createElement("button"); reject.type = "button"; reject.className = "btn ghost"; reject.textContent = "暂不采用";
-        const status = document.createElement("div"); status.className = "ai-writeback-status";
-        const applyStatus = value => {
-          candidate.status = value;
-          const pending = value === "pending_confirmation";
-          confirm.hidden = !pending; reject.hidden = !pending;
-          status.textContent = ({confirmed: isObservationTask ? "已由你确认，并保存为个人观察任务。" : "已由你确认，并写入版本化当前判断。", rejected: isObservationTask ? "已放弃，本次没有创建观察任务。" : "已拒绝，正式判断没有变化。", stale: isObservationTask ? "股票研究空间已变化，这份任务候选已失效。" : "正式判断已更新，这份草稿已失效。"})[value] || (isObservationTask ? "确认前不会创建个人任务。" : "确认前不会修改正式判断。");
-        };
-        confirm.addEventListener("click", async () => {
-          confirm.disabled = true; reject.disabled = true; status.textContent = isObservationTask ? "正在创建观察任务…" : "正在写入版本化判断…";
-          try {
-            const result = await api(`/v1/ai-writebacks/${encodeURIComponent(candidate.id)}/confirm`, {method: "POST"});
-            applyStatus(result.status || "confirmed");
-            await loadWatchlist();
-            if (candidate.symbol && $("deepStockSymbol")?.value === candidate.symbol) {
-              await loadDeepStockOverview(candidate.symbol);
-            }
-          } catch (error) {
-            status.textContent = error.message || (isObservationTask ? "暂时无法创建这项观察任务。" : "暂时无法确认这份判断草稿。");
-            confirm.disabled = false; reject.disabled = false;
-          }
-        });
-        reject.addEventListener("click", async () => {
-          confirm.disabled = true; reject.disabled = true; status.textContent = "正在保留原判断…";
-          try {
-            const result = await api(`/v1/ai-writebacks/${encodeURIComponent(candidate.id)}/reject`, {method: "POST"});
-            applyStatus(result.status || "rejected");
-          } catch (error) {
-            status.textContent = error.message || "暂时无法处理这份判断草稿。";
-            confirm.disabled = false; reject.disabled = false;
-          }
-        });
-        actions.append(confirm, reject); card.append(title, copy, actions, status); node.appendChild(card); applyStatus(candidate.status);
-        void api(`/v1/ai-writebacks/${encodeURIComponent(candidate.id)}`).then(current => applyStatus(current.status)).catch(() => {});
+        appendAIWritebackCandidate(node, candidate);
       }
     }
 
@@ -6434,8 +6479,14 @@
     async function generateTradeReviewDraft(symbol, review, button) {
       button.disabled = true;
       try {
-        await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/generate-draft`, {method: "POST", body: JSON.stringify({base_version: tradeReviewVersion(review)?.version_no || 0})});
-        await refreshStockWorkflow(symbol, "history");
+        const candidate = await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/generate-draft`, {method: "POST", body: JSON.stringify({base_version: tradeReviewVersion(review)?.version_no || 0})});
+        const host = button.closest(".trade-review-card") || button.parentElement;
+        host.querySelector(":scope > .ai-writeback-card")?.remove();
+        button.hidden = true;
+        appendAIWritebackCandidate(host, candidate, {
+          onConfirmed: async () => { await refreshStockWorkflow(symbol, "history"); },
+          onRejected: async () => { button.hidden = false; button.disabled = false; }
+        });
       } catch { button.disabled = false; button.textContent = "重新生成草稿"; }
     }
 
@@ -6497,9 +6548,13 @@
       button.disabled = true;
       button.textContent = "AI 正在复盘…";
       try {
-        await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/generate-draft`, {method: "POST", body: JSON.stringify({base_version: tradeReviewVersion(review)?.version_no || 0})});
-        await loadTradeReviewCenter(review.id);
-        void loadTodayOverview();
+        const candidate = await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/generate-draft`, {method: "POST", body: JSON.stringify({base_version: tradeReviewVersion(review)?.version_no || 0})});
+        button.hidden = true;
+        $("tradeReviewDetail").querySelector(":scope > .ai-writeback-card")?.remove();
+        appendAIWritebackCandidate($("tradeReviewDetail"), candidate, {
+          onConfirmed: async () => { await loadTradeReviewCenter(review.id); void loadTodayOverview(); },
+          onRejected: async () => { button.hidden = false; button.disabled = false; button.textContent = "生成 AI 逻辑草稿"; }
+        });
       } catch (error) {
         button.disabled = false;
         button.textContent = "重新生成草稿";

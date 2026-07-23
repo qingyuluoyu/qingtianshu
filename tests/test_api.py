@@ -2520,6 +2520,40 @@ def test_stock_claim_prompt_prioritizes_claims_and_blocks_raw_units(app, client)
     assert "不得写成趋势反证已经" in prompt
 
 
+def test_focused_plan_request_uses_claim_ledger_and_forbids_invented_plan_levels(
+    app, client
+):
+    user = create_user(client, "Focused Plan Prompt User")
+    response = client.post(
+        "/me/chat",
+        json={
+            "message": (
+                "分析中兴通讯并生成操作计划，核验条件：如果下一期经营现金流继续恶化，"
+                "由我重新评估是否减仓；不要填写目标价、数量或仓位。"
+            ),
+            "symbol": "000063",
+            "model_tier": "deep",
+            "execute_agent": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "earnings_quality"
+    assert payload["evidence"]["research_claims"]["claims"]
+    prompt = (
+        Path(app.state.database.get_user(user["id"])["workspace_path"])
+        / "runs"
+        / payload["run_id"]
+        / "prompt.md"
+    ).read_text(encoding="utf-8")
+    compact_prompt = " ".join(prompt.split())
+    assert "用户确认式操作计划要求" in prompt
+    assert "用户在本轮消息里明确给出的核验条件" in compact_prompt
+    assert "不能改造成计划门槛" in compact_prompt
+    assert "触发条件”必须逐字保留用户原句" in compact_prompt
+
+
 def test_watchlist_can_be_managed_and_stock_intraday_is_available(client):
     create_user(client, "Watchlist UI User")
     created = client.post(

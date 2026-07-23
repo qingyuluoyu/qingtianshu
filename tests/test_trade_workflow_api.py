@@ -302,7 +302,17 @@ def test_review_flow_uses_frozen_context_hermes_draft_and_version_conflicts(
         json={"base_version": 0, "model_tier": "economy"},
     )
     assert generated.status_code == 201, generated.text
-    draft = generated.json()
+    candidate = generated.json()
+    assert candidate["candidate_type"] == "review_draft"
+    assert candidate["status"] == "pending_confirmation"
+    assert client.get(f"/v1/trade-reviews/{review['id']}").json()[
+        "current_version"
+    ] is None
+    confirmed_candidate = client.post(
+        f"/v1/ai-writebacks/{candidate['id']}/confirm"
+    )
+    assert confirmed_candidate.status_code == 200
+    draft = confirmed_candidate.json()["trade_review"]
     assert draft["status"] == "draft"
     assert draft["current_version"]["created_source"] == "ai"
     assert draft["current_version"]["source_run_id"] == run["id"]

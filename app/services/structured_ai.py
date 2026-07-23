@@ -10,6 +10,12 @@ from app.db import Database
 from app.services.observation_tasks import ObservationTaskService
 from app.services.research_claims import build_research_claim_ledger
 from app.services.stock_domain import StockDomainService
+from app.services.trade_workflow import (
+    TradeWorkflowConflict,
+    TradeWorkflowInvalidState,
+    TradeWorkflowNotFound,
+    TradeWorkflowService,
+)
 from app.utils import json_dumps, utc_now
 
 
@@ -29,6 +35,15 @@ class StructuredAIService:
     """Persist auditable citations and user-confirmable Agent writebacks."""
 
     CONTRACT_VERSION = "structured_ai_response_v1"
+    STOCK_RESEARCH_INTENTS = {
+        "stock_research",
+        "earnings_quality",
+        "financial_drivers",
+        "business_structure",
+        "shareholder_structure",
+        "analyst_expectations",
+        "event_timeline",
+    }
     THESIS_WRITEBACK_TERMS = (
         "形成判断草稿",
         "生成判断草稿",
@@ -47,6 +62,16 @@ class StructuredAIService:
         "生成核验任务",
         "保存核验任务",
         "保存为核验任务",
+    )
+    ACTION_PLAN_WRITEBACK_TERMS = (
+        "创建操作计划",
+        "生成操作计划",
+        "保存操作计划",
+        "保存为操作计划",
+        "建立操作计划",
+        "创建计划草稿",
+        "生成计划草稿",
+        "保存计划草稿",
     )
     WRITEBACK_NEGATIONS = ("不要", "不用", "无需", "暂不", "先不")
     PUBLIC_CITATION_FIELDS = (
@@ -78,10 +103,12 @@ class StructuredAIService:
         database: Database,
         stock_domain: StockDomainService,
         observation_tasks: ObservationTaskService,
+        trade_workflow: TradeWorkflowService,
     ):
         self.database = database
         self.stock_domain = stock_domain
         self.observation_tasks = observation_tasks
+        self.trade_workflow = trade_workflow
 
     def build_and_persist(
         self,
@@ -94,7 +121,8 @@ class StructuredAIService:
         conversation_id: str | None,
         symbol: str | None,
     ) -> dict[str, Any] | None:
-        if str(run.get("intent") or evidence.get("type") or "") != "stock_research":
+        intent = str(run.get("intent") or evidence.get("type") or "")
+        if intent not in self.STOCK_RESEARCH_INTENTS:
             return None
         ledger = evidence.get("research_claims") or build_research_claim_ledger(
             evidence
@@ -244,6 +272,24 @@ class StructuredAIService:
             )
             if candidate is not None:
                 writebacks.append(self.public_writeback(candidate))
+        if (
+            run.get("status") == "completed"
+            and symbol
+            and self._wants_action_plan_writeback(message)
+        ):
+            candidate = self._create_action_plan_writeback(
+                user_id=user_id,
+                run_id=str(run["id"]),
+                conversation_id=conversation_id,
+                symbol=symbol,
+                message=message,
+                evidence=evidence,
+                ledger=ledger,
+                next_evidence_tasks=next_evidence_tasks,
+                citation_by_claim=citation_by_claim,
+            )
+            if candidate is not None:
+                writebacks.append(self.public_writeback(candidate))
 
         status = (
             "complete"
@@ -271,6 +317,94 @@ class StructuredAIService:
             ],
             "candidate_writebacks": writebacks,
         }
+
+    def create_review_draft_writeback(
+        self,
+        *,
+        user_id: str,
+        run: dict[str, Any],
+        evidence: dict[str, Any],
+        draft: dict[str, Any],
+        base_version: int,
+    ) -> dict[str, Any]:
+        """Keep an Agent review outside the formal review until user confirmation."""
+
+        if run.get("status") != "completed" or run.get("intent") != "trade_review":
+            raise StructuredAIInvalidState("只有已完成的交易复盘 Run 可以生成候选")
+        review_id = str(evidence.get("review_id") or "").strip()
+        if not review_id:
+            raise StructuredAIInvalidState("交易复盘候选缺少目标记录")
+        try:
+            review = self.trade_workflow.get_trade_review(user_id, review_id)
+        except TradeWorkflowNotFound as exc:
+            raise StructuredAINotFound(str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise StructuredAIInvalidState(str(exc)) from exc
+        if review.get("status") != "ready" or not review.get("can_generate_draft"):
+            raise StructuredAIInvalidState("后续交易日数据尚不足，暂不能生成复盘候选")
+        current = review.get("current_version") or {}
+        current_version = int(current.get("version_no") or 0)
+        if current_version != int(base_version):
+            raise StructuredAIConflict("复盘草稿已更新，请刷新后重试")
+        workspace = self.database.get_stock_workspace(user_id, str(review["symbol"]))
+        if workspace is None:
+            raise StructuredAINotFound("股票研究空间不存在")
+        logic_result = str(draft.get("logic_result") or "").strip()
+        if not logic_result:
+            raise StructuredAIInvalidState("Agent 未返回可确认的逻辑复盘")
+        citations = self._persist_review_citations(
+            user_id=user_id,
+            run_id=str(run["id"]),
+            review=review,
+        )
+        payload = {
+            "review_id": review_id,
+            "display_name": review.get("name") or review.get("symbol"),
+            "operation_type": (review.get("operation") or {}).get("operation_type"),
+            "price_result": (review.get("price_observation") or {}).get("summary"),
+            "logic_result": logic_result[:6000],
+            "plan_deviation": self._clean_optional_text(
+                draft.get("plan_deviation"), 4000
+            ),
+            "bias_tags": self._unique_text(draft.get("bias_tags") or [], limit=12),
+            "improvement_text": self._clean_optional_text(
+                draft.get("improvement_text"), 4000
+            ),
+        }
+        now = utc_now()
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO ai_writeback_candidates(
+                    id, user_id, run_id, conversation_id, workspace_id, symbol,
+                    candidate_type, status, payload_json, citation_ids_json,
+                    base_version, target_object_id, created_at, resolved_at
+                ) VALUES (?, ?, ?, NULL, ?, ?, 'review_draft',
+                    'pending_confirmation', ?, ?, ?, NULL, ?, NULL)
+                """,
+                (
+                    str(uuid4()),
+                    user_id,
+                    str(run["id"]),
+                    workspace["id"],
+                    review["symbol"],
+                    json_dumps(payload),
+                    json_dumps([item["id"] for item in citations]),
+                    current_version,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM ai_writeback_candidates
+                WHERE user_id = ? AND run_id = ?
+                  AND candidate_type = 'review_draft'
+                """,
+                (user_id, str(run["id"])),
+            ).fetchone()
+        if row is None:
+            raise StructuredAIInvalidState("复盘候选未能保存")
+        return self.public_writeback(self._writeback_row(row))
 
     def list_writebacks(
         self, *, user_id: str, status: str | None = None, limit: int = 100
@@ -321,6 +455,10 @@ class StructuredAIService:
             raise StructuredAIInvalidState("该候选写回已经处理")
         if candidate["candidate_type"] == "observation_task":
             return self._confirm_observation_task(candidate)
+        if candidate["candidate_type"] == "action_plan":
+            return self._confirm_action_plan(candidate)
+        if candidate["candidate_type"] == "review_draft":
+            return self._confirm_review_draft(candidate)
         if candidate["candidate_type"] != "thesis":
             raise StructuredAIInvalidState("未知的候选写回类型")
         payload = candidate["payload"]
@@ -404,6 +542,122 @@ class StructuredAIService:
             "observation_task": task,
         }
 
+    def _confirm_action_plan(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        workspace = self.database.get_stock_workspace(
+            candidate["user_id"], candidate["symbol"]
+        )
+        if workspace is None or workspace.get("relation_type") == "ended":
+            self._mark_stale(candidate)
+            raise StructuredAIConflict("股票研究空间已结束，这份计划候选已失效")
+        active = self.database.get_active_thesis(
+            candidate["user_id"], str(workspace["id"])
+        )
+        current_version = int(active["version_no"]) if active else 0
+        if current_version != int(candidate["base_version"]):
+            self._mark_stale(candidate)
+            raise StructuredAIConflict(
+                f"当前判断已更新到版本 {current_version}，请重新核对操作计划"
+            )
+        payload = candidate["payload"]
+        try:
+            plan = self.trade_workflow.create_action_plan(
+                user_id=candidate["user_id"],
+                symbol=candidate["symbol"],
+                action_type=str(payload.get("action_type") or "hold"),
+                trigger_text=str(payload.get("trigger_text") or ""),
+                target_quantity=None,
+                target_amount=None,
+                target_position_percent=None,
+                thesis_version_id=(
+                    str(active["id"])
+                    if active is not None and candidate["base_version"]
+                    else None
+                ),
+                expires_at=None,
+                idempotency_key=f"ai-writeback:{candidate['id']}",
+            )
+        except TradeWorkflowNotFound as exc:
+            raise StructuredAINotFound(str(exc)) from exc
+        except TradeWorkflowConflict as exc:
+            self._mark_stale(candidate)
+            raise StructuredAIConflict(str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise StructuredAIInvalidState(str(exc)) from exc
+        self._resolve_confirmed(candidate, str(plan["id"]))
+        refreshed = self._get_writeback(candidate["user_id"], candidate["id"])
+        return {
+            **self.public_writeback(refreshed),  # type: ignore[arg-type]
+            "action_plan": plan,
+        }
+
+    def _confirm_review_draft(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        payload = candidate["payload"]
+        review_id = str(payload.get("review_id") or "")
+        if not review_id:
+            raise StructuredAIInvalidState("复盘候选缺少目标记录")
+        try:
+            review = self.trade_workflow.get_trade_review(
+                candidate["user_id"], review_id
+            )
+        except TradeWorkflowNotFound as exc:
+            raise StructuredAINotFound(str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise StructuredAIInvalidState(str(exc)) from exc
+        current = review.get("current_version") or {}
+        current_version = int(current.get("version_no") or 0)
+        if (
+            current_version != int(candidate["base_version"])
+            or review.get("status") != "ready"
+        ):
+            self._mark_stale(candidate)
+            raise StructuredAIConflict("复盘状态或版本已更新，请重新生成后再确认")
+        try:
+            saved = self.trade_workflow.save_ai_draft(
+                user_id=candidate["user_id"],
+                review_id=review_id,
+                source_run_id=candidate["run_id"],
+                base_version=int(candidate["base_version"]),
+                logic_result=str(payload.get("logic_result") or ""),
+                plan_deviation=payload.get("plan_deviation"),
+                bias_tags=list(payload.get("bias_tags") or []),
+                improvement_text=payload.get("improvement_text"),
+            )
+        except TradeWorkflowNotFound as exc:
+            raise StructuredAINotFound(str(exc)) from exc
+        except TradeWorkflowConflict as exc:
+            self._mark_stale(candidate)
+            raise StructuredAIConflict(str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise StructuredAIInvalidState(str(exc)) from exc
+        self._resolve_confirmed(candidate, review_id)
+        refreshed = self._get_writeback(candidate["user_id"], candidate["id"])
+        return {
+            **self.public_writeback(refreshed),  # type: ignore[arg-type]
+            "trade_review": saved,
+        }
+
+    def _resolve_confirmed(self, candidate: dict[str, Any], target_id: str) -> None:
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                UPDATE ai_writeback_candidates
+                SET status = 'confirmed', target_object_id = ?, resolved_at = ?
+                WHERE id = ? AND user_id = ? AND status = 'pending_confirmation'
+                """,
+                (target_id, utc_now(), candidate["id"], candidate["user_id"]),
+            )
+
+    def _mark_stale(self, candidate: dict[str, Any]) -> None:
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                UPDATE ai_writeback_candidates
+                SET status = 'stale', resolved_at = ?
+                WHERE id = ? AND user_id = ? AND status = 'pending_confirmation'
+                """,
+                (utc_now(), candidate["id"], candidate["user_id"]),
+            )
+
     def _confirmed_writeback(self, candidate: dict[str, Any]) -> dict[str, Any]:
         result = self.public_writeback(candidate)
         target_id = str(candidate.get("target_object_id") or "")
@@ -415,6 +669,20 @@ class StructuredAIService:
             result["observation_task"] = self.observation_tasks.get_task(
                 user_id=candidate["user_id"], task_id=target_id
             )
+        elif candidate["candidate_type"] == "action_plan" and target_id:
+            try:
+                result["action_plan"] = self.trade_workflow.get_action_plan(
+                    candidate["user_id"], target_id
+                )
+            except TradeWorkflowNotFound:
+                pass
+        elif candidate["candidate_type"] == "review_draft" and target_id:
+            try:
+                result["trade_review"] = self.trade_workflow.get_trade_review(
+                    candidate["user_id"], target_id
+                )
+            except (TradeWorkflowNotFound, TradeWorkflowInvalidState):
+                pass
         return result
 
     def reject_writeback(self, *, user_id: str, candidate_id: str) -> dict[str, Any]:
@@ -659,6 +927,183 @@ class StructuredAIService:
             ).fetchone()
         return self._writeback_row(row) if row is not None else None
 
+    def _create_action_plan_writeback(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        conversation_id: str | None,
+        symbol: str,
+        message: str,
+        evidence: dict[str, Any],
+        ledger: dict[str, Any],
+        next_evidence_tasks: list[dict[str, Any]],
+        citation_by_claim: dict[str, str],
+    ) -> dict[str, Any] | None:
+        canonical = normalize_symbol(symbol)
+        workspace = self.database.get_stock_workspace(user_id, canonical)
+        if workspace is None or workspace.get("relation_type") == "ended":
+            return None
+        active = self.database.get_active_thesis(user_id, str(workspace["id"]))
+        base_version = int(active["version_no"]) if active else 0
+        claims = list(ledger.get("claims") or [])
+        user_condition = self._extract_user_plan_condition(message)
+        if not user_condition:
+            return None
+        conditions = [user_condition]
+        action_type = self._extract_user_plan_action(message)
+        name = str(evidence.get("display_name") or workspace.get("name") or canonical)
+        trigger_text = (
+            f"{name}研究复核：由我在以下条件得到核验后重新评估，系统不自动执行交易："
+            + "；".join(f"{index}. {condition}" for index, condition in enumerate(conditions, 1))
+        )[:2000]
+        selected_claims = [
+            *[item for item in claims if item.get("relation") == "weakens"][:2],
+            *[item for item in claims if item.get("relation") == "unresolved"][:2],
+            *[item for item in claims if item.get("relation") == "supports"][:1],
+        ]
+        citation_ids = self._unique_text(
+            [citation_by_claim.get(str(item.get("id"))) for item in selected_claims],
+            limit=8,
+        )
+        stored_payload = {
+            "action_type": action_type,
+            "trigger_text": trigger_text,
+            "target_quantity": None,
+            "target_amount": None,
+            "target_position_percent": None,
+            "expires_at": None,
+            "thesis_version_id": active.get("id") if active else None,
+            "source_text": " ".join(str(message or "").split())[:2000],
+            "boundary": (
+                "AI 只整理用户明确给出的核验条件，不生成目标价、仓位、收益承诺或自动交易。"
+            ),
+        }
+        now = utc_now()
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO ai_writeback_candidates(
+                    id, user_id, run_id, conversation_id, workspace_id, symbol,
+                    candidate_type, status, payload_json, citation_ids_json,
+                    base_version, target_object_id, created_at, resolved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'action_plan',
+                    'pending_confirmation', ?, ?, ?, NULL, ?, NULL)
+                """,
+                (
+                    str(uuid4()),
+                    user_id,
+                    run_id,
+                    conversation_id,
+                    workspace["id"],
+                    canonical,
+                    json_dumps(stored_payload),
+                    json_dumps(citation_ids),
+                    base_version,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM ai_writeback_candidates
+                WHERE user_id = ? AND run_id = ?
+                  AND candidate_type = 'action_plan'
+                """,
+                (user_id, run_id),
+            ).fetchone()
+        return self._writeback_row(row) if row is not None else None
+
+    def _persist_review_citations(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        review: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        operation = review.get("operation") or {}
+        plan = review.get("action_plan") or {}
+        observation = review.get("price_observation") or {}
+        records = [
+            {
+                "claim_id": "trade-review-price",
+                "source_name": "落库行情确定性计算",
+                "evidence_type": "system_calculation",
+                "data_time": observation.get("end_date"),
+                "excerpt": observation.get("summary"),
+                "limitations": [
+                    "价格路径不自动代表操作逻辑正确或错误。",
+                    "费用不完整时不计算精确净收益。",
+                ],
+            },
+            {
+                "claim_id": "trade-review-operation",
+                "source_name": "用户真实操作记录",
+                "evidence_type": "user_record",
+                "data_time": operation.get("operated_at"),
+                "excerpt": "；".join(
+                    str(value)
+                    for value in (
+                        operation.get("reason_text"),
+                        f"方向 {operation.get('operation_type')}"
+                        if operation.get("operation_type")
+                        else None,
+                        f"数量 {operation.get('quantity')}"
+                        if operation.get("quantity") is not None
+                        else None,
+                        f"价格 {operation.get('price')}"
+                        if operation.get("price") is not None
+                        else None,
+                    )
+                    if value
+                ),
+                "limitations": ["该记录来自用户录入，不代表平台交易执行结果。"],
+            },
+            {
+                "claim_id": "trade-review-plan",
+                "source_name": "用户确认的操作计划",
+                "evidence_type": "user_record",
+                "data_time": plan.get("updated_at"),
+                "excerpt": plan.get("trigger_text"),
+                "limitations": ["系统只保存用户自己的条件，不生成交易建议。"],
+            },
+        ]
+        now = utc_now()
+        with self.database.connect() as connection:
+            for item in records:
+                excerpt = str(item.get("excerpt") or "").strip()
+                if not excerpt:
+                    continue
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO ai_citations(
+                        id, user_id, run_id, claim_id, source_name, source_key,
+                        source_url, evidence_type, data_time, report_period,
+                        excerpt, limitations_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid4()),
+                        user_id,
+                        run_id,
+                        item["claim_id"],
+                        item["source_name"],
+                        item["evidence_type"],
+                        item.get("data_time"),
+                        excerpt,
+                        json_dumps(item.get("limitations") or []),
+                        now,
+                    ),
+                )
+            rows = connection.execute(
+                """
+                SELECT * FROM ai_citations
+                WHERE user_id = ? AND run_id = ?
+                ORDER BY created_at ASC, rowid ASC
+                """,
+                (user_id, run_id),
+            ).fetchall()
+        return [self._citation_row(row) for row in rows]
+
     def _get_writeback(
         self, user_id: str, candidate_id: str
     ) -> dict[str, Any] | None:
@@ -716,6 +1161,47 @@ class StructuredAIService:
         )
 
     @classmethod
+    def _wants_action_plan_writeback(cls, message: str) -> bool:
+        text = " ".join(str(message or "").split())
+        return cls._contains_non_negated_term(text, cls.ACTION_PLAN_WRITEBACK_TERMS)
+
+    @staticmethod
+    def _extract_user_plan_action(message: str) -> str:
+        text = " ".join(str(message or "").split())
+        explicit_actions = (
+            (("卖出", "清仓"), "sell"),
+            (("减仓", "减少持仓"), "reduce"),
+            (("加仓", "增加持仓"), "add"),
+            (("买入",), "buy"),
+        )
+        for terms, action in explicit_actions:
+            if any(term in text for term in terms):
+                return action
+        return "hold"
+
+    @classmethod
+    def _extract_user_plan_condition(cls, message: str) -> str | None:
+        text = " ".join(str(message or "").split())
+        match = re.search(
+            r"(?:我的条件|触发条件|核验条件|条件)\s*[:：]\s*(.+)$",
+            text,
+        )
+        if match:
+            condition = re.split(
+                r"[；;。]\s*(?:但|请)?(?:不要|不用|无需|暂不|先不)",
+                match.group(1),
+                maxsplit=1,
+            )[0].strip("；;，,。 ")
+            return condition[:600] if condition else None
+        if any(marker in text for marker in ("如果", "当", "等到", "确认后", "核验后")):
+            cleaned = text
+            for term in cls.ACTION_PLAN_WRITEBACK_TERMS:
+                cleaned = cleaned.replace(term, "")
+            cleaned = cleaned.strip("请帮我，,。；; ")
+            return cleaned[:600] if len(cleaned) >= 8 else None
+        return None
+
+    @classmethod
     def _contains_non_negated_term(
         cls, text: str, terms: tuple[str, ...]
     ) -> bool:
@@ -737,6 +1223,11 @@ class StructuredAIService:
             if len(clean) >= 16 and clean not in {"结论", "一句话结论"}:
                 return clean[:500]
         return str(answer or "").strip()[:500]
+
+    @staticmethod
+    def _clean_optional_text(value: Any, max_length: int) -> str | None:
+        text = str(value or "").strip()
+        return text[:max_length] if text else None
 
     @staticmethod
     def _unique_text(values: list[Any], limit: int) -> list[str]:

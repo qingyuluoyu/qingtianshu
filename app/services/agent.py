@@ -2853,6 +2853,27 @@ class AgentService:
             conversation_history=prompt_history,
             knowledge_context=prompt_knowledge_context,
         )
+        if intent in {
+            "stock_research",
+            "earnings_quality",
+            "financial_drivers",
+            "business_structure",
+            "shareholder_structure",
+            "analyst_expectations",
+            "event_timeline",
+        } and self._is_action_plan_request(message):
+            prompt += """
+
+## 用户确认式操作计划要求
+
+本轮可以先回答与问题直接相关的研究事实，再整理一份“待确认的操作计划草稿”。计划草稿只能
+复述用户在本轮消息里明确给出的核验条件和本人拟采取的动作，不得把行情价、均线、估值、目标价、
+支撑位、阻力位或模型自行推导的任何数字新增为触发条件，也不得补充数量、金额、仓位、收益承诺、
+自动执行或确定性买卖建议。即使证据包包含这些数字，也只能用于回答研究事实，不能改造成计划门槛。
+“触发条件”必须逐字保留用户原句；不得用“即、例如、也就是、或、且、同时”等措辞扩写定义，
+不得增加括号解释、比率、比较基准、连续期数、改善幅度或模型认为更可执行的判定标准。
+用户没有明确给出某项计划字段时就保持为空，并明确说明草稿需在界面确认后才会写入。
+"""
         if (
             intent
             in {
@@ -3419,6 +3440,29 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             error=error,
         )
         return self.database.get_run(run["id"], user["id"])  # type: ignore[return-value]
+
+    @staticmethod
+    def _is_action_plan_request(message: str) -> bool:
+        text = " ".join(str(message or "").split())
+        terms = (
+            "创建操作计划",
+            "生成操作计划",
+            "保存操作计划",
+            "保存为操作计划",
+            "建立操作计划",
+            "创建计划草稿",
+            "生成计划草稿",
+            "保存计划草稿",
+        )
+        for term in terms:
+            start = text.find(term)
+            if start < 0:
+                continue
+            prefix = text[max(0, start - 8) : start]
+            if any(negation in prefix for negation in ("不要", "不用", "无需", "暂不", "先不")):
+                continue
+            return True
+        return False
 
     @staticmethod
     def _convert_markdown_tables(answer: str) -> str:

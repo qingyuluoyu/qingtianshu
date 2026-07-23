@@ -290,11 +290,33 @@ def test_trade_review_requires_live_completed_run_then_user_confirmation(
         f"/v1/trade-reviews/{review['id']}/generate-draft", json={}
     )
     assert generated.status_code == 201
-    draft = generated.json()
+    candidate = generated.json()
+    assert candidate["candidate_type"] == "review_draft"
+    assert candidate["status"] == "pending_confirmation"
+    assert client.get(f"/v1/trade-reviews/{review['id']}").json()[
+        "current_version"
+    ] is None
+    other = TestClient(app)
+    _create_user(other, "Review Candidate Other")
+    assert other.get(f"/v1/ai-writebacks/{candidate['id']}").status_code == 404
+    assert (
+        other.post(f"/v1/ai-writebacks/{candidate['id']}/confirm").status_code
+        == 404
+    )
+    confirmed_candidate = client.post(
+        f"/v1/ai-writebacks/{candidate['id']}/confirm"
+    )
+    assert confirmed_candidate.status_code == 200
+    draft = confirmed_candidate.json()["trade_review"]
     assert draft["status"] == "draft"
     assert draft["current_version"]["created_source"] == "ai"
     assert draft["current_version"]["source_run_id"] == run["id"]
     assert "即时生成" in draft["current_version"]["logic_result"]
+    repeated = client.post(f"/v1/ai-writebacks/{candidate['id']}/confirm")
+    assert repeated.status_code == 200
+    assert repeated.json()["trade_review"]["current_version"]["id"] == draft[
+        "current_version"
+    ]["id"]
 
     edited = client.patch(
         f"/v1/trade-reviews/{review['id']}/draft",
