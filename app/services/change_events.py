@@ -162,28 +162,26 @@ class ChangeEventService:
                 self.refresh_symbol(canonical)
                 self.database.ensure_user_change_links(user_id, canonical)
 
+        raw_limit = min(500, max(limit, limit * 3))
         items = self.database.list_user_change_links(
             user_id,
             symbol=canonical,
             relevance_status=relevance_status,
-            limit=limit,
-        )
-        pending_unread = self.database.list_user_change_links(
-            user_id,
-            symbol=canonical,
-            unread_only=True,
-            pending_only=True,
-            limit=limit,
+            limit=raw_limit,
         )
         active_symbols = watchlist_symbols
         if canonical is None:
             items = [item for item in items if item.get("symbol") in active_symbols]
-            pending_unread = [
-                item for item in pending_unread if item.get("symbol") in active_symbols
-            ]
         elif canonical not in active_symbols:
             items = []
-            pending_unread = []
+        items = self._dedupe_user_links(items)[:limit]
+        pending_unread = [
+            item
+            for item in items
+            if item.get("relevance_status") == "pending"
+            and item.get("read_at") is None
+            and item.get("handled_at") is None
+        ]
         public_items = [self._public_link(item) for item in items]
         public_pending = [self._public_link(item) for item in pending_unread]
         counts = {
@@ -217,6 +215,64 @@ class ChangeEventService:
             ),
             "boundary": self._boundary(),
         }
+
+    @classmethod
+    def _dedupe_user_links(cls, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Hide legacy duplicate events without rewriting a user's history.
+
+        Older rule implementations could produce a new dedupe hash for the same
+        semantic event. Keep one representative per stock, event type, rule and
+        fact date. A link the user has already handled or read wins over a newer
+        pending duplicate so the same fact is not surfaced again as unfinished.
+        """
+
+        grouped: dict[tuple[str, ...], dict[str, Any]] = {}
+        order: list[tuple[str, ...]] = []
+        for item in items:
+            identity = cls._semantic_identity(item)
+            current = grouped.get(identity)
+            if current is None:
+                grouped[identity] = item
+                order.append(identity)
+                continue
+            if cls._user_link_state_rank(item) > cls._user_link_state_rank(current):
+                grouped[identity] = item
+        return [grouped[identity] for identity in order]
+
+    @staticmethod
+    def _semantic_identity(item: dict[str, Any]) -> tuple[str, ...]:
+        event_type = str(item.get("event_type") or "")
+        symbol = str(item.get("symbol") or "")
+        rule_version = str(item.get("rule_version") or "")
+        occurred_at = str(item.get("occurred_at") or "")
+        payload = item.get("payload") or {}
+        if event_type == "daily_price_anomaly":
+            fact_date = str(payload.get("daily_date") or occurred_at[:10])
+            return symbol, event_type, rule_version, fact_date
+        if event_type == "official_financial_disclosure":
+            source_identity = str(item.get("source_url") or "").strip().casefold()
+            if not source_identity:
+                source_identity = " ".join(
+                    str(item.get("title") or "").split()
+                ).casefold()
+            return symbol, event_type, rule_version, occurred_at[:10], source_identity
+        event_id = str(item.get("event_id") or item.get("link_id") or "")
+        return symbol, event_type, rule_version, event_id
+
+    @staticmethod
+    def _user_link_state_rank(item: dict[str, Any]) -> tuple[int, int, str]:
+        handled = int(
+            bool(item.get("handled_at"))
+            or item.get("relevance_status") in {"relevant", "irrelevant"}
+        )
+        read = int(bool(item.get("read_at")))
+        updated_at = str(
+            item.get("link_updated_at")
+            or item.get("detected_at")
+            or item.get("linked_at")
+            or ""
+        )
+        return handled, read, updated_at
 
     def get_user_change(self, user_id: str, link_id: str) -> dict[str, Any]:
         item = self.database.get_user_change_link(user_id, link_id)

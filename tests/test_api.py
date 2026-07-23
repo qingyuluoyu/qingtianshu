@@ -568,12 +568,26 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "完整市场数据仍在准备" not in page.text
     assert "市场数据正在准备" not in page.text
     assert 'id="todayOverviewGrid" class="today-overview-grid"' in page.text
+    assert page.text.index('id="liveSection"') < page.text.index(
+        'id="marketDashboard"'
+    ) < page.text.index('id="todayOverviewGrid"') < page.text.index(
+        'id="insightSection"'
+    )
+    assert "我的研究待办" in page.text
+    assert "与我相关的重要变化" in page.text
+    assert "不会在这里伪装上线" not in page.text
+    assert "priority.ranking_method" not in page.text
+    assert "需要你处理的变化已经归入左侧待办" in page.text
     assert 'id="liZongPanel" class="li-zong-panel"' in page.text
     assert '$("todayOverviewGrid").hidden = true' in page.text
     assert '$("liZongPanel").hidden = true' in page.text
     assert 'api("/session")' in page.text
     assert 'api("/me/watchlist/brief")' in page.text
     assert 'api("/me/chat"' in page.text
+    assert "void loadHealth().catch(() =>" in page.text
+    assert page.text.index('connectServerEvents();') < page.text.index(
+        'await Promise.all([loadHealth(), ensureUser()]);'
+    )
     assert 'api("/me/memories?status=candidate")' in page.text
     assert "memory-card" in page.text
     assert "确认保存" in page.text
@@ -600,9 +614,11 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'item.quality_scope !== "evaluation"' in page.text
     assert 'api("/me/knowledge")' in page.text
     assert 'conversation_id: state.conversationId' in page.text
-    assert "个股研究" in page.text
-    assert "原逻辑复核" in page.text
-    assert "新闻影响" in page.text
+    assert "研究类型" in page.text
+    assert "个股分析" in page.text
+    assert "行业研究" in page.text
+    assert "关注组合" in page.text
+    assert "公告财报" in page.text
     assert "操作前检查" in page.text
     assert "公司对比" in page.text
     assert "市场环境" in page.text
@@ -1144,6 +1160,48 @@ def test_chat_understands_default_company_names_and_price_move_questions(client,
     assert market_context["indices"]
     assert market_context["market_breadth"]["status"] == "unavailable"
     assert "中兴通讯" in payload["answer"]
+
+
+def test_chat_compares_two_to_five_named_stocks_and_preserves_context(client):
+    create_user(client, "Multi Stock Research User")
+
+    first = client.post(
+        "/me/chat",
+        json={
+            "message": "比较中兴通讯、中际旭创和英伟达的盈利质量、估值和主要风险",
+            "execute_agent": False,
+        },
+    )
+
+    assert first.status_code == 200
+    payload = first.json()
+    assert payload["intent"] == "stock_comparison"
+    assert payload["evidence"]["symbols"] == ["000063.SZ", "300308.SZ", "NVDA"]
+    assert payload["research_targets"] == [
+        {"symbol": "000063.SZ", "name": "中兴通讯"},
+        {"symbol": "300308.SZ", "name": "中际旭创"},
+        {"symbol": "NVDA", "name": "英伟达"},
+    ]
+    assert payload["evidence"]["comparison_basis"]["financial"]["status"] in {
+        "exact_common_period",
+        "partial_exact_groups",
+        "not_aligned",
+    }
+    assert "关键差异" in payload["answer"]
+
+    followup = client.post(
+        "/me/chat",
+        json={
+            "message": "再重点比较盈利质量，并说明哪些项目当前不可比",
+            "conversation_id": payload["conversation_id"],
+            "execute_agent": False,
+        },
+    )
+
+    assert followup.status_code == 200
+    followup_payload = followup.json()
+    assert followup_payload["intent"] == "stock_comparison"
+    assert followup_payload["evidence"]["symbols"] == payload["evidence"]["symbols"]
 
 
 def test_chat_returns_helpful_clarification_instead_of_http_error(client):

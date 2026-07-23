@@ -143,6 +143,65 @@ def test_price_event_reuses_same_trading_day_when_report_value_is_corrected(app)
     assert sum(item["event_type"] == "daily_price_anomaly" for item in persisted) == 1
 
 
+def test_user_packet_hides_legacy_semantic_duplicates_and_keeps_user_state(app):
+    client = TestClient(app)
+    user = _create_user(client, "Legacy Duplicate Change Owner")
+    app.state.database.upsert_watchlist(
+        user["id"], "000063.SZ", "中兴通讯", "A股", "核验历史变化事件去重"
+    )
+    common = {
+        "symbol": "000063.SZ",
+        "event_type": "daily_price_anomaly",
+        "occurred_at": "2026-07-22T01:30:00+00:00",
+        "source_name": "Verified daily source",
+        "source_url": "https://example.invalid/daily",
+        "data_status": "confirmed_daily_bar",
+        "rule_version": app.state.change_events.PRICE_RULE_VERSION,
+        "payload": {
+            "name": "中兴通讯",
+            "daily_date": "2026-07-22",
+            "daily_timestamp": "2026-07-22T01:30:00+00:00",
+            "return_1d_pct": 7.5,
+        },
+    }
+    older = app.state.database.upsert_change_event(
+        **common,
+        title="中兴通讯上一完整交易日上涨 7.50%",
+        fact_summary="旧规则生成的同日价格变化。",
+        detected_at="2026-07-23T01:00:00+00:00",
+        dedupe_hash="legacy-semantic-change-older",
+    )
+    app.state.database.upsert_change_event(
+        **common,
+        title="中兴通讯上一完整交易日上涨 7.51%",
+        fact_summary="新规则生成的同日价格变化。",
+        detected_at="2026-07-23T02:00:00+00:00",
+        dedupe_hash="legacy-semantic-change-newer",
+    )
+    app.state.database.ensure_user_change_links(user["id"], "000063.SZ")
+
+    links = app.state.database.list_user_change_links(user["id"], symbol="000063.SZ")
+    older_link = next(item for item in links if item["event_id"] == older["id"])
+    app.state.change_events.mark_read(user["id"], older_link["link_id"])
+    app.state.change_events.set_relevance(
+        user["id"], older_link["link_id"], "relevant"
+    )
+
+    packet = app.state.change_events.get_user_packet(user["id"], refresh=False)
+
+    assert len(packet["items"]) == 1
+    assert packet["items"][0]["event_id"] == older["id"]
+    assert packet["items"][0]["relevance_status"] == "relevant"
+    assert packet["counts"] == {
+        "total": 1,
+        "pending": 0,
+        "pending_unread": 0,
+        "relevant": 1,
+        "irrelevant": 0,
+    }
+    assert packet["pending_unread_items"] == []
+
+
 def test_whitelist_accepts_official_financial_disclosure_not_media_or_unverified_type(
     app,
 ):

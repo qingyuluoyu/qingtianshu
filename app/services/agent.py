@@ -26,6 +26,7 @@ SKILL_BY_INTENT = {
     "watchlist_brief": "watchlist-monitor",
     "watchlist_update": "watchlist-monitor",
     "stock_research": "stock-research",
+    "stock_comparison": "stock-comparison",
     "stock_screen": "stock-screen",
     "earnings_quality": "earnings-quality",
     "financial_drivers": "financial-drivers",
@@ -58,6 +59,11 @@ EXTRA_SKILLS_BY_INTENT = {
         "fundamental-evidence",
         "evidence-debate",
         "conditional-outlook",
+    ],
+    "stock_comparison": [
+        "fundamental-evidence",
+        "earnings-quality",
+        "evidence-debate",
     ],
     "earnings_quality": [
         "a-share-information",
@@ -2793,6 +2799,8 @@ class AgentService:
             )
         elif intent == "research_actions":
             prompt_evidence = self._compact_research_actions_evidence(prompt_evidence)
+        elif intent == "stock_comparison":
+            prompt_evidence = self._compact_stock_comparison_evidence(prompt_evidence)
         elif intent == "stock_research" and model_tier == "economy":
             prompt_evidence = self._compact_stock_research_evidence(prompt_evidence)
         prompt = self._build_prompt(
@@ -2805,6 +2813,7 @@ class AgentService:
         )
         if intent in {
             "stock_research",
+            "stock_comparison",
             "earnings_quality",
             "financial_drivers",
             "shareholder_structure",
@@ -2904,6 +2913,21 @@ MA20、RSI、3/5/10 个交易日或条件情景等与当前问题无关的技术
 报告期数量等确认门槛。若基本面证据只能说明需要继续核验，应写成待补证项，不得量化成阈值。
 失效条件只说明哪些事实会推翻当前判断：跌破下方关键位是下行风险被触发，不是“下行失效”；
 价格仍在上下关键位之间是区间情景继续成立，不是“区间失效”。
+"""
+        if intent == "stock_comparison":
+            prompt += """
+
+## 多股统一口径比较要求
+
+这是用户指定的 2—5 只股票比较。先读取 comparison_basis：财务指标只有 report_date 与
+period_basis 同时一致时才能横向比较；没有全体共同报告期时，必须逐只列明报告期，只在
+groups 中同口径的标的之间比较。不得把不同季度、年度和累计口径混为同一排名。
+
+估值必须逐只保留 valuation.timestamps 的行情时间。mixed_currency 时不得直接比较股价、
+市值或绝对金额；可以比较 PE、PB 等无量纲指标，但必须保留跨市场会计、业务和估值环境差异。
+优先回答 comparison_focus 和用户当前问题，按“结论、关键差异、反方证据、下一步核验”组织，
+不使用 Markdown 表格，不输出综合排名、目标价或买卖建议。某个标的数据缺失时保留其他标的结果，
+明确该项不可比，不得用常识补写当前事实。
 """
         if intent == "stock_research" and prompt_evidence.get(
             "deep_stock_coverage"
@@ -6461,6 +6485,67 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         return compact
 
     @staticmethod
+    def _compact_stock_comparison_evidence(
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        items = []
+        for item in (evidence.get("items") or [])[:5]:
+            compact_item = {
+                key: item.get(key)
+                for key in (
+                    "symbol",
+                    "name",
+                    "market",
+                    "status",
+                    "snapshot",
+                    "limitations",
+                )
+                if item.get(key) not in (None, [], {}, "")
+            }
+            item_evidence = item.get("evidence") or {}
+            compact_item["evidence"] = {
+                key: item_evidence.get(key)
+                for key in (
+                    "symbol",
+                    "display_name",
+                    "current_quote",
+                    "metrics",
+                    "provenance",
+                    "user_thesis",
+                    "fundamentals",
+                    "earnings_quality",
+                    "financial_drivers",
+                    "business_structure",
+                    "analyst_expectations",
+                    "event_timeline",
+                    "company_information",
+                    "evidence_debate",
+                    "conditional_outlook",
+                )
+                if item_evidence.get(key) not in (None, [], {}, "")
+            }
+            items.append(compact_item)
+        return {
+            key: evidence.get(key)
+            for key in (
+                "contract_version",
+                "type",
+                "status",
+                "generated_at",
+                "user_question",
+                "symbols",
+                "targets",
+                "available_symbols",
+                "unavailable_symbols",
+                "comparison_focus",
+                "comparison_basis",
+                "warnings",
+                "boundary",
+            )
+            if evidence.get(key) not in (None, [], {}, "")
+        } | {"items": items}
+
+    @staticmethod
     def _compact_research_actions_evidence(
         evidence: dict[str, Any],
     ) -> dict[str, Any]:
@@ -7322,6 +7407,86 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             return f"{fmt(amount)} {currency or ''}".strip()
 
         kind = evidence.get("type")
+        if kind == "stock_comparison":
+            items = evidence.get("items") or []
+            available = [item for item in items if item.get("status") == "available"]
+            financial_basis = (evidence.get("comparison_basis") or {}).get(
+                "financial"
+            ) or {}
+            status_label = {
+                "exact_common_period": "财务报告期完全一致，可按列出的指标横向比较",
+                "partial_exact_groups": "只有部分公司报告期一致，财务指标需分组比较",
+                "not_aligned": "最新财务报告期未对齐，只能逐只陈述",
+            }.get(str(financial_basis.get("status")), "财务口径需要逐只核对")
+            lines = [
+                "结论",
+                f"本轮纳入 {len(items)} 只股票，其中 {len(available)} 只形成可用证据；{status_label}。",
+                "",
+                "关键差异",
+            ]
+            for item in items:
+                name = item.get("name") or item.get("symbol")
+                if item.get("status") != "available":
+                    lines.append(f"- {name}：本轮未形成可比较的确定性证据。")
+                    continue
+                snapshot = item.get("snapshot") or {}
+                valuation = snapshot.get("valuation") or {}
+                financial = snapshot.get("financial") or {}
+                period = financial.get("report_date_name") or financial.get(
+                    "report_date"
+                )
+                valuation_parts = []
+                if valuation.get("pe_ttm") is not None:
+                    valuation_parts.append(f"PE(TTM) {fmt(valuation.get('pe_ttm'))}")
+                if valuation.get("pb") is not None:
+                    valuation_parts.append(f"PB {fmt(valuation.get('pb'))}")
+                financial_parts = []
+                if financial.get("revenue_yoy_pct") is not None:
+                    financial_parts.append(
+                        f"营收同比 {fmt(financial.get('revenue_yoy_pct'))}%"
+                    )
+                if financial.get("net_profit_yoy_pct") is not None:
+                    financial_parts.append(
+                        f"净利润同比 {fmt(financial.get('net_profit_yoy_pct'))}%"
+                    )
+                if financial.get("gross_margin_pct") is not None:
+                    financial_parts.append(
+                        f"毛利率 {fmt(financial.get('gross_margin_pct'))}%"
+                    )
+                parts = [
+                    f"报告期 {period or '待确认'}",
+                    *valuation_parts,
+                    *financial_parts,
+                ]
+                lines.append(f"- {name}：" + "；".join(parts) + "。")
+            lines.extend(["", "反方证据"])
+            for item in available:
+                risks = (item.get("snapshot") or {}).get("counter_evidence") or []
+                risk_texts = []
+                for risk in risks[:2]:
+                    if isinstance(risk, dict):
+                        text = risk.get("claim") or risk.get("risk") or risk.get(
+                            "statement"
+                        )
+                    else:
+                        text = risk
+                    if text:
+                        risk_texts.append(str(text))
+                lines.append(
+                    f"- {item.get('name') or item.get('symbol')}："
+                    + ("；".join(risk_texts) if risk_texts else "当前没有足够的结构化反方证据可直接比较。")
+                )
+            lines.extend(["", "下一步核验"])
+            warnings = evidence.get("warnings") or []
+            if warnings:
+                lines.extend(f"- {warning}" for warning in warnings[:3])
+            else:
+                lines.append("- 等待下一次同口径财务披露后按相同维度重新比较。")
+            lines.append(
+                evidence.get("boundary")
+                or "该比较用于研究，不构成公司排名或买卖建议。"
+            )
+            return "\n".join(lines)
         if kind == "stock_screen":
             profile = evidence.get("profile") or {}
             if profile.get("key") == "li_zong":

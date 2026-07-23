@@ -26,6 +26,10 @@ class TodayOverviewService:
         "research_task": 6,
     }
     _PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
+    _CHANGE_FRESHNESS_DAYS = {
+        "daily_price_anomaly": 5,
+        "official_financial_disclosure": 45,
+    }
 
     def __init__(
         self,
@@ -75,6 +79,9 @@ class TodayOverviewService:
         results, component_status = self._collect(calls)
         session = self.session_provider()
         watchlist = self.database.list_watchlist(user_id)
+        whitelist_changes = self._dedupe_whitelist_changes(
+            results.get("whitelist_changes") or {}
+        )
         watchlist_names = {
             str(item.get("symbol")): str(
                 item.get("name")
@@ -88,20 +95,31 @@ class TodayOverviewService:
             actions=results.get("actions") or {},
             writebacks=results.get("writebacks") or {},
             trade_reviews=results.get("trade_reviews") or {},
-            whitelist_changes=results.get("whitelist_changes") or {},
+            whitelist_changes=whitelist_changes,
             names=watchlist_names,
         )
+        selected_change_links = {
+            str(item.get("source_ref_id") or "")
+            for item in priority_items
+            if item.get("source_type") == "verified_change_event"
+        }
+        priority_change_keys = {
+            self._canonical_change_key(event)
+            for event in whitelist_changes.get("pending_unread_items") or []
+            if str(event.get("link_id") or "") in selected_change_links
+        }
         market = self._market_packet(
             results.get("indices") or {},
             results.get("breadth") or {},
             results.get("industries") or {},
-            results.get("whitelist_changes") or {},
+            whitelist_changes,
         )
         personalized = self._personalized_packet(
             changes=results.get("changes") or {},
-            whitelist_changes=results.get("whitelist_changes") or {},
+            whitelist_changes=whitelist_changes,
             actions=results.get("actions") or {},
             watchlist=watchlist,
+            exclude_change_keys=priority_change_keys,
         )
         warnings = [
             label
@@ -184,6 +202,8 @@ class TodayOverviewService:
         items: list[dict[str, Any]] = []
         now = datetime.now(timezone.utc)
         for event in whitelist_changes.get("pending_unread_items") or []:
+            if not cls._change_event_is_fresh(event, now=now):
+                continue
             symbol = str(event.get("symbol") or "")
             name = str(event.get("name") or names.get(symbol) or symbol)
             event_type = str(event.get("event_type") or "")
@@ -391,6 +411,61 @@ class TodayOverviewService:
         return output[:5]
 
     @classmethod
+    def _dedupe_whitelist_changes(
+        cls, packet: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not packet:
+            return {}
+
+        items = cls._dedupe_change_events(list(packet.get("items") or []))
+        pending_items = cls._dedupe_change_events(
+            list(packet.get("pending_unread_items") or [])
+        )
+        counts = {
+            "total": len(items),
+            "pending": sum(
+                item.get("relevance_status") == "pending" for item in items
+            ),
+            "pending_unread": len(pending_items),
+            "relevant": sum(
+                item.get("relevance_status") == "relevant" for item in items
+            ),
+            "irrelevant": sum(
+                item.get("relevance_status") == "irrelevant" for item in items
+            ),
+        }
+        return {
+            **packet,
+            "items": items,
+            "pending_unread_items": pending_items,
+            "counts": counts,
+        }
+
+    @classmethod
+    def _dedupe_change_events(
+        cls, events: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        selected: dict[tuple[str, ...], dict[str, Any]] = {}
+        for event in events:
+            selected.setdefault(cls._canonical_change_key(event), event)
+        return list(selected.values())
+
+    @staticmethod
+    def _canonical_change_key(event: dict[str, Any]) -> tuple[str, ...]:
+        symbol = str(event.get("symbol") or "").strip().upper()
+        event_type = str(event.get("event_type") or "").strip()
+        event_time = str(
+            event.get("occurred_at") or event.get("market_date") or ""
+        ).strip()
+        rule_version = str(event.get("rule_version") or "").strip()
+        if symbol and event_type and event_time:
+            return "business_event", symbol, event_type, event_time, rule_version
+        record_id = str(
+            event.get("event_id") or event.get("link_id") or event.get("id") or ""
+        ).strip()
+        return "event_record", record_id or repr(sorted(event.items()))
+
+    @classmethod
     def _priority_sort_key(cls, item: dict[str, Any]) -> tuple[Any, ...]:
         due = cls._parse_time(item.get("due_at"))
         updated = cls._parse_time(item.get("updated_at"))
@@ -472,6 +547,11 @@ class TodayOverviewService:
                     "main_net_inflow": sector.get("main_net_inflow"),
                 }
             )
+        current_change_items = [
+            item
+            for item in whitelist_changes.get("items") or []
+            if cls._change_event_is_fresh(item)
+        ]
         return {
             "indices": index_cards,
             "breadth": breadth_packet,
@@ -489,15 +569,18 @@ class TodayOverviewService:
             "risk_agenda": {
                 "status": (
                     "available"
-                    if whitelist_changes.get("items")
+                    if current_change_items
                     else "empty"
                     if whitelist_changes
                     else "not_available"
                 ),
-                "pending_unread": (whitelist_changes.get("counts") or {}).get(
-                    "pending_unread", 0
+                "pending_unread": sum(
+                    item.get("relevance_status") == "pending"
+                    and item.get("read_at") is None
+                    and item.get("handled_at") is None
+                    for item in current_change_items
                 ),
-                "items": list(whitelist_changes.get("items") or [])[:5],
+                "items": current_change_items[:5],
                 "message": (
                     whitelist_changes.get("empty_message")
                     or "当前只展示已完成来源与规则验收的事件类型。"
@@ -505,13 +588,15 @@ class TodayOverviewService:
             },
         }
 
-    @staticmethod
+    @classmethod
     def _personalized_packet(
+        cls,
         *,
         changes: dict[str, Any],
         whitelist_changes: dict[str, Any],
         actions: dict[str, Any],
         watchlist: list[dict[str, Any]],
+        exclude_change_keys: set[tuple[str, ...]] | None = None,
     ) -> dict[str, Any]:
         selected_events: dict[tuple[str, str], dict[str, Any]] = {}
         for event in changes.get("events") or []:
@@ -531,7 +616,12 @@ class TodayOverviewService:
             reverse=True,
         )
         events = []
+        excluded = exclude_change_keys or set()
         for event in whitelist_changes.get("items") or []:
+            if cls._canonical_change_key(event) in excluded:
+                continue
+            if not cls._change_event_is_fresh(event):
+                continue
             events.append(
                 {
                     "id": event.get("event_id"),
@@ -613,6 +703,26 @@ class TodayOverviewService:
                 or "未完成来源与规则验收的事件类型不会进入用户提醒。"
             ),
         }
+
+    @classmethod
+    def _change_event_is_fresh(
+        cls, event: dict[str, Any], *, now: datetime | None = None
+    ) -> bool:
+        event_type = str(event.get("event_type") or "")
+        freshness_days = cls._CHANGE_FRESHNESS_DAYS.get(event_type)
+        if freshness_days is None:
+            return True
+        raw_time = str(event.get("occurred_at") or event.get("detected_at") or "")
+        if not raw_time:
+            return False
+        try:
+            event_time = datetime.fromisoformat(raw_time.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if event_time.tzinfo is None:
+            event_time = event_time.replace(tzinfo=timezone.utc)
+        age = (now or datetime.now(timezone.utc)) - event_time.astimezone(timezone.utc)
+        return age.total_seconds() >= -86400 and age.days <= freshness_days
 
     @staticmethod
     def _change_priority(event: dict[str, Any]) -> tuple[int, int, int]:

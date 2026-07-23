@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.services.today_overview import TodayOverviewService
@@ -203,6 +204,63 @@ class FakeTradeWorkflow:
         }
 
 
+class FakeChangeEvents:
+    def get_user_packet(self, user_id: str, *, limit: int) -> dict[str, Any]:
+        assert (user_id, limit) == ("user-1", 50)
+        now = datetime.now(timezone.utc)
+        occurred_at = (now - timedelta(days=1)).isoformat()
+        duplicate_base = {
+            "symbol": "000063.SZ",
+            "name": "中兴通讯",
+            "event_type": "daily_price_anomaly",
+            "event_type_label": "完整日线价格异常",
+            "title": "中兴通讯上一完整交易日上涨 7.51%",
+            "fact_summary": "最近完整日线上涨 7.51%。",
+            "occurred_at": occurred_at,
+            "detected_at": now.isoformat(),
+            "severity": "high",
+            "relevance_status": "pending",
+            "relevance_status_label": "待判断相关性",
+            "read_at": None,
+            "handled_at": None,
+            "rule_version": "daily_move_abs_5pct_v1",
+        }
+        first = {
+            **duplicate_base,
+            "link_id": "duplicate-link-1",
+            "event_id": "duplicate-event-1",
+        }
+        second = {
+            **duplicate_base,
+            "link_id": "duplicate-link-2",
+            "event_id": "duplicate-event-2",
+        }
+        related = {
+            "link_id": "related-link",
+            "event_id": "related-event",
+            "symbol": "NVDA",
+            "name": "英伟达",
+            "event_type": "official_financial_disclosure",
+            "event_type_label": "官方财务披露",
+            "title": "NVDA SEC 10-Q",
+            "fact_summary": "新的监管财务披露已经发布。",
+            "occurred_at": (now - timedelta(days=2)).isoformat(),
+            "detected_at": now.isoformat(),
+            "severity": "notice",
+            "relevance_status": "relevant",
+            "relevance_status_label": "与我有关",
+            "read_at": now.isoformat(),
+            "handled_at": now.isoformat(),
+            "rule_version": "official_financial_disclosure_v1",
+        }
+        return {
+            "items": [first, second, related],
+            "pending_unread_items": [first, second],
+            "counts": {"total": 3, "pending": 2, "pending_unread": 2},
+            "coverage": {},
+        }
+
+
 def post_market_session() -> dict[str, Any]:
     return {
         "key": "post_market",
@@ -298,3 +356,103 @@ def test_today_overview_surfaces_ready_trade_review_as_actionable_reminder():
         "symbol": "000063.SZ",
     }
     assert packet["coverage"]["components"]["trade_reviews"] == "ready"
+
+
+def test_today_overview_keeps_stale_filings_in_history_but_out_of_today_scope():
+    now = datetime.now(timezone.utc)
+    fresh_price = {
+        "link_id": "fresh-price",
+        "event_id": "fresh-price-event",
+        "symbol": "000063.SZ",
+        "name": "中兴通讯",
+        "event_type": "daily_price_anomaly",
+        "event_type_label": "完整日线价格异常",
+        "title": "中兴通讯上一完整交易日上涨 7.51%",
+        "fact_summary": "最近完整日线出现价格异常。",
+        "occurred_at": (now - timedelta(days=1)).isoformat(),
+        "detected_at": now.isoformat(),
+        "severity": "high",
+        "relevance_status": "pending",
+        "relevance_status_label": "待判断相关性",
+        "read_at": None,
+        "handled_at": None,
+        "rule_version": "daily_move_abs_5pct_v1",
+    }
+    stale_filing = {
+        "link_id": "stale-filing",
+        "event_id": "stale-filing-event",
+        "symbol": "NVDA",
+        "name": "英伟达",
+        "event_type": "official_financial_disclosure",
+        "event_type_label": "官方财务披露",
+        "title": "NVDA SEC 10-Q",
+        "fact_summary": "历史财务披露已经发布。",
+        "occurred_at": (now - timedelta(days=90)).isoformat(),
+        "detected_at": (now - timedelta(days=89)).isoformat(),
+        "severity": "notice",
+        "relevance_status": "pending",
+        "relevance_status_label": "待判断相关性",
+        "read_at": None,
+        "handled_at": None,
+        "rule_version": "official_financial_disclosure_v1",
+    }
+    whitelist = {
+        "items": [fresh_price, stale_filing],
+        "pending_unread_items": [fresh_price, stale_filing],
+        "counts": {"pending_unread": 2},
+        "coverage": {},
+    }
+
+    priority = TodayOverviewService._priority_items(
+        tasks={},
+        actions={},
+        writebacks={},
+        trade_reviews={},
+        whitelist_changes=whitelist,
+        names={"000063.SZ": "中兴通讯", "NVDA": "英伟达"},
+    )
+    personalized = TodayOverviewService._personalized_packet(
+        changes={},
+        whitelist_changes=whitelist,
+        actions={},
+        watchlist=[{"symbol": "000063.SZ"}, {"symbol": "NVDA"}],
+    )
+
+    assert [item["source_ref_id"] for item in priority] == ["fresh-price"]
+    assert [item["link_id"] for item in personalized["changes"]] == [
+        "fresh-price"
+    ]
+
+
+def test_today_overview_dedupes_business_events_and_avoids_cross_section_repeat():
+    service = TodayOverviewService(
+        FakeDatabase(),
+        FakeAnalysis(),
+        FakeTasks(),
+        FakeActions(),
+        FakeTracking(),
+        FakeWritebacks(),
+        change_events=FakeChangeEvents(),
+        session_provider=post_market_session,
+    )
+
+    packet = service.get_overview("user-1")
+
+    priority_changes = [
+        item
+        for item in packet["priority_items"]["items"]
+        if item["kind"] == "change_event"
+    ]
+    related_verified_changes = [
+        item
+        for item in packet["personalized"]["changes"]
+        if item["source_type"] == "verified_change_event"
+    ]
+
+    assert len(priority_changes) == 1
+    assert priority_changes[0]["source_ref_id"] == "duplicate-link-1"
+    assert [item["link_id"] for item in related_verified_changes] == ["related-link"]
+    assert packet["market"]["risk_agenda"]["pending_unread"] == 1
+    assert [
+        item["link_id"] for item in packet["market"]["risk_agenda"]["items"]
+    ] == ["duplicate-link-1", "related-link"]

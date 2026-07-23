@@ -63,6 +63,7 @@ from app.services.stock_screener import (
     StockScreenerService,
     StockScreenerUnavailable,
 )
+from app.services.stock_comparison import StockComparisonService
 from app.services.stock_domain import (
     StockDomainInvalidState,
     StockDomainNotFound,
@@ -514,6 +515,49 @@ def _build_visible_evidence_sources(
             item["url"] = str(url).strip()
         sources.append(item)
 
+    if packet.get("type") == "stock_comparison":
+        for comparison_item in (packet.get("items") or [])[:5]:
+            name = str(
+                comparison_item.get("name")
+                or comparison_item.get("symbol")
+                or "研究对象"
+            )
+            if comparison_item.get("status") != "available":
+                add(
+                    "比较边界",
+                    f"{name}本轮证据状态",
+                    "本轮未形成可比较的确定性证据。",
+                    as_of=generated_at,
+                    source="多股统一口径研究",
+                )
+                continue
+            snapshot = comparison_item.get("snapshot") or {}
+            financial = snapshot.get("financial") or {}
+            if financial.get("report_date"):
+                add(
+                    "财务口径",
+                    f"{name}财务报告期",
+                    (
+                        f"{financial.get('report_date_name') or financial.get('report_date')}；"
+                        f"{financial.get('period_basis_label') or financial.get('period_basis') or '口径待确认'}"
+                    ),
+                    as_of=financial.get("notice_date")
+                    or financial.get("report_date"),
+                    source="结构化财务披露",
+                )
+            for child in _build_visible_evidence_sources(
+                comparison_item.get("evidence") or {}
+            )[:3]:
+                add(
+                    str(child.get("kind") or "研究证据"),
+                    f"{name}｜{child.get('title')}",
+                    child.get("summary"),
+                    as_of=child.get("as_of"),
+                    source=child.get("source"),
+                    url=child.get("url"),
+                )
+        return sources[:16]
+
     quote = packet.get("current_quote") or {}
     quote_price = _public_evidence_number(quote.get("price"))
     quote_change = _public_evidence_number(quote.get("pct_change"), signed=True)
@@ -887,6 +931,7 @@ def create_app(
         analyst_expectations,
         event_timeline,
     )
+    stock_comparison = StockComparisonService(research_evidence)
     research_reports = ResearchReportService(
         database, research_evidence, agent, settings
     )
@@ -1027,6 +1072,7 @@ def create_app(
     app.state.peer_comparison = peer_comparison
     app.state.outlook_calibration = outlook_calibration
     app.state.research_evidence = research_evidence
+    app.state.stock_comparison = stock_comparison
     app.state.research_reports = research_reports
     app.state.research_tracking = research_tracking
     app.state.research_priority = research_priority
@@ -3266,13 +3312,17 @@ def create_app(
                 )
                 or conversation
             )
-        symbol = _extract_symbol(
+        symbols = _extract_symbols(
             payload.symbol,
             message,
             watchlist=database.list_watchlist(user_id),
         )
+        symbol = symbols[0] if len(symbols) == 1 else None
         prior_intent = _intent_from_history(history)
         contextual_followup = _is_contextual_followup(message)
+        if not symbols and prior_intent == "stock_comparison" and contextual_followup:
+            symbols = _symbols_from_history(history)
+            symbol = symbols[0] if len(symbols) == 1 else None
         explicit_market_query = _is_market_query(message)
         explicit_industry_topic = _extract_industry_topic(message)
         explicit_stock_screen_query = _is_stock_screen_query(message)
@@ -3289,6 +3339,11 @@ def create_app(
             and contextual_followup
         )
         peer_comparison_query = _is_peer_comparison_query(message)
+        stock_comparison_query = (
+            len(symbols) >= 2
+            and not explicit_stock_screen_query
+            and not explicit_li_zong_query
+        )
         financial_driver_query = (
             _is_financial_driver_query(message) and not peer_comparison_query
         )
@@ -3376,6 +3431,11 @@ def create_app(
                 f"{message} 透明选股 研究候选 财务质量 估值约束 "
                 "相对行业表现 反方证据 风险边界"
             )
+        elif stock_comparison_query:
+            knowledge_query = (
+                f"{message} 多股统一口径比较 报告期可比性 盈利质量 估值 "
+                "业务差异 反方证据 风险边界"
+            )
         elif analyst_expectations_context:
             knowledge_query = (
                 f"{message} 分析师一致预期 券商研报 EPS修订 评级覆盖 "
@@ -3434,7 +3494,18 @@ def create_app(
                 (evidence_payload or {}).get("market_drivers", {}).get("market_key")
             )
             research_targets: list[dict[str, str]] = []
-            if response_intent == "stock_screen":
+            if response_intent == "stock_comparison":
+                for target in (evidence_payload or {}).get("targets") or []:
+                    target_symbol = str(target.get("symbol") or "").strip()
+                    if not target_symbol:
+                        continue
+                    research_targets.append(
+                        {
+                            "symbol": target_symbol,
+                            "name": str(target.get("name") or target_symbol),
+                        }
+                    )
+            elif response_intent == "stock_screen":
                 screen_evidence = evidence_payload or {}
                 requested_targets = list(screen_evidence.get("requested_symbols") or [])
                 if not requested_targets and screen_evidence.get("requested_symbol"):
@@ -3490,6 +3561,7 @@ def create_app(
                     "coverage": knowledge_context.get("coverage", {}),
                 },
                 "evidence_sources": evidence_sources,
+                "research_targets": research_targets,
                 "structured_answer": structured_answer,
             }
 
@@ -3720,6 +3792,16 @@ def create_app(
                     "warnings": ["完整市场截面仍在准备。"],
                     "boundary": "系统不会在缺少确定性数据时生成临时候选。",
                 }
+        elif stock_comparison_query and upload is None:
+            intent = "stock_comparison"
+            try:
+                evidence = stock_comparison.build(
+                    user_id,
+                    symbols,
+                    question=message,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         elif _is_research_action_query(message) and symbol is None:
             intent = "research_actions"
             evidence = research_actions.get_packet(user_id)
@@ -4515,6 +4597,7 @@ def create_app(
             "market_brief",
             "stock_screen",
             "stock_research",
+            "stock_comparison",
             "earnings_quality",
             "financial_drivers",
             "business_structure",
@@ -4896,14 +4979,23 @@ def _extract_symbol(
     message: str,
     watchlist: list[dict[str, Any]] | None = None,
 ) -> str | None:
+    symbols = _extract_symbols(explicit, message, watchlist=watchlist)
+    return symbols[0] if symbols else None
+
+
+def _extract_symbols(
+    explicit: str | None,
+    message: str,
+    watchlist: list[dict[str, Any]] | None = None,
+) -> list[str]:
+    candidates: list[tuple[int, int, str]] = []
     if explicit:
         try:
-            return normalize_symbol(explicit)
+            candidates.append((-1, 0, normalize_symbol(explicit)))
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-    match = re.search(r"(?<!\d)(\d{6})(?!\d)", message)
-    if match:
-        return normalize_symbol(match.group(1))
+    for match in re.finditer(r"(?<!\d)(\d{6})(?!\d)", message):
+        candidates.append((match.start(), 0, normalize_symbol(match.group(1))))
     aliases = dict(SECURITY_NAME_ALIASES)
     aliases.update(
         {
@@ -4921,8 +5013,16 @@ def _extract_symbol(
     for alias, symbol in sorted(
         aliases.items(), key=lambda item: len(item[0]), reverse=True
     ):
-        if alias and alias.casefold() in folded_message:
-            return normalize_symbol(symbol)
+        folded_alias = alias.casefold()
+        if not folded_alias:
+            continue
+        start = 0
+        while True:
+            index = folded_message.find(folded_alias, start)
+            if index < 0:
+                break
+            candidates.append((index, -len(alias), normalize_symbol(symbol)))
+            start = index + max(1, len(folded_alias))
     ticker_pattern = re.compile(
         r"(?<![A-Z0-9])([A-Z]{1,5}(?:[.=-][A-Z0-9]{1,5})?)(?![A-Z0-9])"
     )
@@ -4933,11 +5033,28 @@ def _extract_symbol(
         suffix = message[ticker.end(1) :]
         if re.match(r"\s*\+\s*\d+", suffix):
             continue
-        if ticker.group(1).upper() in {"PE", "PB", "PS", "ROE", "ROA", "EPS", "TTM"}:
+        if ticker.group(1).upper() in {
+            "PE",
+            "PB",
+            "PS",
+            "ROE",
+            "ROA",
+            "EPS",
+            "TTM",
+            "SZ",
+            "SS",
+            "SH",
+        }:
             continue
         if not _is_market_ticker_reference(ticker.group(1), message):
-            return normalize_symbol(ticker.group(1))
-    return None
+            candidates.append(
+                (ticker.start(1), 0, normalize_symbol(ticker.group(1)))
+            )
+    output: list[str] = []
+    for _, _, symbol in sorted(candidates, key=lambda item: (item[0], item[1])):
+        if symbol not in output:
+            output.append(symbol)
+    return output
 
 
 def _is_stock_screen_query(message: str) -> bool:
@@ -6001,6 +6118,27 @@ def _symbol_from_history(history: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def _symbols_from_history(history: list[dict[str, Any]]) -> list[str]:
+    for item in reversed(history):
+        metadata = item.get("metadata") or {}
+        targets = metadata.get("research_targets") or []
+        output: list[str] = []
+        for target in targets:
+            raw = target.get("symbol") if isinstance(target, dict) else target
+            if not raw:
+                continue
+            try:
+                canonical = normalize_symbol(str(raw))
+            except ValueError:
+                continue
+            if canonical not in output:
+                output.append(canonical)
+        if len(output) >= 2:
+            return output
+    symbol = _symbol_from_history(history)
+    return [symbol] if symbol else []
+
+
 def _intent_from_history(history: list[dict[str, Any]]) -> str | None:
     for item in reversed(history):
         if item.get("role") == "assistant" and item.get("intent"):
@@ -6089,6 +6227,9 @@ def _is_contextual_followup(message: str) -> bool:
         "需要补什么证据",
         "还有呢",
         "继续",
+        "再比较",
+        "继续比较",
+        "重点比较",
         "变化",
         "进展",
         "更新",

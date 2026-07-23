@@ -1564,9 +1564,9 @@
     .panel-title { color: #1f304b; font-size: 16px; }
     .btn { border-radius: 9px; }
 
-    /* The first screen answers what needs attention and what the market is doing. */
+    /* Market facts lead the page; personal research work follows without duplication. */
     #homeFocus { display: none !important; }
-    .today-overview-grid { grid-template-columns: minmax(0,1.18fr) minmax(320px,.82fr); gap: 14px; margin-bottom: 14px; }
+    .today-overview-grid { grid-template-columns: minmax(0,1.18fr) minmax(320px,.82fr); gap: 14px; margin: 18px 0 16px; }
     .today-overview-card { box-shadow: none; }
     .live-panel { margin-bottom: 16px; }
     .market-section { margin-top: 18px; }
@@ -1896,31 +1896,6 @@
           </div>
         </section>
 
-        <section id="todayOverviewGrid" class="today-overview-grid" aria-label="今日待处理与相关变化" hidden>
-          <article class="panel today-overview-card">
-            <div class="today-overview-head">
-              <div>
-                <div class="today-overview-title">今日需要处理</div>
-                <div class="today-overview-copy">按风险、到期、判断草稿确认和证据缺口排列，最多展示 5 项</div>
-              </div>
-              <span id="todaySessionBadge" class="today-session-badge">状态待确认</span>
-            </div>
-            <div id="todayPrioritySummary" class="today-overview-summary">正在读取个人研究事项…</div>
-            <div id="todayPriorityItems" class="today-item-list"><div class="empty">正在加载今日事项…</div></div>
-          </article>
-          <article class="panel today-overview-card">
-            <div class="today-overview-head">
-              <div>
-                <div class="today-overview-title">与我相关的变化</div>
-                <div class="today-overview-copy">只展示已进入当前用户关注范围、可追溯来源和规则版本的变化</div>
-              </div>
-              <span id="todayChangeCount" class="today-session-badge">0 项</span>
-            </div>
-            <div id="todayRelatedChanges" class="today-item-list"><div class="empty">正在加载研究变化…</div></div>
-            <div id="todayRelatedBoundary" class="today-boundary">未完成来源和规则验收的事件类别不会在这里伪装上线。</div>
-          </article>
-        </section>
-
         <section id="liveSection" class="panel live-panel">
           <div class="panel-head">
             <div>
@@ -1991,6 +1966,31 @@
               <div id="watchlistPulseSource" class="source-note">只显示当前用户空间中的关注与研究状态。</div>
             </article>
           </div>
+        </section>
+
+        <section id="todayOverviewGrid" class="today-overview-grid" aria-label="我的研究待办与重要变化" hidden>
+          <article class="panel today-overview-card">
+            <div class="today-overview-head">
+              <div>
+                <div class="today-overview-title">我的研究待办</div>
+                <div class="today-overview-copy">按风险和时间优先级排列，先处理最需要核验的事项</div>
+              </div>
+              <span id="todaySessionBadge" class="today-session-badge">状态待确认</span>
+            </div>
+            <div id="todayPrioritySummary" class="today-overview-summary">正在读取个人研究事项…</div>
+            <div id="todayPriorityItems" class="today-item-list"><div class="empty">正在加载今日事项…</div></div>
+          </article>
+          <article class="panel today-overview-card">
+            <div class="today-overview-head">
+              <div>
+                <div class="today-overview-title">与我相关的重要变化</div>
+                <div class="today-overview-copy">只展示与你的关注或持仓有关、且尚未列入左侧待办的变化</div>
+              </div>
+              <span id="todayChangeCount" class="today-session-badge">0 项</span>
+            </div>
+            <div id="todayRelatedChanges" class="today-item-list"><div class="empty">正在加载研究变化…</div></div>
+            <div id="todayRelatedBoundary" class="today-boundary">点击变化可查看事实、证据和下一步核验。</div>
+          </article>
         </section>
 
         <div id="insightSection" class="insight-layout">
@@ -2389,12 +2389,13 @@
             <div class="message agent">你好，我是清数智算。你可以直接问市场、个股、新闻、财报或原研究逻辑；我会调用 Hermes、资料库和金融 Skills，并把事实、反方证据与失效条件分开说明。</div>
           </div>
           <div id="quickActions" class="quick-actions">
-            <span class="quick-actions-label">常用研究</span>
-            <button class="chip" data-message="请研究这家公司当前的经营、行业、估值、反方证据和主要风险">个股研究</button>
-            <button class="chip" data-message="请比较我原来的关注理由和最新证据，说明哪些事实发生了变化">原逻辑复核</button>
-            <button class="chip" data-message="请分析这条新闻是否改变了相关公司的基本面或我的原关注逻辑">新闻影响</button>
-            <button id="earningsQualityAction" class="chip">财报解读</button>
-            <button class="chip" data-message="只看反方证据和原假设的失效条件">反方风险</button>
+            <span class="quick-actions-label">研究类型</span>
+            <button class="chip" data-message="分析中兴通讯当前的经营、行业、估值、反方证据和主要风险">个股分析</button>
+            <button class="chip" data-message="比较中兴通讯、中际旭创和英伟达的盈利质量、估值和主要风险；严格区分报告期和币种口径">多股比较</button>
+            <button class="chip" data-message="研究A股通信设备板块当前行情、行业证据、主要驱动和反方风险">行业研究</button>
+            <button class="chip" data-message="分析我的自选股当前最值得优先核验的变化、风险和研究任务">关注组合</button>
+            <button id="earningsQualityAction" class="chip">公告财报</button>
+            <button class="chip secondary-research-action" data-quick-secondary hidden data-message="只看反方证据和原假设的失效条件">反方风险</button>
             <button class="chip secondary-research-action" data-quick-secondary hidden data-message="请根据我自己记录的原计划，检查这次拟议操作是否偏离计划；不要替我生成买卖建议">操作前检查</button>
             <button class="chip secondary-research-action" data-quick-secondary hidden data-message="请比较两家公司在行业位置、经营质量、估值口径和风险上的差异">公司对比</button>
             <button class="chip secondary-research-action" data-quick-secondary hidden data-message="请分析当前市场环境如何影响我的自选股和原研究假设">市场环境</button>
@@ -2544,6 +2545,7 @@
         market_brief: "大盘诊断",
         stock_screen: "选股研究",
         stock_research: "个股研究",
+        stock_comparison: "多股比较",
         business_structure: "主营结构",
         earnings_quality: "财报质量",
         financial_drivers: "利润与现金流",
@@ -4226,26 +4228,34 @@
       const session = data.session || {};
       const priority = data.priority_items || {};
       const personalized = data.personalized || {};
+      const priorityItems = priority.items || [];
+      const priorityChangeIds = new Set(
+        priorityItems
+          .filter(item => item.kind === "change_event" && item.source_ref_id)
+          .map(item => String(item.source_ref_id))
+      );
       $("todaySessionBadge").textContent = session.label || "状态待确认";
-      $("todayPrioritySummary").textContent = priority.total_visible
-        ? `${priority.total_visible} 项进入首屏；点击可进入对应股票研究空间。${priority.ranking_method || ""}`
+      $("todayPrioritySummary").textContent = priorityItems.length
+        ? `${priorityItems.length} 项需要处理；已按风险和时间优先级排序，点击即可继续核验。`
         : (priority.empty_message || "当前没有需要立即处理的个人研究事项。");
       const priorityContainer = $("todayPriorityItems"); priorityContainer.innerHTML = "";
-      for (const item of priority.items || []) {
+      for (const item of priorityItems) {
         const row = document.createElement("button"); row.type = "button"; row.className = "today-item";
         const title = document.createElement("span"); title.className = "today-item-title"; title.textContent = item.title || "待处理研究事项";
         const badge = document.createElement("span"); badge.className = `today-item-badge ${item.category || "research_task"}`; badge.textContent = item.status_label || "待处理";
         const detail = document.createElement("span"); detail.className = "today-item-detail"; detail.textContent = item.detail || item.rank_reason || "进入研究空间继续核验";
         const meta = document.createElement("span"); meta.className = "today-item-meta";
-        const parts = [item.name || item.symbol, item.rank_reason, item.due_at ? `${item.kind === "trade_review" ? "就绪" : "截止"} ${readableTime(item.due_at)}` : null].filter(Boolean);
+        const parts = [item.name || item.symbol, item.due_at ? `${item.kind === "trade_review" ? "就绪" : "截止"} ${readableTime(item.due_at)}` : null].filter(Boolean);
         meta.textContent = parts.join(" · "); row.append(title, badge, detail, meta);
         row.addEventListener("click", () => { void openPriorityItem(item); });
         priorityContainer.appendChild(row);
       }
       if (!priorityContainer.children.length) priorityContainer.innerHTML = `<div class="empty">${escapeHtml(priority.empty_message || "当前没有需要立即处理的个人研究事项。")}</div>`;
 
-      const changes = personalized.changes || [];
-      $("todayChangeCount").textContent = `${changes.length} 项`;
+      const allChanges = personalized.changes || [];
+      const changes = allChanges.filter(item => !item.link_id || !priorityChangeIds.has(String(item.link_id)));
+      const changesMovedToPriority = allChanges.length - changes.length;
+      $("todayChangeCount").textContent = changes.length ? `${changes.length} 项` : changesMovedToPriority ? "已列入待办" : "0 项";
       const changesContainer = $("todayRelatedChanges"); changesContainer.innerHTML = "";
       for (const item of changes) {
         const row = document.createElement("button"); row.type = "button"; row.className = "today-item";
@@ -4260,8 +4270,15 @@
         });
         changesContainer.appendChild(row);
       }
-      if (!changesContainer.children.length) changesContainer.innerHTML = `<div class="empty">${escapeHtml(personalized.empty_message || "当前没有新的可追溯研究变化。")}</div>`;
-      $("todayRelatedBoundary").textContent = personalized.boundary || data.boundary || "未验收事件不会展示。";
+      if (!changesContainer.children.length) {
+        const emptyMessage = changesMovedToPriority
+          ? "需要你处理的变化已经归入左侧待办，这里不重复展示。"
+          : (personalized.empty_message || "当前没有新的重要变化。");
+        changesContainer.innerHTML = `<div class="empty">${escapeHtml(emptyMessage)}</div>`;
+      }
+      $("todayRelatedBoundary").textContent = changes.length
+        ? "点击变化可查看事实、证据和下一步核验。"
+        : "新的重要变化出现后，会在这里按事实时间更新。";
       renderNotificationCenter(priority);
       renderHomeFocus();
     }
@@ -8012,7 +8029,9 @@
         $("systemStatus").textContent = "正在重新连接";
       };
       stream.onopen = () => {
-        renderSystemHealth(state.health?.data_health || {status: "initializing", user_label: "数据正在同步"});
+        void loadHealth().catch(() => {
+          renderSystemHealth(state.health?.data_health || {status: "initializing", user_label: "数据正在同步"});
+        });
       };
     }
 
@@ -8410,8 +8429,9 @@
     });
 
     (async function boot() {
+      activateWorkspace("insights");
+      connectServerEvents();
       try {
-        activateWorkspace("insights");
         await Promise.all([loadHealth(), ensureUser()]);
         await loadWatchlist();
         await Promise.all([loadTodayOverview(), loadMarketDashboard(), loadSectors(), loadLiveMarkets(), loadArticles(), loadKnowledge(), loadDeepStock()]);
@@ -8420,7 +8440,6 @@
           startNewConversation(false);
           await loadMemoryCandidates();
         }
-        connectServerEvents();
       } catch (error) {
         $("systemStatus").textContent = "正在重新连接";
         addMessage("agent", "页面正在重新连接数据，请稍后刷新。");
