@@ -3800,22 +3800,25 @@
 
       for (const candidate of (structured.candidate_writebacks || [])) {
         const card = document.createElement("div"); card.className = "ai-writeback-card";
-        const title = document.createElement("div"); title.className = "ai-writeback-title"; title.textContent = "AI 提出的判断草稿 · 需要你确认";
+        const isObservationTask = candidate.candidate_type === "observation_task";
+        const title = document.createElement("div"); title.className = "ai-writeback-title"; title.textContent = isObservationTask ? "AI 整理的观察任务 · 需要你确认" : "AI 提出的判断草稿 · 需要你确认";
         const copy = document.createElement("div"); copy.className = "ai-writeback-copy";
         const payload = candidate.payload || {};
-        copy.textContent = [payload.current_reason_text ? `当前判断：${payload.current_reason_text}` : "当前尚无正式判断", `建议草稿：${payload.reason_text || ""}`].join("\n\n");
+        copy.textContent = isObservationTask
+          ? [`任务：${payload.title || "本轮证据核验"}`, `核验内容：${payload.description || ""}`].join("\n\n")
+          : [payload.current_reason_text ? `当前判断：${payload.current_reason_text}` : "当前尚无正式判断", `建议草稿：${payload.reason_text || ""}`].join("\n\n");
         const actions = document.createElement("div"); actions.className = "ai-writeback-actions";
-        const confirm = document.createElement("button"); confirm.type = "button"; confirm.className = "btn primary"; confirm.textContent = "确认写入当前判断";
+        const confirm = document.createElement("button"); confirm.type = "button"; confirm.className = "btn primary"; confirm.textContent = isObservationTask ? "确认创建观察任务" : "确认写入当前判断";
         const reject = document.createElement("button"); reject.type = "button"; reject.className = "btn ghost"; reject.textContent = "暂不采用";
         const status = document.createElement("div"); status.className = "ai-writeback-status";
         const applyStatus = value => {
           candidate.status = value;
           const pending = value === "pending_confirmation";
           confirm.hidden = !pending; reject.hidden = !pending;
-          status.textContent = ({confirmed: "已由你确认，并写入版本化当前判断。", rejected: "已拒绝，正式判断没有变化。", stale: "正式判断已更新，这份草稿已失效。"})[value] || "确认前不会修改正式判断。";
+          status.textContent = ({confirmed: isObservationTask ? "已由你确认，并保存为个人观察任务。" : "已由你确认，并写入版本化当前判断。", rejected: isObservationTask ? "已放弃，本次没有创建观察任务。" : "已拒绝，正式判断没有变化。", stale: isObservationTask ? "股票研究空间已变化，这份任务候选已失效。" : "正式判断已更新，这份草稿已失效。"})[value] || (isObservationTask ? "确认前不会创建个人任务。" : "确认前不会修改正式判断。");
         };
         confirm.addEventListener("click", async () => {
-          confirm.disabled = true; reject.disabled = true; status.textContent = "正在写入版本化判断…";
+          confirm.disabled = true; reject.disabled = true; status.textContent = isObservationTask ? "正在创建观察任务…" : "正在写入版本化判断…";
           try {
             const result = await api(`/v1/ai-writebacks/${encodeURIComponent(candidate.id)}/confirm`, {method: "POST"});
             applyStatus(result.status || "confirmed");
@@ -3824,7 +3827,7 @@
               await loadDeepStockOverview(candidate.symbol);
             }
           } catch (error) {
-            status.textContent = error.message || "暂时无法确认这份判断草稿。";
+            status.textContent = error.message || (isObservationTask ? "暂时无法创建这项观察任务。" : "暂时无法确认这份判断草稿。");
             confirm.disabled = false; reject.disabled = false;
           }
         });

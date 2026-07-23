@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from app.catalog import normalize_symbol
 from app.db import Database
+from app.services.observation_tasks import ObservationTaskService
 from app.services.research_claims import build_research_claim_ledger
 from app.services.stock_domain import StockDomainService
 from app.utils import json_dumps, utc_now
@@ -28,7 +29,7 @@ class StructuredAIService:
     """Persist auditable citations and user-confirmable Agent writebacks."""
 
     CONTRACT_VERSION = "structured_ai_response_v1"
-    WRITEBACK_TERMS = (
+    THESIS_WRITEBACK_TERMS = (
         "形成判断草稿",
         "生成判断草稿",
         "提出判断草稿",
@@ -36,6 +37,16 @@ class StructuredAIService:
         "更新当前判断",
         "保存判断草稿",
         "写入当前判断",
+    )
+    OBSERVATION_TASK_WRITEBACK_TERMS = (
+        "创建观察任务",
+        "生成观察任务",
+        "保存观察任务",
+        "保存为观察任务",
+        "创建核验任务",
+        "生成核验任务",
+        "保存核验任务",
+        "保存为核验任务",
     )
     WRITEBACK_NEGATIONS = ("不要", "不用", "无需", "暂不", "先不")
     PUBLIC_CITATION_FIELDS = (
@@ -62,9 +73,15 @@ class StructuredAIService:
         "resolved_at",
     )
 
-    def __init__(self, database: Database, stock_domain: StockDomainService):
+    def __init__(
+        self,
+        database: Database,
+        stock_domain: StockDomainService,
+        observation_tasks: ObservationTaskService,
+    ):
         self.database = database
         self.stock_domain = stock_domain
+        self.observation_tasks = observation_tasks
 
     def build_and_persist(
         self,
@@ -212,6 +229,21 @@ class StructuredAIService:
             )
             if candidate is not None:
                 writebacks.append(self.public_writeback(candidate))
+        if (
+            run.get("status") == "completed"
+            and symbol
+            and self._wants_observation_task_writeback(message)
+        ):
+            candidate = self._create_observation_task_writeback(
+                user_id=user_id,
+                run_id=str(run["id"]),
+                conversation_id=conversation_id,
+                symbol=symbol,
+                evidence=evidence,
+                next_evidence_tasks=next_evidence_tasks,
+            )
+            if candidate is not None:
+                writebacks.append(self.public_writeback(candidate))
 
         status = (
             "complete"
@@ -283,8 +315,14 @@ class StructuredAIService:
         candidate = self._get_writeback(user_id, candidate_id)
         if candidate is None:
             raise StructuredAINotFound("候选写回不存在")
+        if candidate["status"] == "confirmed":
+            return self._confirmed_writeback(candidate)
         if candidate["status"] != "pending_confirmation":
             raise StructuredAIInvalidState("该候选写回已经处理")
+        if candidate["candidate_type"] == "observation_task":
+            return self._confirm_observation_task(candidate)
+        if candidate["candidate_type"] != "thesis":
+            raise StructuredAIInvalidState("未知的候选写回类型")
         payload = candidate["payload"]
         workspace = self.database.get_stock_workspace(user_id, candidate["symbol"])
         if workspace is None:
@@ -333,6 +371,51 @@ class StructuredAIService:
             **self.public_writeback(refreshed),  # type: ignore[arg-type]
             "thesis": confirmed,
         }
+
+    def _confirm_observation_task(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        workspace = self.database.get_stock_workspace(
+            candidate["user_id"], candidate["symbol"]
+        )
+        if workspace is None or workspace.get("relation_type") == "ended":
+            raise StructuredAIConflict("股票研究空间已结束，不能创建观察任务")
+        payload = candidate["payload"]
+        task = self.observation_tasks.create_task(
+            user_id=candidate["user_id"],
+            symbol=candidate["symbol"],
+            title=str(payload.get("title") or "本轮研究证据核验"),
+            description=str(payload.get("description") or "继续核验本轮研究证据。"),
+            priority=str(payload.get("priority") or "normal"),
+            due_at=payload.get("due_at"),
+            source_type="research_action",
+            source_ref_id=f"ai-writeback:{candidate['id']}",
+        )
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                UPDATE ai_writeback_candidates
+                SET status = 'confirmed', target_object_id = ?, resolved_at = ?
+                WHERE id = ? AND user_id = ? AND status = 'pending_confirmation'
+                """,
+                (task["id"], utc_now(), candidate["id"], candidate["user_id"]),
+            )
+        refreshed = self._get_writeback(candidate["user_id"], candidate["id"])
+        return {
+            **self.public_writeback(refreshed),  # type: ignore[arg-type]
+            "observation_task": task,
+        }
+
+    def _confirmed_writeback(self, candidate: dict[str, Any]) -> dict[str, Any]:
+        result = self.public_writeback(candidate)
+        target_id = str(candidate.get("target_object_id") or "")
+        if candidate["candidate_type"] == "thesis" and target_id:
+            thesis = self.database.get_thesis_version(candidate["user_id"], target_id)
+            if thesis is not None:
+                result["thesis"] = thesis
+        elif candidate["candidate_type"] == "observation_task" and target_id:
+            result["observation_task"] = self.observation_tasks.get_task(
+                user_id=candidate["user_id"], task_id=target_id
+            )
+        return result
 
     def reject_writeback(self, *, user_id: str, candidate_id: str) -> dict[str, Any]:
         candidate = self._get_writeback(user_id, candidate_id)
@@ -497,6 +580,85 @@ class StructuredAIService:
             ).fetchone()
         return self._writeback_row(row) if row is not None else None
 
+    def _create_observation_task_writeback(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        conversation_id: str | None,
+        symbol: str,
+        evidence: dict[str, Any],
+        next_evidence_tasks: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        canonical = normalize_symbol(symbol)
+        workspace = self.database.get_stock_workspace(user_id, canonical)
+        if (
+            workspace is None
+            or workspace.get("relation_type") == "ended"
+            or not next_evidence_tasks
+        ):
+            return None
+        descriptions = self._unique_text(
+            [item.get("description") for item in next_evidence_tasks], limit=6
+        )
+        if not descriptions:
+            return None
+        name = str(evidence.get("display_name") or workspace.get("name") or canonical)
+        citation_ids = self._unique_text(
+            [
+                citation_id
+                for item in next_evidence_tasks
+                for citation_id in item.get("citation_ids") or []
+            ],
+            limit=8,
+        )
+        payload = {
+            "title": f"{name}｜本轮证据核验"[:160],
+            "description": "；".join(
+                f"{index}. {description}"
+                for index, description in enumerate(descriptions, start=1)
+            )[:2000],
+            "priority": "normal",
+            "due_at": None,
+            "source_task_ids": [
+                str(item.get("id"))
+                for item in next_evidence_tasks[:6]
+                if item.get("id")
+            ],
+        }
+        now = utc_now()
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO ai_writeback_candidates(
+                    id, user_id, run_id, conversation_id, workspace_id, symbol,
+                    candidate_type, status, payload_json, citation_ids_json,
+                    base_version, target_object_id, created_at, resolved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'observation_task',
+                    'pending_confirmation', ?, ?, 0, NULL, ?, NULL)
+                """,
+                (
+                    str(uuid4()),
+                    user_id,
+                    run_id,
+                    conversation_id,
+                    workspace["id"],
+                    canonical,
+                    json_dumps(payload),
+                    json_dumps(citation_ids),
+                    now,
+                ),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM ai_writeback_candidates
+                WHERE user_id = ? AND run_id = ?
+                    AND candidate_type = 'observation_task'
+                """,
+                (user_id, run_id),
+            ).fetchone()
+        return self._writeback_row(row) if row is not None else None
+
     def _get_writeback(
         self, user_id: str, candidate_id: str
     ) -> dict[str, Any] | None:
@@ -542,7 +704,22 @@ class StructuredAIService:
         text = " ".join(str(message or "").split())
         if "判断" not in text:
             return False
-        for term in cls.WRITEBACK_TERMS:
+        return cls._contains_non_negated_term(text, cls.THESIS_WRITEBACK_TERMS)
+
+    @classmethod
+    def _wants_observation_task_writeback(cls, message: str) -> bool:
+        text = " ".join(str(message or "").split())
+        if "任务" not in text:
+            return False
+        return cls._contains_non_negated_term(
+            text, cls.OBSERVATION_TASK_WRITEBACK_TERMS
+        )
+
+    @classmethod
+    def _contains_non_negated_term(
+        cls, text: str, terms: tuple[str, ...]
+    ) -> bool:
+        for term in terms:
             start = text.find(term)
             if start < 0:
                 continue

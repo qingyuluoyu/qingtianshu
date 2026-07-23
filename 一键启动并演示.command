@@ -5,15 +5,10 @@ set -u
 ROOT_DIR="${0:A:h}"
 PYTHON_BIN="${PYTHON_BIN:-}"
 VENV_DIR="${QINGSHU_VENV_DIR:-$ROOT_DIR/.venv}"
-DATA_DIR="${QINGSHU_DATA_DIR:-$ROOT_DIR/data}"
+RUNTIME_DIR="${QINGSHU_RUNTIME_DIR:-$ROOT_DIR/.qingshu-runtime}"
 PORT="${QINGSHU_PORT:-8000}"
 BASE_URL="http://127.0.0.1:${PORT}"
 SERVER_PID=""
-HERMES_ENABLED_VALUE="${HERMES_ENABLED:-false}"
-HERMES_ECONOMY_PROVIDER_VALUE="${HERMES_ECONOMY_PROVIDER:-deepseek}"
-HERMES_ECONOMY_MODEL_VALUE="${HERMES_ECONOMY_MODEL:-deepseek-v4-pro}"
-HERMES_DEEP_PROVIDER_VALUE="${HERMES_DEEP_PROVIDER:-deepseek}"
-HERMES_DEEP_MODEL_VALUE="${HERMES_DEEP_MODEL:-deepseek-v4-pro}"
 
 cd "$ROOT_DIR" || exit 1
 
@@ -65,7 +60,7 @@ else
   "$PYTHON_BIN" -m pip install --disable-pip-version-check -e "$ROOT_DIR" || exit 1
 fi
 
-mkdir -p "$DATA_DIR"
+mkdir -p "$RUNTIME_DIR"
 
 cleanup() {
   if [[ -n "$SERVER_PID" ]]; then
@@ -90,30 +85,11 @@ if curl -fsS "$BASE_URL/health" >/dev/null 2>&1; then
   echo "✅ 清数智算已经在运行，正在打开产品页面。"
 else
   echo "正在启动清数智算，请稍等..."
-  HERMES_BIN_VALUE="${HERMES_BIN:-hermes}"
-  if [[ -z "${HERMES_ENABLED+x}" ]]; then
-    if [[ -x "$HERMES_BIN_VALUE" ]] || command -v "$HERMES_BIN_VALUE" >/dev/null 2>&1; then
-      HERMES_ENABLED_VALUE="true"
-    else
-      HERMES_ENABLED_VALUE="false"
-    fi
-  else
-    HERMES_ENABLED_VALUE="$HERMES_ENABLED"
-  fi
-  DEFAULT_A_SHARE_SYMBOLS="${DEFAULT_A_SHARE_SYMBOLS:-000063.SZ,300308.SZ}" \
-  DEFAULT_RESEARCH_SYMBOLS="${DEFAULT_RESEARCH_SYMBOLS:-000063.SZ,300308.SZ,NVDA}" \
-  HERMES_ENABLED="$HERMES_ENABLED_VALUE" \
-  HERMES_BIN="$HERMES_BIN_VALUE" \
-  HERMES_ECONOMY_PROVIDER="$HERMES_ECONOMY_PROVIDER_VALUE" \
-  HERMES_ECONOMY_MODEL="$HERMES_ECONOMY_MODEL_VALUE" \
-  HERMES_DEEP_PROVIDER="$HERMES_DEEP_PROVIDER_VALUE" \
-  HERMES_DEEP_MODEL="$HERMES_DEEP_MODEL_VALUE" \
-  QINGSHU_DATA_DIR="$DATA_DIR" \
-  "$PYTHON_BIN" -m uvicorn app.main:app \
+  "$PYTHON_BIN" -m app \
     --host 127.0.0.1 \
     --port "$PORT" \
-    --timeout-graceful-shutdown 3 \
-    > "$DATA_DIR/server.log" 2>&1 &
+    --no-browser \
+    > "$RUNTIME_DIR/server.log" 2>&1 &
   SERVER_PID=$!
 
   READY=false
@@ -126,8 +102,8 @@ else
   done
 
   if [[ "$READY" != "true" ]]; then
-    echo "❌ 启动失败。日志位置：$DATA_DIR/server.log"
-    tail -20 "$DATA_DIR/server.log"
+    echo "❌ 启动失败。日志位置：$RUNTIME_DIR/server.log"
+    tail -20 "$RUNTIME_DIR/server.log"
     read -k 1 "?按任意键关闭..."
     exit 1
   fi
@@ -135,18 +111,15 @@ else
 fi
 
 if command -v open >/dev/null 2>&1; then
-  open "$BASE_URL/demo" >/dev/null 2>&1 || true
+  open "$BASE_URL/today" >/dev/null 2>&1 || true
 elif command -v xdg-open >/dev/null 2>&1; then
-  xdg-open "$BASE_URL/demo" >/dev/null 2>&1 || true
+  xdg-open "$BASE_URL/today" >/dev/null 2>&1 || true
 fi
 
 echo ""
 echo "================================================"
 echo "✅ 产品页面已打开"
 echo "请保持这个窗口开启，数据与研究报告会自动更新。"
-if [[ "$HERMES_ENABLED_VALUE" != "true" ]]; then
-  echo "当前未检测到 AI 运行环境，系统会使用无需模型费用的确定性研究模式。"
-fi
 echo "关闭这个窗口即可停止清数智算。"
 echo "================================================"
 echo ""

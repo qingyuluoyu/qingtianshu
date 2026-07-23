@@ -19,6 +19,25 @@ import threading
 from typing import Any
 
 
+# When this file is executed by absolute path, Python puts ``app/`` at the
+# front of ``sys.path``.  That directory also contains ``app/utils.py``, which
+# can shadow Hermes' own top-level ``utils`` package and make the streaming
+# runtime fail before the first token.  The bridge only needs standard-library
+# modules before importing Hermes, so remove its script directory explicitly.
+_BRIDGE_DIR = Path(__file__).resolve().parent
+
+
+def _without_bridge_dir(paths: list[str]) -> list[str]:
+    return [
+        entry
+        for entry in paths
+        if Path(entry or os.getcwd()).resolve() != _BRIDGE_DIR
+    ]
+
+
+sys.path = _without_bridge_dir(sys.path)
+
+
 _OUTPUT_LOCK = threading.Lock()
 _USAGE_KEYS = (
     "estimated_cost_usd",

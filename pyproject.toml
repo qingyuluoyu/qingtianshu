@@ -29,6 +29,9 @@ dev = [
   "ruff>=0.15",
 ]
 
+[project.scripts]
+qingshu-start = "app.cli:main"
+
 [tool.setuptools]
 include-package-data = true
 

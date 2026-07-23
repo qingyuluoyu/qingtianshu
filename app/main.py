@@ -962,8 +962,8 @@ def create_app(
     conversation_quality = ConversationQualityService(database)
     deep_stock = DeepStockResearchService(database)
     stock_domain = StockDomainService(database)
-    structured_ai = StructuredAIService(database, stock_domain)
     observation_tasks = ObservationTaskService(database)
+    structured_ai = StructuredAIService(database, stock_domain, observation_tasks)
     position_ledger = PositionLedgerService(database)
     trade_workflow = TradeWorkflowService(database)
     global_search = GlobalSearchService(database, trade_workflow)
@@ -1214,7 +1214,7 @@ def create_app(
 
     @app.get("/", include_in_schema=False)
     def root() -> RedirectResponse:
-        return RedirectResponse(url="/demo")
+        return RedirectResponse(url="/today")
 
     @app.get("/demo", include_in_schema=False)
     def demo_page() -> FileResponse:

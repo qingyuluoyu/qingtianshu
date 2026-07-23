@@ -188,7 +188,7 @@ class Database:
                         REFERENCES stock_workspaces(id) ON DELETE CASCADE,
                     symbol TEXT NOT NULL,
                     candidate_type TEXT NOT NULL
-                        CHECK(candidate_type IN ('thesis')),
+                        CHECK(candidate_type IN ('thesis', 'observation_task')),
                     status TEXT NOT NULL CHECK(status IN (
                         'pending_confirmation', 'confirmed', 'rejected', 'stale'
                     )),
@@ -1413,6 +1413,7 @@ class Database:
                 WHERE idempotency_key IS NOT NULL
                 """
             )
+            self._ensure_ai_writeback_candidate_types(connection)
             self._backfill_stock_domains(connection)
 
     @staticmethod
@@ -1425,6 +1426,61 @@ class Database:
         }
         if column not in columns:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @staticmethod
+    def _ensure_ai_writeback_candidate_types(connection: sqlite3.Connection) -> None:
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("ai_writeback_candidates",),
+        ).fetchone()
+        schema = str(row["sql"] or "") if row is not None else ""
+        if "observation_task" in schema:
+            return
+        connection.executescript(
+            """
+            DROP INDEX IF EXISTS idx_ai_writebacks_user_status;
+            DROP INDEX IF EXISTS idx_ai_writebacks_workspace;
+            ALTER TABLE ai_writeback_candidates
+                RENAME TO ai_writeback_candidates_legacy;
+            CREATE TABLE ai_writeback_candidates (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                conversation_id TEXT
+                    REFERENCES conversations(id) ON DELETE SET NULL,
+                workspace_id TEXT NOT NULL
+                    REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                symbol TEXT NOT NULL,
+                candidate_type TEXT NOT NULL
+                    CHECK(candidate_type IN ('thesis', 'observation_task')),
+                status TEXT NOT NULL CHECK(status IN (
+                    'pending_confirmation', 'confirmed', 'rejected', 'stale'
+                )),
+                payload_json TEXT NOT NULL,
+                citation_ids_json TEXT NOT NULL DEFAULT '[]',
+                base_version INTEGER NOT NULL,
+                target_object_id TEXT,
+                created_at TEXT NOT NULL,
+                resolved_at TEXT,
+                UNIQUE(user_id, run_id, candidate_type)
+            );
+            INSERT INTO ai_writeback_candidates(
+                id, user_id, run_id, conversation_id, workspace_id, symbol,
+                candidate_type, status, payload_json, citation_ids_json,
+                base_version, target_object_id, created_at, resolved_at
+            )
+            SELECT
+                id, user_id, run_id, conversation_id, workspace_id, symbol,
+                candidate_type, status, payload_json, citation_ids_json,
+                base_version, target_object_id, created_at, resolved_at
+            FROM ai_writeback_candidates_legacy;
+            DROP TABLE ai_writeback_candidates_legacy;
+            CREATE INDEX idx_ai_writebacks_user_status
+                ON ai_writeback_candidates(user_id, status, created_at DESC);
+            CREATE INDEX idx_ai_writebacks_workspace
+                ON ai_writeback_candidates(workspace_id, status, created_at DESC);
+            """
+        )
 
     @staticmethod
     def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:

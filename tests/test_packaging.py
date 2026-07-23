@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 import zipfile
+
+from app.hermes_stream_bridge import _BRIDGE_DIR, _without_bridge_dir
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ASSET_ROOTS = (
@@ -13,6 +16,17 @@ ASSET_ROOTS = (
     Path("app/knowledge"),
 )
 PACKAGED_BRIDGE = "app/hermes_stream_bridge.py"
+PACKAGED_CLI = "app/cli.py"
+PACKAGED_MAIN = "app/__main__.py"
+
+
+def test_streaming_bridge_removes_its_script_directory_from_import_path() -> None:
+    unrelated = str(PROJECT_ROOT)
+    cleaned = _without_bridge_dir([str(_BRIDGE_DIR), unrelated, ""])
+
+    assert str(_BRIDGE_DIR) not in cleaned
+    assert unrelated in cleaned
+    assert isinstance(sys.path, list)
 
 
 def _copy_build_source(destination: Path) -> None:
@@ -88,5 +102,15 @@ def test_distribution_builds_with_runtime_data_and_contains_product_assets(
     assert expected_assets <= sdist_members
     assert PACKAGED_BRIDGE in wheel_members
     assert PACKAGED_BRIDGE in sdist_members
+    assert PACKAGED_CLI in wheel_members
+    assert PACKAGED_CLI in sdist_members
+    assert PACKAGED_MAIN in wheel_members
+    assert PACKAGED_MAIN in sdist_members
+    entry_points = next(
+        member for member in wheel_members if member.endswith(".dist-info/entry_points.txt")
+    )
+    with zipfile.ZipFile(wheels[0]) as bundle:
+        entry_point_text = bundle.read(entry_points).decode("utf-8")
+    assert "qingshu-start = app.cli:main" in entry_point_text
     assert not any(member.startswith("data/") for member in wheel_members)
     assert not any(member.startswith("data/") for member in sdist_members)

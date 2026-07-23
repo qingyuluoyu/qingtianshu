@@ -545,7 +545,7 @@ def test_time_sensitive_stock_question_excludes_stale_snapshot_documents():
 def test_demo_page_is_the_default_human_facing_entry(client):
     root = client.get("/", follow_redirects=False)
     assert root.status_code in {302, 307}
-    assert root.headers["location"] == "/demo"
+    assert root.headers["location"] == "/today"
     page = client.get("/demo")
     assert page.status_code == 200
     assert page.headers["cache-control"] == "no-store, max-age=0"

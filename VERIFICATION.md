@@ -701,3 +701,15 @@ uv run pytest
 - 自动化验证：全量 `503 tests collected` 并全部通过；`uv run ruff check .`、内联 JavaScript `node --check`、`git diff --check` 和 `uv lock --check` 均通过。运行服务 `/health=ok`、`hermes_enabled=true`、数据健康 `54/54`，后台 `change_event_refresh` 已启用。
 
 当前边界：事件体系仍是严格白名单 MVP，不把媒体报道、盘中异动或尚未验收的公司行动自动升级为用户提醒；“与我有关/无关”只控制个人提醒与后续排序，尚未实现邮件、短信、微信投递、订阅规则和由变化直接创建用户观察任务。
+
+## 2026-07-23 真实 Agent 观察任务写回与 Hermes 流式桥接修复
+
+- 实际复现问题“分析中兴通讯当前最需要核验的证据，并把下一步保存为核验任务，供我确认”。新建对话并未与旧问题串线；旧 Run `d5dc4995-0e8a-458d-8ef4-0e26298630f3` 的真正故障是流式桥接导入项目 `app/utils.py`，覆盖 Hermes 自身顶层 `utils`，触发 `ImportError` 后回退到 oneshot。
+- oneshot 保持了 Hermes 默认工具能力，模型因而在尚未经用户确认时就在个人工作区写入任务文件，随后因缺少当前报价时间锚点被输出守卫拒绝，页面只剩冗长的确定性摘要。该未确认文件已清理。
+- 流式桥接现在于导入 Hermes 前移除脚本目录的模块影子。直接真实运行 `deepseek-v4-pro` 已返回 delta 和 final，不再出现 `atomic_replace` 导入错误。同时 oneshot 回退显式限定为空工具集，Prompt 明确要求模型只返回研究文本，不得写文件、数据库、记忆、任务或用户状态。
+- 修复后真实网页 Run `47f5f698-8a32-40b4-87fd-f38fe5b474f2` 为 `stock_research / completed`，`streaming.enabled=true`，流式模式为 `guarded_cumulative_stream_v3`，错误为空。页面针对本轮问题生成了毛利率、财务费用、经营现金流和订单证据的可读回答，并明确“确认后才会生效”。
+- 页面同时展示“AI 整理的观察任务·需要你确认”卡片。确认前正式任务不存在；点击确认后，candidate `7f1b8be9-4d6b-499c-8417-2aa8bc06159b` 变为 `confirmed`，并创建唯一任务 `8f7e3e04-6325-45c4-8ab9-2ba07d0e47b4`。中兴通讯股票空间的“今日待处理”已展示该任务，页面刷新后仍保留；同名待处理任务数量为 `1`。
+- 浏览器实测 Enter 发送成功，新对话 URL 与问题、回答、K 线标的均一致；个股空间刷新后任务恢复，控制台无 error/warn。
+- 最终自动化验收：`528 tests collected` 全部通过；Ruff、内联 JavaScript 解析、`git diff --check` 和 `uv lock --check` 通过。运行中 `/health=ok`、`hermes_enabled=true`、数据健康 `54/54`。
+
+当前边界：观察任务内容目前由结构化 Claim 的下一证据项聚合，仍可以继续做问题聚焦与优先级压缩；生产版需将候选确认、正式任务创建和通知 Outbox 收敛为单事务或可补偿流程。

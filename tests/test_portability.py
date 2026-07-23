@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import shutil
 import subprocess
+import sys
 
 import pytest
 
 from app.config import DEFAULT_DATA_DIR, PROJECT_ROOT, Settings
+from app.cli import build_parser
 
 
 PORTABLE_FILES = (
@@ -65,3 +68,54 @@ def test_macos_launcher_has_valid_shell_syntax():
     launcher = (PROJECT_ROOT / "一键启动并演示.command").read_text(encoding="utf-8")
     assert 'uv pip install --python "$PYTHON_BIN" -e "$ROOT_DIR"' in launcher
     assert '"$PYTHON_BIN" -m ensurepip --upgrade' in launcher
+    assert '"$PYTHON_BIN" -m app' in launcher
+    assert '"$BASE_URL/today"' in launcher
+
+
+def test_cli_contract_supports_port_and_no_browser():
+    args = build_parser().parse_args(["--port", "8773", "--no-browser"])
+    assert args.host == "127.0.0.1"
+    assert args.port == 8773
+    assert args.no_browser is True
+
+
+def test_current_directory_and_explicit_env_files_are_portable(tmp_path: Path):
+    cwd_data = tmp_path / "cwd-data"
+    explicit_data = tmp_path / "explicit-data"
+    (tmp_path / ".env").write_text(
+        f"QINGSHU_DATA_DIR={cwd_data}\n", encoding="utf-8"
+    )
+    explicit = tmp_path / "portable.env"
+    explicit.write_text(
+        f"QINGSHU_DATA_DIR={explicit_data}\n", encoding="utf-8"
+    )
+    command = [
+        sys.executable,
+        "-c",
+        "from app.config import Settings; print(Settings.from_env().data_dir)",
+    ]
+    env = os.environ.copy()
+    env.pop("QINGSHU_DATA_DIR", None)
+    env.pop("QINGSHU_ENV_FILE", None)
+    env["PYTHONPATH"] = str(PROJECT_ROOT)
+
+    cwd_result = subprocess.run(
+        command,
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert Path(cwd_result.stdout.strip()) == cwd_data.resolve()
+
+    env["QINGSHU_ENV_FILE"] = str(explicit)
+    explicit_result = subprocess.run(
+        command,
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert Path(explicit_result.stdout.strip()) == explicit_data.resolve()

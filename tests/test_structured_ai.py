@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+import sqlite3
+
 from fastapi.testclient import TestClient
+
+from app.db import Database
 
 
 def _create_user(client: TestClient, name: str) -> dict:
@@ -171,6 +176,7 @@ def test_normal_question_does_not_create_writeback_and_negated_request_is_respec
     for message in (
         "分析中兴通讯当前最强的反方证据。",
         "分析中兴通讯，但不要形成判断草稿。",
+        "分析中兴通讯，但先不要创建观察任务。",
     ):
         run = _run(app, user["id"], "completed", message, evidence)
         result = app.state.structured_ai.build_and_persist(
@@ -183,6 +189,104 @@ def test_normal_question_does_not_create_writeback_and_negated_request_is_respec
             symbol="000063.SZ",
         )
         assert result["candidate_writebacks"] == []
+
+
+def test_observation_task_writeback_requires_confirmation_and_is_idempotent(app):
+    owner = TestClient(app)
+    owner_user = _create_user(owner, "Structured AI Observation Owner")
+    _add_stock(owner, "关注利润、现金流和订单兑现")
+    message = "分析中兴通讯并把下一步保存为核验任务，供我确认。"
+    run = _run(app, owner_user["id"], "completed", message, _evidence())
+    result = app.state.structured_ai.build_and_persist(
+        user_id=owner_user["id"],
+        run=run,
+        evidence=_evidence(),
+        answer=run["answer"],
+        message=message,
+        conversation_id=None,
+        symbol="000063.SZ",
+    )
+
+    assert len(result["candidate_writebacks"]) == 1
+    candidate = result["candidate_writebacks"][0]
+    assert candidate["candidate_type"] == "observation_task"
+    assert candidate["status"] == "pending_confirmation"
+    assert candidate["payload"]["title"].startswith("中兴通讯")
+    assert "经营现金流" in candidate["payload"]["description"]
+    assert owner.get("/v1/observation-tasks").json()["items"] == []
+
+    other = TestClient(app)
+    _create_user(other, "Structured AI Observation Other")
+    path = f"/v1/ai-writebacks/{candidate['id']}"
+    assert other.get(path).status_code == 404
+    assert other.post(f"{path}/confirm").status_code == 404
+
+    confirmed = owner.post(f"{path}/confirm")
+    assert confirmed.status_code == 200
+    confirmed_payload = confirmed.json()
+    assert confirmed_payload["status"] == "confirmed"
+    task = confirmed_payload["observation_task"]
+    assert task["status"] == "pending"
+    assert task["source_type"] == "research_action"
+
+    repeated = owner.post(f"{path}/confirm")
+    assert repeated.status_code == 200
+    assert repeated.json()["observation_task"]["id"] == task["id"]
+    tasks = owner.get("/v1/stocks/000063/observation-tasks").json()["items"]
+    assert [item["id"] for item in tasks] == [task["id"]]
+    restored = owner.get(path).json()
+    assert restored["status"] == "confirmed"
+
+
+def test_observation_task_candidate_is_not_created_for_preview_run(app):
+    client = TestClient(app)
+    user = _create_user(client, "Structured AI Observation Preview")
+    _add_stock(client, "等待核验")
+    message = "把下一步创建为观察任务。"
+    run = _run(app, user["id"], "preview", message, _evidence())
+    result = app.state.structured_ai.build_and_persist(
+        user_id=user["id"],
+        run=run,
+        evidence=_evidence(),
+        answer=run["answer"],
+        message=message,
+        conversation_id=None,
+        symbol="000063.SZ",
+    )
+    assert result["candidate_writebacks"] == []
+
+
+def test_database_migrates_existing_thesis_only_writeback_schema(tmp_path: Path):
+    database_path = tmp_path / "legacy.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE ai_writeback_candidates (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                run_id TEXT NOT NULL,
+                conversation_id TEXT,
+                workspace_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                candidate_type TEXT NOT NULL CHECK(candidate_type IN ('thesis')),
+                status TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                citation_ids_json TEXT NOT NULL DEFAULT '[]',
+                base_version INTEGER NOT NULL,
+                target_object_id TEXT,
+                created_at TEXT NOT NULL,
+                resolved_at TEXT,
+                UNIQUE(user_id, run_id, candidate_type)
+            )
+            """
+        )
+    database = Database(database_path, tmp_path / "workspaces")
+    database.initialize()
+    with database.connect() as connection:
+        schema = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'ai_writeback_candidates'"
+        ).fetchone()["sql"]
+    assert "observation_task" in schema
 
 
 def test_writeback_confirm_reject_stale_and_user_isolation(app):

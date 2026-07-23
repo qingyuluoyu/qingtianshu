@@ -59,6 +59,49 @@ def test_hermes_route_keeps_explicit_override_and_vision_route(monkeypatch):
     assert agent_module._resolve_hermes_route("vision") == (None, None)
 
 
+def test_hermes_oneshot_fallback_disables_all_tools(
+    tmp_path: Path, settings, monkeypatch
+):
+    hermes_bin = tmp_path / "hermes"
+    hermes_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    hermes_bin.chmod(0o755)
+    guarded_settings = replace(
+        settings,
+        database_path=tmp_path / "oneshot-no-tools.db",
+        workspace_root=tmp_path / "oneshot-no-tools-workspaces",
+        hermes_bin=hermes_bin,
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database.initialize()
+    service = AgentService(database, guarded_settings)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    captured = {}
+
+    class Result:
+        returncode = 0
+        stdout = "只返回研究文本"
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        return Result()
+
+    monkeypatch.setattr("app.services.agent.subprocess.run", fake_run)
+
+    answer, _ = service._execute_hermes(
+        prompt="整理待确认任务，不要执行写入。",
+        model_tier="economy",
+        run_dir=run_dir,
+        user_workspace=tmp_path,
+        image_path=None,
+    )
+
+    assert answer == "只返回研究文本"
+    toolsets_index = captured["command"].index("--toolsets")
+    assert captured["command"][toolsets_index + 1] == "context_engine"
+
+
 def test_market_brief_uses_compact_runtime_skill_without_removing_full_rules():
     skill_dir = agent_module.PROJECT_ROOT / "app" / "skills" / "market-brief"
     runtime_path = skill_dir / "PROMPT.md"
