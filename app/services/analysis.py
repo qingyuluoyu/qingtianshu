@@ -8,7 +8,12 @@ from statistics import mean, pstdev, stdev
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.catalog import CORE_INDEX_SYMBOLS, INDEX_BY_SYMBOL, INDEX_CATALOG, RESEARCH_TARGETS
+from app.catalog import (
+    CORE_INDEX_SYMBOLS,
+    INDEX_BY_SYMBOL,
+    INDEX_CATALOG,
+    RESEARCH_TARGETS,
+)
 from app.db import Database
 from app.providers.market import (
     CSIIndustryIndexProvider,
@@ -25,7 +30,9 @@ from app.utils import utc_now
 
 def analyze_history(history: dict[str, Any]) -> dict[str, Any]:
     points = history.get("points") or []
-    closes = [float(point["close"]) for point in points if point.get("close") is not None]
+    closes = [
+        float(point["close"]) for point in points if point.get("close") is not None
+    ]
     if not closes:
         raise ValueError("没有可分析的收盘价")
 
@@ -124,7 +131,11 @@ def annualized_volatility(closes: list[float], window: int) -> float | None:
     if len(closes) < window + 1:
         return None
     sample = closes[-(window + 1) :]
-    returns = [sample[i] / sample[i - 1] - 1 for i in range(1, len(sample)) if sample[i - 1] != 0]
+    returns = [
+        sample[i] / sample[i - 1] - 1
+        for i in range(1, len(sample))
+        if sample[i - 1] != 0
+    ]
     if len(returns) < 2:
         return None
     return _round(stdev(returns) * math.sqrt(252) * 100)
@@ -183,9 +194,7 @@ def moving_average_convergence_divergence(
     }
 
 
-def bollinger_bands(
-    closes: list[float], window: int = 20
-) -> dict[str, float | None]:
+def bollinger_bands(closes: list[float], window: int = 20) -> dict[str, float | None]:
     if len(closes) < window:
         return {"upper": None, "middle": None, "lower": None, "position": None}
     sample = closes[-window:]
@@ -241,7 +250,8 @@ def classify_market(index_items: list[dict[str, Any]]) -> dict[str, Any]:
     returns = [
         item["metrics"]["return_1d_pct"]
         for item in index_items
-        if item.get("status") == "available" and item.get("metrics", {}).get("return_1d_pct") is not None
+        if item.get("status") == "available"
+        and item.get("metrics", {}).get("return_1d_pct") is not None
     ]
     total = len(index_items)
     coverage = len(returns) / total if total else 0
@@ -376,9 +386,7 @@ def _index_market_key(item: dict[str, Any]) -> str:
     return group or "china"
 
 
-def _validated_index_metrics(
-    history: dict[str, Any], symbol: str
-) -> dict[str, Any]:
+def _validated_index_metrics(history: dict[str, Any], symbol: str) -> dict[str, Any]:
     metrics = analyze_history(history)
     points = list(history.get("points") or [])
     catalog_item = INDEX_BY_SYMBOL.get(symbol) or {"symbol": symbol, "group": ""}
@@ -419,8 +427,7 @@ def _market_brief_target_date(
     dates = [
         date
         for item in index_items
-        if item.get("status") == "available"
-        and (date := _index_market_date(item))
+        if item.get("status") == "available" and (date := _index_market_date(item))
     ]
     if dates:
         counts = Counter(dates)
@@ -493,8 +500,10 @@ def build_conditional_outlook(
     volatility = metrics.get("volatility_20d_annualized_pct")
     sample_size = (sentiment or {}).get("sample_size", 0)
     confidence = "medium" if ma20 is not None and ma60 is not None else "low"
-    if volatility is None or volatility > 45 or (
-        sentiment is not None and sample_size < 10
+    if (
+        volatility is None
+        or volatility > 45
+        or (sentiment is not None and sample_size < 10)
     ):
         confidence = "low"
 
@@ -523,16 +532,22 @@ def build_conditional_outlook(
             {
                 "name": "向上延续",
                 "condition": f"收盘有效站上上方关键位 {upside_level}，且随后不跌回 MA20 {ma20}",
+                "reference_level": upside_level,
+                "trigger_direction": "above",
                 "meaning": "动量延续的条件得到更多价格证据，但仍需公告或基本面催化交叉验证。",
             },
             {
                 "name": "区间震荡",
                 "condition": f"价格继续运行在近20日低点 {recent_low} 与高点 {recent_high} 之间",
+                "lower_reference_level": recent_low,
+                "upper_reference_level": recent_high,
                 "meaning": "当前信息没有形成方向性突破，不宜把单日波动解释成趋势。",
             },
             {
                 "name": "下行风险",
                 "condition": f"收盘跌破关键参考位 {downside_level}，同时20日收益继续恶化",
+                "reference_level": downside_level,
+                "trigger_direction": "below",
                 "meaning": "原有偏强或震荡假设需要失效处理，优先复核风险证据与当前研究判断。",
             },
         ],
@@ -546,6 +561,66 @@ def build_conditional_outlook(
     }
 
 
+def align_conditional_outlook_with_current_quote(
+    outlook: dict[str, Any],
+    current_quote: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Prevent a fresh quote from being described as a future threshold crossing."""
+
+    quote = current_quote or {}
+    quote_price = quote.get("price")
+    if not isinstance(quote_price, (int, float)):
+        return outlook
+    scenarios = [dict(item) for item in outlook.get("scenarios") or []]
+    alignment_status = "within_existing_conditions"
+    crossed_conditions: list[str] = []
+    complete_bar = quote.get("complete_daily_bar_confirmed") is True
+    quote_label = str(quote.get("quote_label") or "当前报价")
+    confirmation = "已由完整日线确认" if complete_bar else "仍需等待同日完整日线确认"
+
+    for scenario in scenarios:
+        direction = scenario.get("trigger_direction")
+        reference = scenario.get("reference_level")
+        if not isinstance(reference, (int, float)):
+            continue
+        if direction == "below" and float(quote_price) < float(reference):
+            alignment_status = "below_downside_reference"
+            crossed_conditions.append(str(scenario.get("name") or "下行风险"))
+            scenario["condition_status"] = "already_crossed_by_current_quote"
+            scenario["condition"] = (
+                f"{quote_label} {quote_price} 已低于关键参考位 {reference}；{confirmation}。"
+                "若完整日线确认且20日收益继续恶化，当前判断需要重算"
+            )
+            scenario["meaning"] = (
+                "下行风险条件已被最新报价触及，不应再写成未来‘若跌破’；"
+                "先核验完整日线与基本面、事件证据是否同步恶化。"
+            )
+        elif direction == "above" and float(quote_price) > float(reference):
+            if alignment_status == "within_existing_conditions":
+                alignment_status = "above_upside_reference"
+            crossed_conditions.append(str(scenario.get("name") or "向上延续"))
+            scenario["condition_status"] = "already_crossed_by_current_quote"
+            scenario["condition"] = (
+                f"{quote_label} {quote_price} 已高于上方关键位 {reference}；{confirmation}。"
+                "若完整日线确认且随后不跌回MA20，才增加动量延续证据"
+            )
+
+    result = dict(outlook)
+    result["scenarios"] = scenarios
+    result["current_quote_alignment"] = {
+        "status": alignment_status,
+        "price": quote_price,
+        "market_timestamp": quote.get("market_timestamp"),
+        "quote_label": quote_label,
+        "complete_daily_bar_confirmed": complete_bar,
+        "crossed_conditions": crossed_conditions,
+        "boundary": (
+            "最新报价只用于判断条件是否已被触及；完整趋势状态仍以已完成日线为准。"
+        ),
+    }
+    return result
+
+
 def build_evidence_debate(evidence: dict[str, Any]) -> dict[str, Any]:
     metrics = evidence.get("metrics") or {}
     information = evidence.get("a_share_information") or {}
@@ -557,9 +632,9 @@ def build_evidence_debate(evidence: dict[str, Any]) -> dict[str, Any]:
     financial_drivers = evidence.get("financial_drivers") or {}
     business_structure = evidence.get("business_structure") or {}
     event_timeline = evidence.get("event_timeline") or {}
-    outlook_calibration = (
-        (evidence.get("conditional_outlook") or {}).get("calibration") or {}
-    )
+    outlook_calibration = (evidence.get("conditional_outlook") or {}).get(
+        "calibration"
+    ) or {}
     calibration_analog = outlook_calibration.get("historical_analog") or {}
     bull: list[dict[str, str]] = []
     bear: list[dict[str, str]] = []
@@ -599,8 +674,17 @@ def build_evidence_debate(evidence: dict[str, Any]) -> dict[str, Any]:
             }
         )
     sentiment_score = sentiment.get("score")
-    if isinstance(sentiment_score, (int, float)) and sentiment.get("sample_size", 0) >= 10:
-        target = bull if sentiment_score >= 0.2 else bear if sentiment_score <= -0.2 else None
+    if (
+        isinstance(sentiment_score, (int, float))
+        and sentiment.get("sample_size", 0) >= 10
+    ):
+        target = (
+            bull
+            if sentiment_score >= 0.2
+            else bear
+            if sentiment_score <= -0.2
+            else None
+        )
         if target is not None:
             target.append(
                 {
@@ -707,7 +791,13 @@ def build_evidence_debate(evidence: dict[str, Any]) -> dict[str, Any]:
             existing_bear_claims.add(claim)
     for driver in (financial_drivers.get("confirmed_mechanical_drivers") or [])[:6]:
         direction = driver.get("direction")
-        target = bull if direction == "positive" else bear if direction == "negative" else None
+        target = (
+            bull
+            if direction == "positive"
+            else bear
+            if direction == "negative"
+            else None
+        )
         if target is None:
             continue
         claim = str(driver.get("label") or "财务科目机械影响")
@@ -764,9 +854,10 @@ def build_evidence_debate(evidence: dict[str, Any]) -> dict[str, Any]:
             {
                 "risk": "财报质量存在需要解释的矛盾",
                 "evidence": "；".join(quality_contradictions[:2]),
-                "action": (earnings_quality.get("review_points") or [
-                    "核对公告原文、现金流和会计口径。"
-                ])[0],
+                "action": (
+                    earnings_quality.get("review_points")
+                    or ["核对公告原文、现金流和会计口径。"]
+                )[0],
             }
         )
     driver_clues = financial_drivers.get("plausible_clues") or []
@@ -778,9 +869,10 @@ def build_evidence_debate(evidence: dict[str, Any]) -> dict[str, Any]:
                     str(item.get("evidence") or item.get("label"))
                     for item in driver_clues[:2]
                 ),
-                "action": (financial_drivers.get("review_points") or [
-                    "核对详细三表、公告附注和分业务披露。"
-                ])[0],
+                "action": (
+                    financial_drivers.get("review_points")
+                    or ["核对详细三表、公告附注和分业务披露。"]
+                )[0],
             }
         )
     structure_dimensions = {
@@ -845,9 +937,7 @@ def build_evidence_debate(evidence: dict[str, Any]) -> dict[str, Any]:
         )
     missing = evidence.get("research_frame", {}).get("missing_information", [])
     critical_missing = [
-        item
-        for item in missing
-        if not str(item).startswith("行业供需与一致预期")
+        item for item in missing if not str(item).startswith("行业供需与一致预期")
     ]
     if critical_missing:
         risks.append(
@@ -941,7 +1031,9 @@ def build_research_analysis_board(evidence: dict[str, Any]) -> dict[str, Any]:
             "key": "sentiment",
             "label": "情绪与分歧",
             "status": "ready" if information.get("sentiment") else "not_applicable",
-            "evidence_count": (information.get("sentiment") or {}).get("sample_size", 0),
+            "evidence_count": (information.get("sentiment") or {}).get(
+                "sample_size", 0
+            ),
         },
         {
             "key": "fundamentals",
@@ -991,14 +1083,10 @@ def build_research_analysis_board(evidence: dict[str, Any]) -> dict[str, Any]:
             else "not_applicable"
             if not str(evidence.get("symbol") or "").endswith((".SS", ".SZ"))
             else "missing",
-            "evidence_count": len(
-                analyst_expectations.get("forecast_eps") or []
-            )
+            "evidence_count": len(analyst_expectations.get("forecast_eps") or [])
             + len(analyst_expectations.get("latest_reports") or [])
             + int(
-                isinstance(
-                    analyst_expectations.get("rating_organization_count"), int
-                )
+                isinstance(analyst_expectations.get("rating_organization_count"), int)
             ),
         },
         {
@@ -1055,8 +1143,7 @@ def build_research_analysis_board(evidence: dict[str, Any]) -> dict[str, Any]:
     missing_core_modules = [
         item["label"]
         for item in modules
-        if item["key"] in {"market", "fundamentals"}
-        and item["status"] != "ready"
+        if item["key"] in {"market", "fundamentals"} and item["status"] != "ready"
     ]
     optional_gaps = list(
         (evidence.get("research_frame") or {}).get("missing_information") or []
@@ -1091,10 +1178,7 @@ def build_research_analysis_board(evidence: dict[str, Any]) -> dict[str, Any]:
             "response_policy": response_policy,
         },
         "tracking_plan": tracking_plan,
-        "boundary": (
-            "3/5/10 个交易日是研究复核周期，不是涨跌预测、"
-            "目标价或持仓指令。"
-        ),
+        "boundary": ("3/5/10 个交易日是研究复核周期，不是涨跌预测、目标价或持仓指令。"),
     }
 
 
@@ -1119,7 +1203,9 @@ class MarketAnalysisService:
         history = self._fetch_index_history(symbol, range_name=range_name)
         return {**history, "metrics": _validated_index_metrics(history, symbol)}
 
-    def get_indices(self, scope: str = "core", group: str | None = None) -> dict[str, Any]:
+    def get_indices(
+        self, scope: str = "core", group: str | None = None
+    ) -> dict[str, Any]:
         catalog = INDEX_CATALOG
         if scope == "core":
             catalog = [INDEX_BY_SYMBOL[symbol] for symbol in CORE_INDEX_SYMBOLS]
@@ -1235,27 +1321,15 @@ class MarketAnalysisService:
                 for item in INDEX_CATALOG
                 if (
                     (market_key == "china" and item.get("group") == "china")
-                    or (
-                        market_key == "hong_kong"
-                        and item.get("group") == "hong_kong"
-                    )
+                    or (market_key == "hong_kong" and item.get("group") == "hong_kong")
                     or (
                         market_key == "us"
                         and item.get("group") == "us"
                         and item.get("symbol") != "^VIX"
                     )
-                    or (
-                        market_key == "europe"
-                        and item.get("group") == "europe"
-                    )
-                    or (
-                        market_key == "japan"
-                        and item.get("symbol") == "^N225"
-                    )
-                    or (
-                        market_key == "korea"
-                        and item.get("symbol") == "^KS11"
-                    )
+                    or (market_key == "europe" and item.get("group") == "europe")
+                    or (market_key == "japan" and item.get("symbol") == "^N225")
+                    or (market_key == "korea" and item.get("symbol") == "^KS11")
                 )
             ]
         index_items = self._fetch_index_items(catalog, range_name="3mo")
@@ -1332,7 +1406,9 @@ class MarketAnalysisService:
         )
         breadth_data["same_date_as_analysis_target"] = breadth_same_date
 
-        warnings = [warning for item in index_items for warning in item.get("warnings", [])]
+        warnings = [
+            warning for item in index_items for warning in item.get("warnings", [])
+        ]
         warnings.extend(sector_data.get("warnings", []))
         warnings.extend(breadth_data.get("warnings", []))
         aligned_indices = [
@@ -1390,12 +1466,8 @@ class MarketAnalysisService:
                     "whole_market_breadth_state": breadth.get("state"),
                     "whole_market_turnover_available": turnover.get("status")
                     == "available",
-                    "whole_market_total_amount_cny": turnover.get(
-                        "total_amount_cny"
-                    ),
-                    "whole_market_distribution_available": distribution.get(
-                        "status"
-                    )
+                    "whole_market_total_amount_cny": turnover.get("total_amount_cny"),
+                    "whole_market_distribution_available": distribution.get("status")
                     == "available",
                     "whole_market_median_pct_change": distribution.get(
                         "median_pct_change"
@@ -1509,7 +1581,9 @@ class MarketAnalysisService:
                     "data_as_of": payload.get("data_as_of"),
                 }
             try:
-                history = self.market_provider.fetch_history(item["symbol"], range_name="1y")
+                history = self.market_provider.fetch_history(
+                    item["symbol"], range_name="1y"
+                )
                 metrics = analyze_history(history)
                 return {
                     **item,
@@ -1553,7 +1627,9 @@ class MarketAnalysisService:
                 "requested": len(watchlist),
                 "available": sum(item["status"] == "available" for item in items),
             },
-            "warnings": [warning for item in items for warning in item.get("warnings", [])],
+            "warnings": [
+                warning for item in items for warning in item.get("warnings", [])
+            ],
             "sorting": "按一日涨跌幅绝对值排序，不代表投资优先级",
         }
 
@@ -1585,10 +1661,13 @@ class MarketAnalysisService:
             "type": "stock_research",
             "generated_at": utc_now(),
             "symbol": symbol,
-            "display_name": watchlist_item.get("name") if watchlist_item else history["display_name"],
+            "display_name": watchlist_item.get("name")
+            if watchlist_item
+            else history["display_name"],
             "user_thesis": watchlist_item.get("thesis") if watchlist_item else None,
             "confirmed_user_memories": [
-                {"kind": item["kind"], "content": item["content"]} for item in confirmed_memories
+                {"kind": item["kind"], "content": item["content"]}
+                for item in confirmed_memories
             ],
             "facts": facts,
             "metrics": metrics,
@@ -1630,9 +1709,7 @@ class MarketAnalysisService:
                 metrics = _validated_index_metrics(history, item["symbol"])
                 warnings = list(history.get("warnings", []))
                 if metrics.get("return_1d_status") == "missing_previous_session":
-                    warnings.append(
-                        "最近两个日线点不是相邻交易日，未计算一日涨跌幅。"
-                    )
+                    warnings.append("最近两个日线点不是相邻交易日，未计算一日涨跌幅。")
                 return {
                     **item,
                     "status": "available",
@@ -1654,9 +1731,7 @@ class MarketAnalysisService:
         items.sort(key=lambda item: order[item["symbol"]])
         return items
 
-    def _fetch_index_history(
-        self, symbol: str, *, range_name: str
-    ) -> dict[str, Any]:
+    def _fetch_index_history(self, symbol: str, *, range_name: str) -> dict[str, Any]:
         histories: list[dict[str, Any]] = []
         failures: list[Exception] = []
         try:
@@ -1669,9 +1744,7 @@ class MarketAnalysisService:
         fallback = self.china_index_provider
         if fallback is not None and fallback.supports(symbol):
             try:
-                histories.append(
-                    fallback.fetch_history(symbol, range_name=range_name)
-                )
+                histories.append(fallback.fetch_history(symbol, range_name=range_name))
             except (ProviderError, ValueError) as exc:
                 failures.append(exc)
 
@@ -1701,7 +1774,9 @@ class MarketAnalysisService:
         return max(histories, key=freshness)
 
     @staticmethod
-    def _parallel_map(items: list[dict[str, Any]], function: Any) -> list[dict[str, Any]]:
+    def _parallel_map(
+        items: list[dict[str, Any]], function: Any
+    ) -> list[dict[str, Any]]:
         workers = min(6, max(1, len(items)))
         output = []
         with ThreadPoolExecutor(max_workers=workers) as executor:

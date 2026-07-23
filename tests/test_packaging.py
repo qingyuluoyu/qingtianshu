@@ -51,6 +51,8 @@ def _expected_asset_paths() -> set[str]:
         for root in ASSET_ROOTS
         for path in (PROJECT_ROOT / root).rglob("*")
         if path.is_file()
+        and "__pycache__" not in path.parts
+        and path.suffix != ".pyc"
     }
 
 

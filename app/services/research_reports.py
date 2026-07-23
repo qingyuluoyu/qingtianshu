@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
-from typing import Any
+from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
 from app.catalog import RESEARCH_TARGETS, normalize_symbol
@@ -12,6 +12,7 @@ from app.db import Database
 from app.services.agent import AgentService
 from app.services.analysis import (
     MarketAnalysisService,
+    align_conditional_outlook_with_current_quote,
     build_conditional_outlook,
     build_evidence_debate,
     build_research_analysis_board,
@@ -92,19 +93,86 @@ class StockResearchEvidenceService:
         self.analyst_expectations = analyst_expectations
         self.event_timeline = event_timeline
 
-    def build(self, user_id: str, symbol: str) -> dict[str, Any]:
+    def build(
+        self,
+        user_id: str,
+        symbol: str,
+        *,
+        plan: dict[str, Any] | None = None,
+        reusable_evidence: dict[str, Any] | None = None,
+        reusable_generated_at: str | None = None,
+        progress_callback: Callable[[str, str], None] | None = None,
+    ) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
-        evidence = self.analysis.stock_research(user_id, canonical)
+        selected_modules = set(
+            (plan or {}).get("selected_modules")
+            or (
+                "market",
+                "company_information",
+                "fundamentals",
+                "earnings_quality",
+                "financial_drivers",
+                "business_structure",
+                "shareholder_structure",
+                "analyst_expectations",
+                "event_timeline",
+                "peer_comparison",
+                "outlook_calibration",
+            )
+        )
+        required_modules = set((plan or {}).get("required_modules") or selected_modules)
+        reusable = dict(reusable_evidence or {})
+        module_statuses: dict[str, dict[str, Any]] = {}
+
+        self._notify(progress_callback, "market", "正在核验价格与技术结构…")
+        try:
+            evidence = self.analysis.stock_research(user_id, canonical)
+            module_statuses["market"] = self._module_status(
+                "market", "fresh", required=True
+            )
+        except Exception:
+            evidence = self._market_fallback(reusable, canonical)
+            if not evidence:
+                raise
+            module_statuses["market"] = self._module_status(
+                "market", "reused_fallback", required=True
+            )
+            evidence.setdefault("warnings", []).append(
+                "最新价格结构暂未更新，当前使用已保存的最近可核验日线。"
+            )
         configured_name = RESEARCH_TARGETS.get(canonical, {}).get("name")
         if configured_name:
             evidence["display_name"] = configured_name
         price_signal_label = (evidence.get("conditional_outlook") or {}).get(
             "price_signal_label"
         ) or (evidence.get("conditional_outlook") or {}).get("label")
-        if canonical.endswith((".SS", ".SZ")):
-            try:
-                information = self.china_info.get_packet(canonical)
-                evidence["a_share_information"] = information
+        is_a_share = canonical.endswith((".SS", ".SZ"))
+
+        if "company_information" in selected_modules:
+            self._notify(
+                progress_callback,
+                "company_information",
+                "正在核验公告、新闻与事件线索…",
+            )
+            information_key = (
+                "a_share_information" if is_a_share else "global_information"
+            )
+            information = self._load_module(
+                evidence=evidence,
+                reusable=reusable,
+                target_key=information_key,
+                module_key="company_information",
+                loader=(
+                    (lambda: self.china_info.get_packet(canonical))
+                    if is_a_share
+                    else (lambda: self.global_info.get_packet(canonical))
+                ),
+                required="company_information" in required_modules,
+                max_age_hours=self._max_age(plan, "company_information"),
+                reusable_generated_at=reusable_generated_at,
+                statuses=module_statuses,
+            )
+            if information and is_a_share:
                 evidence["conditional_outlook"] = build_conditional_outlook(
                     evidence["metrics"],
                     evidence["price_levels"],
@@ -119,13 +187,36 @@ class StockResearchEvidenceService:
                     if not item.startswith("公司最新公告")
                     and not item.startswith("新闻与事件")
                 ]
-            except Exception as exc:
-                evidence.setdefault("warnings", []).append(
-                    f"A股事件证据刷新未完成：{type(exc).__name__}"
+            elif information and not is_a_share and information.get("news"):
+                missing = evidence.get("research_frame", {}).get(
+                    "missing_information", []
                 )
-            try:
-                packet = self.fundamentals.get_packet(canonical)
-                evidence["fundamentals"] = packet
+                evidence["research_frame"]["missing_information"] = [
+                    item for item in missing if not item.startswith("新闻与事件")
+                ]
+
+        if "fundamentals" in selected_modules:
+            self._notify(
+                progress_callback,
+                "fundamentals",
+                "正在核验最新报价、财务与估值…",
+            )
+            packet = self._load_module(
+                evidence=evidence,
+                reusable=reusable,
+                target_key="fundamentals",
+                module_key="fundamentals",
+                loader=(
+                    (lambda: self.fundamentals.get_packet(canonical))
+                    if is_a_share
+                    else (lambda: self.us_fundamentals.get_packet(canonical))
+                ),
+                required="fundamentals" in required_modules,
+                max_age_hours=self._max_age(plan, "fundamentals"),
+                reusable_generated_at=reusable_generated_at,
+                statuses=module_statuses,
+            )
+            if packet:
                 current_quote = _current_quote_from_valuation(packet.get("valuation"))
                 if current_quote:
                     evidence["current_quote"] = current_quote
@@ -139,143 +230,275 @@ class StockResearchEvidenceService:
                         for item in missing
                         if not item.startswith("结构化财务与估值")
                     ]
-            except Exception as exc:
-                evidence.setdefault("warnings", []).append(
-                    f"财务估值证据刷新未完成：{type(exc).__name__}"
-                )
-        else:
-            packet = self.global_info.get_packet(canonical)
-            evidence["global_information"] = packet
-            if packet.get("news"):
-                missing = evidence.get("research_frame", {}).get(
-                    "missing_information", []
-                )
-                evidence["research_frame"]["missing_information"] = [
-                    item for item in missing if not item.startswith("新闻与事件")
-                ]
-            try:
-                fundamentals_packet = self.us_fundamentals.get_packet(canonical)
-                evidence["fundamentals"] = fundamentals_packet
-                current_quote = _current_quote_from_valuation(
-                    fundamentals_packet.get("valuation")
-                )
-                if current_quote:
-                    evidence["current_quote"] = current_quote
-                summary = fundamentals_packet.get("summary") or {}
-                missing = evidence.get("research_frame", {}).get(
-                    "missing_information", []
-                )
-                evidence["research_frame"]["missing_information"] = [
-                    item
-                    for item in missing
-                    if not (
-                        item.startswith("公司最新公告")
-                        and fundamentals_packet.get("regulatory_filings")
-                    )
-                    and not (
-                        item.startswith("结构化财务与估值")
-                        and fundamentals_packet.get("valuation")
-                        and summary.get("latest_report")
-                    )
-                ]
-            except Exception as exc:
-                evidence.setdefault("warnings", []).append(
-                    f"美股官方财务证据刷新未完成：{type(exc).__name__}"
-                )
-        try:
-            evidence["earnings_quality"] = self.earnings_quality.get_packet(canonical)
-        except Exception as exc:
-            evidence.setdefault("warnings", []).append(
-                f"财报质量分析未完成：{type(exc).__name__}"
-            )
-        try:
-            evidence["financial_drivers"] = self.financial_drivers.get_packet(
-                canonical
-            )
-        except Exception as exc:
-            evidence.setdefault("warnings", []).append(
-                f"利润与现金流驱动拆解未完成：{type(exc).__name__}"
-            )
-        if canonical.endswith((".SS", ".SZ")):
-            try:
-                evidence["business_structure"] = self.business_structure.get_packet(
-                    canonical
-                )
-            except Exception as exc:
-                evidence.setdefault("warnings", []).append(
-                    f"主营业务结构分析未完成：{type(exc).__name__}"
-                )
-            try:
-                evidence["shareholder_structure"] = self.shareholders.get_packet(
-                    canonical
-                )
-            except Exception as exc:
-                evidence.setdefault("warnings", []).append(
-                    f"股东结构分析未完成：{type(exc).__name__}"
-                )
-            try:
-                expectations = self.analyst_expectations.get_packet(canonical)
-                evidence["analyst_expectations"] = expectations
-                if expectations.get("status") == "available":
+                if not is_a_share:
+                    regulatory_filings = packet.get("regulatory_filings") or []
                     missing = evidence.get("research_frame", {}).get(
                         "missing_information", []
                     )
                     evidence["research_frame"]["missing_information"] = [
                         item
                         for item in missing
-                        if not item.startswith("行业供需与一致预期")
+                        if not (item.startswith("公司最新公告") and regulatory_filings)
                     ]
-                    fundamentals_packet = evidence.get("fundamentals") or {}
-                    summary = fundamentals_packet.get("summary") or {}
-                    summary["missing_context"] = [
-                        item
-                        for item in summary.get("missing_context") or []
-                        if not item.startswith("分析师一致预期")
-                    ]
-            except Exception as exc:
-                evidence.setdefault("warnings", []).append(
-                    f"分析师一致预期刷新未完成：{type(exc).__name__}"
+
+        module_loaders: tuple[tuple[str, str, Callable[[], dict[str, Any]]], ...] = (
+            (
+                "earnings_quality",
+                "earnings_quality",
+                lambda: self.earnings_quality.get_packet(canonical),
+            ),
+            (
+                "financial_drivers",
+                "financial_drivers",
+                lambda: self.financial_drivers.get_packet(canonical),
+            ),
+            (
+                "business_structure",
+                "business_structure",
+                lambda: self.business_structure.get_packet(canonical),
+            ),
+            (
+                "shareholder_structure",
+                "shareholder_structure",
+                lambda: self.shareholders.get_packet(canonical),
+            ),
+            (
+                "analyst_expectations",
+                "analyst_expectations",
+                lambda: self.analyst_expectations.get_packet(canonical),
+            ),
+            (
+                "event_timeline",
+                "event_timeline",
+                lambda: self.event_timeline.get_packet(
+                    canonical, refresh_sources=False
+                ),
+            ),
+            (
+                "peer_comparison",
+                "peer_comparison",
+                lambda: self.peer_comparison.get_packet(canonical),
+            ),
+            (
+                "outlook_calibration",
+                "outlook_calibration",
+                lambda: self.outlook_calibration.get_packet(canonical),
+            ),
+        )
+        for module_key, target_key, loader in module_loaders:
+            if module_key not in selected_modules:
+                continue
+            if not is_a_share and module_key in {
+                "business_structure",
+                "shareholder_structure",
+                "analyst_expectations",
+            }:
+                module_statuses[module_key] = self._module_status(
+                    module_key, "not_applicable", required=False
                 )
-        try:
-            evidence["event_timeline"] = self.event_timeline.get_packet(
-                canonical, refresh_sources=False
+                continue
+            self._notify(
+                progress_callback,
+                module_key,
+                f"正在核验{self._module_label(module_key)}…",
             )
-        except Exception as exc:
-            evidence.setdefault("warnings", []).append(
-                f"事件脉络分析未完成：{type(exc).__name__}"
+            packet = self._load_module(
+                evidence=evidence,
+                reusable=reusable,
+                target_key=target_key,
+                module_key=module_key,
+                loader=loader,
+                required=module_key in required_modules,
+                max_age_hours=self._max_age(plan, module_key),
+                reusable_generated_at=reusable_generated_at,
+                statuses=module_statuses,
             )
-        try:
-            peer_packet = self.peer_comparison.get_packet(canonical)
-            evidence["peer_comparison"] = peer_packet
-            fundamentals_packet = evidence.get("fundamentals") or {}
-            summary = fundamentals_packet.get("summary") or {}
-            missing_context = summary.get("missing_context") or []
-            summary["missing_context"] = [
-                item
-                for item in missing_context
-                if not item.startswith("行业可比估值分位")
-            ]
-        except Exception as exc:
-            evidence.setdefault("warnings", []).append(
-                f"同行比较样本刷新未完成：{type(exc).__name__}"
-            )
-        try:
-            calibration_packet = self.outlook_calibration.get_packet(canonical)
-            evidence["outlook_calibration"] = calibration_packet
-            evidence["conditional_outlook"] = attach_outlook_calibration(
-                evidence["conditional_outlook"],
-                calibration_packet["calibration"],
-                price_signal_label,
-            )
-        except Exception as exc:
-            evidence.setdefault("warnings", []).append(
-                f"历史走查刷新未完成：{type(exc).__name__}"
-            )
+            if not packet:
+                continue
+            if (
+                module_key == "analyst_expectations"
+                and packet.get("status") == "available"
+            ):
+                missing = evidence.get("research_frame", {}).get(
+                    "missing_information", []
+                )
+                evidence["research_frame"]["missing_information"] = [
+                    item
+                    for item in missing
+                    if not item.startswith("行业供需与一致预期")
+                ]
+                fundamentals_packet = evidence.get("fundamentals") or {}
+                summary = fundamentals_packet.get("summary") or {}
+                summary["missing_context"] = [
+                    item
+                    for item in summary.get("missing_context") or []
+                    if not item.startswith("分析师一致预期")
+                ]
+            elif module_key == "peer_comparison":
+                fundamentals_packet = evidence.get("fundamentals") or {}
+                summary = fundamentals_packet.get("summary") or {}
+                summary["missing_context"] = [
+                    item
+                    for item in summary.get("missing_context") or []
+                    if not item.startswith("行业可比估值分位")
+                ]
+            elif module_key == "outlook_calibration" and packet.get("calibration"):
+                evidence["conditional_outlook"] = attach_outlook_calibration(
+                    evidence["conditional_outlook"],
+                    packet["calibration"],
+                    price_signal_label,
+                )
+
+        evidence["conditional_outlook"] = align_conditional_outlook_with_current_quote(
+            evidence.get("conditional_outlook") or {},
+            evidence.get("current_quote"),
+        )
+
+        evidence["research_plan"] = dict(plan or {})
+        evidence["module_statuses"] = module_statuses
+        unavailable_required = [
+            key
+            for key in required_modules
+            if (module_statuses.get(key) or {}).get("status") == "unavailable"
+        ]
+        evidence["evidence_status"] = "partial" if unavailable_required else "ready"
         evidence["evidence_debate"] = build_evidence_debate(evidence)
         evidence["analysis_board"] = build_research_analysis_board(evidence)
         evidence["evidence_readiness"] = evidence["analysis_board"]["readiness"]
         evidence["research_claims"] = build_research_claim_ledger(evidence)
         return evidence
+
+    @staticmethod
+    def _notify(
+        callback: Callable[[str, str], None] | None,
+        module_key: str,
+        label: str,
+    ) -> None:
+        if callback is not None:
+            callback(module_key, label)
+
+    @staticmethod
+    def _market_fallback(reusable: dict[str, Any], canonical: str) -> dict[str, Any]:
+        if not reusable.get("metrics") or not reusable.get("provenance"):
+            return {}
+        keys = (
+            "type",
+            "generated_at",
+            "symbol",
+            "display_name",
+            "facts",
+            "metrics",
+            "current_quote",
+            "price_levels",
+            "conditional_outlook",
+            "recent_bars",
+            "research_frame",
+            "provenance",
+            "warnings",
+        )
+        packet = {key: reusable.get(key) for key in keys if key in reusable}
+        packet["type"] = "stock_research"
+        packet["symbol"] = canonical
+        packet["generated_at"] = datetime.now(timezone.utc).isoformat()
+        packet["warnings"] = list(packet.get("warnings") or [])
+        return packet
+
+    def _load_module(
+        self,
+        *,
+        evidence: dict[str, Any],
+        reusable: dict[str, Any],
+        target_key: str,
+        module_key: str,
+        loader: Callable[[], dict[str, Any]],
+        required: bool,
+        max_age_hours: int,
+        reusable_generated_at: str | None,
+        statuses: dict[str, dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        saved = reusable.get(target_key)
+        if (
+            saved
+            and max_age_hours > 0
+            and self._reusable_is_fresh(
+                reusable_generated_at or reusable.get("generated_at"), max_age_hours
+            )
+        ):
+            evidence[target_key] = saved
+            statuses[module_key] = self._module_status(
+                module_key, "reused", required=required
+            )
+            return saved
+        try:
+            packet = loader()
+            evidence[target_key] = packet
+            statuses[module_key] = self._module_status(
+                module_key, "fresh", required=required
+            )
+            return packet
+        except Exception:
+            if saved:
+                evidence[target_key] = saved
+                statuses[module_key] = self._module_status(
+                    module_key, "reused_fallback", required=required
+                )
+                evidence.setdefault("warnings", []).append(
+                    f"最新{self._module_label(module_key)}暂未更新，当前使用已保存的最近可核验证据。"
+                )
+                return saved
+            statuses[module_key] = self._module_status(
+                module_key, "unavailable", required=required
+            )
+            evidence.setdefault("warnings", []).append(
+                f"本轮未取得{self._module_label(module_key)}，回答会明确该项缺口。"
+            )
+            return None
+
+    @staticmethod
+    def _max_age(plan: dict[str, Any] | None, module_key: str) -> int:
+        return int(((plan or {}).get("module_max_age_hours") or {}).get(module_key, 0))
+
+    @staticmethod
+    def _reusable_is_fresh(value: Any, max_age_hours: int) -> bool:
+        if not value or max_age_hours <= 0:
+            return False
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            age_hours = (
+                datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)
+            ).total_seconds() / 3600
+            return 0 <= age_hours <= max_age_hours
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _module_label(module_key: str) -> str:
+        return {
+            "market": "价格与技术结构",
+            "company_information": "公告、新闻与情绪",
+            "fundamentals": "财务与最新估值",
+            "earnings_quality": "财报质量",
+            "financial_drivers": "利润与现金流驱动",
+            "business_structure": "主营业务结构",
+            "shareholder_structure": "股东结构",
+            "analyst_expectations": "分析师预期",
+            "event_timeline": "重要事件脉络",
+            "peer_comparison": "同行比较",
+            "outlook_calibration": "历史条件走查",
+        }.get(module_key, module_key)
+
+    @classmethod
+    def _module_status(
+        cls, module_key: str, status: str, *, required: bool
+    ) -> dict[str, Any]:
+        return {
+            "module": module_key,
+            "label": cls._module_label(module_key),
+            "status": status,
+            "required": required,
+        }
 
 
 class ResearchReportService:
@@ -348,9 +571,7 @@ class ResearchReportService:
             fingerprint=fingerprint,
             evidence=evidence,
             run_id=run["id"],
-            market_timestamp=(evidence.get("provenance") or {}).get(
-                "market_timestamp"
-            ),
+            market_timestamp=(evidence.get("provenance") or {}).get("market_timestamp"),
         )
         event = self.tracking.record_report(report, latest)
         self._index_report_knowledge(report, event)
@@ -403,7 +624,9 @@ class ResearchReportService:
             "results": results,
         }
 
-    def get_latest(self, symbol: str, generate_if_missing: bool = True) -> dict[str, Any] | None:
+    def get_latest(
+        self, symbol: str, generate_if_missing: bool = True
+    ) -> dict[str, Any] | None:
         canonical = normalize_symbol(symbol)
         report = self.database.latest_research_report(canonical)
         if report is None and generate_if_missing:
@@ -462,7 +685,9 @@ class ResearchReportService:
                     "neutral_count",
                 )
             },
-            "latest_announcement": announcements[0].get("url") if announcements else None,
+            "latest_announcement": announcements[0].get("url")
+            if announcements
+            else None,
             "latest_global_news": global_news[0].get("url") if global_news else None,
             "latest_regulatory_filing": (
                 regulatory_filings[0].get("url") if regulatory_filings else None
@@ -472,9 +697,9 @@ class ResearchReportService:
             ),
             "financial_report_date": latest_report.get("report_date"),
             "earnings_quality": {
-                "report_date": (
-                    earnings_quality.get("latest_report") or {}
-                ).get("report_date"),
+                "report_date": (earnings_quality.get("latest_report") or {}).get(
+                    "report_date"
+                ),
                 "overall_label": earnings_quality.get("overall_label"),
                 "confidence": earnings_quality.get("confidence"),
                 "supports": earnings_quality.get("supports") or [],
@@ -482,9 +707,9 @@ class ResearchReportService:
                 "factors": earnings_quality.get("factors") or [],
             },
             "financial_drivers": {
-                "report_date": (
-                    financial_drivers.get("latest_period") or {}
-                ).get("report_date"),
+                "report_date": (financial_drivers.get("latest_period") or {}).get(
+                    "report_date"
+                ),
                 "overall_label": financial_drivers.get("overall_label"),
                 "confidence": financial_drivers.get("confidence"),
                 "profit_bridge": financial_drivers.get("profit_bridge") or {},
@@ -493,15 +718,11 @@ class ResearchReportService:
                 )
                 or [],
                 "plausible_clues": financial_drivers.get("plausible_clues") or [],
-                "company_explanations": financial_drivers.get(
-                    "company_explanations"
-                )
+                "company_explanations": financial_drivers.get("company_explanations")
                 or [],
                 "filing_document": {
                     key: (
-                        (financial_drivers.get("filing_evidence") or {}).get(
-                            "document"
-                        )
+                        (financial_drivers.get("filing_evidence") or {}).get("document")
                         or {}
                     ).get(key)
                     for key in ("article_code", "report_period", "content_hash")
@@ -509,38 +730,26 @@ class ResearchReportService:
                 "unresolved_causes": financial_drivers.get("unresolved_causes") or [],
             },
             "business_structure": {
-                "anchor_report_date": business_structure.get(
-                    "anchor_report_date"
-                ),
+                "anchor_report_date": business_structure.get("anchor_report_date"),
                 "method": business_structure.get("method"),
                 "dimensions": business_structure.get("dimensions") or [],
                 "key_changes": business_structure.get("key_changes") or [],
                 "coverage_limits": business_structure.get("coverage_limits") or [],
             },
             "shareholder_structure": {
-                "holder_count_as_of": shareholder_structure.get(
-                    "holder_count_as_of"
-                ),
+                "holder_count_as_of": shareholder_structure.get("holder_count_as_of"),
                 "holder_count": shareholder_structure.get("holder_count"),
                 "holder_count_change_pct": shareholder_structure.get(
                     "holder_count_change_pct"
                 ),
-                "holder_count_signal": shareholder_structure.get(
-                    "holder_count_signal"
-                ),
-                "top10_report_date": shareholder_structure.get(
-                    "top10_report_date"
-                ),
-                "top10_ratio_pct": shareholder_structure.get(
-                    "top10_ratio_pct"
-                ),
+                "holder_count_signal": shareholder_structure.get("holder_count_signal"),
+                "top10_report_date": shareholder_structure.get("top10_report_date"),
+                "top10_ratio_pct": shareholder_structure.get("top10_ratio_pct"),
                 "top_holders": shareholder_structure.get("top_holders") or [],
             },
             "analyst_expectations": {
                 "as_of_date": analyst_expectations.get("as_of_date"),
-                "latest_report_date": analyst_expectations.get(
-                    "latest_report_date"
-                ),
+                "latest_report_date": analyst_expectations.get("latest_report_date"),
                 "rating_organization_count": analyst_expectations.get(
                     "rating_organization_count"
                 ),
@@ -599,9 +808,9 @@ class ResearchReportService:
             "calibration_method": (
                 (evidence.get("outlook_calibration") or {}).get("calibration") or {}
             ).get("method"),
-            "calibration_history_last": (
-                evidence.get("outlook_calibration") or {}
-            ).get("history_last"),
+            "calibration_history_last": (evidence.get("outlook_calibration") or {}).get(
+                "history_last"
+            ),
         }
         return hashlib.sha256(
             json.dumps(stable, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -616,9 +825,9 @@ class ResearchReportService:
         self, report: dict[str, Any], event: dict[str, Any]
     ) -> None:
         source_key = f"research-report:{report['symbol']}"
-        document_id = "common-" + hashlib.sha256(
-            source_key.encode("utf-8")
-        ).hexdigest()[:24]
+        document_id = (
+            "common-" + hashlib.sha256(source_key.encode("utf-8")).hexdigest()[:24]
+        )
         payload = event.get("payload") or {}
         content = (
             f"# {report['name']}长期研究档案\n\n"

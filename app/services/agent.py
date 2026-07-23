@@ -112,6 +112,8 @@ def _resolve_hermes_route(model_tier: str) -> tuple[str | None, str | None]:
         provider = provider or "deepseek"
         model = model or "deepseek-v4-pro"
     return provider, model
+
+
 _EVIDENCE_MAGNITUDE_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _NEGATIVE_NUMBER_CONTEXT_RE = re.compile(
     r"(?:下跌|跌|下降|减少|回撤|亏损|负增长|转负|"
@@ -131,9 +133,7 @@ _PROHIBITED_OUTPUT_PATTERNS = (
         r"[^。；\n]{0,16}(?:上涨|下跌)[^。；\n]{0,10}\d+(?:\.\d+)?%",
         re.IGNORECASE,
     ),
-    re.compile(
-        r"(?:保证收益|稳赚|必涨|必跌|强烈买入|强烈卖出|建议买入|建议卖出)"
-    ),
+    re.compile(r"(?:保证收益|稳赚|必涨|必跌|强烈买入|强烈卖出|建议买入|建议卖出)"),
     re.compile(r"\b(?:BUY|HOLD|SELL)\b", re.IGNORECASE),
 )
 _PRIVATE_OPERATIONAL_OUTPUT_PATTERNS = (
@@ -219,9 +219,7 @@ _UNSUPPORTED_PEER_OPERATING_INFERENCE_PATTERNS = (
     ),
     (
         "同行公告日期不能用单一日期概括",
-        re.compile(
-            r"财务数据均为[^。；\n]{0,80}[（(]\d{4}-\d{2}-\d{2}公告[）)]"
-        ),
+        re.compile(r"财务数据均为[^。；\n]{0,80}[（(]\d{4}-\d{2}-\d{2}公告[）)]"),
     ),
     (
         "主营构成报告期必须与证据逐家公司一致",
@@ -235,8 +233,7 @@ _UNSUPPORTED_PEER_OPERATING_INFERENCE_PATTERNS = (
 
 def _is_index_contribution_clause(text: str) -> bool:
     return "贡献" in text and any(
-        term in text
-        for term in ("指数", "权重", "百分点", "pp", "成分", "贡献排名")
+        term in text for term in ("指数", "权重", "百分点", "pp", "成分", "贡献排名")
     )
 
 
@@ -374,9 +371,7 @@ _UNSUPPORTED_MARKET_INFERENCE_PATTERNS = (
     ),
     (
         "价格跌幅或回撤不能直接改写为估值压缩",
-        re.compile(
-            r"(?:跌幅|回撤|下跌)[^。；\n]{0,160}(?:估值压缩|估值消化)"
-        ),
+        re.compile(r"(?:跌幅|回撤|下跌)[^。；\n]{0,160}(?:估值压缩|估值消化)"),
     ),
     (
         "缺少历史校准时不能用跌幅越深支持均值回归",
@@ -479,15 +474,11 @@ _UNSUPPORTED_MARKET_INFERENCE_PATTERNS = (
     ),
     (
         "5日和20日累计收益不能直接改写成周线或月线",
-        re.compile(
-            r"(?:5|20)\s*日[^。；\n]{0,120}(?:周线|月线)"
-        ),
+        re.compile(r"(?:5|20)\s*日[^。；\n]{0,120}(?:周线|月线)"),
     ),
     (
         "没有历史序列时不能声称这是第一次反弹或需要二次验证",
-        re.compile(
-            r"(?:第一次|首次)[^。；\n]{0,30}(?:反弹|回升|修复|大涨)|二次验证"
-        ),
+        re.compile(r"(?:第一次|首次)[^。；\n]{0,30}(?:反弹|回升|修复|大涨)|二次验证"),
     ),
     (
         "区间收益不能直接证明指数处于低价或低位区间",
@@ -597,9 +588,7 @@ _UNSUPPORTED_MARKET_INFERENCE_PATTERNS = (
     ),
     (
         "三大指数表述不能同时覆盖第四个代表性指数",
-        re.compile(
-            r"三大指数[^。；\n]{0,220}(?:罗素\s*2000|四个代表性指数)"
-        ),
+        re.compile(r"三大指数[^。；\n]{0,220}(?:罗素\s*2000|四个代表性指数)"),
     ),
     (
         "证据包没有给出观察窗口时不能发明连续数日确认条件",
@@ -792,6 +781,39 @@ _UNSUPPORTED_SHAREHOLDER_INFERENCE_PATTERNS = (
         ),
     ),
 )
+_SHAREHOLDER_BOUNDARY_RE = re.compile(
+    r"(?:不能|无法|不应|不可|不得|不宜|尚不能|未能|不代表|并不代表|并非|不是)"
+    r"(?:直接|自动)?(?:将|把)?"
+)
+_SHAREHOLDER_POSITIVE_REVERSAL_RE = re.compile(
+    r"(?:但|却|而(?:是)?)[^。；\n]{0,36}"
+    r"(?:说明|表明|意味着|证明|显示|就是|等同|代表|判断|反映|"
+    r"实时持仓|当日资金流|今日资金流|机构吸筹|主力吸筹|"
+    r"被动调仓|主动建仓|外资配置意愿)"
+)
+
+
+def _has_unsupported_shareholder_inference(
+    text: str, pattern: re.Pattern[str]
+) -> bool:
+    """Treat explicit evidence boundaries as boundaries, not forbidden claims."""
+
+    for clause in re.split(r"[。；\n]", text):
+        for match in pattern.finditer(clause):
+            matched_text = match.group(0)
+            boundary_matches = list(_SHAREHOLDER_BOUNDARY_RE.finditer(matched_text))
+            if not boundary_matches:
+                return True
+            boundary = boundary_matches[-1]
+            if _SHAREHOLDER_POSITIVE_REVERSAL_RE.search(
+                matched_text[boundary.end() :]
+            ):
+                return True
+            if _SHAREHOLDER_POSITIVE_REVERSAL_RE.search(clause[match.end() :]):
+                return True
+    return False
+
+
 _SHAREHOLDER_STREAK_CLAIM_RE = re.compile(
     r"连续\s*(\d+)\s*(?:次|期|轮)[^。；\n]{0,32}(下降|减少|上升|增加)"
 )
@@ -838,9 +860,7 @@ def _has_available_index_return_missing_claim(
             continue
         normalized = re.sub(r"\s+", "", clause)
         for period_match in metric_pattern.finditer(clause):
-            window = clause[
-                max(0, period_match.start() - 18) : period_match.end() + 18
-            ]
+            window = clause[max(0, period_match.start() - 18) : period_match.end() + 18]
             if not any(term in window for term in missing_terms):
                 continue
             metric_key = f"return_{period_match.group(1)}d_pct"
@@ -856,9 +876,7 @@ def _has_available_index_return_missing_claim(
             available = [
                 item
                 for item in candidates
-                if isinstance(
-                    (item.get("metrics") or {}).get(metric_key), (int, float)
-                )
+                if isinstance((item.get("metrics") or {}).get(metric_key), (int, float))
             ]
             if named_items and available:
                 return True
@@ -1093,7 +1111,9 @@ def _has_wrong_index_return_extreme_claim(
                     str(item.get("symbol") or ""),
                     (str(item.get("name") or ""),),
                 )
-                position = max((prefix.rfind(alias) for alias in aliases if alias), default=-1)
+                position = max(
+                    (prefix.rfind(alias) for alias in aliases if alias), default=-1
+                )
                 if position >= 0:
                     subjects.append((position, item))
             if not subjects:
@@ -1125,7 +1145,9 @@ def _has_unavailable_index_return_claim(
     for clause in re.split(r"[。；\n]", text):
         if not re.search(r"[-+]?\d+(?:\.\d+)?%", clause):
             continue
-        if not any(term in clause for term in ("涨幅", "跌幅", "上涨", "下跌", "收涨", "收跌")):
+        if not any(
+            term in clause for term in ("涨幅", "跌幅", "上涨", "下跌", "收涨", "收跌")
+        ):
             continue
         metric_key = (
             "return_60d_pct"
@@ -1195,9 +1217,7 @@ def _has_index_return_direction_conflict(
     return False
 
 
-def _has_index_trend_state_conflict(
-    text: str, indices: list[dict[str, Any]]
-) -> bool:
+def _has_index_trend_state_conflict(text: str, indices: list[dict[str, Any]]) -> bool:
     aliases_by_symbol = {
         "^GSPC": ("标普500", "标普"),
         "^IXIC": ("纳斯达克综合", "纳斯达克", "纳指"),
@@ -1281,7 +1301,9 @@ def _has_wrong_index_volatility_extreme_claim(
                     str(item.get("symbol") or ""),
                     (str(item.get("name") or ""),),
                 )
-                position = max((prefix.rfind(alias) for alias in aliases if alias), default=-1)
+                position = max(
+                    (prefix.rfind(alias) for alias in aliases if alias), default=-1
+                )
                 if position >= 0:
                     subjects.append((position, item))
             if not subjects:
@@ -1295,12 +1317,8 @@ def _has_wrong_index_volatility_extreme_claim(
     return False
 
 
-def _has_mismatched_major_index_count(
-    text: str, indices: list[dict[str, Any]]
-) -> bool:
-    available = [
-        item for item in indices if item.get("status") != "unavailable"
-    ]
+def _has_mismatched_major_index_count(text: str, indices: list[dict[str, Any]]) -> bool:
+    available = [item for item in indices if item.get("status") != "unavailable"]
     if len(available) < 4 or "三大指数" not in text:
         return False
     for clause in re.split(r"[。；\n]", text):
@@ -1308,8 +1326,7 @@ def _has_mismatched_major_index_count(
             continue
         normalized = re.sub(r"\s+", "", clause)
         named_four = all(
-            term in normalized
-            for term in ("标普", "纳斯达克", "道琼斯", "罗素")
+            term in normalized for term in ("标普", "纳斯达克", "道琼斯", "罗素")
         )
         if "四个代表性指数" in normalized or named_four:
             return True
@@ -1430,7 +1447,10 @@ def _has_unsafe_rating_recommendation(
         ):
             recommendation_language = any(
                 term in clause for term in ("给予", "维持", "调整为")
-            ) or ("建议" in clause and not any(term in clause for term in non_advice_terms))
+            ) or (
+                "建议" in clause
+                and not any(term in clause for term in non_advice_terms)
+            )
             if not recommendation_language:
                 continue
         return True
@@ -1461,9 +1481,7 @@ _STOCK_OBSERVATION_WINDOW_LABEL = "个股观察周期只能使用研究计划已
 _LI_ZONG_RULE_BOTTLENECK_LABEL = (
     "缺少逐规则汇总统计时不能推断李总策略的主要瓶颈或规则稀缺度"
 )
-_LI_ZONG_COVERAGE_CONFLATION_LABEL = (
-    "李总策略名单预筛覆盖不能冒充深度规则完成率"
-)
+_LI_ZONG_COVERAGE_CONFLATION_LABEL = "李总策略名单预筛覆盖不能冒充深度规则完成率"
 _STOCK_DISCLOSURE_DATE_LABEL = "缺少披露日历证据时不能预测下一份报告日期"
 _STOCK_REPORT_DATE_CONFLICT_LABEL = "财报公告日期必须与结构化报告一致"
 _STOCK_DRAWDOWN_WINDOW_LABEL = "最大回撤观察窗口必须与确定性指标一致"
@@ -1491,15 +1509,11 @@ _STOCK_COMPONENT_SOURCE_BOUNDARY_LABEL = (
 _STOCK_MARKET_ABSORPTION_LABEL = (
     "缺少事件研究证据时不能声称基本面已被市场消化或情绪驱动超跌"
 )
-_STOCK_EVENT_SENTIMENT_LABEL = (
-    "公告或媒体线索不能在缺少事件研究时评为正面负面或催化"
-)
+_STOCK_EVENT_SENTIMENT_LABEL = "公告或媒体线索不能在缺少事件研究时评为正面负面或催化"
 _STOCK_UNSUPPORTED_CAUSAL_HYPOTHESIS_LABEL = (
     "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
 )
-_MARKET_CAUSE_FACT_REQUIRED_LABEL = (
-    "大盘涨跌原因回答必须保留至少一项同日指数价格事实"
-)
+_MARKET_CAUSE_FACT_REQUIRED_LABEL = "大盘涨跌原因回答必须保留至少一项同日指数价格事实"
 _STOCK_FAILURE_THRESHOLD_LANGUAGE_RE = re.compile(
     r"(?:低于|高于|不低于|不高于|以下|以上|超过|跌破|突破|"
     r"降至|升至|放缓至|扩大至|收缩至|达到|维持|连续|持续)"
@@ -1586,15 +1600,11 @@ def _stock_failure_line_has_unsupported_threshold(
     if not _STOCK_FAILURE_THRESHOLD_LANGUAGE_RE.search(line):
         return False
     sanctioned_text = _sanctioned_stock_failure_text(evidence)
-    if (
-        _STOCK_INVENTED_REPORT_WINDOW_RE.search(line)
-        and not _STOCK_INVENTED_REPORT_WINDOW_RE.search(sanctioned_text)
-    ):
+    if _STOCK_INVENTED_REPORT_WINDOW_RE.search(
+        line
+    ) and not _STOCK_INVENTED_REPORT_WINDOW_RE.search(sanctioned_text):
         return True
-    if (
-        _STOCK_INVENTED_SINGLE_DIGIT_RE.search(line)
-        and "个位数" not in sanctioned_text
-    ):
+    if _STOCK_INVENTED_SINGLE_DIGIT_RE.search(line) and "个位数" not in sanctioned_text:
         return True
     sanctioned: list[tuple[float, str]] = []
     for match in _NUMBER_RE.finditer(sanctioned_text):
@@ -1686,8 +1696,7 @@ def _has_unsupported_stock_observation_window(
         for match in re.finditer(r'"horizon_sessions"\s*:\s*(\d+)', allowed_text)
     )
     allowed.update(
-        int(match.group(1))
-        for match in _STOCK_T_PLUS_WINDOW_RE.finditer(allowed_text)
+        int(match.group(1)) for match in _STOCK_T_PLUS_WINDOW_RE.finditer(allowed_text)
     )
     for match in _STOCK_OBSERVATION_WINDOW_RE.finditer(answer):
         claimed = {int(match.group(1))}
@@ -1717,13 +1726,10 @@ def _has_li_zong_rule_bottleneck_overclaim(
     )
 
 
-def _has_li_zong_coverage_conflation(
-    answer: str, evidence: dict[str, Any]
-) -> bool:
-    if (
-        ((evidence.get("profile") or {}).get("key") != "li_zong")
-        or evidence.get("selection_mode") != "candidate_pool"
-    ):
+def _has_li_zong_coverage_conflation(answer: str, evidence: dict[str, Any]) -> bool:
+    if ((evidence.get("profile") or {}).get("key") != "li_zong") or evidence.get(
+        "selection_mode"
+    ) != "candidate_pool":
         return False
     has_legacy_coverage = bool(
         re.search(
@@ -1795,17 +1801,13 @@ def _has_stock_report_notice_date_conflict(
             ):
                 continue
             claimed_year = date_match.group("year") or notice_date[:4]
-            claimed = (
-                f"{claimed_year}-{month:02d}-{day:02d}"
-            )
+            claimed = f"{claimed_year}-{month:02d}-{day:02d}"
             if claimed != notice_date:
                 return True
     return False
 
 
-def _has_stock_drawdown_window_conflict(
-    answer: str, evidence: dict[str, Any]
-) -> bool:
+def _has_stock_drawdown_window_conflict(answer: str, evidence: dict[str, Any]) -> bool:
     metrics = evidence.get("metrics") or {}
     expected = 60 if metrics.get("max_drawdown_60d_pct") is not None else None
     if expected is None:
@@ -1840,10 +1842,9 @@ def _stock_current_quote_is_newer(evidence: dict[str, Any]) -> bool:
 def _stock_current_quote_conflicts(
     answer: str, evidence: dict[str, Any]
 ) -> tuple[bool, bool]:
-    analysis_target = (
-        (evidence.get("stock_market_context") or {}).get("analysis_target")
-        or {}
-    )
+    analysis_target = (evidence.get("stock_market_context") or {}).get(
+        "analysis_target"
+    ) or {}
     if analysis_target.get("basis") == "explicit_question_date":
         return False, False
     quote = evidence.get("current_quote") or {}
@@ -1903,7 +1904,9 @@ def _stock_current_quote_conflicts(
                 line,
             )
             for price_match in price_matches:
-                nearby_prefix = line[max(0, price_match.start() - 28) : price_match.start()]
+                nearby_prefix = line[
+                    max(0, price_match.start() - 28) : price_match.start()
+                ]
                 if any(term in nearby_prefix for term in previous_terms):
                     continue
                 claimed_price = float(price_match.group(1))
@@ -1914,13 +1917,10 @@ def _stock_current_quote_conflicts(
     return direction_conflict, price_conflict
 
 
-def _stock_current_quote_close_conflict(
-    answer: str, evidence: dict[str, Any]
-) -> bool:
-    analysis_target = (
-        (evidence.get("stock_market_context") or {}).get("analysis_target")
-        or {}
-    )
+def _stock_current_quote_close_conflict(answer: str, evidence: dict[str, Any]) -> bool:
+    analysis_target = (evidence.get("stock_market_context") or {}).get(
+        "analysis_target"
+    ) or {}
     if analysis_target.get("basis") == "explicit_question_date":
         return False
     quote = evidence.get("current_quote") or {}
@@ -2002,9 +2002,7 @@ def _stock_current_quote_close_conflict(
     return False
 
 
-def _normalize_current_quote_semantics(
-    answer: str, evidence: dict[str, Any]
-) -> str:
+def _normalize_current_quote_semantics(answer: str, evidence: dict[str, Any]) -> str:
     if not _stock_current_quote_close_conflict(answer, evidence):
         return answer
 
@@ -2048,9 +2046,7 @@ def _normalize_stock_research_number_precision(answer: str) -> str:
     def replace(match: re.Match[str]) -> str:
         raw = match.group("value")
         try:
-            rounded = Decimal(raw).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
+            rounded = Decimal(raw).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         except InvalidOperation:
             return raw
         if rounded == 0:
@@ -2084,7 +2080,9 @@ def _stock_current_quote_session_conflict(
 def _normalize_current_quote_session_semantics(
     answer: str, evidence: dict[str, Any]
 ) -> str:
-    if (evidence.get("current_quote") or {}).get("quote_basis") != "post_close_snapshot":
+    if (evidence.get("current_quote") or {}).get(
+        "quote_basis"
+    ) != "post_close_snapshot":
         return answer
     normalized = re.sub(
         r"(?:当前|现在|目前)(?:仍|还)?(?:处于|在)?盘中(?:交易)?",
@@ -2135,8 +2133,7 @@ def _normalize_history_price_mislabeled_as_current_quote(
         if abs(value - float(quote_price)) <= tolerance:
             return match.group(0)
         return (
-            f"{match.group('prefix')}收盘价{match.group('price')}"
-            f"{match.group('unit')}"
+            f"{match.group('prefix')}收盘价{match.group('price')}{match.group('unit')}"
         )
 
     normalized = pattern.sub(replace, answer)
@@ -2156,23 +2153,18 @@ def _normalize_history_price_mislabeled_as_current_quote(
         if value is None or abs(value - float(baseline_close)) > baseline_tolerance:
             return match.group(0)
         return (
-            f"{match.group('prefix')}收盘价{match.group('price')}"
-            f"{match.group('unit')}"
+            f"{match.group('prefix')}收盘价{match.group('price')}{match.group('unit')}"
         )
 
     return previous_pattern.sub(replace_previous, normalized)
 
 
-def _stock_current_quote_ma20_conflict(
-    answer: str, evidence: dict[str, Any]
-) -> bool:
+def _stock_current_quote_ma20_conflict(answer: str, evidence: dict[str, Any]) -> bool:
     quote_price = (evidence.get("current_quote") or {}).get("price")
     ma20 = (evidence.get("price_levels") or {}).get("ma20")
     if not isinstance(ma20, (int, float)):
         ma20 = (evidence.get("metrics") or {}).get("ma20")
-    if not isinstance(quote_price, (int, float)) or not isinstance(
-        ma20, (int, float)
-    ):
+    if not isinstance(quote_price, (int, float)) or not isinstance(ma20, (int, float)):
         return False
     for clause in re.split(r"[。；\n]", answer):
         if not re.search(r"(?:当前|最新)(?:报价|价格|股价)", clause):
@@ -2195,9 +2187,7 @@ def _normalize_stock_current_quote_ma20_relation(
     ma20 = (evidence.get("price_levels") or {}).get("ma20")
     if not isinstance(ma20, (int, float)):
         ma20 = (evidence.get("metrics") or {}).get("ma20")
-    if not isinstance(quote_price, (int, float)) or not isinstance(
-        ma20, (int, float)
-    ):
+    if not isinstance(quote_price, (int, float)) or not isinstance(ma20, (int, float)):
         return answer
     quote_term = r"(?P<quote>(?:当前|最新)(?:报价|价格|股价))"
     ma_term = r"(?P<ma>(?:MA\s*20|20\s*日均线))"
@@ -2234,12 +2224,12 @@ def _current_quote_is_at_common_a_share_limit(evidence: dict[str, Any]) -> bool:
     # A-share boards commonly use 5%, 10%, 20%, or 30% daily limits.  The
     # exact price is rounded to the tick, so a small percentage tolerance is
     # necessary; a 9.5% quote is not treated as a 10% limit-up price.
-    return min(abs(abs(float(quote_change)) - limit) for limit in (5, 10, 20, 30)) <= 0.2
+    return (
+        min(abs(abs(float(quote_change)) - limit) for limit in (5, 10, 20, 30)) <= 0.2
+    )
 
 
-def _stock_current_limit_status_conflict(
-    answer: str, evidence: dict[str, Any]
-) -> bool:
+def _stock_current_limit_status_conflict(answer: str, evidence: dict[str, Any]) -> bool:
     quote_change = (evidence.get("current_quote") or {}).get("pct_change")
     if not isinstance(quote_change, (int, float)):
         return False
@@ -2270,12 +2260,12 @@ def _has_intraday_limit_touch_evidence(evidence: dict[str, Any], term: str) -> b
         ]
         if isinstance(item, dict)
     ]
-    return any(term in title or (term == "涨停" and "封板" in title) for title in titles)
+    return any(
+        term in title or (term == "涨停" and "封板" in title) for title in titles
+    )
 
 
-def _normalize_current_limit_status(
-    answer: str, evidence: dict[str, Any]
-) -> str:
+def _normalize_current_limit_status(answer: str, evidence: dict[str, Any]) -> str:
     if not _stock_current_limit_status_conflict(answer, evidence):
         return answer
     quote_change = float((evidence.get("current_quote") or {}).get("pct_change"))
@@ -2283,14 +2273,11 @@ def _normalize_current_limit_status(
     limit_term = "涨停" if rising else "跌停"
     touched = _has_intraday_limit_touch_evidence(evidence, limit_term)
     replacement = (
-        f"盘中曾触及{limit_term}后回落"
-        if touched
-        else f"当前未处于{limit_term}价"
+        f"盘中曾触及{limit_term}后回落" if touched else f"当前未处于{limit_term}价"
     )
     pattern = (
         r"(?:当前|目前|现在|最新(?:报价)?|盘中)"
-        r"(?:仍|已|正|处于|为)?\s*"
-        + (r"(?:涨停|封板)" if rising else r"跌停")
+        r"(?:仍|已|正|处于|为)?\s*" + (r"(?:涨停|封板)" if rising else r"跌停")
     )
     normalized = re.sub(pattern, replacement, answer)
     if _stock_current_limit_status_conflict(normalized, evidence):
@@ -2320,7 +2307,9 @@ def _stock_current_quote_required_but_missing(
     answer: str, evidence: dict[str, Any]
 ) -> bool:
     question = str(evidence.get("user_question") or "")
-    if not any(term in question for term in ("今天", "今日", "当前", "现在", "盘中", "最新")):
+    if not any(
+        term in question for term in ("今天", "今日", "当前", "现在", "盘中", "最新")
+    ):
         return False
     quote = evidence.get("current_quote") or {}
     if not _stock_current_quote_is_newer(evidence):
@@ -2339,15 +2328,13 @@ def _stock_current_quote_required_but_missing(
     ]
     price_tolerance = max(0.02, abs(float(quote_price)) * 0.002)
     if not any(
-        abs(value - float(quote_price)) <= price_tolerance
-        for value in claimed_values
+        abs(value - float(quote_price)) <= price_tolerance for value in claimed_values
     ):
         return True
 
     change_tolerance = max(0.02, abs(float(quote_change)) * 0.002)
     if any(
-        abs(value - float(quote_change)) <= change_tolerance
-        for value in claimed_values
+        abs(value - float(quote_change)) <= change_tolerance for value in claimed_values
     ):
         return False
 
@@ -2361,16 +2348,15 @@ def _stock_current_quote_required_but_missing(
             continue
         for match in _NUMBER_RE.finditer(clause):
             value = _number_value(match.group(0))
-            if value is not None and abs(
-                abs(value) - abs(float(quote_change))
-            ) <= change_tolerance:
+            if (
+                value is not None
+                and abs(abs(value) - abs(float(quote_change))) <= change_tolerance
+            ):
                 return False
     return True
 
 
-def _has_stock_cross_date_market_claim(
-    answer: str, evidence: dict[str, Any]
-) -> bool:
+def _has_stock_cross_date_market_claim(answer: str, evidence: dict[str, Any]) -> bool:
     market_context = evidence.get("stock_market_context") or {}
     breadth = market_context.get("market_breadth") or {}
     if breadth.get("same_date_as_target") is True:
@@ -2423,10 +2409,9 @@ def _has_stock_cross_date_market_claim(
 def _has_stock_industry_breadth_overclaim(
     answer: str, evidence: dict[str, Any]
 ) -> bool:
-    industry_index = (
-        (evidence.get("stock_market_context") or {}).get("exact_industry_index")
-        or {}
-    )
+    industry_index = (evidence.get("stock_market_context") or {}).get(
+        "exact_industry_index"
+    ) or {}
     component_breadth = industry_index.get("component_breadth") or {}
     if component_breadth.get("status") == "available":
         return False
@@ -2471,9 +2456,7 @@ def _has_stock_industry_causal_overclaim(answer: str) -> bool:
             continue
         if not re.search(r"(?:行业|板块)[^。；\n]{0,30}(?:普涨|普跌)", clause):
             continue
-        if re.search(
-            r"(?:导致|造成|驱动|拖累|共同作用|解释了|原因)", clause
-        ):
+        if re.search(r"(?:导致|造成|驱动|拖累|共同作用|解释了|原因)", clause):
             return True
     return False
 
@@ -2484,12 +2467,9 @@ def _stock_contribution_required_but_missing(
     question = str(evidence.get("user_question") or "")
     if "贡献" not in question:
         return False
-    industry_index = (
-        (evidence.get("stock_market_context") or {}).get(
-            "exact_industry_index"
-        )
-        or {}
-    )
+    industry_index = (evidence.get("stock_market_context") or {}).get(
+        "exact_industry_index"
+    ) or {}
     contribution = industry_index.get("component_contribution") or {}
     subject = contribution.get("subject") or {}
     expected = subject.get("estimated_contribution_pp")
@@ -2512,8 +2492,7 @@ def _stock_contribution_required_but_missing(
             if (value := _number_value(match.group(0))) is not None
         ]
         if any(
-            abs(value - float(expected))
-            <= max(0.01, abs(float(expected)) * 0.02)
+            abs(value - float(expected)) <= max(0.01, abs(float(expected)) * 0.02)
             for value in values
         ):
             has_subject_value = True
@@ -2542,12 +2521,9 @@ def _stock_industry_counts_required_but_missing(
     )
     if not explicitly_requested:
         return False
-    industry_index = (
-        (evidence.get("stock_market_context") or {}).get(
-            "exact_industry_index"
-        )
-        or {}
-    )
+    industry_index = (evidence.get("stock_market_context") or {}).get(
+        "exact_industry_index"
+    ) or {}
     breadth = industry_index.get("component_breadth") or {}
     if breadth.get("status") != "available":
         return False
@@ -2571,19 +2547,14 @@ def _stock_industry_counts_required_but_missing(
 def _stock_component_source_boundary_required_but_missing(
     answer: str, evidence: dict[str, Any]
 ) -> bool:
-    industry_index = (
-        (evidence.get("stock_market_context") or {}).get(
-            "exact_industry_index"
-        )
-        or {}
-    )
+    industry_index = (evidence.get("stock_market_context") or {}).get(
+        "exact_industry_index"
+    ) or {}
     breadth = industry_index.get("component_breadth") or {}
     coverage = breadth.get("coverage") or {}
     fallback_count = coverage.get("fallback_unadjusted_returns")
     fallbacks = list(breadth.get("source_fallbacks") or [])
-    if not (
-        isinstance(fallback_count, int) and fallback_count > 0
-    ) and not fallbacks:
+    if not (isinstance(fallback_count, int) and fallback_count > 0) and not fallbacks:
         return False
     names = [
         str(item.get("name") or item.get("symbol") or "").strip()
@@ -2591,18 +2562,13 @@ def _stock_component_source_boundary_required_but_missing(
     ]
     names = [item for item in names if item]
     names_present = all(name in answer for name in names)
-    source_present = any(
-        term in answer for term in ("新浪公开日线", "公开未复权日线")
-    )
+    source_present = any(term in answer for term in ("新浪公开日线", "公开未复权日线"))
     adjustment_present = "未复权" in answer
     boundary_present = any(
         term in answer for term in ("除权除息", "公司行动", "复权口径")
     )
     return not (
-        names_present
-        and source_present
-        and adjustment_present
-        and boundary_present
+        names_present and source_present and adjustment_present and boundary_present
     )
 
 
@@ -2674,6 +2640,26 @@ def _has_stock_unsupported_causal_hypothesis(answer: str) -> bool:
         "不能归因",
     )
     for clause in re.split(r"[。；\n]", answer):
+        if re.search(
+            r"(?:主要(?:原因|表现为)|核心原因|直接原因|归因于|源于)"
+            r"[^。；\n]{0,180}(?:公告|分红|除权除息|回购|新闻|消息|事件|"
+            r"前期急涨|获利回吐|技术性回吐|提前调整)|"
+            r"(?:公告|分红|除权除息|回购|新闻|消息|事件)"
+            r"[^。；\n]{0,100}(?:引发|导致|造成|驱动|带来|触发)"
+            r"[^。；\n]{0,80}(?:下跌|大跌|回落|调整|回吐)",
+            clause,
+        ):
+            return True
+        if re.search(
+            r"(?:上涨|下跌|大跌|回落)[^。；\n]{0,24}(?:主要)?"
+            r"(?:来自|源于|归因于|由)[^。；\n]{0,24}"
+            r"(?:个股|公司)(?:自身|特定)?(?:因素|压力|原因)|"
+            r"(?:更多|主要)?体现为[^。；\n]{0,120}"
+            r"(?:获利回吐|基本面隐忧|因素共振|情绪共振)|"
+            r"(?:获利回吐|基本面隐忧)[^。；\n]{0,60}(?:共振|导致|驱动)",
+            clause,
+        ):
+            return True
         if any(term in clause for term in cautious_terms):
             continue
         if re.search(
@@ -2718,8 +2704,7 @@ def _has_stock_60d_return_binding_conflict(
             if (value := _number_value(match.group(0))) is not None
         ]
         if values and not any(
-            abs(value - float(expected))
-            <= max(0.02, abs(float(expected)) * 0.005)
+            abs(value - float(expected)) <= max(0.02, abs(float(expected)) * 0.005)
             for value in values
         ):
             return True
@@ -2805,6 +2790,7 @@ class AgentService:
                 "execute_agent": execute_agent,
                 "image_attached": image_path is not None,
                 "conversation_id": conversation_id,
+                "research_plan": evidence.get("research_plan"),
             },
             workspace_path=workspace,
         )
@@ -2813,9 +2799,14 @@ class AgentService:
 
         skill_name = SKILL_BY_INTENT[intent]
         extra_skills = list(EXTRA_SKILLS_BY_INTENT.get(intent, []))
-        if intent in {"stock_research", "earnings_quality", "financial_drivers"} and not str(evidence.get("symbol") or "").endswith(
-            (".SS", ".SZ")
-        ):
+        planned_skills = (evidence.get("research_plan") or {}).get("selected_skills")
+        if intent == "stock_research" and isinstance(planned_skills, list):
+            extra_skills = [str(item) for item in planned_skills if str(item).strip()]
+        if intent in {
+            "stock_research",
+            "earnings_quality",
+            "financial_drivers",
+        } and not str(evidence.get("symbol") or "").endswith((".SS", ".SZ")):
             extra_skills = [
                 item
                 for item in extra_skills
@@ -2830,11 +2821,9 @@ class AgentService:
             extra_skills.insert(0, "us-regulatory-evidence")
         if image_path and skill_name != "visual-research":
             extra_skills.insert(0, "visual-research")
-        skill_names = [
-            "user-memory-context",
-            skill_name,
-            *extra_skills,
-        ]
+        skill_names = list(
+            dict.fromkeys(["user-memory-context", skill_name, *extra_skills])
+        )
         skill_text = "\n\n".join(self._load_skill(name) for name in skill_names)
         memories = self.database.list_memories(user["id"], status="confirmed")
         prompt_evidence = self._evidence_for_prompt(evidence)
@@ -2849,14 +2838,12 @@ class AgentService:
             prompt_knowledge_context = self._compact_market_knowledge_context(
                 prompt_knowledge_context
             )
-            prompt_history = self._compact_market_conversation_history(
-                prompt_history
-            )
+            prompt_history = self._compact_market_conversation_history(prompt_history)
         elif intent == "research_actions":
             prompt_evidence = self._compact_research_actions_evidence(prompt_evidence)
         elif intent == "stock_comparison":
             prompt_evidence = self._compact_stock_comparison_evidence(prompt_evidence)
-        elif intent == "stock_research" and model_tier == "economy":
+        elif intent == "stock_research":
             prompt_evidence = self._compact_stock_research_evidence(prompt_evidence)
         prompt = self._build_prompt(
             message,
@@ -2866,16 +2853,20 @@ class AgentService:
             conversation_history=prompt_history,
             knowledge_context=prompt_knowledge_context,
         )
-        if intent in {
-            "stock_research",
-            "stock_comparison",
-            "earnings_quality",
-            "financial_drivers",
-            "shareholder_structure",
-            "analyst_expectations",
-            "event_timeline",
-            "stock_screen",
-        } and model_tier == "economy":
+        if (
+            intent
+            in {
+                "stock_research",
+                "stock_comparison",
+                "earnings_quality",
+                "financial_drivers",
+                "shareholder_structure",
+                "analyst_expectations",
+                "event_timeline",
+                "stock_screen",
+            }
+            and model_tier == "economy"
+        ):
             prompt += """
 
 ## 标准解读要求
@@ -2928,16 +2919,16 @@ component_breadth.status=partial 时，必须说明有效样本数/官方样本�
 “非系统性因素所致”。用户问“为什么涨跌”但没有同日事件证据时，结论必须明确区分：
 已经确认的是价格与相对表现，具体驱动仍未确认。除非用户明确询问跟踪计划，否则不要附加
 MA20、RSI、3/5/10 个交易日或条件情景等与当前问题无关的技术观察。
+即使存在同日公告、前一日上涨或财务压力，也不得写成“主要来自、主要表现为、更多体现为、
+个股自身因素、获利回吐、基本面隐忧共振、回落不意外”；除非证据明确给出事件研究或官方归因，
+这些内容只能列为待核验线索，结论仍须写明具体驱动未确认。
 当 analysis_target.basis=explicit_question_date 时，用户明确写出的日期优先于最新报价和最新完整日线；
 必须用 stock_target、同日指数、同日行业和同日成分广度回答。metrics/provenance 可能描述更新的一根日线，
 不得因此把用户指定日期替换成最新交易日，也不得声称指定日期证据缺失而引用另一日的成分家数。
 """
-            peer_operating = (
-                (prompt_evidence.get("peer_comparison") or {}).get(
-                    "operating_comparison"
-                )
-                or {}
-            )
+            peer_operating = (prompt_evidence.get("peer_comparison") or {}).get(
+                "operating_comparison"
+            ) or {}
             if peer_operating.get("metrics"):
                 prompt += """
 
@@ -2984,9 +2975,7 @@ groups 中同口径的标的之间比较。不得把不同季度、年度和累�
 不使用 Markdown 表格，不输出综合排名、目标价或买卖建议。某个标的数据缺失时保留其他标的结果，
 明确该项不可比，不得用常识补写当前事实。
 """
-        if intent == "stock_research" and prompt_evidence.get(
-            "deep_stock_coverage"
-        ):
+        if intent == "stock_research" and prompt_evidence.get("deep_stock_coverage"):
             prompt += """
 
 ## 六维证据覆盖回答要求
@@ -3019,15 +3008,19 @@ unresolved 是尚未解决的风险或缺口，不能把 unresolved 写成已经
 价格、均线、收益、回撤和波动率只能说明价格路径；财报、现金流、公告原文和经营数据
 才可作为基本面反证。当前报价即使越过上一完整日线的 MA20，也不得写成趋势反证已经
 “消失、反转或正在弱化”；必须等待同日完整日线确认，并保留两个时间锚点。
+若 conditional_outlook.current_quote_alignment 表明当前报价已经越过某个关键位，
+不得再把同一关键位写成未来“若跌破/若突破”的条件；应先说明报价已经触及，
+再说明是否仍待完整日线确认，以及确认后需要重算什么。
 
 回答中优先使用 research_claims 已整理的证据摘要。除非用户明确要求原始字段，
 不得从 fundamentals、financial_drivers 等深层结构拼接底层元单位的大整数或十位以上小数；
 百分比和比率可在不改变方向与含义的前提下保留最多两位小数。若 Claim 摘要没有用户可读的
 金额单位，可改用方向、同比、比率和报告期说明，不自行换算出新的金额。
 """
-        if intent == "stock_screen" and (
-            prompt_evidence.get("profile") or {}
-        ).get("key") == "li_zong":
+        if (
+            intent == "stock_screen"
+            and (prompt_evidence.get("profile") or {}).get("key") == "li_zong"
+        ):
             prompt += """
 
 ## 李总策略回答要求
@@ -3097,10 +3090,10 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 用户同时询问“昨天为什么涨跌”和“今天盘前关注什么”时，必须拆成两个时间段回答：
 上一交易日只使用同日行情与资讯，盘前部分只列新的可核验事件或观察变量，不能混成一个结论。
 """
-            if (
-                (prompt_evidence.get("question_focus") or {}).get("key")
-                == "market_risk"
-                and (prompt_evidence.get("market_drivers") or {}).get("items")
+            if (prompt_evidence.get("question_focus") or {}).get(
+                "key"
+            ) == "market_risk" and (prompt_evidence.get("market_drivers") or {}).get(
+                "items"
             ):
                 prompt += """
 当前证据已经包含与该市场直接相关的资讯标题。回答风险、反方证据或失效条件时，
@@ -3112,22 +3105,20 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 用户明确要求失效条件。最终回答必须包含标题“失效条件”，并只使用证据包已有的
 均线、收益、回撤、波动或事件证据作为可复核条件；不能省略，也不能自造时间窗口。
 """
-            if (
-                (prompt_evidence.get("question_focus") or {}).get("key")
-                == "trend_reversal"
-            ):
+            if (prompt_evidence.get("question_focus") or {}).get(
+                "key"
+            ) == "trend_reversal":
                 prompt += """
 趋势判断只使用当前证据明确给出的区间收益、均线位置和趋势状态。
 不得声称这是“首次修复”，也不得把区间累计下跌改写成处于“低价区间”或“低位区间”。
 指数区间收益使用“上涨/下跌”，不用“盈利/亏损”。上证与深证的强弱差异不能替代
 大小盘或市值风格指数，也不要自行规定“后续几个交易日”之类确认窗口。
 """
-            if (
-                (prompt_evidence.get("question_focus") or {}).get("key")
-                == "sector_rotation"
-                and (prompt_evidence.get("market_breadth") or {}).get("status")
-                == "available"
-            ):
+            if (prompt_evidence.get("question_focus") or {}).get(
+                "key"
+            ) == "sector_rotation" and (
+                prompt_evidence.get("market_breadth") or {}
+            ).get("status") == "available":
                 prompt += """
 当前证据已经提供沪深京A股完整上涨、下跌、平盘家数和固定广度分类。
 回答必须直接给出三项家数并逐字沿用 evidence 中的 state；不得省略固定分类，
@@ -3146,15 +3137,11 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 分档统一使用“上涨至少3% / 上涨不足3% / 下跌不足3% / 下跌至少3%”这类自然语言，
 不得写成“跌幅0~-3%”或“跌幅≥-3%”等符号方向错误的表达。
 """
-            if (
-                (prompt_evidence.get("question_focus") or {}).get("key")
-                == "volume_flows"
-                and (
-                    (prompt_evidence.get("market_breadth") or {}).get("turnover")
-                    or {}
-                ).get("status")
-                == "available"
-            ):
+            if (prompt_evidence.get("question_focus") or {}).get(
+                "key"
+            ) == "volume_flows" and (
+                (prompt_evidence.get("market_breadth") or {}).get("turnover") or {}
+            ).get("status") == "available":
                 prompt += """
 全市场成交额必须使用 `market_breadth.market_date` 作为市场日期，并可同时引用
 `coverage.latest_tick_time` 说明快照内最新成交时点；`snapshot_local_time` 只是系统取得快照的时间。
@@ -3254,12 +3241,8 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     prompt_evidence,
                 )
                 answer = _normalize_relative_event_dates(answer)
-                answer = self._normalize_li_zong_scope_answer(
-                    answer, prompt_evidence
-                )
-                answer = self._normalize_li_zong_symbol_answer(
-                    answer, prompt_evidence
-                )
+                answer = self._normalize_li_zong_scope_answer(answer, prompt_evidence)
+                answer = self._normalize_li_zong_symbol_answer(answer, prompt_evidence)
                 if intent == "stock_research":
                     answer = _normalize_stock_research_number_precision(answer)
                 output_guard = self._validate_model_output(
@@ -3270,7 +3253,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 if output_guard["passed"]:
                     status = "completed"
                 else:
-                    (run_dir / "answer.rejected.md").write_text(answer, encoding="utf-8")
+                    (run_dir / "answer.rejected.md").write_text(
+                        answer, encoding="utf-8"
+                    )
                     structured_repair = self._repair_trade_review_json_guard_failure(
                         answer,
                         prompt_evidence,
@@ -3298,9 +3283,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                             repair_method = (
                                 "drop_unsupported_and_append_stock_required_evidence_v1"
                             )
-                        elif semantic_repairs == {
-                            _STOCK_CONTRIBUTION_REQUIRED_LABEL
-                        }:
+                        elif semantic_repairs == {_STOCK_CONTRIBUTION_REQUIRED_LABEL}:
                             repair_method = "append_stock_component_contribution_v1"
                         elif semantic_repairs == {
                             _STOCK_INDUSTRY_COUNTS_REQUIRED_LABEL
@@ -3313,9 +3296,8 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                             repair_method = "append_stock_required_evidence_v1"
                         elif output_guard.get("private_operational_patterns"):
                             repair_method = "drop_private_operational_lines_v1"
-                        elif (
-                            "同行净利润亿元换算必须与结构化财务一致"
-                            in (output_guard.get("unsupported_market_inferences") or [])
+                        elif "同行净利润亿元换算必须与结构化财务一致" in (
+                            output_guard.get("unsupported_market_inferences") or []
                         ):
                             repair_method = "correct_peer_money_unit_v1"
                         elif output_guard.get("unsupported_market_inferences"):
@@ -3358,7 +3340,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 )
                 answer = self._render_preview(evidence)
                 status = "degraded"
-                error = f"Hermes 调用失败，已回退确定性摘要：{type(exc).__name__}: {exc}"
+                error = (
+                    f"Hermes 调用失败，已回退确定性摘要：{type(exc).__name__}: {exc}"
+                )
         else:
             answer = self._render_preview(evidence)
             status = "preview"
@@ -3396,6 +3380,13 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             }
             usage = {
                 **(usage or {}),
+                "prompt_profile": {
+                    "characters": len(prompt),
+                    "skills": skill_names,
+                    "research_focus": (evidence.get("research_plan") or {}).get(
+                        "focus"
+                    ),
+                },
                 "timings": {
                     **(pre_run_timings or {}),
                     "agent_setup_seconds": round(prompt_ready_seconds, 3),
@@ -3495,9 +3486,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             r"\bscore\s+([-+]?\d)", r"情绪分数 \1", answer, flags=re.IGNORECASE
         )
         answer = re.sub(r"置信度\s+low\b", "置信度较低", answer, flags=re.IGNORECASE)
-        answer = re.sub(
-            r"置信度\s+medium\b", "置信度中等", answer, flags=re.IGNORECASE
-        )
+        answer = re.sub(r"置信度\s+medium\b", "置信度中等", answer, flags=re.IGNORECASE)
         answer = re.sub(r"置信度\s+high\b", "置信度较高", answer, flags=re.IGNORECASE)
         answer = re.sub(
             r"(?:同口径)?(?:历史比较|历史对比)?\s*(?:仍)?(?:处于|为)?\s*"
@@ -3530,13 +3519,69 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             answer,
             flags=re.IGNORECASE,
         )
+        answer = re.sub(
+            r"(?:今日|当日)?(?:上涨|下跌|回调)?(?:属于|是)?"
+            r"(?:独立于|脱离)(?:大市|大盘|行业)的?"
+            r"(?:个股)?(?:上涨|下跌|回调|表现)?",
+            "相对大市表现明显分化",
+            answer,
+        )
+        answer = re.sub(
+            r"(?:不能|无法|不应)归结为(?:全市场)?(?:系统性|大盘或行业|市场或行业)"
+            r"[^。；\n]{0,12}(?:拖累|因素|原因)",
+            "当日事实不支持全市场普跌解释，但具体驱动仍未确认",
+            answer,
+        )
+        answer = re.sub(
+            r"(?:当日|今日)?(?:盘面|事实)?不支持(?:全市场)?(?:系统性)?普跌"
+            r"(?:拖累(?:个股|该股)?)?",
+            "当日事实不支持全市场普跌解释",
+            answer,
+        )
+        answer = re.sub(
+            r"(?:同日)?(?:大盘|市场)[^。；\n]{0,32}不支持(?:全市场)?系统性拖累",
+            "同日市场事实不支持全市场普跌解释",
+            answer,
+        )
+        answer = re.sub(
+            r"(?:当日|今日)[^。；\n]{0,24}不支持(?:全市场)?系统性拖累",
+            "当日事实不支持全市场普跌解释",
+            answer,
+        )
+        answer = re.sub(
+            r"(?:上涨|下跌|回落)?(?:属于|是)?与(?:大盘|大市|市场|行业)"
+            r"方向不同的独立表现",
+            "相对市场方向明显分化，但具体驱动仍未确认",
+            answer,
+        )
+        answer = re.sub(
+            r"(?:上涨|下跌|大跌|回落)[^。；\n]{0,24}(?:主要)?"
+            r"(?:来自|源于|归因于|由)[^。；\n]{0,24}"
+            r"(?:个股|公司)(?:自身|特定)?(?:因素|压力|原因)",
+            "该股相对市场表现明显偏弱，但具体驱动仍未确认",
+            answer,
+        )
+        answer = re.sub(
+            r"(?:综合来看[，,]?)?(?:今日|当日|本次)?(?:大跌|下跌|回落)"
+            r"[^。；\n]{0,24}(?:主要(?:表现为|原因是)|归因于|源于)"
+            r"[^。；\n]{0,180}(?:引发|导致|造成|回吐|提前调整)[^。；\n]*",
+            "现有证据只能确认价格下跌与相对表现，具体驱动仍未确认",
+            answer,
+        )
+        answer = re.sub(
+            r"(?:更多|主要)?体现为[^。；\n]{0,120}"
+            r"(?:获利回吐|基本面隐忧|因素共振|情绪共振)[^。；\n]*",
+            "具体驱动仍未确认",
+            answer,
+        )
+        answer = re.sub(r"[，,]?(?:因此)?回落不意外", "", answer)
         replacements = {
             "根据你提供的完整当前证据和技能要求": "根据当前可验证证据",
             '能确认的"非系统性拖累"': "市场与行业对照",
             "能确认的“非系统性拖累”": "市场与行业对照",
             "完全不存在系统性拖累": "当日事实不支持全市场普跌解释",
             "不存在系统性拖累": "当日事实不支持全市场普跌解释",
-            '"当前最可能的市场解释"': '“市场资讯反复提及的解释”',
+            '"当前最可能的市场解释"': "“市场资讯反复提及的解释”",
             "“当前最可能的市场解释”": "“市场资讯反复提及的解释”",
             "当前最可能的市场解释": "市场资讯反复提及的解释",
             "当前已接入资料未披露": "现有证据没有提供",
@@ -3580,6 +3625,8 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         for old, new in replacements.items():
             answer = answer.replace(old, new)
         answer = answer.replace("当前当前", "当前")
+        answer = re.sub(r"(?:解释){2,}", "解释", answer)
+        answer = answer.replace("。；", "；").replace("；。", "。")
         answer = re.sub(
             r"[（(]\s*label\s*=\s*([^）)]+)[）)]",
             r"（\1）",
@@ -3636,9 +3683,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         guard_evidence = evidence
         if evidence.get("type") == "market_brief":
             guard_evidence = dict(evidence)
-            guard_evidence["indices"] = AgentService._aligned_market_indices(
-                evidence
-            )
+            guard_evidence["indices"] = AgentService._aligned_market_indices(evidence)
             hot_sectors = dict(evidence.get("hot_sectors") or {})
             if hot_sectors.get("same_date_as_analysis_target") is False:
                 hot_sectors["sectors"] = []
@@ -3680,9 +3725,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         # that the answer may name as “60日”. Only take these magnitudes from
         # dictionary keys. Scanning the whole JSON text would accidentally let
         # unrelated values support newly invented ratios and thresholds.
-        allowed_magnitudes.extend(
-            AgentService._evidence_key_magnitudes(guard_evidence)
-        )
+        allowed_magnitudes.extend(AgentService._evidence_key_magnitudes(guard_evidence))
         if evidence.get("type") == "market_brief":
             for item in guard_evidence.get("indices") or []:
                 metrics = item.get("metrics") or {}
@@ -3735,20 +3778,23 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             line_start = answer.rfind("\n", 0, match.start()) + 1
             prefix = answer[line_start : match.start()]
             suffix = answer[match.end() : match.end() + 2]
-            is_list_marker = not token.endswith("%") and not prefix.strip() and suffix[:1] in {
-                ".",
-                "、",
-                ")",
-                "）",
-            }
+            is_list_marker = (
+                not token.endswith("%")
+                and not prefix.strip()
+                and suffix[:1]
+                in {
+                    ".",
+                    "、",
+                    ")",
+                    "）",
+                }
+            )
             if is_list_marker:
                 continue
             explicit_sign = token.startswith(("+", "-"))
             implied_value: float | None = None
             nearby = answer[
-                max(line_start, match.start() - 24) : min(
-                    len(answer), match.end() + 12
-                )
+                max(line_start, match.start() - 24) : min(len(answer), match.end() + 12)
             ]
             absolute_ratio_transition = (
                 "→" in nearby
@@ -3773,9 +3819,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             if token.endswith("%"):
                 numeric_token = token.lstrip("+-").rstrip("%")
                 decimal_places = (
-                    len(numeric_token.rsplit(".", 1)[1])
-                    if "." in numeric_token
-                    else 0
+                    len(numeric_token.rsplit(".", 1)[1]) if "." in numeric_token else 0
                 )
                 if decimal_places == 0:
                     tolerance_floor = (
@@ -3787,13 +3831,10 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     tolerance_floor = 0.051
             else:
                 numeric_token = token.lstrip("+-").replace(",", "")
-                if (
-                    "." not in numeric_token
-                    and re.search(r"(?:约|大约|约为|近)\s*$", prefix[-10:])
+                if "." not in numeric_token and re.search(
+                    r"(?:约|大约|约为|近)\s*$", prefix[-10:]
                 ):
-                    trailing_zeros = len(numeric_token) - len(
-                        numeric_token.rstrip("0")
-                    )
+                    trailing_zeros = len(numeric_token) - len(numeric_token.rstrip("0"))
                     if trailing_zeros > 0:
                         tolerance_floor = max(
                             tolerance_floor, 0.51 * (10**trailing_zeros)
@@ -3804,16 +3845,16 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             elif implied_value is not None:
                 supported = matches(implied_value, allowed_values, tolerance_floor)
             else:
-                supported = matches(
-                    value, allowed_values, tolerance_floor
-                ) or matches(
+                supported = matches(value, allowed_values, tolerance_floor) or matches(
                     abs(value), allowed_magnitudes, tolerance_floor
                 )
 
             if not supported:
                 unsupported.append(token)
                 unsupported_contexts.append(
-                    answer[max(0, match.start() - 24) : min(len(answer), match.end() + 24)]
+                    answer[
+                        max(0, match.start() - 24) : min(len(answer), match.end() + 24)
+                    ]
                 )
         unsupported = list(dict.fromkeys(unsupported))[:12]
         semantic_conflicts: list[str] = []
@@ -3836,59 +3877,47 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 match = pattern.search(answer)
                 if match is None:
                     continue
-                if (
-                    label == "代表性指数涨幅不能直接证明市场或风格贡献"
-                    and (
-                        evidence.get("index_contribution")
-                        or (evidence.get("market_breadth") or {}).get(
-                            "index_contribution"
-                        )
-                    )
+                if label == "代表性指数涨幅不能直接证明市场或风格贡献" and (
+                    evidence.get("index_contribution")
+                    or (evidence.get("market_breadth") or {}).get("index_contribution")
                 ):
                     continue
                 if (
-                    label
-                    == "证据包没有给出阈值时不能发明量能或回撤验证门槛"
+                    label == "证据包没有给出阈值时不能发明量能或回撤验证门槛"
                     and AgentService._is_evidenced_breadth_threshold(
                         answer, match, evidence
                     )
                 ):
                     continue
-                if (
-                    label
-                    in {
-                        "成交量或量比不能直接证明增量资金入场或资金流向",
-                        "成交量或量比不能直接证明上涨参与面或市场覆盖范围",
-                    }
-                    and any(
-                        term in match.group(0)
-                        for term in (
-                            "不能证明",
-                            "不能说明",
-                            "无法证明",
-                            "无法说明",
-                            "不证明",
-                            "不说明",
-                            "不等于",
-                            "不是",
-                            "并非",
-                        )
+                if label in {
+                    "成交量或量比不能直接证明增量资金入场或资金流向",
+                    "成交量或量比不能直接证明上涨参与面或市场覆盖范围",
+                } and any(
+                    term in match.group(0)
+                    for term in (
+                        "不能证明",
+                        "不能说明",
+                        "无法证明",
+                        "无法说明",
+                        "不证明",
+                        "不说明",
+                        "不等于",
+                        "不是",
+                        "并非",
                     )
                 ):
                     continue
                 unsupported_market_inferences.append(label)
             market_state = evidence.get("market_state") or {}
-            if (
-                market_state.get("whole_market_breadth_available") is False
-                and _has_whole_market_breadth_overclaim(answer)
-            ):
+            if market_state.get(
+                "whole_market_breadth_available"
+            ) is False and _has_whole_market_breadth_overclaim(answer):
                 unsupported_market_inferences.append(
                     "缺少全市场涨跌家数时不能确认是否普涨"
                 )
-            if (
-                market_state.get("whole_market_breadth_available") is False
-                and _has_unsupported_majority_stock_claim(answer)
-            ):
+            if market_state.get(
+                "whole_market_breadth_available"
+            ) is False and _has_unsupported_majority_stock_claim(answer):
                 unsupported_market_inferences.append(
                     "缺少同日全市场广度时不能声称多数个股涨跌"
                 )
@@ -3913,14 +3942,12 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 market_breadth = evidence.get("market_breadth") or {}
                 user_question = str(evidence.get("user_question") or "")
                 answer_clauses = re.split(r"[。；\n]", answer)
-                turnover_available = (
-                    (market_breadth.get("turnover") or {}).get("status")
-                    == "available"
-                )
-                distribution_available = (
-                    (market_breadth.get("distribution") or {}).get("status")
-                    == "available"
-                )
+                turnover_available = (market_breadth.get("turnover") or {}).get(
+                    "status"
+                ) == "available"
+                distribution_available = (market_breadth.get("distribution") or {}).get(
+                    "status"
+                ) == "available"
                 if (
                     turnover_available
                     and "成交额" in user_question
@@ -3946,9 +3973,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         answer, turnover_market_date
                     )
                 ):
-                    semantic_conflicts.append(
-                        "全市场成交额时间必须引用市场快照日期"
-                    )
+                    semantic_conflicts.append("全市场成交额时间必须引用市场快照日期")
                 if turnover_available and re.search(
                     r"(?:全市场)?成交额[^。；\n]{0,50}"
                     r"(?:未|没有|缺少)[^。；\n]{0,24}(?:市场)?(?:日期|时间|时点)",
@@ -3975,30 +4000,23 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     semantic_conflicts.append(
                         "用户明确询问涨跌幅分布时必须引用可用的分布统计"
                     )
-                if (
-                    distribution_available
-                    and _AVAILABLE_DISTRIBUTION_MISSING_RE.search(answer)
+                if distribution_available and _AVAILABLE_DISTRIBUTION_MISSING_RE.search(
+                    answer
                 ):
                     unsupported_market_inferences.append(
                         "已有全市场个股涨跌幅分布时不能声称该数据缺失"
                     )
-                if (
-                    turnover_available
-                    and _AVAILABLE_TURNOVER_MISSING_RE.search(answer)
-                ):
+                if turnover_available and _AVAILABLE_TURNOVER_MISSING_RE.search(answer):
                     unsupported_market_inferences.append(
                         "已有全市场成交额时不能声称该数据缺失"
                     )
-            if (
-                (evidence.get("market_drivers") or {}).get("items")
-                and _AVAILABLE_MARKET_DRIVERS_MISSING_RE.search(answer)
-            ):
+            if (evidence.get("market_drivers") or {}).get(
+                "items"
+            ) and _AVAILABLE_MARKET_DRIVERS_MISSING_RE.search(answer):
                 unsupported_market_inferences.append(
                     "已有市场资讯时不能声称消息面驱动资讯缺失"
                 )
-            if _has_available_index_return_missing_claim(
-                answer, market_indices
-            ):
+            if _has_available_index_return_missing_claim(answer, market_indices):
                 unsupported_market_inferences.append(
                     "已有指数区间收益时不能声称该字段缺失"
                 )
@@ -4006,21 +4024,16 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 str(item.get("metrics", {}).get("trend_state") or "")
                 for item in market_indices
             ]
-            if (
-                not any(
-                    term in state
-                    for state in trend_states
-                    for term in ("下行", "向下", "下降")
-                )
-                and _has_unproven_downtrend_claim(answer)
-            ):
+            if not any(
+                term in state
+                for state in trend_states
+                for term in ("下行", "向下", "下降")
+            ) and _has_unproven_downtrend_claim(answer):
                 unsupported_market_inferences.append(
                     "中期偏弱不能直接改写为已确认的下行趋势"
                 )
             available_indices = [
-                item
-                for item in market_indices
-                if item.get("status") != "unavailable"
+                item for item in market_indices if item.get("status") != "unavailable"
             ]
             for match in _REPRESENTATIVE_INDEX_COUNT_RE.finditer(answer):
                 if int(match.group(1)) != len(available_indices):
@@ -4037,16 +4050,12 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     "代表性指数上涨比例不能归到单一指数名下"
                 )
             available_metric_keys = {
-                key
-                for item in available_indices
-                for key in (item.get("metrics") or {})
+                key for item in available_indices for key in (item.get("metrics") or {})
             }
             if "ma5" not in available_metric_keys and _UNAVAILABLE_MA5_RE.search(
                 answer
             ):
-                unsupported_market_inferences.append(
-                    "当前证据没有MA5或5日均线"
-                )
+                unsupported_market_inferences.append("当前证据没有MA5或5日均线")
             if _UNSUPPORTED_WAVE_RE.search(answer):
                 unsupported_market_inferences.append(
                     "当前证据不支持A浪B浪C浪等浪型判断"
@@ -4055,24 +4064,16 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 unsupported_market_inferences.append(
                     "指数领涨领跌或最大涨跌幅必须与当前证据排序一致"
                 )
-            if _has_unavailable_index_return_claim(
-                answer, market_indices
-            ):
+            if _has_unavailable_index_return_claim(answer, market_indices):
                 unsupported_market_inferences.append(
                     "缺失收益的指数不能引用其他指数的涨跌幅"
                 )
-            if _has_index_return_direction_conflict(
-                answer, market_indices
-            ):
+            if _has_index_return_direction_conflict(answer, market_indices):
                 unsupported_market_inferences.append(
                     "指数区间收益正负方向必须与当前证据一致"
                 )
-            if _has_index_trend_state_conflict(
-                answer, market_indices
-            ):
-                unsupported_market_inferences.append(
-                    "指数趋势状态必须与当前证据一致"
-                )
+            if _has_index_trend_state_conflict(answer, market_indices):
+                unsupported_market_inferences.append("指数趋势状态必须与当前证据一致")
             if _has_wrong_index_volatility_extreme_claim(answer, available_indices):
                 unsupported_market_inferences.append(
                     "指数波动率最高最低表述必须与当前证据排序一致"
@@ -4110,8 +4111,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     not breadth_state
                     or breadth_state not in answer
                     or any(
-                        isinstance(value, int)
-                        and str(value) not in normalized_answer
+                        isinstance(value, int) and str(value) not in normalized_answer
                         for value in required_counts
                     )
                 ):
@@ -4149,57 +4149,41 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             and evidence.get("symbol")
             and _has_unsupported_stock_failure_threshold(answer, evidence)
         ):
-            unsupported_market_inferences.append(
-                _STOCK_FAILURE_THRESHOLD_LABEL
-            )
+            unsupported_market_inferences.append(_STOCK_FAILURE_THRESHOLD_LABEL)
         if (
             evidence.get("type") != "market_brief"
             and (evidence.get("symbol") or evidence.get("type") == "stock_screen")
             and _has_unsupported_stock_observation_window(answer, evidence)
         ):
-            unsupported_market_inferences.append(
-                _STOCK_OBSERVATION_WINDOW_LABEL
-            )
+            unsupported_market_inferences.append(_STOCK_OBSERVATION_WINDOW_LABEL)
         if _has_li_zong_rule_bottleneck_overclaim(answer, evidence):
-            unsupported_market_inferences.append(
-                _LI_ZONG_RULE_BOTTLENECK_LABEL
-            )
+            unsupported_market_inferences.append(_LI_ZONG_RULE_BOTTLENECK_LABEL)
         if _has_li_zong_coverage_conflation(answer, evidence):
-            unsupported_market_inferences.append(
-                _LI_ZONG_COVERAGE_CONFLATION_LABEL
-            )
+            unsupported_market_inferences.append(_LI_ZONG_COVERAGE_CONFLATION_LABEL)
         if (
             evidence.get("type") != "market_brief"
             and evidence.get("symbol")
             and _has_unsupported_stock_disclosure_date(answer, evidence)
         ):
-            unsupported_market_inferences.append(
-                _STOCK_DISCLOSURE_DATE_LABEL
-            )
+            unsupported_market_inferences.append(_STOCK_DISCLOSURE_DATE_LABEL)
         if (
             evidence.get("type") != "market_brief"
             and evidence.get("symbol")
             and _has_stock_report_notice_date_conflict(answer, evidence)
         ):
-            unsupported_market_inferences.append(
-                _STOCK_REPORT_DATE_CONFLICT_LABEL
-            )
+            unsupported_market_inferences.append(_STOCK_REPORT_DATE_CONFLICT_LABEL)
         if (
             evidence.get("type") != "market_brief"
             and evidence.get("symbol")
             and _has_stock_drawdown_window_conflict(answer, evidence)
         ):
-            unsupported_market_inferences.append(
-                _STOCK_DRAWDOWN_WINDOW_LABEL
-            )
+            unsupported_market_inferences.append(_STOCK_DRAWDOWN_WINDOW_LABEL)
         if (
             evidence.get("type") != "market_brief"
             and evidence.get("symbol")
             and _has_stock_scenario_direction_conflict(answer)
         ):
-            unsupported_market_inferences.append(
-                _STOCK_SCENARIO_DIRECTION_LABEL
-            )
+            unsupported_market_inferences.append(_STOCK_SCENARIO_DIRECTION_LABEL)
         if evidence.get("type") != "market_brief" and evidence.get("symbol"):
             (
                 current_quote_direction_conflict,
@@ -4210,71 +4194,41 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     _STOCK_CURRENT_QUOTE_DIRECTION_LABEL
                 )
             if current_quote_price_conflict:
-                unsupported_market_inferences.append(
-                    _STOCK_CURRENT_QUOTE_PRICE_LABEL
-                )
+                unsupported_market_inferences.append(_STOCK_CURRENT_QUOTE_PRICE_LABEL)
             if _stock_current_quote_close_conflict(answer, evidence):
-                unsupported_market_inferences.append(
-                    _STOCK_CURRENT_QUOTE_CLOSE_LABEL
-                )
+                unsupported_market_inferences.append(_STOCK_CURRENT_QUOTE_CLOSE_LABEL)
             if _stock_current_quote_session_conflict(answer, evidence):
-                unsupported_market_inferences.append(
-                    _STOCK_CURRENT_QUOTE_SESSION_LABEL
-                )
+                unsupported_market_inferences.append(_STOCK_CURRENT_QUOTE_SESSION_LABEL)
             if _stock_current_quote_ma20_conflict(answer, evidence):
-                unsupported_market_inferences.append(
-                    _STOCK_CURRENT_QUOTE_MA20_LABEL
-                )
+                unsupported_market_inferences.append(_STOCK_CURRENT_QUOTE_MA20_LABEL)
             if _stock_current_limit_status_conflict(answer, evidence):
-                unsupported_market_inferences.append(
-                    _STOCK_CURRENT_LIMIT_STATUS_LABEL
-                )
+                unsupported_market_inferences.append(_STOCK_CURRENT_LIMIT_STATUS_LABEL)
             if _stock_current_quote_required_but_missing(answer, evidence):
                 unsupported_market_inferences.append(
                     _STOCK_CURRENT_QUOTE_REQUIRED_LABEL
                 )
             if _has_stock_cross_date_market_claim(answer, evidence):
-                unsupported_market_inferences.append(
-                    _STOCK_CROSS_DATE_MARKET_LABEL
-                )
+                unsupported_market_inferences.append(_STOCK_CROSS_DATE_MARKET_LABEL)
             if _has_stock_industry_breadth_overclaim(answer, evidence):
-                unsupported_market_inferences.append(
-                    _STOCK_INDUSTRY_BREADTH_LABEL
-                )
+                unsupported_market_inferences.append(_STOCK_INDUSTRY_BREADTH_LABEL)
             if _has_stock_60d_return_binding_conflict(answer, evidence):
-                unsupported_market_inferences.append(
-                    _STOCK_60D_RETURN_BINDING_LABEL
-                )
+                unsupported_market_inferences.append(_STOCK_60D_RETURN_BINDING_LABEL)
             if _has_stock_industry_causal_overclaim(answer):
-                unsupported_market_inferences.append(
-                    _STOCK_INDUSTRY_CAUSAL_LABEL
-                )
+                unsupported_market_inferences.append(_STOCK_INDUSTRY_CAUSAL_LABEL)
             if _has_stock_market_absorption_overclaim(answer):
-                unsupported_market_inferences.append(
-                    _STOCK_MARKET_ABSORPTION_LABEL
-                )
+                unsupported_market_inferences.append(_STOCK_MARKET_ABSORPTION_LABEL)
             if _has_stock_event_sentiment_overclaim(answer):
-                unsupported_market_inferences.append(
-                    _STOCK_EVENT_SENTIMENT_LABEL
-                )
+                unsupported_market_inferences.append(_STOCK_EVENT_SENTIMENT_LABEL)
             if _has_stock_unsupported_causal_hypothesis(answer):
                 unsupported_market_inferences.append(
                     _STOCK_UNSUPPORTED_CAUSAL_HYPOTHESIS_LABEL
                 )
             if _stock_contribution_required_but_missing(answer, evidence):
-                semantic_conflicts.append(
-                    _STOCK_CONTRIBUTION_REQUIRED_LABEL
-                )
+                semantic_conflicts.append(_STOCK_CONTRIBUTION_REQUIRED_LABEL)
             if _stock_industry_counts_required_but_missing(answer, evidence):
-                semantic_conflicts.append(
-                    _STOCK_INDUSTRY_COUNTS_REQUIRED_LABEL
-                )
-            if _stock_component_source_boundary_required_but_missing(
-                answer, evidence
-            ):
-                semantic_conflicts.append(
-                    _STOCK_COMPONENT_SOURCE_BOUNDARY_LABEL
-                )
+                semantic_conflicts.append(_STOCK_INDUSTRY_COUNTS_REQUIRED_LABEL)
+            if _stock_component_source_boundary_required_but_missing(answer, evidence):
+                semantic_conflicts.append(_STOCK_COMPONENT_SOURCE_BOUNDARY_LABEL)
         if (
             evidence.get("type") != "market_brief"
             and evidence.get("symbol")
@@ -4284,10 +4238,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             unsupported_market_inferences.append(
                 "用户明确询问失效条件时回答必须包含失效条件"
             )
-        peer_operating = (
-            (evidence.get("peer_comparison") or {}).get("operating_comparison")
-            or {}
-        )
+        peer_operating = (evidence.get("peer_comparison") or {}).get(
+            "operating_comparison"
+        ) or {}
         if peer_operating:
             if AgentService._peer_net_profit_unit_replacements(answer, evidence):
                 unsupported_market_inferences.append(
@@ -4295,12 +4248,12 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 )
             business_dates = []
             notice_dates = []
-            subject_profile = (
-                (peer_operating.get("subject") or {}).get("business_profile") or {}
-            )
-            subject_financial = (
-                (peer_operating.get("subject") or {}).get("financial") or {}
-            )
+            subject_profile = (peer_operating.get("subject") or {}).get(
+                "business_profile"
+            ) or {}
+            subject_financial = (peer_operating.get("subject") or {}).get(
+                "financial"
+            ) or {}
             if subject_financial.get("notice_date"):
                 notice_dates.append(subject_financial["notice_date"])
             if subject_profile.get("anchor_report_date"):
@@ -4312,7 +4265,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     notice_dates.append(financial["notice_date"])
                 if profile.get("anchor_report_date"):
                     business_dates.append(profile["anchor_report_date"])
-            same_business_period = bool(business_dates) and len(set(business_dates)) == 1
+            same_business_period = (
+                bool(business_dates) and len(set(business_dates)) == 1
+            )
             distinct_notice_dates = len(set(notice_dates)) > 1
             for label, pattern in _UNSUPPORTED_PEER_OPERATING_INFERENCE_PATTERNS:
                 if (
@@ -4326,8 +4281,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 ):
                     continue
                 if any(
-                    pattern.search(clause)
-                    and not _is_index_contribution_clause(clause)
+                    pattern.search(clause) and not _is_index_contribution_clause(clause)
                     for clause in re.split(r"[。；\n]", answer)
                 ):
                     unsupported_market_inferences.append(label)
@@ -4342,11 +4296,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             unsupported_market_inferences.extend(
                 label
                 for label, pattern in _UNSUPPORTED_SHAREHOLDER_INFERENCE_PATTERNS
-                if pattern.search(answer)
+                if _has_unsupported_shareholder_inference(answer, pattern)
             )
-            expected_streak = shareholder_evidence.get(
-                "holder_count_streak_count"
-            )
+            expected_streak = shareholder_evidence.get("holder_count_streak_count")
             expected_direction = shareholder_evidence.get(
                 "holder_count_streak_direction"
             )
@@ -4357,9 +4309,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 for match in _SHAREHOLDER_STREAK_CLAIM_RE.finditer(answer):
                     claimed_count = int(match.group(1))
                     claimed_direction = (
-                        "decrease"
-                        if match.group(2) in {"下降", "减少"}
-                        else "increase"
+                        "decrease" if match.group(2) in {"下降", "减少"} else "increase"
                     )
                     if (
                         claimed_count != expected_streak
@@ -4369,13 +4319,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                             "股东户数连续变化次数或方向与确定性证据不一致"
                         )
                         break
-            if (
-                shareholder_evidence.get(
-                    "top10_historical_comparison_available"
-                )
-                is False
-                and _TOP10_HISTORICAL_COMPARISON_RE.search(answer)
-            ):
+            if shareholder_evidence.get(
+                "top10_historical_comparison_available"
+            ) is False and _TOP10_HISTORICAL_COMPARISON_RE.search(answer):
                 unsupported_market_inferences.append(
                     "缺少历史十大股东合计序列时不能声称前十持股跨期持平或变化"
                 )
@@ -4383,10 +4329,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             "analyst_expectations"
         ):
             revision = analyst_evidence.get("revision") or {}
-            if (
-                revision.get("available") is not True
-                and _has_unproven_analyst_revision_claim(answer)
-            ):
+            if revision.get(
+                "available"
+            ) is not True and _has_unproven_analyst_revision_claim(answer):
                 unsupported_market_inferences.append(
                     "缺少历史一致预期快照时不能声称EPS已经上修或下修"
                 )
@@ -4409,11 +4354,13 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
     def _peer_net_profit_unit_replacements(
         answer: str, evidence: dict[str, Any]
     ) -> list[tuple[int, int, str]]:
-        peer_operating = (
-            (evidence.get("peer_comparison") or {}).get("operating_comparison")
-            or {}
-        )
-        rows = [peer_operating.get("subject") or {}, *(peer_operating.get("peers") or [])]
+        peer_operating = (evidence.get("peer_comparison") or {}).get(
+            "operating_comparison"
+        ) or {}
+        rows = [
+            peer_operating.get("subject") or {},
+            *(peer_operating.get("peers") or []),
+        ]
         replacements: list[tuple[int, int, str]] = []
         occupied: set[tuple[int, int]] = set()
         for item in rows:
@@ -4427,7 +4374,8 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             if len(name) >= 2:
                 aliases.append(name[:2])
             alias_pattern = "|".join(
-                re.escape(alias) for alias in sorted(set(aliases), key=len, reverse=True)
+                re.escape(alias)
+                for alias in sorted(set(aliases), key=len, reverse=True)
             )
             patterns = (
                 re.compile(
@@ -4627,7 +4575,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         if not removed or not repaired_payload["logic_result"]:
             return None
 
-        repaired = json.dumps(repaired_payload, ensure_ascii=False, separators=(",", ":"))
+        repaired = json.dumps(
+            repaired_payload, ensure_ascii=False, separators=(",", ":")
+        )
         repaired_guard = AgentService._validate_model_output(
             repaired,
             evidence,
@@ -4657,11 +4607,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             _STOCK_COMPONENT_SOURCE_BOUNDARY_LABEL,
             _MARKET_CAUSE_FACT_REQUIRED_LABEL,
         }
-        has_repairable_semantic_conflicts = bool(
+        has_repairable_semantic_conflicts = bool(semantic_conflicts) and set(
             semantic_conflicts
-        ) and set(semantic_conflicts).issubset(
-            repairable_semantic_conflicts
-        )
+        ).issubset(repairable_semantic_conflicts)
         appendices: list[str | None] = []
         if has_repairable_semantic_conflicts:
             if _STOCK_INDUSTRY_COUNTS_REQUIRED_LABEL in semantic_conflicts:
@@ -4670,20 +4618,14 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 )
             if _STOCK_CONTRIBUTION_REQUIRED_LABEL in semantic_conflicts:
                 appendices.append(
-                    AgentService._stock_component_contribution_appendix(
-                        evidence
-                    )
+                    AgentService._stock_component_contribution_appendix(evidence)
                 )
             if _STOCK_COMPONENT_SOURCE_BOUNDARY_LABEL in semantic_conflicts:
                 appendices.append(
-                    AgentService._stock_component_source_boundary_appendix(
-                        evidence
-                    )
+                    AgentService._stock_component_source_boundary_appendix(evidence)
                 )
             if _MARKET_CAUSE_FACT_REQUIRED_LABEL in semantic_conflicts:
-                appendices.append(
-                    AgentService._market_cause_facts_appendix(evidence)
-                )
+                appendices.append(AgentService._market_cause_facts_appendix(evidence))
             if any(not appendix for appendix in appendices):
                 return None
         if (
@@ -4713,19 +4655,13 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 and not semantic_conflicts
             )
             or prohibited
-            or (
-                semantic_conflicts
-                and not has_repairable_semantic_conflicts
-            )
+            or (semantic_conflicts and not has_repairable_semantic_conflicts)
         ):
             return None
 
         removed_count = 0
         unit_corrected = False
-        if (
-            "同行净利润亿元换算必须与结构化财务一致"
-            in unsupported_market_inferences
-        ):
+        if "同行净利润亿元换算必须与结构化财务一致" in unsupported_market_inferences:
             replacements = AgentService._peer_net_profit_unit_replacements(
                 answer, evidence
             )
@@ -4756,9 +4692,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             answer = "\n".join(sanitized_lines)
 
         if _STOCK_CROSS_DATE_MARKET_LABEL in unsupported_market_inferences:
-            section_heading = re.compile(
-                r"^\s*(?:#{1,6}\s+.+|\*\*.+\*\*)\s*$"
-            )
+            section_heading = re.compile(r"^\s*(?:#{1,6}\s+.+|\*\*.+\*\*)\s*$")
             sanitized_lines = []
             dropping_cross_date_section = False
             for line in answer.splitlines():
@@ -4826,13 +4760,16 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 label in unsupported_market_inferences and pattern.search(line)
                 for label, pattern in (
                     *_UNSUPPORTED_MARKET_INFERENCE_PATTERNS,
-                    *_UNSUPPORTED_SHAREHOLDER_INFERENCE_PATTERNS,
                     *_UNSUPPORTED_PEER_OPERATING_INFERENCE_PATTERNS,
                 )
             )
+            line_has_unsupported_inference = line_has_unsupported_inference or any(
+                label in unsupported_market_inferences
+                and _has_unsupported_shareholder_inference(line, pattern)
+                for label, pattern in _UNSUPPORTED_SHAREHOLDER_INFERENCE_PATTERNS
+            )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                "缺少全市场涨跌家数时不能确认是否普涨"
-                in unsupported_market_inferences
+                "缺少全市场涨跌家数时不能确认是否普涨" in unsupported_market_inferences
                 and _has_whole_market_breadth_overclaim(line)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
@@ -4841,8 +4778,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 and _has_unsupported_majority_stock_claim(line)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                "全市场广度结论必须沿用固定分类"
-                in unsupported_market_inferences
+                "全市场广度结论必须沿用固定分类" in unsupported_market_inferences
                 and (
                     _has_uncautious_breadth_label(line, "普涨")
                     or _has_uncautious_breadth_label(line, "普跌")
@@ -4859,8 +4795,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 and _AVAILABLE_DISTRIBUTION_MISSING_RE.search(line)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                "已有全市场成交额时不能声称该数据缺失"
-                in unsupported_market_inferences
+                "已有全市场成交额时不能声称该数据缺失" in unsupported_market_inferences
                 and _AVAILABLE_TURNOVER_MISSING_RE.search(line)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
@@ -4869,8 +4804,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 and _AVAILABLE_MARKET_DRIVERS_MISSING_RE.search(line)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                "已有指数区间收益时不能声称该字段缺失"
-                in unsupported_market_inferences
+                "已有指数区间收益时不能声称该字段缺失" in unsupported_market_inferences
                 and _has_available_index_return_missing_claim(
                     line, list(evidence.get("indices") or [])
                 )
@@ -4881,8 +4815,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 and _has_unproven_downtrend_claim(line)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                "代表性指数数量与当前问题证据不一致"
-                in unsupported_market_inferences
+                "代表性指数数量与当前问题证据不一致" in unsupported_market_inferences
                 and (
                     _REPRESENTATIVE_INDEX_COUNT_RE.search(line)
                     or _APPROX_REPRESENTATIVE_INDEX_COUNT_RE.search(line)
@@ -4898,8 +4831,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 and _UNAVAILABLE_MA5_RE.search(line)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                "当前证据不支持A浪B浪C浪等浪型判断"
-                in unsupported_market_inferences
+                "当前证据不支持A浪B浪C浪等浪型判断" in unsupported_market_inferences
                 and _UNSUPPORTED_WAVE_RE.search(line)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
@@ -4924,8 +4856,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 )
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                "指数趋势状态必须与当前证据一致"
-                in unsupported_market_inferences
+                "指数趋势状态必须与当前证据一致" in unsupported_market_inferences
                 and _has_index_trend_state_conflict(
                     line, list(evidence.get("indices") or [])
                 )
@@ -4938,8 +4869,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 )
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                "三大指数表述不能与四个代表性指数混用"
-                in unsupported_market_inferences
+                "三大指数表述不能与四个代表性指数混用" in unsupported_market_inferences
                 and "三大指数" in line
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
@@ -4965,101 +4895,82 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 and _has_unproven_analyst_revision_claim(line)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_FAILURE_THRESHOLD_LABEL
-                in unsupported_market_inferences
+                _STOCK_FAILURE_THRESHOLD_LABEL in unsupported_market_inferences
                 and _stock_failure_line_has_unsupported_threshold(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_OBSERVATION_WINDOW_LABEL
-                in unsupported_market_inferences
+                _STOCK_OBSERVATION_WINDOW_LABEL in unsupported_market_inferences
                 and _has_unsupported_stock_observation_window(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _LI_ZONG_RULE_BOTTLENECK_LABEL
-                in unsupported_market_inferences
+                _LI_ZONG_RULE_BOTTLENECK_LABEL in unsupported_market_inferences
                 and _has_li_zong_rule_bottleneck_overclaim(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _LI_ZONG_COVERAGE_CONFLATION_LABEL
-                in unsupported_market_inferences
+                _LI_ZONG_COVERAGE_CONFLATION_LABEL in unsupported_market_inferences
                 and _has_li_zong_coverage_conflation(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_DISCLOSURE_DATE_LABEL
-                in unsupported_market_inferences
+                _STOCK_DISCLOSURE_DATE_LABEL in unsupported_market_inferences
                 and _has_unsupported_stock_disclosure_date(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_REPORT_DATE_CONFLICT_LABEL
-                in unsupported_market_inferences
+                _STOCK_REPORT_DATE_CONFLICT_LABEL in unsupported_market_inferences
                 and _has_stock_report_notice_date_conflict(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_DRAWDOWN_WINDOW_LABEL
-                in unsupported_market_inferences
+                _STOCK_DRAWDOWN_WINDOW_LABEL in unsupported_market_inferences
                 and _has_stock_drawdown_window_conflict(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_SCENARIO_DIRECTION_LABEL
-                in unsupported_market_inferences
+                _STOCK_SCENARIO_DIRECTION_LABEL in unsupported_market_inferences
                 and _has_stock_scenario_direction_conflict(line)
             )
             line_quote_direction_conflict, line_quote_price_conflict = (
                 _stock_current_quote_conflicts(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_CURRENT_QUOTE_DIRECTION_LABEL
-                in unsupported_market_inferences
+                _STOCK_CURRENT_QUOTE_DIRECTION_LABEL in unsupported_market_inferences
                 and line_quote_direction_conflict
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_CURRENT_QUOTE_PRICE_LABEL
-                in unsupported_market_inferences
+                _STOCK_CURRENT_QUOTE_PRICE_LABEL in unsupported_market_inferences
                 and line_quote_price_conflict
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_CURRENT_QUOTE_CLOSE_LABEL
-                in unsupported_market_inferences
+                _STOCK_CURRENT_QUOTE_CLOSE_LABEL in unsupported_market_inferences
                 and _stock_current_quote_close_conflict(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_CURRENT_QUOTE_SESSION_LABEL
-                in unsupported_market_inferences
+                _STOCK_CURRENT_QUOTE_SESSION_LABEL in unsupported_market_inferences
                 and _stock_current_quote_session_conflict(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_CURRENT_QUOTE_MA20_LABEL
-                in unsupported_market_inferences
+                _STOCK_CURRENT_QUOTE_MA20_LABEL in unsupported_market_inferences
                 and _stock_current_quote_ma20_conflict(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_CURRENT_LIMIT_STATUS_LABEL
-                in unsupported_market_inferences
+                _STOCK_CURRENT_LIMIT_STATUS_LABEL in unsupported_market_inferences
                 and _stock_current_limit_status_conflict(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_CROSS_DATE_MARKET_LABEL
-                in unsupported_market_inferences
+                _STOCK_CROSS_DATE_MARKET_LABEL in unsupported_market_inferences
                 and _has_stock_cross_date_market_claim(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_60D_RETURN_BINDING_LABEL
-                in unsupported_market_inferences
+                _STOCK_60D_RETURN_BINDING_LABEL in unsupported_market_inferences
                 and _has_stock_60d_return_binding_conflict(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_INDUSTRY_CAUSAL_LABEL
-                in unsupported_market_inferences
+                _STOCK_INDUSTRY_CAUSAL_LABEL in unsupported_market_inferences
                 and _has_stock_industry_causal_overclaim(line)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_MARKET_ABSORPTION_LABEL
-                in unsupported_market_inferences
+                _STOCK_MARKET_ABSORPTION_LABEL in unsupported_market_inferences
                 and _has_stock_market_absorption_overclaim(line)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
-                _STOCK_EVENT_SENTIMENT_LABEL
-                in unsupported_market_inferences
+                _STOCK_EVENT_SENTIMENT_LABEL in unsupported_market_inferences
                 and _has_stock_event_sentiment_overclaim(line)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
@@ -5068,8 +4979,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 and _has_stock_unsupported_causal_hypothesis(line)
             )
             line_has_private_operation = any(
-                pattern.search(line)
-                for pattern in _PRIVATE_OPERATIONAL_OUTPUT_PATTERNS
+                pattern.search(line) for pattern in _PRIVATE_OPERATIONAL_OUTPUT_PATTERNS
             ) and not _is_public_component_source_boundary_clause(line)
             if (
                 line_tokens & unsupported
@@ -5092,17 +5002,11 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             if appendix:
                 post_repair_appendices.append(appendix)
         if _stock_contribution_required_but_missing(repaired, evidence):
-            appendix = AgentService._stock_component_contribution_appendix(
-                evidence
-            )
+            appendix = AgentService._stock_component_contribution_appendix(evidence)
             if appendix:
                 post_repair_appendices.append(appendix)
-        if _stock_component_source_boundary_required_but_missing(
-            repaired, evidence
-        ):
-            appendix = AgentService._stock_component_source_boundary_appendix(
-                evidence
-            )
+        if _stock_component_source_boundary_required_but_missing(repaired, evidence):
+            appendix = AgentService._stock_component_source_boundary_appendix(evidence)
             if appendix:
                 post_repair_appendices.append(appendix)
         if _market_cause_fact_required_but_missing(repaired, evidence):
@@ -5185,12 +5089,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
     def _stock_industry_counts_appendix(
         evidence: dict[str, Any],
     ) -> str | None:
-        industry_index = (
-            (evidence.get("stock_market_context") or {}).get(
-                "exact_industry_index"
-            )
-            or {}
-        )
+        industry_index = (evidence.get("stock_market_context") or {}).get(
+            "exact_industry_index"
+        ) or {}
         breadth = industry_index.get("component_breadth") or {}
         required = (
             breadth.get("advancers"),
@@ -5203,9 +5104,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             return None
         name = str(industry_index.get("name") or "对应行业指数").strip()
         market_date = str(
-            breadth.get("market_date")
-            or industry_index.get("market_date")
-            or ""
+            breadth.get("market_date") or industry_index.get("market_date") or ""
         ).strip()
         total = breadth.get("total_constituents")
         if not isinstance(total, int):
@@ -5235,12 +5134,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
     def _stock_component_contribution_appendix(
         evidence: dict[str, Any],
     ) -> str | None:
-        industry_index = (
-            (evidence.get("stock_market_context") or {}).get(
-                "exact_industry_index"
-            )
-            or {}
-        )
+        industry_index = (evidence.get("stock_market_context") or {}).get(
+            "exact_industry_index"
+        ) or {}
         contribution = industry_index.get("component_contribution") or {}
         subject = contribution.get("subject") or {}
         estimated = subject.get("estimated_contribution_pp")
@@ -5277,9 +5173,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         official_return = contribution.get("official_index_return_pct")
         if not isinstance(official_return, (int, float)):
             official_return = industry_index.get("return_1d_pct")
-        estimated_total = contribution.get(
-            "estimated_total_contribution_pp"
-        )
+        estimated_total = contribution.get("estimated_total_contribution_pp")
         reconciliation_gap = contribution.get("reconciliation_gap_pp")
         boundary = str(contribution.get("boundary") or "").strip() or (
             "贡献度按官方权重快照与目标日复权涨跌幅静态相乘估算，"
@@ -5303,17 +5197,13 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         ]
         reconciliation_parts = []
         if isinstance(official_return, (int, float)):
-            reconciliation_parts.append(
-                f"官方指数当日涨跌 {fmt(official_return)}%"
-            )
+            reconciliation_parts.append(f"官方指数当日涨跌 {fmt(official_return)}%")
         if isinstance(estimated_total, (int, float)):
             reconciliation_parts.append(
                 f"可用成分静态估算合计 {fmt(estimated_total)} 个百分点"
             )
         if isinstance(reconciliation_gap, (int, float)):
-            reconciliation_parts.append(
-                f"对账差 {fmt(reconciliation_gap)} 个百分点"
-            )
+            reconciliation_parts.append(f"对账差 {fmt(reconciliation_gap)} 个百分点")
         if reconciliation_parts:
             lines.append(
                 f"- {index_name}对账：" + "；".join(reconciliation_parts) + "。"
@@ -5325,12 +5215,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
     def _stock_component_source_boundary_appendix(
         evidence: dict[str, Any],
     ) -> str | None:
-        industry_index = (
-            (evidence.get("stock_market_context") or {}).get(
-                "exact_industry_index"
-            )
-            or {}
-        )
+        industry_index = (evidence.get("stock_market_context") or {}).get(
+            "exact_industry_index"
+        ) or {}
         breadth = industry_index.get("component_breadth") or {}
         coverage = breadth.get("coverage") or {}
         fallbacks = list(breadth.get("source_fallbacks") or [])
@@ -5489,8 +5376,14 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         if re.search(r"涨跌幅[^\n]{0,24}(?:中位数|四分位|分布)", phrase):
             return None
         directions = [
-            *((match.start(), -1) for match in _NEGATIVE_NUMBER_CONTEXT_RE.finditer(phrase)),
-            *((match.start(), 1) for match in _POSITIVE_NUMBER_CONTEXT_RE.finditer(phrase)),
+            *(
+                (match.start(), -1)
+                for match in _NEGATIVE_NUMBER_CONTEXT_RE.finditer(phrase)
+            ),
+            *(
+                (match.start(), 1)
+                for match in _POSITIVE_NUMBER_CONTEXT_RE.finditer(phrase)
+            ),
         ]
         return max(directions, default=(0, None), key=lambda item: item[0])[1]
 
@@ -5669,7 +5562,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         )
 
         compact_indices = []
-        for item in indices[:8 if global_query else 5]:
+        for item in indices[: 8 if global_query else 5]:
             coverage = item.get("coverage") or {}
             interval = str(coverage.get("interval") or "")
             compact_item = {
@@ -5723,14 +5616,14 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     moving_average, (int, float)
                 ):
                     continue
-                compact_item["metrics"][
-                    f"{moving_average_key}_gap_points"
-                ] = round(float(moving_average) - float(latest_close))
-                compact_item["metrics"][
-                    f"distance_to_{moving_average_key}_pct"
-                ] = round(
-                    (float(latest_close) / float(moving_average) - 1) * 100,
-                    1,
+                compact_item["metrics"][f"{moving_average_key}_gap_points"] = round(
+                    float(moving_average) - float(latest_close)
+                )
+                compact_item["metrics"][f"distance_to_{moving_average_key}_pct"] = (
+                    round(
+                        (float(latest_close) / float(moving_average) - 1) * 100,
+                        1,
+                    )
                 )
             if latest_bar_keys and item.get("latest_bar"):
                 latest_bar = item.get("latest_bar") or {}
@@ -5744,7 +5637,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     compact_item["latest_bar"][
                         "date" if interval == "1d" else "timestamp"
                     ] = str(latest_bar.get("timestamp"))[
-                        :10 if interval == "1d" else None
+                        : 10 if interval == "1d" else None
                     ]
             compact_indices.append(compact_item)
 
@@ -5865,11 +5758,11 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     moving_average, (int, float)
                 ):
                     continue
-                compact_industry_metrics[
-                    f"distance_to_{moving_average_key}_pct"
-                ] = round(
-                    (float(latest_close) / float(moving_average) - 1) * 100,
-                    1,
+                compact_industry_metrics[f"distance_to_{moving_average_key}_pct"] = (
+                    round(
+                        (float(latest_close) / float(moving_average) - 1) * 100,
+                        1,
+                    )
                 )
             compact["industry_snapshot"]["metrics"] = compact_industry_metrics
             if target_point:
@@ -5932,11 +5825,15 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 "return_60d_pct", "最近60个交易日累计收益"
             )
         if focus_key == "market_risk" and len(compact_indices) >= 2:
-            first_volatility = compact_indices[0].get("metrics", {}).get(
-                "volatility_20d_annualized_pct"
+            first_volatility = (
+                compact_indices[0]
+                .get("metrics", {})
+                .get("volatility_20d_annualized_pct")
             )
-            second_volatility = compact_indices[1].get("metrics", {}).get(
-                "volatility_20d_annualized_pct"
+            second_volatility = (
+                compact_indices[1]
+                .get("metrics", {})
+                .get("volatility_20d_annualized_pct")
             )
             if (
                 isinstance(first_volatility, (int, float))
@@ -6019,8 +5916,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                             "coverage_ratio",
                             "latest_tick_time",
                         )
-                        if (market_breadth.get("coverage") or {}).get(key)
-                        is not None
+                        if (market_breadth.get("coverage") or {}).get(key) is not None
                     },
                     "breadth": {
                         key: (market_breadth.get("breadth") or {}).get(key)
@@ -6036,19 +5932,16 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                             "state",
                             "classification_method",
                         )
-                        if (market_breadth.get("breadth") or {}).get(key)
-                        is not None
+                        if (market_breadth.get("breadth") or {}).get(key) is not None
                     },
                     "turnover": {
-                        "status": (market_breadth.get("turnover") or {}).get(
-                            "status"
-                        ),
+                        "status": (market_breadth.get("turnover") or {}).get("status"),
                         "currency": (market_breadth.get("turnover") or {}).get(
                             "currency"
                         ),
-                        "total_amount_cny": (
-                            market_breadth.get("turnover") or {}
-                        ).get("total_amount_cny"),
+                        "total_amount_cny": (market_breadth.get("turnover") or {}).get(
+                            "total_amount_cny"
+                        ),
                         "total_amount_100m_cny": (
                             market_breadth.get("turnover") or {}
                         ).get("total_amount_100m_cny"),
@@ -6061,9 +5954,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         "history_comparison": (
                             market_breadth.get("turnover") or {}
                         ).get("history_comparison"),
-                        "interpretation": (
-                            market_breadth.get("turnover") or {}
-                        ).get("interpretation"),
+                        "interpretation": (market_breadth.get("turnover") or {}).get(
+                            "interpretation"
+                        ),
                     },
                     "distribution": {
                         key: (market_breadth.get("distribution") or {}).get(key)
@@ -6085,9 +5978,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     market_breadth.get("fetched_at"), "Asia/Shanghai"
                 )
                 if snapshot_local_time:
-                    compact["market_breadth"][
-                        "snapshot_local_time"
-                    ] = snapshot_local_time
+                    compact["market_breadth"]["snapshot_local_time"] = (
+                        snapshot_local_time
+                    )
 
         knowledge_context = evidence.get("knowledge_context") or {}
         if knowledge_context.get("items"):
@@ -6166,7 +6059,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
     ) -> dict[str, Any]:
         items = list(context.get("items") or [])
 
-        def relevance_priority(indexed_item: tuple[int, dict[str, Any]]) -> tuple[int, int]:
+        def relevance_priority(
+            indexed_item: tuple[int, dict[str, Any]],
+        ) -> tuple[int, int]:
             index, item = indexed_item
             title = str(item.get("title") or "")
             if item.get("scope") == "user":
@@ -6267,16 +6162,162 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 "conditional_outlook",
                 "research_frame",
                 "provenance",
-                "stock_market_context",
                 "evidence_debate",
                 "research_claims",
-                "precomputed_report",
-                "knowledge_context",
-                "analysis_board",
-                "deep_stock_coverage",
-                "research_change",
+                "research_plan",
+                "module_statuses",
+                "evidence_status",
             ),
         )
+        plan = evidence.get("research_plan") or {}
+        focus = str(plan.get("focus") or "comprehensive")
+
+        market_context = evidence.get("stock_market_context") or {}
+        if market_context:
+            industry = market_context.get("exact_industry_index") or {}
+            breadth = market_context.get("market_breadth") or {}
+            compact["stock_market_context"] = {
+                **select(
+                    market_context,
+                    (
+                        "generated_at",
+                        "market_key",
+                        "analysis_target",
+                        "stock_target",
+                        "company_industry",
+                        "exact_industry_match_available",
+                        "market_state",
+                    ),
+                ),
+                "indices": [
+                    select(
+                        item,
+                        (
+                            "symbol",
+                            "name",
+                            "status",
+                            "comparison_status",
+                            "market_date",
+                            "close",
+                            "return_1d_pct",
+                            "stock_minus_index_pct",
+                        ),
+                    )
+                    for item in (market_context.get("indices") or [])[:6]
+                ],
+                "exact_industry_index": select(
+                    industry,
+                    (
+                        "status",
+                        "index_code",
+                        "name",
+                        "market_date",
+                        "close",
+                        "return_1d_pct",
+                        "stock_return_1d_pct",
+                        "stock_minus_industry_pct",
+                        "constituent_count",
+                        "subject_is_constituent",
+                        "subject_weight_pct",
+                        "industry_mapping",
+                        "component_breadth",
+                        "component_contribution",
+                        "source_url",
+                    ),
+                ),
+                "market_breadth": {
+                    **select(
+                        breadth,
+                        (
+                            "status",
+                            "market_date",
+                            "same_date_as_target",
+                            "latest_tick_time",
+                            "coverage",
+                            "breadth",
+                        ),
+                    ),
+                    "turnover": select(
+                        breadth.get("turnover") or {},
+                        (
+                            "status",
+                            "currency",
+                            "total_amount_100m_cny",
+                            "coverage",
+                            "history_comparison",
+                            "interpretation",
+                        ),
+                    ),
+                    "distribution": select(
+                        breadth.get("distribution") or {},
+                        (
+                            "status",
+                            "coverage",
+                            "median_pct_change",
+                            "p25_pct_change",
+                            "p75_pct_change",
+                            "bins",
+                            "bin_ratios",
+                            "method",
+                        ),
+                    ),
+                },
+            }
+
+        knowledge = evidence.get("knowledge_context") or {}
+        if knowledge.get("items"):
+            compact["knowledge_context"] = {
+                "query": knowledge.get("query"),
+                "coverage": knowledge.get("coverage") or {},
+                "items": [
+                    select(
+                        item,
+                        (
+                            "title",
+                            "scope",
+                            "relevance_score",
+                            "updated_at",
+                        ),
+                    )
+                    | {"excerpt": str(item.get("excerpt") or "")[:600]}
+                    for item in (knowledge.get("items") or [])[:2]
+                ],
+            }
+
+        workspace = evidence.get("stock_workspace_context") or {}
+        if workspace:
+            compact["stock_workspace_context"] = {
+                **select(
+                    workspace,
+                    (
+                        "contract_version",
+                        "symbol",
+                        "name",
+                        "research_focus",
+                        "relation",
+                        "formal_thesis",
+                        "position",
+                        "history_summary",
+                        "completeness",
+                        "data_meta",
+                        "boundary",
+                    ),
+                ),
+                "active_action_plans": (workspace.get("active_action_plans") or [])[:2],
+                "active_observation_tasks": (
+                    workspace.get("active_observation_tasks") or []
+                )[:2],
+                "recent_trade_reviews": (workspace.get("recent_trade_reviews") or [])[
+                    :2
+                ],
+                "important_changes": (workspace.get("important_changes") or [])[:2],
+                "pending_actions": (workspace.get("pending_actions") or [])[:3],
+            }
+
+        if focus == "comprehensive":
+            for key in ("analysis_board", "deep_stock_coverage", "research_change"):
+                if evidence.get(key):
+                    compact[key] = evidence[key]
 
         information = evidence.get("a_share_information") or {}
         sentiment = information.get("sentiment") or {}
@@ -6494,13 +6535,14 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         "boundary",
                     ),
                 ),
-                "latest_reports": (
-                    analyst_expectations.get("latest_reports") or []
-                )[:6],
+                "latest_reports": (analyst_expectations.get("latest_reports") or [])[
+                    :6
+                ],
             }
 
         event_timeline = evidence.get("event_timeline") or {}
         if event_timeline:
+            event_limit = 12 if focus == "events" else 8
             compact["event_timeline"] = {
                 **select(
                     event_timeline,
@@ -6517,11 +6559,27 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         "boundary",
                     ),
                 ),
-                "events": (event_timeline.get("events") or [])[:12],
-                "risk_events": (event_timeline.get("risk_events") or [])[:6],
-                "supportive_events": (
-                    event_timeline.get("supportive_events") or []
-                )[:6],
+                "events": [
+                    select(
+                        item,
+                        (
+                            "event_type",
+                            "event_label",
+                            "title",
+                            "published_at",
+                            "event_date",
+                            "category",
+                            "evidence_level",
+                            "evidence_label",
+                            "event_status",
+                            "research_relevance",
+                            "research_relevance_label",
+                            "source",
+                            "url",
+                        ),
+                    )
+                    for item in (event_timeline.get("events") or [])[:event_limit]
+                ],
             }
 
         peers = evidence.get("peer_comparison") or {}
@@ -6609,21 +6667,17 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         for item in evidence.get("items") or []:
             actions = list(item.get("actions") or [])
             selected = [
-                *[
-                    action
-                    for action in actions
-                    if action.get("status") == "triggered"
-                ][:3],
+                *[action for action in actions if action.get("status") == "triggered"][
+                    :3
+                ],
                 *[
                     action
                     for action in actions
                     if action.get("status") == "pending_data"
                 ][:2],
-                *[
-                    action
-                    for action in actions
-                    if action.get("status") == "watching"
-                ][:1],
+                *[action for action in actions if action.get("status") == "watching"][
+                    :1
+                ],
             ]
             compact_items.append(
                 {
@@ -6822,9 +6876,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         if result.returncode != 0:
             raise RuntimeError(f"Hermes 退出码 {result.returncode}")
         raw_answer = result.stdout.strip()
-        answer = (
-            self._extract_chat_answer(raw_answer) if image_path else raw_answer
-        )
+        answer = self._extract_chat_answer(raw_answer) if image_path else raw_answer
         if not answer:
             raise RuntimeError("Hermes 未返回文本")
 
@@ -6917,7 +6969,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 try:
                     event = json.loads(line)
                 except json.JSONDecodeError as exc:
-                    raise RuntimeError("Hermes streaming bridge emitted invalid JSON") from exc
+                    raise RuntimeError(
+                        "Hermes streaming bridge emitted invalid JSON"
+                    ) from exc
                 event_type = event.get("type")
                 if event_type == "delta":
                     text = str(event.get("text") or "")
@@ -7156,9 +7210,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         deep_processed = int(data_meta.get("deep_processed_symbols") or 0)
         deep_remaining = int(data_meta.get("deep_remaining_symbols") or 0)
         deep_ratio = float(data_meta.get("deep_processing_ratio") or 0)
-        history_insufficient = int(
-            data_meta.get("history_insufficient_count") or 0
-        )
+        history_insufficient = int(data_meta.get("history_insufficient_count") or 0)
         history_unknown = int(data_meta.get("history_unknown_count") or 0)
         candidate_count = int(
             data_meta.get("actionable_candidate_count")
@@ -7200,13 +7252,10 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         return "".join(lines)
 
     @staticmethod
-    def _normalize_li_zong_scope_answer(
-        answer: str, evidence: dict[str, Any]
-    ) -> str:
-        if (
-            ((evidence.get("profile") or {}).get("key") != "li_zong")
-            or evidence.get("selection_mode") != "candidate_pool"
-        ):
+    def _normalize_li_zong_scope_answer(answer: str, evidence: dict[str, Any]) -> str:
+        if ((evidence.get("profile") or {}).get("key") != "li_zong") or evidence.get(
+            "selection_mode"
+        ) != "candidate_pool":
             return answer
         summary = AgentService._li_zong_scope_summary(evidence)
         cleaned = re.sub(
@@ -7221,19 +7270,15 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         return f"{summary}\n\n{cleaned}" if cleaned else summary
 
     @staticmethod
-    def _normalize_li_zong_symbol_answer(
-        answer: str, evidence: dict[str, Any]
-    ) -> str:
-        if (
-            ((evidence.get("profile") or {}).get("key") != "li_zong")
-            or evidence.get("selection_mode") != "symbol_comparison"
-        ):
+    def _normalize_li_zong_symbol_answer(answer: str, evidence: dict[str, Any]) -> str:
+        if ((evidence.get("profile") or {}).get("key") != "li_zong") or evidence.get(
+            "selection_mode"
+        ) != "symbol_comparison":
             return answer
         preview = AgentService._render_li_zong_preview(evidence)
         cleaned = str(answer or "").strip()
         if any(
-            pattern.search(cleaned)
-            for pattern in _PRIVATE_OPERATIONAL_OUTPUT_PATTERNS
+            pattern.search(cleaned) for pattern in _PRIVATE_OPERATIONAL_OUTPUT_PATTERNS
         ):
             return preview
         return f"{preview}\n\n{cleaned}" if cleaned else preview
@@ -7243,7 +7288,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         items = list(evidence.get("items") or [])
         data_meta = evidence.get("data_meta") or {}
         strategy = evidence.get("strategy") or {}
-        rule_definitions = ((strategy.get("version") or {}).get("rules") or [])
+        rule_definitions = (strategy.get("version") or {}).get("rules") or []
         rule_labels = {
             str(item.get("rule_id")): str(item.get("label") or item.get("rule_id"))
             for item in rule_definitions
@@ -7273,15 +7318,11 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 lines = [coverage_text]
                 missing_symbols = list(evidence.get("missing_requested_symbols") or [])
                 if missing_symbols:
-                    lines.append(
-                        "尚无策略快照：" + "、".join(missing_symbols) + "。"
-                    )
+                    lines.append("尚无策略快照：" + "、".join(missing_symbols) + "。")
                 for item in items:
                     status = str(item.get("status") or "data_incomplete")
                     rules = list(item.get("rule_results") or [])
-                    failed = [
-                        rule for rule in rules if rule.get("status") == "failed"
-                    ]
+                    failed = [rule for rule in rules if rule.get("status") == "failed"]
                     incomplete = [
                         rule
                         for rule in rules
@@ -7349,10 +7390,16 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 for rule in rules
                 if str(rule.get("rule_id") or "").startswith(("LZ-F", "LZ-C", "LZ-VP"))
             ]
-            passed_count = sum(rule.get("status") == "passed" for rule in candidate_rules)
-            failed = [rule for rule in candidate_rules if rule.get("status") == "failed"]
+            passed_count = sum(
+                rule.get("status") == "passed" for rule in candidate_rules
+            )
+            failed = [
+                rule for rule in candidate_rules if rule.get("status") == "failed"
+            ]
             incomplete = [
-                rule for rule in candidate_rules if rule.get("status") == "data_incomplete"
+                rule
+                for rule in candidate_rules
+                if rule.get("status") == "data_incomplete"
             ]
             lines = [
                 f"{item.get('name')}（{item.get('internal_symbol')}）截至 {item.get('as_of_date') or trade_date} 的李总策略状态："
@@ -7379,7 +7426,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 )
             if status == "triggered" and item.get("triggered_rule_ids"):
                 lines.append(
-                    "本次触发：" + "、".join(item.get("triggered_rule_ids") or []) + "；仅进入人工复核。"
+                    "本次触发："
+                    + "、".join(item.get("triggered_rule_ids") or [])
+                    + "；仅进入人工复核。"
                 )
             lines.extend(
                 [
@@ -7394,7 +7443,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             if data_meta.get("full_market_coverage") and data_meta.get(
                 "deep_check_complete"
             ):
-                lines.append("本期全市场深度规则计算已经完成，尚无股票进入候选池或触发池。")
+                lines.append(
+                    "本期全市场深度规则计算已经完成，尚无股票进入候选池或触发池。"
+                )
             else:
                 lines.append(
                     "当前已深度处理范围内尚无股票进入候选池或触发池；"
@@ -7411,7 +7462,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 lines.append(
                     f"{index}. {item.get('name')}（{item.get('internal_symbol')}）：{label}{suffix}"
                 )
-            lines.append("选择其中一只后，应进入股票研究空间核验逐规则证据、反方证据和失效条件。")
+            lines.append(
+                "选择其中一只后，应进入股票研究空间核验逐规则证据、反方证据和失效条件。"
+            )
         lines.append(boundary)
         return "\n\n".join(lines)
 
@@ -7524,8 +7577,10 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 risk_texts = []
                 for risk in risks[:2]:
                     if isinstance(risk, dict):
-                        text = risk.get("claim") or risk.get("risk") or risk.get(
-                            "statement"
+                        text = (
+                            risk.get("claim")
+                            or risk.get("risk")
+                            or risk.get("statement")
                         )
                     else:
                         text = risk
@@ -7533,7 +7588,11 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         risk_texts.append(str(text))
                 lines.append(
                     f"- {item.get('name') or item.get('symbol')}："
-                    + ("；".join(risk_texts) if risk_texts else "当前没有足够的结构化反方证据可直接比较。")
+                    + (
+                        "；".join(risk_texts)
+                        if risk_texts
+                        else "当前没有足够的结构化反方证据可直接比较。"
+                    )
                 )
             lines.extend(["", "下一步核验"])
             warnings = evidence.get("warnings") or []
@@ -7542,8 +7601,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             else:
                 lines.append("- 等待下一次同口径财务披露后按相同维度重新比较。")
             lines.append(
-                evidence.get("boundary")
-                or "该比较用于研究，不构成公司排名或买卖建议。"
+                evidence.get("boundary") or "该比较用于研究，不构成公司排名或买卖建议。"
             )
             return "\n".join(lines)
         if kind == "stock_screen":
@@ -7572,7 +7630,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 "",
             ]
             for index, item in enumerate(items[:8], start=1):
-                reasons = "；".join(str(value) for value in (item.get("matched_reasons") or [])[:3])
+                reasons = "；".join(
+                    str(value) for value in (item.get("matched_reasons") or [])[:3]
+                )
                 missing = item.get("missing_fields") or []
                 suffix = f"；缺失项：{'、'.join(missing[:4])}" if missing else ""
                 lines.append(
@@ -7591,7 +7651,10 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             state = evidence.get("market_state", {})
             industry_focus = evidence.get("industry_focus") or {}
             industry_snapshot = evidence.get("industry_snapshot") or {}
-            if industry_focus.get("name") and industry_snapshot.get("status") == "available":
+            if (
+                industry_focus.get("name")
+                and industry_snapshot.get("status") == "available"
+            ):
                 metrics = industry_snapshot.get("metrics") or {}
                 component_analysis = industry_snapshot.get("component_analysis") or {}
                 breadth = component_analysis.get("breadth") or {}
@@ -7745,14 +7808,10 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 )
             if focus_key == "trend_reversal" and shown:
                 lines.append("反弹与趋势确认：")
-                include_60d_return = "60日" in str(
-                    evidence.get("user_question") or ""
-                )
+                include_60d_return = "60日" in str(evidence.get("user_question") or "")
                 for item in shown[:3]:
                     metrics = item.get("metrics") or {}
-                    return_details = (
-                        f"20日 {fmt(metrics.get('return_20d_pct'))}%"
-                    )
+                    return_details = f"20日 {fmt(metrics.get('return_20d_pct'))}%"
                     if include_60d_return:
                         return_details += (
                             f"，60日 {fmt(metrics.get('return_60d_pct'))}%"
@@ -7772,9 +7831,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         "latest_tick_time"
                     )
                     time_label = (
-                        f"，快照内最新成交时点 {latest_tick}"
-                        if latest_tick
-                        else ""
+                        f"，快照内最新成交时点 {latest_tick}" if latest_tick else ""
                     )
                     lines.append(
                         f"沪深京A股全市场成交额（市场日期 {market_date}{time_label}）："
@@ -7825,18 +7882,19 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 else []
             )
             if sectors and market_key in {None, "china"}:
-                lines.append("热门板块（按当前涨跌幅）：" + "、".join(
-                    f"{item['name']} {fmt(item['pct_change'])}%" for item in sectors
-                ))
+                lines.append(
+                    "热门板块（按当前涨跌幅）："
+                    + "、".join(
+                        f"{item['name']} {fmt(item['pct_change'])}%" for item in sectors
+                    )
+                )
             if sectors and market_key in {None, "china"}:
                 lines.append("板块涨跌幅是当前市场截面，不代表后续持续性。")
             if (
                 market_key in {None, "china"}
                 and sector_packet.get("same_date_as_analysis_target") is False
             ):
-                target_date = (evidence.get("analysis_target") or {}).get(
-                    "market_date"
-                )
+                target_date = (evidence.get("analysis_target") or {}).get("market_date")
                 sector_date = sector_packet.get("market_date")
                 lines.append(
                     f"板块榜已切换到 {sector_date or '新的交易日'}，"
@@ -7852,7 +7910,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         if kind == "general_research":
             items = evidence.get("knowledge_context", {}).get("items", [])
             if items:
-                titles = "、".join(item.get("title") or "未命名资料" for item in items[:4])
+                titles = "、".join(
+                    item.get("title") or "未命名资料" for item in items[:4]
+                )
                 return (
                     f"已从个人与通用资料库匹配到：{titles}。"
                     "开启 AI 深度解读后，Hermes 会结合当前对话、已确认记忆、"
@@ -7878,7 +7938,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         f"{item.get('thesis') or '尚未填写'}"
                     )
                 else:
-                    lines.append(f"- {item.get('name') or item['symbol']}：行情暂不可用。")
+                    lines.append(
+                        f"- {item.get('name') or item['symbol']}：行情暂不可用。"
+                    )
             return "\n".join(lines)
 
         if kind == "research_tracking":
@@ -7914,7 +7976,11 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 event.get("symbol"): event for event in events if event.get("symbol")
             }
             for item in items:
-                event = latest_by_symbol.get(item["symbol"]) or item.get("latest_change") or {}
+                event = (
+                    latest_by_symbol.get(item["symbol"])
+                    or item.get("latest_change")
+                    or {}
+                )
                 lines.append(
                     f"- {item.get('name') or item['symbol']}："
                     f"{event.get('summary') or '已建立研究基线，等待新证据。'}"
@@ -7942,7 +8008,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 checks = next_review.get("checks") or []
                 if checks:
                     lines.append(f"   下一步：{'；'.join(checks[:2])}")
-            lines.append(evidence.get("boundary") or "该顺序只用于研究复核，不是买卖建议。")
+            lines.append(
+                evidence.get("boundary") or "该顺序只用于研究复核，不是买卖建议。"
+            )
             return "\n".join(lines)
 
         if kind == "research_actions":
@@ -8086,7 +8154,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 lines.extend(
                     f"- {item}" for item in (evidence.get("review_points") or [])[:3]
                 )
-                lines.append(evidence.get("boundary") or "不能用预测或估值替代财务事实。")
+                lines.append(
+                    evidence.get("boundary") or "不能用预测或估值替代财务事实。"
+                )
                 return "\n".join(lines)
             latest = evidence.get("latest_report") or {}
             comparable = evidence.get("comparable_report") or {}
@@ -8102,7 +8172,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             if evidence.get("supports"):
                 lines.append("- 支持证据：" + "；".join(evidence["supports"][:3]))
             if evidence.get("contradictions"):
-                lines.append("- 需要解释的矛盾：" + "；".join(evidence["contradictions"][:3]))
+                lines.append(
+                    "- 需要解释的矛盾：" + "；".join(evidence["contradictions"][:3])
+                )
             for explanation in (evidence.get("company_explanations") or [])[:4]:
                 lines.append(
                     "- 公司报告解释："
@@ -8113,11 +8185,15 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             if related:
                 lines.append(
                     "- 相关公告与信息线索："
-                    + "；".join(item.get("title") or "未命名信息" for item in related[:4])
+                    + "；".join(
+                        item.get("title") or "未命名信息" for item in related[:4]
+                    )
                     + "。标题只能用于定位原文，不能单独证明财务变化原因。"
                 )
             if evidence.get("review_points"):
-                lines.append("- 下一步复核：" + "；".join(evidence["review_points"][:3]))
+                lines.append(
+                    "- 下一步复核：" + "；".join(evidence["review_points"][:3])
+                )
             lines.append(evidence.get("boundary") or "财报质量分析不构成交易结论。")
             return "\n".join(lines)
 
@@ -8191,29 +8267,26 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         for term in focus_terms
                     )
                 ]
-            for driver in drivers[:6 if not focus_theme else 3]:
+            for driver in drivers[: 6 if not focus_theme else 3]:
                 lines.append(f"- 已确认机械影响：{driver.get('statement')}")
-            for explanation in explanations[:5 if not focus_theme else 2]:
+            for explanation in explanations[: 5 if not focus_theme else 2]:
                 lines.append(
                     "- 公司报告解释："
                     f"{explanation.get('label')}；{explanation.get('excerpt')}"
                     "（管理层披露，仍需交叉验证）"
                 )
-            for clue in clues[:4 if not focus_theme else 2]:
+            for clue in clues[: 4 if not focus_theme else 2]:
                 lines.append(
                     f"- 待验证线索：{clue.get('label')}；{clue.get('evidence')}"
                 )
             if evidence.get("unresolved_causes") and not focus_theme:
                 lines.append(
-                    "- 仍不能确认："
-                    + "；".join(evidence["unresolved_causes"][:3])
+                    "- 仍不能确认：" + "；".join(evidence["unresolved_causes"][:3])
                 )
             if evidence.get("review_points"):
                 lines.append(
                     "- 下一步复核："
-                    + "；".join(
-                        evidence["review_points"][:1 if focus_theme else 3]
-                    )
+                    + "；".join(evidence["review_points"][: 1 if focus_theme else 3])
                 )
             lines.append(evidence.get("boundary") or "该拆解不构成交易结论。")
             return "\n".join(lines)
@@ -8224,10 +8297,12 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     [
                         evidence.get("forecast_statement")
                         or "当前还没有可核验的分析师一致预期。",
-                        *((
-                            f"- {item}"
-                            for item in (evidence.get("review_points") or [])[:3]
-                        )),
+                        *(
+                            (
+                                f"- {item}"
+                                for item in (evidence.get("review_points") or [])[:3]
+                            )
+                        ),
                         evidence.get("boundary")
                         or "缺失预测值不会用于生成评级、目标价或未来收益概率。",
                     ]
@@ -8253,9 +8328,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         )
                     )
             else:
-                lines.append(
-                    "- 历史修订：当前为首个可比较快照，尚不能判断上修或下修。"
-                )
+                lines.append("- 历史修订：当前为首个可比较快照，尚不能判断上修或下修。")
             reports = evidence.get("latest_reports") or []
             if reports:
                 lines.append("- 最新研报：")
@@ -8280,11 +8353,14 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 return "\n".join(
                     [
                         f"{evidence.get('name') or evidence.get('symbol')}尚未形成可用的事件脉络。",
-                        *((
-                            f"- {item}"
-                            for item in (evidence.get("review_points") or [])[:3]
-                        )),
-                        evidence.get("boundary") or "不使用缺失事件生成催化或风险结论。",
+                        *(
+                            (
+                                f"- {item}"
+                                for item in (evidence.get("review_points") or [])[:3]
+                            )
+                        ),
+                        evidence.get("boundary")
+                        or "不使用缺失事件生成催化或风险结论。",
                     ]
                 )
             question = str(evidence.get("user_question") or "")
@@ -8309,9 +8385,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     f"- 其中有 {media_count} 条媒体线索，需用公告或监管原文再确认。"
                 )
             if evidence.get("review_points"):
-                lines.append(
-                    "- 下一步：" + "；".join(evidence["review_points"][:2])
-                )
+                lines.append("- 下一步：" + "；".join(evidence["review_points"][:2]))
             lines.append(evidence.get("boundary") or "事件脉络不构成交易建议。")
             return "\n".join(lines)
 
@@ -8320,7 +8394,12 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 return "\n".join(
                     [
                         evidence.get("summary") or "尚未取得股东结构数据。",
-                        *((f"- {item}" for item in (evidence.get("review_points") or [])[:3])),
+                        *(
+                            (
+                                f"- {item}"
+                                for item in (evidence.get("review_points") or [])[:3]
+                            )
+                        ),
                         evidence.get("boundary") or "缺少披露时不会补写股东结构。",
                     ]
                 )
@@ -8331,7 +8410,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 f"- {evidence.get('holder_count_statement')}",
                 f"- {evidence.get('recent_pattern')}",
             ]
-            if any(term in question for term in ("十大", "主要股东", "股东是谁", "机构")):
+            if any(
+                term in question for term in ("十大", "主要股东", "股东是谁", "机构")
+            ):
                 holders = evidence.get("top_holders") or []
                 if holders:
                     lines.append(
@@ -8356,7 +8437,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             for note in (evidence.get("special_name_notes") or [])[:2]:
                 lines.append(f"- 口径提示：{note}")
             if evidence.get("review_points"):
-                lines.append("- 下一步复核：" + "；".join(evidence["review_points"][:2]))
+                lines.append(
+                    "- 下一步复核：" + "；".join(evidence["review_points"][:2])
+                )
             lines.append(evidence.get("boundary") or "股东结构不构成交易结论。")
             return "\n".join(line for line in lines if line)
 
@@ -8365,7 +8448,12 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 return "\n".join(
                     [
                         evidence.get("summary") or "尚未取得主营构成数据。",
-                        *((f"- {item}" for item in (evidence.get("review_points") or [])[:3])),
+                        *(
+                            (
+                                f"- {item}"
+                                for item in (evidence.get("review_points") or [])[:3]
+                            )
+                        ),
                         evidence.get("boundary") or "缺失业务占比不会由模型补写。",
                     ]
                 )
@@ -8373,11 +8461,17 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             dimensions = list(evidence.get("dimensions") or [])
             if "地区" in question or "海外" in question or "国内" in question:
                 dimensions = [
-                    item for item in dimensions if item.get("classification") == "region"
+                    item
+                    for item in dimensions
+                    if item.get("classification") == "region"
                 ]
-            elif any(term in question for term in ("产品", "业务", "靠什么", "收入来自")):
+            elif any(
+                term in question for term in ("产品", "业务", "靠什么", "收入来自")
+            ):
                 dimensions = [
-                    item for item in dimensions if item.get("classification") == "product"
+                    item
+                    for item in dimensions
+                    if item.get("classification") == "product"
                 ] or dimensions
             lines = [
                 f"{evidence.get('name') or evidence.get('symbol')}主营业务结构：",
@@ -8432,7 +8526,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     )
                 )
             if evidence.get("review_points"):
-                lines.append("- 下一步复核：" + "；".join(evidence["review_points"][:2]))
+                lines.append(
+                    "- 下一步复核：" + "；".join(evidence["review_points"][:2])
+                )
             if evidence.get("latest_fetched_at"):
                 lines.append(f"- 数据抓取时间：{evidence.get('latest_fetched_at')}")
             lines.append(evidence.get("boundary") or "主营构成不构成交易结论。")
@@ -8527,7 +8623,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         + str(latest_change.get("summary"))
                     )
                 else:
-                    lines.append("- 当前变化档案未标识新的正式证据，不能把旧材料写成新增。")
+                    lines.append(
+                        "- 当前变化档案未标识新的正式证据，不能把旧材料写成新增。"
+                    )
 
                 def evidence_text(item: Any) -> str:
                     if isinstance(item, dict):
@@ -8630,9 +8728,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     "市场或板块拖累",
                 )
             ):
-                limit_query = any(
-                    term in question for term in ("涨停", "跌停", "封板")
-                )
+                limit_query = any(term in question for term in ("涨停", "跌停", "封板"))
                 cause_lines: list[str] = []
                 analysis_target = market_context.get("analysis_target") or {}
                 stock_target = market_context.get("stock_target") or {}
@@ -8647,12 +8743,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 if limit_query and quote_is_newer:
                     quote_change = current_quote.get("pct_change")
                     requested_limit = "跌停" if "跌停" in question else "涨停"
-                    sign_matches = (
-                        isinstance(quote_change, (int, float))
-                        and (
-                            (requested_limit == "涨停" and quote_change > 0)
-                            or (requested_limit == "跌停" and quote_change < 0)
-                        )
+                    sign_matches = isinstance(quote_change, (int, float)) and (
+                        (requested_limit == "涨停" and quote_change > 0)
+                        or (requested_limit == "跌停" and quote_change < 0)
                     )
                     cause_lines.append(
                         "是。"
@@ -8682,16 +8775,12 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 elif quote_is_newer:
                     quote_change = current_quote.get("pct_change")
                     quote_basis = str(current_quote.get("quote_basis") or "")
-                    quote_label = str(
-                        current_quote.get("quote_label") or "当前报价"
-                    )
+                    quote_label = str(current_quote.get("quote_label") or "当前报价")
                     quote_direction = (
                         "上涨"
-                        if isinstance(quote_change, (int, float))
-                        and quote_change > 0
+                        if isinstance(quote_change, (int, float)) and quote_change > 0
                         else "下跌"
-                        if isinstance(quote_change, (int, float))
-                        and quote_change < 0
+                        if isinstance(quote_change, (int, float)) and quote_change < 0
                         else "涨跌待确认"
                     )
                     cause_lines.append(
@@ -8706,12 +8795,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         )
                     if limit_query:
                         limit_term = "跌停" if "跌停" in question else "涨停"
-                        sign_matches = (
-                            isinstance(quote_change, (int, float))
-                            and (
-                                (limit_term == "涨停" and quote_change > 0)
-                                or (limit_term == "跌停" and quote_change < 0)
-                            )
+                        sign_matches = isinstance(quote_change, (int, float)) and (
+                            (limit_term == "涨停" and quote_change > 0)
+                            or (limit_term == "跌停" and quote_change < 0)
                         )
                         if sign_matches and _current_quote_is_at_common_a_share_limit(
                             evidence
@@ -8726,9 +8812,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                                     f"- 涨跌停状态：当前报价仍处于{limit_term}价附近；"
                                     "收盘前仍可能打开。"
                                 )
-                        elif _has_intraday_limit_touch_evidence(
-                            evidence, limit_term
-                        ):
+                        elif _has_intraday_limit_touch_evidence(evidence, limit_term):
                             cause_lines.append(
                                 f"- 涨跌停状态：当前已不在{limit_term}价；"
                                 f"媒体线索显示盘中曾触及{limit_term}，随后回落到"
@@ -8793,9 +8877,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         f"相对行业 {fmt(industry_index.get('stock_minus_industry_pct'))} 个百分点。"
                         f"官方样本 {industry_index.get('constituent_count')} 只。"
                     )
-                    component_breadth = (
-                        industry_index.get("component_breadth") or {}
-                    )
+                    component_breadth = industry_index.get("component_breadth") or {}
                     if component_breadth.get("status") == "available":
                         cause_lines.append(
                             f"- 同日行业成分广度：上涨 {component_breadth.get('advancers')} 只、"
@@ -8804,26 +8886,24 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                             f"{component_breadth.get('state')}”，成分涨跌幅中位数 "
                             f"{fmt(component_breadth.get('median_pct_change'))}%。"
                         )
-                        component_coverage = (
-                            component_breadth.get("coverage") or {}
-                        )
+                        component_coverage = component_breadth.get("coverage") or {}
                         fallback_count = component_coverage.get(
                             "fallback_unadjusted_returns"
                         )
                         if isinstance(fallback_count, int) and fallback_count:
                             fallback_names = "、".join(
-                                str(item.get("name") or item.get("symbol") or "").strip()
+                                str(
+                                    item.get("name") or item.get("symbol") or ""
+                                ).strip()
                                 for item in (
-                                    component_breadth.get("source_fallbacks")
-                                    or []
+                                    component_breadth.get("source_fallbacks") or []
                                 )[:3]
                                 if str(
                                     item.get("name") or item.get("symbol") or ""
                                 ).strip()
                             )
                             fallback_subject = (
-                                fallback_names
-                                or f"其中 {fallback_count} 只成分"
+                                fallback_names or f"其中 {fallback_count} 只成分"
                             )
                             cause_lines.append(
                                 f"- 行业成分行情口径：{fallback_subject}使用新浪公开未复权日线补充；"
@@ -8833,16 +8913,17 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                             industry_index.get("component_contribution") or {}
                         )
                         subject_contribution = contribution.get("subject") or {}
-                        if contribution.get("status") == "available" and subject_contribution:
+                        if (
+                            contribution.get("status") == "available"
+                            and subject_contribution
+                        ):
                             cause_lines.append(
                                 f"- 静态估算贡献：{subject_contribution.get('name') or evidence.get('display_name')} "
                                 f"约 {fmt(subject_contribution.get('estimated_contribution_pp'))} 个百分点；"
                                 "该数值按权重快照与复权涨跌幅相乘，不是官方逐日归因。"
                             )
                     elif component_breadth.get("status") == "partial":
-                        component_coverage = (
-                            component_breadth.get("coverage") or {}
-                        )
+                        component_coverage = component_breadth.get("coverage") or {}
                         failures = component_breadth.get("failures") or []
                         missing_text = "；".join(
                             f"{item.get('name') or item.get('symbol')}（{item.get('reason') or '目标日行情待补'}）"
@@ -8914,7 +8995,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 )
                 return "\n".join(cause_lines)
 
-            lines = [f"{evidence.get('display_name') or evidence['symbol']} 当前价格证据："]
+            lines = [
+                f"{evidence.get('display_name') or evidence['symbol']} 当前价格证据："
+            ]
             if current_quote and _stock_current_quote_is_newer(evidence):
                 lines.append(
                     f"- {current_quote.get('quote_label') or '当前报价快照'}（{current_quote.get('market_timestamp')}）："
@@ -8940,9 +9023,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 )
             lines.extend(
                 [
-                f"- 风险：20日年化波动率 {fmt(metrics['volatility_20d_annualized_pct'])}%，"
-                f"60日最大回撤 {fmt(metrics['max_drawdown_60d_pct'])}%。",
-                f"- 你的原假设：{thesis}。价格本身不能证明这条基本面假设。",
+                    f"- 风险：20日年化波动率 {fmt(metrics['volatility_20d_annualized_pct'])}%，"
+                    f"60日最大回撤 {fmt(metrics['max_drawdown_60d_pct'])}%。",
+                    f"- 你的原假设：{thesis}。价格本身不能证明这条基本面假设。",
                 ]
             )
             market_state = market_context.get("market_state") or {}
@@ -8966,7 +9049,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                             f"公司相对行业 {fmt(industry_index.get('stock_minus_industry_pct'))} 个百分点。"
                             + (
                                 f"成分广度为“{(industry_index.get('component_breadth') or {}).get('state')}”。"
-                                if (industry_index.get('component_breadth') or {}).get('status')
+                                if (industry_index.get("component_breadth") or {}).get(
+                                    "status"
+                                )
                                 == "available"
                                 else "指数表现不等于成分股涨跌家数。"
                             )
@@ -8980,10 +9065,15 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 )
             announcements = information.get("announcements") or []
             if announcements:
-                lines.append("- 最新公司公告：" + "；".join(item["title"] for item in announcements[:3]))
+                lines.append(
+                    "- 最新公司公告："
+                    + "；".join(item["title"] for item in announcements[:3])
+                )
             news = information.get("news") or []
             if news:
-                lines.append("- 最新媒体事件：" + "；".join(item["title"] for item in news[:3]))
+                lines.append(
+                    "- 最新媒体事件：" + "；".join(item["title"] for item in news[:3])
+                )
             fundamentals = evidence.get("fundamentals") or {}
             regulatory_filings = fundamentals.get("regulatory_filings") or []
             if regulatory_filings:
@@ -9137,9 +9227,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     )
                     adjustments = "、".join(
                         f"{segment.get('item_name')} {fmt(segment.get('revenue_share_pct'))}%"
-                        for segment in (
-                            profile.get("composition_adjustments") or []
-                        )
+                        for segment in (profile.get("composition_adjustments") or [])
                         if segment.get("item_name")
                     )
                     peer_detail_lines.append(
@@ -9155,7 +9243,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                         + (f"，构成调整项 {adjustments}" if adjustments else "")
                     )
                 if peer_detail_lines:
-                    lines.append("- 同行逐项事实：" + "；".join(peer_detail_lines) + "。")
+                    lines.append(
+                        "- 同行逐项事实：" + "；".join(peer_detail_lines) + "。"
+                    )
                 if business_periods:
                     unique_business_periods = {
                         str(period) for _, period in business_periods if period
@@ -9200,7 +9290,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     ("资产负债率", "debt_asset_ratio_pct"),
                 ):
                     if isinstance(latest_report.get(key), (int, float)):
-                        financial_parts.append(f"{label} {fmt(latest_report.get(key))}%")
+                        financial_parts.append(
+                            f"{label} {fmt(latest_report.get(key))}%"
+                        )
                 lines.append(
                     f"- 最新财务（{latest_report.get('report_date_name')}，"
                     f"{latest_report.get('period_basis_label') or '报告期口径'}）："
@@ -9355,7 +9447,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         if kind == "market_pulse_article":
             market = evidence["market_brief"]
             state = market["market_state"]
-            available = [item for item in market["indices"] if item.get("status") == "available"]
+            available = [
+                item for item in market["indices"] if item.get("status") == "available"
+            ]
             sectors = market.get("hot_sectors", {}).get("sectors", [])[:3]
             strongest = sorted(
                 available,
@@ -9364,7 +9458,11 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             )
             weakest = list(reversed(strongest))
             index_times = sorted(
-                {item.get("market_timestamp") for item in available if item.get("market_timestamp")}
+                {
+                    item.get("market_timestamp")
+                    for item in available
+                    if item.get("market_timestamp")
+                }
             )
             body = [
                 f"# {evidence['article_title']}",
@@ -9386,7 +9484,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             if sectors:
                 body.append(
                     "- A股板块涨幅靠前："
-                    + "、".join(f"{item['name']} {fmt(item['pct_change'])}%" for item in sectors)
+                    + "、".join(
+                        f"{item['name']} {fmt(item['pct_change'])}%" for item in sectors
+                    )
                     + "。这是涨跌幅排序，不等于持续性判断。"
                 )
             body.extend(

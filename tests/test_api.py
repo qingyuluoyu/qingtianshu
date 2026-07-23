@@ -575,9 +575,9 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'id="todayOverviewGrid" class="today-overview-grid"' in page.text
     assert page.text.index('id="liveSection"') < page.text.index(
         'id="marketDashboard"'
-    ) < page.text.index('id="todayOverviewGrid"') < page.text.index(
-        'id="insightSection"'
-    )
+    ) < page.text.index('id="insightSection"') < page.text.index(
+        'id="insightAsk"'
+    ) < page.text.index('id="todayOverviewGrid"')
     assert "我的研究待办" in page.text
     assert "与我相关的重要变化" in page.text
     assert "不会在这里伪装上线" not in page.text

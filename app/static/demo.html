@@ -2030,31 +2030,6 @@
           </div>
         </section>
 
-        <section id="todayOverviewGrid" class="today-overview-grid" aria-label="我的研究待办与重要变化" hidden>
-          <article class="panel today-overview-card">
-            <div class="today-overview-head">
-              <div>
-                <div class="today-overview-title">我的研究待办</div>
-                <div class="today-overview-copy">按风险和时间优先级排列，先处理最需要核验的事项</div>
-              </div>
-              <span id="todaySessionBadge" class="today-session-badge">状态待确认</span>
-            </div>
-            <div id="todayPrioritySummary" class="today-overview-summary">正在读取个人研究事项…</div>
-            <div id="todayPriorityItems" class="today-item-list"><div class="empty">正在加载今日事项…</div></div>
-          </article>
-          <article class="panel today-overview-card">
-            <div class="today-overview-head">
-              <div>
-                <div class="today-overview-title">与我相关的重要变化</div>
-                <div class="today-overview-copy">只展示与你的关注或持仓有关、且尚未列入左侧待办的变化</div>
-              </div>
-              <span id="todayChangeCount" class="today-session-badge">0 项</span>
-            </div>
-            <div id="todayRelatedChanges" class="today-item-list"><div class="empty">正在加载研究变化…</div></div>
-            <div id="todayRelatedBoundary" class="today-boundary">点击变化可查看事实、证据和下一步核验。</div>
-          </article>
-        </section>
-
         <div id="insightSection" class="insight-layout">
           <section class="panel pulse">
             <div class="panel-head">
@@ -2080,6 +2055,31 @@
             <input id="insightQuestion" class="insight-question" type="text" autocomplete="off" placeholder="例如：中兴通讯这次下跌改变了原来的研究逻辑吗？">
             <button id="insightAskButton" class="btn primary" type="submit">进入研究 Agent</button>
           </form>
+        </section>
+
+        <section id="todayOverviewGrid" class="today-overview-grid" aria-label="我的研究待办与重要变化" hidden>
+          <article class="panel today-overview-card">
+            <div class="today-overview-head">
+              <div>
+                <div class="today-overview-title">我的研究待办</div>
+                <div class="today-overview-copy">按风险和时间优先级排列，先处理最需要核验的事项</div>
+              </div>
+              <span id="todaySessionBadge" class="today-session-badge">状态待确认</span>
+            </div>
+            <div id="todayPrioritySummary" class="today-overview-summary">正在读取个人研究事项…</div>
+            <div id="todayPriorityItems" class="today-item-list"><div class="empty">正在加载今日事项…</div></div>
+          </article>
+          <article class="panel today-overview-card">
+            <div class="today-overview-head">
+              <div>
+                <div class="today-overview-title">与我相关的重要变化</div>
+                <div class="today-overview-copy">只展示与你的关注或持仓有关、且尚未列入左侧待办的变化</div>
+              </div>
+              <span id="todayChangeCount" class="today-session-badge">0 项</span>
+            </div>
+            <div id="todayRelatedChanges" class="today-item-list"><div class="empty">正在加载研究变化…</div></div>
+            <div id="todayRelatedBoundary" class="today-boundary">点击变化可查看事实、证据和下一步核验。</div>
+          </article>
         </section>
 
         <section id="searchPanel" class="panel research-page-panel search-page" hidden>
@@ -2628,8 +2628,6 @@
       evaluationMode
     };
     const $ = (id) => document.getElementById(id);
-    $("insightSection").after($("todayOverviewGrid"));
-
     function currentWelcomeMessage() {
       return welcomeMessage;
     }

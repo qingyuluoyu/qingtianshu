@@ -8,6 +8,7 @@ from app.services.analysis import (
     _current_quote_snapshot,
     _validated_index_metrics,
     MarketAnalysisService,
+    align_conditional_outlook_with_current_quote,
     analyze_history,
     annualized_volatility,
     build_conditional_outlook,
@@ -21,7 +22,9 @@ from app.services.analysis import (
 
 class _DatedMarketProvider:
     def fetch_history(self, symbol: str, range_name: str = "3mo"):
-        end_date = datetime(2026, 7, 20 if symbol == "399006.SZ" else 21, tzinfo=timezone.utc)
+        end_date = datetime(
+            2026, 7, 20 if symbol == "399006.SZ" else 21, tzinfo=timezone.utc
+        )
         points = []
         for index in range(70):
             close = 100 + index
@@ -435,6 +438,40 @@ def test_conditional_outlook_exposes_scenarios_without_fake_probability():
     assert "105.0" in outlook["scenarios"][2]["condition"]
 
 
+def test_current_quote_alignment_does_not_repeat_already_crossed_downside_level():
+    outlook = build_conditional_outlook(
+        {
+            "latest_close": 37.5,
+            "ma20": 37.28,
+            "ma60": 37.3,
+            "return_20d_pct": 0.2,
+            "volatility_20d_annualized_pct": 30.0,
+        },
+        {
+            "recent_20d_high": 43.0,
+            "recent_20d_low": 32.39,
+            "ma20": 37.28,
+            "ma60": 37.3,
+        },
+    )
+
+    aligned = align_conditional_outlook_with_current_quote(
+        outlook,
+        {
+            "price": 35.92,
+            "quote_label": "收盘后最新报价",
+            "market_timestamp": "2026-07-23T16:14:30+08:00",
+            "complete_daily_bar_confirmed": False,
+        },
+    )
+
+    downside = next(item for item in aligned["scenarios"] if item["name"] == "下行风险")
+    assert aligned["current_quote_alignment"]["status"] == ("below_downside_reference")
+    assert "已低于关键参考位 37.3" in downside["condition"]
+    assert "仍需等待同日完整日线确认" in downside["condition"]
+    assert "收盘跌破关键参考位 37.3" not in downside["condition"]
+
+
 def test_evidence_debate_keeps_bull_bear_and_risk_separate():
     debate = build_evidence_debate(
         {
@@ -447,7 +484,12 @@ def test_evidence_debate_keeps_bull_bear_and_risk_separate():
                 "volatility_20d_annualized_pct": 30,
             },
             "a_share_information": {
-                "sentiment": {"score": 0.3, "sample_size": 20, "band": "轻微偏多", "confidence": "low_to_medium"}
+                "sentiment": {
+                    "score": 0.3,
+                    "sample_size": 20,
+                    "band": "轻微偏多",
+                    "confidence": "low_to_medium",
+                }
             },
             "research_frame": {"missing_information": ["估值尚未接入"]},
         }
@@ -527,8 +569,7 @@ def test_business_concentration_is_a_review_need_not_a_proven_failure():
     assert fundamentals["status"] == "ready"
     assert fundamentals["evidence_count"] == 2
     assert any(
-        "主营收入、毛利来源" in item
-        for item in board["tracking_plan"][2]["checks"]
+        "主营收入、毛利来源" in item for item in board["tracking_plan"][2]["checks"]
     )
 
 
@@ -544,20 +585,15 @@ def test_optional_industry_gap_does_not_override_ready_core_evidence():
         "evidence_debate": {"bull_case": [{}], "bear_case": [{}], "risk_committee": []},
         "conditional_outlook": {"label": "震荡观察"},
         "price_levels": {"ma20": 98, "recent_20d_low": 90, "recent_20d_high": 110},
-        "research_frame": {
-            "missing_information": ["行业供需与一致预期尚未接入"]
-        },
+        "research_frame": {"missing_information": ["行业供需与一致预期尚未接入"]},
     }
 
     debate = build_evidence_debate(evidence)
     board = build_research_analysis_board(evidence)
 
     assert not any(
-        item["risk"] == "证据覆盖不完整"
-        for item in debate["risk_committee"]
+        item["risk"] == "证据覆盖不完整" for item in debate["risk_committee"]
     )
     assert board["readiness"]["status"] == "ready"
-    assert board["readiness"]["optional_gaps"] == [
-        "行业供需与一致预期尚未接入"
-    ]
+    assert board["readiness"]["optional_gaps"] == ["行业供需与一致预期尚未接入"]
     assert "直接回答" in board["readiness"]["response_policy"]

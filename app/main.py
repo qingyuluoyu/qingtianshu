@@ -125,6 +125,7 @@ from app.services.research_reports import (
     ResearchReportService,
     StockResearchEvidenceService,
 )
+from app.services.research_plan import ResearchPlanService
 from app.services.research_claims import build_research_claim_ledger
 from app.services.research_priority import ResearchPriorityService
 from app.services.research_actions import ResearchActionService
@@ -1001,6 +1002,7 @@ def create_app(
         change_events=change_events,
     )
     stock_assets = StockAssetListService(database, stock_workspace)
+    research_plan = ResearchPlanService()
     today_overview = TodayOverviewService(
         database,
         analysis,
@@ -1098,6 +1100,7 @@ def create_app(
     app.state.global_search = global_search
     app.state.stock_workspace = stock_workspace
     app.state.stock_assets = stock_assets
+    app.state.research_plan = research_plan
     app.state.stock_screener = stock_screener
     app.state.tushare_snapshots = tushare_snapshots
     app.state.li_zong_strategy = li_zong_strategy
@@ -4296,43 +4299,73 @@ def create_app(
                     }
             else:
                 intent = "stock_research"
-                latest_report = (
-                    research_reports.get_latest(symbol, generate_if_missing=False)
-                    if payload.prefer_precomputed
-                    else None
+                plan = research_plan.build(
+                    message,
+                    conversation_history=history,
                 )
-                if latest_report is not None and latest_report.get("evidence"):
+                publish_agent_progress(
+                    "research_plan_ready",
+                    plan.get("progress_label")
+                    or "已识别研究重点，正在核验相关证据…",
+                    research_focus=plan.get("focus"),
+                    evidence_modules=plan.get("selected_modules"),
+                )
+                latest_report = research_reports.get_latest(
+                    symbol, generate_if_missing=False
+                )
+
+                def publish_evidence_module(module_key: str, label: str) -> None:
+                    publish_agent_progress(
+                        "evidence_module_started",
+                        label,
+                        research_focus=plan.get("focus"),
+                        evidence_module=module_key,
+                    )
+
+                try:
+                    evidence = research_evidence.build(
+                        user_id,
+                        symbol,
+                        plan=plan,
+                        reusable_evidence=(latest_report or {}).get("evidence"),
+                        reusable_generated_at=(latest_report or {}).get(
+                            "generated_at"
+                        ),
+                        progress_callback=publish_evidence_module,
+                    )
+                except ProviderError as exc:
+                    if latest_report is None or not latest_report.get("evidence"):
+                        raise HTTPException(status_code=502, detail=str(exc)) from exc
                     evidence = dict(latest_report["evidence"])
                     evidence["generated_at"] = utc_now()
-                    evidence["precomputed_report"] = {
-                        "title": latest_report.get("title"),
-                        "generated_at": latest_report.get("generated_at"),
-                        "market_timestamp": latest_report.get("market_timestamp"),
+                    evidence["research_plan"] = plan
+                    evidence["evidence_status"] = "partial"
+                    evidence["module_statuses"] = {
+                        key: {
+                            "module": key,
+                            "label": (plan.get("module_labels") or {}).get(key, key),
+                            "status": "reused_fallback",
+                            "required": key in (plan.get("required_modules") or []),
+                        }
+                        for key in plan.get("selected_modules") or []
+                        if key == "market" or key in evidence
                     }
                     evidence.setdefault("warnings", []).append(
-                        "当前研究使用服务器最新预生成证据。"
+                        "本轮使用已保存的最近可核验证据，并继续由 AI 针对当前问题生成回答。"
                     )
-                else:
-                    try:
-                        evidence = research_evidence.build(user_id, symbol)
-                    except ProviderError as exc:
-                        latest_report = research_reports.get_latest(
-                            symbol, generate_if_missing=False
-                        )
-                        if latest_report is None or not latest_report.get("evidence"):
-                            raise HTTPException(
-                                status_code=502, detail=str(exc)
-                            ) from exc
-                        evidence = dict(latest_report["evidence"])
-                        evidence["generated_at"] = utc_now()
+                if latest_report is not None and latest_report.get("evidence"):
+                    reused_modules = [
+                        item.get("label")
+                        for item in (evidence.get("module_statuses") or {}).values()
+                        if item.get("status") in {"reused", "reused_fallback"}
+                    ]
+                    if reused_modules:
                         evidence["precomputed_report"] = {
                             "title": latest_report.get("title"),
                             "generated_at": latest_report.get("generated_at"),
                             "market_timestamp": latest_report.get("market_timestamp"),
+                            "reused_modules": reused_modules,
                         }
-                        evidence.setdefault("warnings", []).append(
-                            "当前研究使用服务器最新预生成证据。"
-                        )
                 watchlist_item = database.get_watchlist_item(user_id, symbol)
                 evidence["research_claims"] = build_research_claim_ledger(evidence)
                 evidence["user_thesis"] = (
@@ -4385,6 +4418,13 @@ def create_app(
                                 (evidence.get("analyst_expectations") or {}).get(
                                     "industry"
                                 )
+                                or (
+                                    (evidence.get("li_zong_strategy") or {}).get(
+                                        "stock_basic"
+                                    )
+                                    or {}
+                                ).get("industry")
+                                or (RESEARCH_TARGETS.get(symbol) or {}).get("industry")
                                 or ""
                             )
                             analysis_target = _stock_analysis_target(message, evidence)
@@ -4403,10 +4443,15 @@ def create_app(
                             evidence.setdefault("warnings", []).append(
                                 f"个股市场对照证据刷新未完成：{type(exc).__name__}"
                             )
-                evidence["deep_stock_coverage"] = deep_stock.evidence_coverage_packet(
-                    evidence,
-                    intent="stock_research",
-                )
+                if plan.get("focus") == "comprehensive" or _is_deep_stock_coverage_query(
+                    message
+                ):
+                    evidence["deep_stock_coverage"] = (
+                        deep_stock.evidence_coverage_packet(
+                            evidence,
+                            intent="stock_research",
+                        )
+                    )
                 if _is_deep_stock_coverage_query(message):
                     tracking_packet = research_tracking.get_packet(
                         user_id,
@@ -4419,6 +4464,31 @@ def create_app(
                         "next_review": tracking_item.get("next_review"),
                         "boundary": tracking_packet.get("boundary"),
                     }
+
+        if symbol and intent in {
+            "stock_research",
+            "earnings_quality",
+            "financial_drivers",
+            "business_structure",
+            "shareholder_structure",
+            "analyst_expectations",
+            "event_timeline",
+        }:
+            context_plan = evidence.get("research_plan") or research_plan.build(
+                message,
+                conversation_history=history,
+            )
+            evidence.setdefault("research_plan", context_plan)
+            try:
+                workspace_packet = stock_workspace.get_workspace(user_id, symbol)
+                evidence["stock_workspace_context"] = (
+                    _compact_stock_workspace_context(workspace_packet, context_plan)
+                )
+            except Exception:
+                evidence["stock_workspace_context"] = {
+                    "status": "partial",
+                    "boundary": "本轮仍使用当前用户的行情与研究证据回答。",
+                }
 
         evidence.setdefault("user_question", message)
         knowledge_context = _filter_knowledge_context(
@@ -5484,6 +5554,195 @@ def _question_market_date(
         return None
 
 
+def _compact_stock_workspace_context(
+    workspace: dict[str, Any], plan: dict[str, Any]
+) -> dict[str, Any]:
+    """Keep the user's formal stock state available without copying the UI packet."""
+
+    def select(value: dict[str, Any] | None, keys: tuple[str, ...]) -> dict[str, Any]:
+        packet = value or {}
+        return {
+            key: packet.get(key)
+            for key in keys
+            if packet.get(key) not in (None, "", [], {})
+        }
+
+    position = workspace.get("position_snapshot") or {}
+    action_plans = workspace.get("action_plans") or {}
+    observation_tasks = workspace.get("observation_tasks") or {}
+    trade_reviews = workspace.get("trade_reviews") or {}
+    return {
+        "contract_version": "stock_workspace_agent_context_v1",
+        "symbol": workspace.get("symbol"),
+        "name": workspace.get("name"),
+        "research_focus": plan.get("focus"),
+        "relation": select(
+            workspace.get("relation"),
+            (
+                "type",
+                "label",
+                "priority",
+                "priority_label",
+                "tracking_status",
+                "workflow_status",
+                "attention_tags",
+                "version",
+                "updated_at",
+            ),
+        ),
+        "formal_thesis": select(
+            workspace.get("thesis"),
+            (
+                "id",
+                "summary",
+                "source",
+                "status",
+                "version",
+                "watch_items",
+                "recheck_conditions",
+                "updated_at",
+            ),
+        ),
+        "position": {
+            "opening": select(
+                position.get("opening"),
+                (
+                    "id",
+                    "as_of_date",
+                    "quantity",
+                    "cost_price",
+                    "fees",
+                    "note",
+                    "created_at",
+                ),
+            ),
+            "current_snapshot": select(
+                position.get("current"),
+                (
+                    "quantity",
+                    "cost_basis",
+                    "average_cost",
+                    "realized_gross_pnl",
+                    "realized_net_pnl",
+                    "known_fees",
+                    "fees_complete",
+                    "data_status",
+                    "snapshot_at",
+                ),
+            ),
+            "recent_operations": [
+                select(
+                    item,
+                    (
+                        "id",
+                        "operation_type",
+                        "operated_at",
+                        "quantity",
+                        "price",
+                        "fees",
+                        "reason_text",
+                        "plan_id",
+                        "current_revision",
+                    ),
+                )
+                for item in (position.get("operations") or [])[:3]
+            ],
+        },
+        "active_action_plans": [
+            select(
+                item,
+                (
+                    "id",
+                    "status",
+                    "action_type",
+                    "trigger_text",
+                    "target_quantity",
+                    "target_amount",
+                    "target_position_percent",
+                    "expires_at",
+                    "version",
+                    "updated_at",
+                ),
+            )
+            for item in (action_plans.get("items") or [])
+            if item.get("status")
+            in {"draft", "checked", "saved", "partially_executed"}
+        ][:3],
+        "active_observation_tasks": [
+            select(
+                item,
+                (
+                    "id",
+                    "title",
+                    "description",
+                    "status",
+                    "priority",
+                    "due_at",
+                    "version",
+                    "updated_at",
+                ),
+            )
+            for item in (observation_tasks.get("items") or [])
+            if item.get("status") in {"pending", "in_progress", "waiting_data"}
+        ][:5],
+        "recent_trade_reviews": [
+            {
+                **select(
+                    item,
+                    (
+                        "id",
+                        "status",
+                        "horizon_sessions",
+                        "data_status",
+                        "ready_at",
+                        "updated_at",
+                    ),
+                ),
+                "current_version": select(
+                    item.get("current_version"),
+                    (
+                        "version_no",
+                        "price_result",
+                        "logic_result",
+                        "plan_deviation",
+                        "bias_tags",
+                        "improvement_text",
+                        "status",
+                        "created_at",
+                    ),
+                ),
+            }
+            for item in (trade_reviews.get("items") or [])[:3]
+        ],
+        "important_changes": [
+            select(
+                item,
+                (
+                    "id",
+                    "title",
+                    "summary",
+                    "severity",
+                    "occurred_at",
+                    "created_at",
+                    "source_type",
+                ),
+            )
+            for item in (workspace.get("important_changes") or [])[:5]
+        ],
+        "pending_actions": [
+            select(
+                item,
+                ("id", "title", "status", "severity", "next_step", "source"),
+            )
+            for item in (workspace.get("pending_actions") or [])[:5]
+        ],
+        "history_summary": workspace.get("history_summary") or {},
+        "completeness": workspace.get("completeness") or {},
+        "data_meta": workspace.get("data_meta") or {},
+        "boundary": workspace.get("boundary"),
+    }
+
+
 def _stock_analysis_target(message: str, evidence: dict[str, Any]) -> dict[str, Any]:
     current_quote = evidence.get("current_quote") or {}
     metrics = evidence.get("metrics") or {}
@@ -5545,8 +5804,17 @@ def _build_stock_market_context(
     market_brief: dict[str, Any],
     industry_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    industry_snapshot = industry_snapshot or {}
     company_industry = str(
-        (evidence.get("analyst_expectations") or {}).get("industry") or ""
+        (evidence.get("analyst_expectations") or {}).get("industry")
+        or ((evidence.get("li_zong_strategy") or {}).get("stock_basic") or {}).get(
+            "industry"
+        )
+        or (RESEARCH_TARGETS.get(str(evidence.get("symbol") or "")) or {}).get(
+            "industry"
+        )
+        or industry_snapshot.get("industry_name")
+        or ""
     ).strip()
     current_quote = evidence.get("current_quote") or {}
     metrics = evidence.get("metrics") or {}
@@ -5614,7 +5882,6 @@ def _build_stock_market_context(
         for item in sectors
         if company_industry and str(item.get("name") or "").strip() == company_industry
     ]
-    industry_snapshot = industry_snapshot or {}
     industry_point = next(
         (
             point

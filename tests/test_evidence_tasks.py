@@ -142,8 +142,8 @@ def test_chat_creates_evidence_task_and_review_page_renders_lifecycle(
     _create_user(client)
     original_build = app.state.research_evidence.build
 
-    def build_with_gap(user_id: str, symbol: str):
-        evidence = original_build(user_id, symbol)
+    def build_with_gap(user_id: str, symbol: str, **kwargs):
+        evidence = original_build(user_id, symbol, **kwargs)
         gap = "公司最新公告尚未接入"
         evidence["research_frame"]["missing_information"] = [gap]
         evidence["evidence_readiness"]["optional_gaps"] = [gap]
