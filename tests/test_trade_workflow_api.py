@@ -317,6 +317,11 @@ def test_review_flow_uses_frozen_context_hermes_draft_and_version_conflicts(
     assert draft["current_version"]["created_source"] == "ai"
     assert draft["current_version"]["source_run_id"] == run["id"]
     assert draft["current_version"]["bias_tags"] == ["结果偏差待核对"]
+    premature_followup = client.post(
+        f"/v1/trade-reviews/{review['id']}/followups",
+        json={"target": "observation_task"},
+    )
+    assert premature_followup.status_code == 422
 
     edited = client.patch(
         f"/v1/trade-reviews/{review['id']}/draft",
@@ -351,6 +356,56 @@ def test_review_flow_uses_frozen_context_hermes_draft_and_version_conflicts(
     assert confirmed.status_code == 200, confirmed.text
     assert confirmed.json()["status"] == "confirmed"
 
+    task_followup = client.post(
+        f"/v1/trade-reviews/{review['id']}/followups",
+        json={"target": "observation_task", "priority": "high"},
+    )
+    assert task_followup.status_code == 201, task_followup.text
+    task = task_followup.json()["observation_task"]
+    assert task["title"] == "复盘改进｜中兴通讯"
+    assert task["description"] == "以后同步记录费用与证据链接。"
+    assert task["priority"] == "high"
+    repeated_task = client.post(
+        f"/v1/trade-reviews/{review['id']}/followups",
+        json={"target": "observation_task", "priority": "normal"},
+    )
+    assert repeated_task.status_code == 201
+    assert repeated_task.json()["observation_task"]["id"] == task["id"]
+
+    before_thesis = client.get("/v1/stocks/000063/theses").json()["active"]
+    thesis_followup = client.post(
+        f"/v1/trade-reviews/{review['id']}/followups",
+        json={"target": "thesis_draft"},
+    )
+    assert thesis_followup.status_code == 201, thesis_followup.text
+    thesis_draft = thesis_followup.json()["thesis"]
+    assert thesis_draft["status"] == "draft"
+    assert before_thesis["reason_text"] in thesis_draft["reason_text"]
+    assert "以后同步记录费用与证据链接。" in thesis_draft["reason_text"]
+    assert client.get("/v1/stocks/000063/theses").json()["active"]["id"] == before_thesis["id"]
+    repeated_thesis = client.post(
+        f"/v1/trade-reviews/{review['id']}/followups",
+        json={"target": "thesis_draft"},
+    )
+    assert repeated_thesis.status_code == 201
+    assert repeated_thesis.json()["thesis"]["id"] == thesis_draft["id"]
+    confirmed_thesis = client.post(
+        f"/v1/stocks/000063/theses/{thesis_draft['id']}/confirm"
+    )
+    assert confirmed_thesis.status_code == 200
+    assert confirmed_thesis.json()["status"] == "active"
+    applied_thesis = client.post(
+        f"/v1/trade-reviews/{review['id']}/followups",
+        json={"target": "thesis_draft"},
+    )
+    assert applied_thesis.status_code == 201
+    assert applied_thesis.json()["status"] == "already_applied"
+    assert applied_thesis.json()["thesis"]["id"] == thesis_draft["id"]
+
+    refreshed_review = client.get(f"/v1/trade-reviews/{review['id']}").json()
+    assert refreshed_review["followups"]["observation_task"]["id"] == task["id"]
+    assert refreshed_review["followups"]["thesis"]["status"] == "active"
+
     stale_archive = client.post(
         f"/v1/trade-reviews/{review['id']}/archive",
         json={"base_version": 1},
@@ -371,4 +426,8 @@ def test_review_flow_uses_frozen_context_hermes_draft_and_version_conflicts(
     _create_user(other, "Review Other")
     assert other.get("/v1/trade-reviews").json()["items"] == []
     assert other.get(f"/v1/trade-reviews/{review['id']}").status_code == 404
+    assert other.post(
+        f"/v1/trade-reviews/{review['id']}/followups",
+        json={"target": "observation_task"},
+    ).status_code == 404
     assert other.get(f"/v1/operations/{operation_id}/context").status_code == 404

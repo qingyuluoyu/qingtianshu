@@ -3053,7 +3053,21 @@ unresolved 是尚未解决的风险或缺口，不能把 unresolved 写成已经
 的名单比例，不是深度规则完成率；深度进度只能使用 deep_processed_symbols/deep_check_eligible_count。
 若 deep_check_complete=false，只能说“当前已深度处理范围内”的候选情况，不得推断尚待深度处理
 的股票，也不得宣称全市场没有候选。没有 items 时要区分“当前已深度处理范围内尚无候选”和
-“全市场深度处理完成后无候选”。
+“全市场深度处理完成后无候选”。若 evidence.history.items 存在，必须继续基于这些真实历史
+样本即时回答，不得停在“当前0只”：逐只说明信号日期、当时是进入候选还是触发人工复核，
+并引用5/10/20个交易日的个股收益、同期沪深300收益和超额表现。某个周期状态不是 available
+时只能说该周期尚未形成完整观察，不能补算或猜测。
+
+若 evidence.rule_funnel.steps 存在，用户询问“为什么没有候选、规则是否太严”时，应按固定顺序
+引用 remaining_count 解释交集如何收窄。可以说明哪一步在本期截面减少了多少股票，但不得把
+单期漏斗升级成该规则的长期预测能力、胜率或永久稀缺性；不得自行改变漏斗顺序重新归因。
+
+历史回放不是预存回答文案。必须围绕用户本轮问题重新组织结论、证据和样本边界；不得照抄
+boundary 或把多个样本机械拼接成固定模板。历史规则证据只允许引用 history.items.rule_results，
+后续走势只允许引用 performance.horizons/path。不得把历史样本数量包装成胜率、成功率、荐股评价
+或未来概率。必须说明回放覆盖率只是近期已完成股票范围，不是多年全市场回测。信号日后的收益
+从信号日收盘计算，未计交易成本和实际可成交性。提到区间最大上行或最大下行发生时间时，
+必须逐字使用 max_upside_date 或 max_drawdown_date；没有日期字段就只报幅度，不得猜测第几个交易日。
 
 selection_mode=symbol_check 时，必须直接回答该股票是 triggered、qualified、not_qualified、
 data_incomplete 还是 invalidated。not_qualified 不是候选，data_incomplete 不能判断通过，invalidated
@@ -7311,7 +7325,14 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             answer,
         )
         cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
-        return f"{summary}\n\n{cleaned}" if cleaned else summary
+        original = str(answer or "").strip()
+        if not cleaned:
+            return summary
+        # Only prepend the deterministic scope repair when an obsolete coverage
+        # sentence was actually removed. A normal Hermes answer already uses the
+        # current evidence and must not be replaced by a second fixed-looking
+        # paragraph after streaming completes.
+        return f"{summary}\n\n{cleaned}" if cleaned != original else cleaned
 
     @staticmethod
     def _normalize_li_zong_symbol_answer(answer: str, evidence: dict[str, Any]) -> str:
@@ -7495,6 +7516,40 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                     "当前已深度处理范围内尚无股票进入候选池或触发池；"
                     "这不能推断尚待深度处理的股票也不满足规则。"
                 )
+            history = evidence.get("history") or {}
+            history_items = list(history.get("items") or [])
+            if history_items:
+                history_coverage = history.get("coverage") or {}
+                lines.append(
+                    "近期无前视历史回放已发布 "
+                    f"{history_coverage.get('completed_symbols') or 0}/"
+                    f"{history_coverage.get('expected_symbols') or 0} 只股票；"
+                    "以下是同一规则曾经出现的真实信号，不是当前候选。"
+                )
+                for event in history_items[:3]:
+                    horizon = (
+                        ((event.get("performance") or {}).get("horizons") or {}).get(
+                            "20"
+                        )
+                        or {}
+                    )
+                    if horizon.get("status") == "available":
+                        outcome = (
+                            f"20个交易日后个股 {float(horizon.get('stock_return_pct') or 0):+.2f}%、"
+                            f"沪深300 {float(horizon.get('benchmark_return_pct') or 0):+.2f}%、"
+                            f"超额 {float(horizon.get('excess_return_pct') or 0):+.2f}%"
+                        )
+                    else:
+                        outcome = "20个交易日观察尚未完整"
+                    signal_label = (
+                        "触发人工复核"
+                        if event.get("signal_type") == "triggered"
+                        else "进入候选池"
+                    )
+                    lines.append(
+                        f"- {event.get('name')}（{event.get('internal_symbol')}）"
+                        f"于 {event.get('signal_date')} {signal_label}；{outcome}。"
+                    )
         else:
             lines.append(f"当前共有 {len(items)} 只已发布研究候选：")
             for index, item in enumerate(items[:10], start=1):

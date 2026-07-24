@@ -1321,6 +1321,62 @@ class LiZongStrategyService:
         )
         return [*triggered, *qualified]
 
+    def funnel_packet(self) -> dict[str, Any]:
+        """Explain how the current full-market intersection narrows by rule."""
+
+        coverage = self.coverage_packet()
+        as_of_date = str(coverage.get("as_of_date") or "")
+        states = self.database.latest_strategy_candidate_states(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=LiZongParameters().parameter_version,
+        )
+        current = [
+            state
+            for state in states.values()
+            if not as_of_date or str(state.get("as_of_date") or "") == as_of_date
+        ]
+        status_maps = [
+            {
+                str(rule.get("rule_id")): str(rule.get("status") or "")
+                for rule in (state.get("result") or {}).get("rule_results") or []
+            }
+            for state in current
+        ]
+        labels = {
+            str(item.get("rule_id")): str(item.get("label") or item.get("rule_id"))
+            for item in RULE_DEFINITIONS
+        }
+        steps: list[dict[str, Any]] = []
+        required: list[str] = []
+        previous = len(current)
+        for rule_id in CANDIDATE_RULE_IDS:
+            required.append(rule_id)
+            count = sum(
+                all(statuses.get(value) == "passed" for value in required)
+                for statuses in status_maps
+            )
+            steps.append(
+                {
+                    "rule_id": rule_id,
+                    "label": labels.get(rule_id, rule_id),
+                    "remaining_count": count,
+                    "removed_at_step": max(0, previous - count),
+                }
+            )
+            previous = count
+        return {
+            "as_of_date": as_of_date or None,
+            "starting_count": len(current),
+            "steps": steps,
+            "final_candidate_count": steps[-1]["remaining_count"] if steps else 0,
+            "scope": "sequential_rule_intersection",
+            "boundary": (
+                "漏斗按固定规则顺序展示逐步交集，只说明当前截面为何收窄，"
+                "不代表单条规则的长期预测能力。"
+            ),
+        }
+
     def get_candidate(
         self,
         symbol: str,

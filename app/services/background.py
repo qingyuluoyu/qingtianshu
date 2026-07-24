@@ -29,6 +29,7 @@ from app.services.market_news import MarketNewsService
 from app.services.research_reports import ResearchReportService
 from app.services.research_outcomes import ResearchOutcomeService
 from app.services.tushare_snapshots import TushareSnapshotService
+from app.services.li_zong_history import LiZongHistoryService
 from app.services.li_zong_strategy_service import LiZongStrategyService
 from app.utils import utc_now
 
@@ -96,6 +97,7 @@ class BackgroundScheduler:
         settings: Settings,
         tushare_snapshots: TushareSnapshotService | None = None,
         li_zong_strategy: LiZongStrategyService | None = None,
+        li_zong_history: LiZongHistoryService | None = None,
         trade_workflow: Any | None = None,
         change_events: Any | None = None,
     ):
@@ -124,6 +126,7 @@ class BackgroundScheduler:
         self.settings = settings
         self.tushare_snapshots = tushare_snapshots
         self.li_zong_strategy = li_zong_strategy
+        self.li_zong_history = li_zong_history
         self.trade_workflow = trade_workflow
         self.change_events = change_events
         self._stop = threading.Event()
@@ -412,6 +415,15 @@ class BackgroundScheduler:
         strategy = self.li_zong_strategy.run_universe_batch(
             batch_size=self.settings.li_zong_universe_batch_size
         )
+        history: dict[str, Any] | None = None
+        if self.li_zong_history:
+            active_symbols = list(strategy.get("selected_symbols") or [])
+            history = self.li_zong_history.run_batch(
+                batch_size=min(
+                    2 if active_symbols else 5,
+                    self.settings.li_zong_universe_batch_size,
+                )
+            )
         coverage = strategy.get("coverage") or {}
         counts = coverage.get("counts") or {}
         self.broker.publish(
@@ -429,6 +441,7 @@ class BackgroundScheduler:
             "counts": counts,
             "coverage": coverage,
             "sync_results": strategy.get("sync_results") or [],
+            "history": history,
         }
 
     def _refresh_article(self) -> dict[str, Any]:

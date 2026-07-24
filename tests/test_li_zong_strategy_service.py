@@ -1250,6 +1250,8 @@ def test_strategy_api_exposes_published_candidates_rules_and_triggers(app, clien
     payload = response.json()
     assert payload["status"] == "ready"
     assert payload["counts"]["triggered"] == 1
+    assert payload["funnel"]["starting_count"] == 1
+    assert payload["funnel"]["steps"][-1]["remaining_count"] == 1
     assert payload["data_meta"]["full_market_coverage"] is False
     item = payload["items"][0]
     assert item["symbol"] == "000063.SZ"

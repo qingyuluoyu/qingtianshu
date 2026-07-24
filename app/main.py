@@ -100,6 +100,7 @@ from app.services.trade_workflow import (
     TradeWorkflowService,
 )
 from app.services.tushare_snapshots import TushareSnapshotService
+from app.services.li_zong_history import LiZongHistoryService
 from app.services.li_zong_strategy_service import LiZongStrategyService
 from app.services.today_overview import TodayOverviewService
 from app.services.calibration import OutlookCalibrationService
@@ -344,6 +345,12 @@ class TradeReviewConfirm(BaseModel):
     base_version: int = Field(ge=1)
 
 
+class TradeReviewFollowupCreate(BaseModel):
+    target: Literal["observation_task", "thesis_draft"]
+    title: str | None = Field(default=None, max_length=160)
+    priority: Literal["high", "normal", "low"] = "normal"
+
+
 class StockScreenFilters(BaseModel):
     min_market_cap_yi: float | None = Field(default=None, ge=0)
     max_market_cap_yi: float | None = Field(default=None, ge=0)
@@ -388,6 +395,12 @@ class LiZongRunRequest(BaseModel):
 class LiZongUniverseRunRequest(BaseModel):
     as_of_date: str | None = Field(default=None, pattern=r"^\d{4}-?\d{2}-?\d{2}$")
     batch_size: int | None = Field(default=None, ge=1, le=200)
+
+
+class LiZongHistoryRunRequest(BaseModel):
+    symbols: list[str] | None = Field(default=None, max_length=20)
+    batch_size: int = Field(default=5, ge=1, le=20)
+    lookback_days: int = Field(default=80, ge=20, le=160)
 
 
 class ArticleGenerateRequest(BaseModel):
@@ -992,6 +1005,11 @@ def create_app(
         tushare_snapshots,
         fundamentals_provider=a_share_fundamentals_provider,
     )
+    li_zong_history = LiZongHistoryService(
+        database,
+        tushare_snapshots,
+        li_zong_strategy,
+    )
     stock_workspace = StockWorkspaceService(
         database,
         deep_stock,
@@ -1043,6 +1061,7 @@ def create_app(
         settings,
         tushare_snapshots=tushare_snapshots,
         li_zong_strategy=li_zong_strategy,
+        li_zong_history=li_zong_history,
         trade_workflow=trade_workflow,
         change_events=change_events,
     )
@@ -1106,6 +1125,7 @@ def create_app(
     app.state.stock_screener = stock_screener
     app.state.tushare_snapshots = tushare_snapshots
     app.state.li_zong_strategy = li_zong_strategy
+    app.state.li_zong_history = li_zong_history
     app.state.today_overview = today_overview
     app.state.event_broker = event_broker
     app.state.agent_streams = agent_streams
@@ -1667,6 +1687,7 @@ def create_app(
             reverse=True,
         )
         coverage = li_zong_strategy.coverage_packet()
+        funnel = li_zong_strategy.funnel_packet()
         has_universe = bool(coverage.get("universe_count"))
         counts = coverage.get("counts") if has_universe else visible_counts
         published_status = (
@@ -1677,6 +1698,7 @@ def create_app(
             "status": published_status,
             "items": items,
             "counts": counts,
+            "funnel": funnel,
             "data_meta": {
                 "universe_status": coverage.get("status"),
                 "latest_as_of_date": (
@@ -1746,6 +1768,29 @@ def create_app(
         public = _public_li_zong_candidate(item)
         public["trigger_events"] = item.get("trigger_events") or []
         return public
+
+    @app.get("/v1/stock-strategies/li-zong/history")
+    def list_li_zong_history(
+        request: Request,
+        symbol: str | None = Query(default=None, max_length=24),
+        limit: int = Query(default=30, ge=1, le=200),
+    ) -> dict[str, Any]:
+        require_session_user(request)
+        try:
+            return li_zong_history.history_packet(symbol=symbol, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/stock-strategies/li-zong/history/runs")
+    def run_li_zong_history(
+        payload: LiZongHistoryRunRequest, request: Request
+    ) -> dict[str, Any]:
+        require_admin_api(request)
+        return li_zong_history.run_batch(
+            batch_size=payload.batch_size,
+            symbols=payload.symbols,
+            lookback_days=payload.lookback_days,
+        )
 
     @app.get("/v1/stock-strategies/li-zong/triggers")
     def list_li_zong_triggers(
@@ -2196,6 +2241,26 @@ def create_app(
         except TradeWorkflowConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except TradeWorkflowInvalidState as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.post("/v1/trade-reviews/{review_id}/followups", status_code=201)
+    def create_my_trade_review_followup(
+        review_id: str, payload: TradeReviewFollowupCreate, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return structured_ai.create_review_followup(
+                user_id=user["id"],
+                review_id=review_id,
+                target=payload.target,
+                title=payload.title,
+                priority=payload.priority,
+            )
+        except StructuredAINotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except StructuredAIConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except StructuredAIInvalidState as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @app.get("/v1/observation-tasks")
@@ -3464,7 +3529,8 @@ def create_app(
         elif li_zong_query:
             knowledge_query = (
                 f"{message} 李总策略 确定性规则 基本面 股性 量价 "
-                "真实涨停价 复权新高 三日放量 数据缺失 人工复核"
+                "真实涨停价 复权新高 三日放量 历史回放 无前视 "
+                "沪深300 超额表现 数据缺失 人工复核"
             )
         elif stock_screen_query:
             knowledge_query = (
@@ -3664,6 +3730,7 @@ def create_app(
         elif li_zong_query and upload is None:
             intent = "stock_screen"
             coverage = li_zong_strategy.coverage_packet()
+            rule_funnel = li_zong_strategy.funnel_packet()
             requested_symbols = li_zong_strategy.resolve_universe_mentions(message)
             if symbol is not None and symbol not in requested_symbols:
                 requested_symbols.insert(0, symbol)
@@ -3689,6 +3756,22 @@ def create_app(
                 for item in candidates
                 if item is not None
             ]
+            history_requested = any(
+                keyword in message
+                for keyword in ("历史", "以前", "曾经", "后来", "走势", "表现", "回放")
+            )
+            history_packet = (
+                li_zong_history.history_packet(
+                    symbol=(
+                        requested_symbols[0]
+                        if len(requested_symbols) == 1 and history_requested
+                        else None
+                    ),
+                    limit=12,
+                )
+                if history_requested or not public_items
+                else None
+            )
             evaluated = int(coverage.get("evaluated_symbols") or 0)
             universe_count = int(coverage.get("universe_count") or 0)
             if not universe_count:
@@ -3728,6 +3811,8 @@ def create_app(
                     if not (full_coverage and deep_complete)
                     else "本期全市场预筛与深度处理完成，尚无股票进入候选池或触发池。"
                 )
+                if history_packet and not (history_packet.get("items") or []):
+                    warnings.append("近期历史回放仍在后台增量生成，暂未发布可展示样本。")
             if selection_mode == "symbol_check" and not public_items:
                 warnings.append("该股票尚未形成可用的李总策略快照。")
             missing_requested_symbols = (
@@ -3775,6 +3860,8 @@ def create_app(
                 "requested_symbols": requested_symbols,
                 "missing_requested_symbols": missing_requested_symbols,
                 "items": public_items,
+                "rule_funnel": rule_funnel,
+                "history": history_packet,
                 "data_meta": {
                     "universe_status": coverage.get("status"),
                     "latest_completed_trade_date": coverage.get("as_of_date")

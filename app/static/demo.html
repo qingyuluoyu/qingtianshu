@@ -220,6 +220,27 @@
     .li-zong-metric strong { display: block; margin-top: 3px; color: #32435b; font-size: 11px; }
     .li-zong-limitations { margin-top: 9px; color: #8e6b31; font-size: 10px; line-height: 1.55; }
     .li-zong-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 11px; }
+    .li-zong-history { margin: 0 18px 18px; padding: 15px; border: 1px solid #dbe6f4; border-radius: 14px; background: #f8fbff; }
+    .li-zong-history-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+    .li-zong-history-title { color: #293c58; font-size: 14px; font-weight: 790; }
+    .li-zong-history-copy { max-width: 720px; margin-top: 4px; color: #728198; font-size: 10px; line-height: 1.6; }
+    .li-zong-history-coverage { flex-shrink: 0; color: #51709b; font-size: 9px; }
+    .li-zong-funnel { display: flex; gap: 6px; margin-top: 12px; padding-bottom: 4px; overflow-x: auto; }
+    .li-zong-funnel-step { flex: 0 0 132px; padding: 8px 9px; border: 1px solid #e0e8f3; border-radius: 9px; background: #fff; }
+    .li-zong-funnel-step span { display: block; overflow: hidden; color: #7d8ba0; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+    .li-zong-funnel-step strong { display: block; margin-top: 3px; color: #31445f; font-size: 12px; }
+    .li-zong-funnel-step small { display: block; margin-top: 2px; color: #9a6f55; font-size: 8px; }
+    .li-zong-history-list { display: grid; gap: 9px; max-height: 680px; margin-top: 12px; overflow-y: auto; overscroll-behavior: contain; }
+    .li-zong-history-card { padding: 13px; border: 1px solid #e0e8f3; border-radius: 12px; background: #fff; }
+    .li-zong-history-meta { margin-top: 3px; color: #7b899c; font-size: 9px; }
+    .li-zong-history-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 7px; margin-top: 10px; }
+    .li-zong-history-horizon { padding: 9px; border-radius: 9px; background: #f4f7fb; }
+    .li-zong-history-horizon span { display: block; color: #8190a4; font-size: 8px; }
+    .li-zong-history-horizon strong { display: block; margin-top: 4px; color: #31445f; font-size: 11px; }
+    .li-zong-history-horizon small { display: block; margin-top: 3px; color: #6f7f95; font-size: 8px; line-height: 1.45; }
+    .li-zong-history-chart { width: 100%; height: 74px; margin-top: 10px; border-radius: 9px; background: linear-gradient(180deg,#f9fbfe,#f2f6fb); }
+    .li-zong-history-legend { display: flex; gap: 12px; margin-top: 5px; color: #75849a; font-size: 8px; }
+    .li-zong-history-legend i { display: inline-block; width: 10px; height: 2px; margin-right: 4px; vertical-align: middle; }
     .screener-section-heading { padding: 2px 18px 14px; }
     .screener-section-heading strong { color: #2b3c54; font-size: 15px; }
     .screener-section-heading span { display: block; margin-top: 4px; color: #7b899c; font-size: 10px; }
@@ -447,6 +468,12 @@
     .trade-center-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
     .trade-center-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
     .trade-center-tag { padding: 5px 8px; border-radius: 999px; color: #53657e; background: #eef3fa; font-size: 10px; }
+    .review-followup { margin-top: 18px; padding: 14px; border: 1px solid #cfdcf5; border-radius: 12px; background: #f6f9ff; }
+    .review-followup-title { color: #263a55; font-size: 13px; font-weight: 780; }
+    .review-followup-copy { margin-top: 6px; color: #5d6f88; font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
+    .review-followup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .review-followup-status { margin-top: 9px; color: #718096; font-size: 11px; line-height: 1.6; }
+    .review-followup-draft { margin-top: 10px; padding: 11px 12px; border: 1px solid #dce5f2; border-radius: 10px; background: #fff; color: #435670; font-size: 12px; line-height: 1.7; white-space: pre-wrap; }
     .evidence-task-state.pending, .evidence-task-state.collecting { color: #f5dda1; background: rgba(244,201,107,.1); }
     .evidence-task-state.resolved { color: #bff4e5; background: rgba(85,219,182,.09); }
     .evidence-task-state.pending_external { color: #bfd3ff; background: rgba(112,167,255,.1); }
@@ -1495,6 +1522,9 @@
       .li-zong-stats { grid-template-columns: repeat(2,minmax(0,1fr)); padding-left: 12px; padding-right: 12px; }
       .li-zong-tabs, .li-zong-list { padding-left: 12px; padding-right: 12px; }
       .li-zong-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      .li-zong-history { margin-left: 12px; margin-right: 12px; }
+      .li-zong-history-head { flex-direction: column; }
+      .li-zong-history-grid { grid-template-columns: 1fr; }
       .evidence-coverage-grid { grid-template-columns: 1fr; }
     }
 
@@ -2143,6 +2173,17 @@
               <button class="li-zong-tab" type="button" data-li-zong-filter="not_qualified">未满足</button>
             </div>
             <div id="liZongResults" class="li-zong-list"><div class="screener-empty">当前没有可展示的策略候选。</div></div>
+            <section id="liZongHistoryPanel" class="li-zong-history" aria-labelledby="liZongHistoryTitle" hidden>
+              <div class="li-zong-history-head">
+                <div>
+                  <div id="liZongHistoryTitle" class="li-zong-history-title">历史真实命中与后续表现</div>
+                  <div class="li-zong-history-copy">当前没有候选时，展示同一版本规则在历史日期真实筛出的股票，并对照信号后5/10/20个交易日的个股、沪深300和超额表现。所有信号严格按当时可得数据回放。</div>
+                </div>
+                <div id="liZongHistoryCoverage" class="li-zong-history-coverage">回放正在准备</div>
+              </div>
+              <div id="liZongFunnel" class="li-zong-funnel" aria-label="李总策略逐规则筛选漏斗"></div>
+              <div id="liZongHistoryResults" class="li-zong-history-list"><div class="screener-empty">正在生成近期历史回放…</div></div>
+            </section>
           </section>
           <div class="screener-section-heading"><strong>通用截面筛选</strong><span>适合快速缩小研究范围；与李总策略的长周期规则和盘后触发独立运行。</span></div>
           <div class="screener-layout">
@@ -2582,6 +2623,7 @@
       stockScreener: null,
       stockScreenerLoading: false,
       liZongStrategy: null,
+      liZongHistory: null,
       liZongLoading: false,
       liZongLoadToken: 0,
       liZongFilter: "qualified",
@@ -3241,6 +3283,113 @@
       openReader(`${item.name || item.internal_symbol}｜李总策略证据`, lines.join("\n"), `${liZongStatusLabel(item.status)} · ${item.as_of_date || "数据时间待确认"}`);
     }
 
+    function createLiZongHistoryChart(path) {
+      const points = (path || []).filter(item => Number.isFinite(Number(item.stock_return_pct)) && Number.isFinite(Number(item.benchmark_return_pct)));
+      if (points.length < 2) return null;
+      const values = points.flatMap(item => [Number(item.stock_return_pct), Number(item.benchmark_return_pct), 0]);
+      const min = Math.min(...values); const max = Math.max(...values); const span = Math.max(1, max - min);
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 320 74"); svg.classList.add("li-zong-history-chart"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "信号后个股与沪深300累计收益走势");
+      const coordinates = key => points.map((item, index) => {
+        const x = 8 + index * (304 / Math.max(1, points.length - 1));
+        const y = 66 - ((Number(item[key]) - min) / span) * 58;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(" ");
+      const zero = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      const zeroY = 66 - ((0 - min) / span) * 58;
+      zero.setAttribute("x1", "8"); zero.setAttribute("x2", "312"); zero.setAttribute("y1", zeroY.toFixed(1)); zero.setAttribute("y2", zeroY.toFixed(1)); zero.setAttribute("stroke", "#dbe3ee"); zero.setAttribute("stroke-width", "1");
+      const benchmark = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      benchmark.setAttribute("points", coordinates("benchmark_return_pct")); benchmark.setAttribute("fill", "none"); benchmark.setAttribute("stroke", "#9aa9bc"); benchmark.setAttribute("stroke-width", "2");
+      const stock = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      stock.setAttribute("points", coordinates("stock_return_pct")); stock.setAttribute("fill", "none"); stock.setAttribute("stroke", "#3673d9"); stock.setAttribute("stroke-width", "2.4");
+      svg.append(zero, benchmark, stock); return svg;
+    }
+
+    function showLiZongHistoryDetail(item) {
+      const performance = item.performance || {}; const horizons = performance.horizons || {};
+      const lines = [
+        `# ${item.name || item.internal_symbol}｜${item.signal_date} 历史信号`,
+        `信号状态：${item.signal_type === "triggered" ? "进入候选池并触发人工复核" : "进入候选池"}`,
+        "",
+        "## 信号后表现"
+      ];
+      [5, 10, 20].forEach(day => {
+        const horizon = horizons[String(day)] || {};
+        if (horizon.status === "available") lines.push(`- ${day}个交易日：个股 ${pct(horizon.stock_return_pct)}；沪深300 ${pct(horizon.benchmark_return_pct)}；超额 ${pct(horizon.excess_return_pct)}；区间最大上行 ${pct(horizon.max_upside_pct)}（${horizon.max_upside_date || "日期待确认"}）；区间最大下行 ${pct(horizon.max_drawdown_pct)}（${horizon.max_drawdown_date || "日期待确认"}）；观察日 ${horizon.target_date}`);
+        else lines.push(`- ${day}个交易日：观察尚未完整。`);
+      });
+      lines.push("", "## 当时逐规则证据");
+      (item.rule_results || []).forEach(rule => {
+        lines.push(`- ${liZongRuleLabel(rule.rule_id)}｜${liZongRuleStatus(rule.status)}｜证据时间 ${rule.evidence_date || rule.report_period || "待确认"}`);
+        lines.push(`  实际值：${strategyShortValue(rule.actual_value)}；阈值：${strategyShortValue(rule.threshold)}；来源：${rule.source || "待确认"}`);
+      });
+      lines.push("", "## 回放边界", "- 只使用信号日及以前日线、当日历史市值和当时已公告财务及股东数据。", "- 收益从信号日收盘计算，未计交易成本、涨跌停可成交性和实际成交滑点。", "- 单个历史样本不代表未来结果，也不用于计算胜率式荐股评价。");
+      openReader(`${item.name || item.internal_symbol}｜历史回放`, lines.join("\n"), `${item.signal_date} · 对照沪深300`);
+    }
+
+    function renderLiZongHistory(payload) {
+      state.liZongHistory = payload;
+      const panel = $("liZongHistoryPanel"); const container = $("liZongHistoryResults");
+      const counts = state.liZongStrategy?.counts || {};
+      const noCurrentCandidates = Number(counts.qualified || 0) + Number(counts.triggered || 0) === 0;
+      const shouldShow = state.liZongFilter === "qualified" && noCurrentCandidates;
+      panel.hidden = !shouldShow;
+      if (!shouldShow) return;
+      const coverage = payload?.coverage || {}; const items = payload?.items || [];
+      const expected = Number(coverage.expected_symbols || 0); const completed = Number(coverage.completed_symbols || 0);
+      $("liZongHistoryCoverage").textContent = expected ? `近期回放 ${completed}/${expected} 只 · ${items.length} 个已发布信号` : "近期回放正在准备";
+      container.innerHTML = "";
+      if (!items.length) {
+        const empty = document.createElement("div"); empty.className = "screener-empty";
+        empty.textContent = completed ? "已完成的近期回放中暂未发现历史命中，后台会继续按近似程度扩展覆盖。" : "后台正在优先回放最接近当前规则的股票，完成后会在这里显示真实历史信号及后续走势。";
+        container.appendChild(empty); return;
+      }
+      items.forEach(item => {
+        const performance = item.performance || {}; const horizons = performance.horizons || {};
+        const card = document.createElement("article"); card.className = "li-zong-history-card";
+        const head = document.createElement("div"); head.className = "li-zong-card-head";
+        const identity = document.createElement("div");
+        const name = document.createElement("div"); name.className = "li-zong-card-name"; name.textContent = item.name || item.internal_symbol;
+        const meta = document.createElement("div"); meta.className = "li-zong-history-meta"; meta.textContent = `${item.internal_symbol} · ${item.signal_date} · ${item.signal_type === "triggered" ? "触发人工复核" : "进入候选池"}`;
+        identity.append(name, meta);
+        const badge = document.createElement("span"); badge.className = `li-zong-badge ${item.signal_type === "triggered" ? "triggered" : ""}`; badge.textContent = "历史真实信号";
+        head.append(identity, badge); card.appendChild(head);
+        const grid = document.createElement("div"); grid.className = "li-zong-history-grid";
+        [5, 10, 20].forEach(day => {
+          const horizon = horizons[String(day)] || {}; const node = document.createElement("div"); node.className = "li-zong-history-horizon";
+          const label = document.createElement("span"); label.textContent = `${day}个交易日后`;
+          const value = document.createElement("strong"); value.textContent = horizon.status === "available" ? `个股 ${pct(horizon.stock_return_pct)}` : "观察未完整";
+          const detail = document.createElement("small"); detail.textContent = horizon.status === "available" ? `沪深300 ${pct(horizon.benchmark_return_pct)} · 超额 ${pct(horizon.excess_return_pct)}` : "不会使用不足周期的数据补算";
+          node.append(label, value, detail); grid.appendChild(node);
+        });
+        card.appendChild(grid);
+        const chart = createLiZongHistoryChart(performance.path || []);
+        if (chart) {
+          card.appendChild(chart);
+          const legend = document.createElement("div"); legend.className = "li-zong-history-legend"; legend.innerHTML = '<span><i style="background:#3673d9"></i>个股</span><span><i style="background:#9aa9bc"></i>沪深300</span><span>纵轴为信号日收盘后的累计收益</span>'; card.appendChild(legend);
+        }
+        const actions = document.createElement("div"); actions.className = "li-zong-actions";
+        const detailButton = document.createElement("button"); detailButton.type = "button"; detailButton.className = "btn"; detailButton.textContent = "查看当时证据"; detailButton.addEventListener("click", () => showLiZongHistoryDetail(item));
+        const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn primary"; ask.textContent = "让 Agent 复盘";
+        ask.addEventListener("click", () => { void researchCandidateWithAgent(item, ask, {source_kind: "li_zong_strategy", source_label: "李总策略历史回放", display_name: item.name, profile_key: item.history_version, as_of_date: item.signal_date, candidate_status: `historical_${item.signal_type}`, matched_reasons: (item.rule_results || []).filter(rule => rule.status === "passed").map(rule => liZongRuleLabel(rule.rule_id)), missing_fields: []}, `请基于李总策略的真实历史回放，复盘${item.name}（${item.internal_symbol}）在${item.signal_date}的信号。针对性说明当时为什么满足规则、信号后5/10/20个交易日相对沪深300的走势、反方证据、样本边界，以及它对当前研究有什么和没有什么启示。不要把历史样本写成未来预测。`); });
+        actions.append(detailButton, ask); card.appendChild(actions); container.appendChild(card);
+      });
+    }
+
+    function renderLiZongFunnel(funnel) {
+      const container = $("liZongFunnel"); container.innerHTML = "";
+      const steps = funnel?.steps || [];
+      if (!steps.length) { container.hidden = true; return; }
+      container.hidden = false;
+      steps.forEach(step => {
+        const node = document.createElement("div"); node.className = "li-zong-funnel-step"; node.title = liZongRuleLabel(step.rule_id);
+        const label = document.createElement("span"); label.textContent = liZongRuleLabel(step.rule_id);
+        const value = document.createElement("strong"); value.textContent = `${Number(step.remaining_count || 0).toLocaleString("zh-CN")} 只`;
+        const removed = document.createElement("small"); removed.textContent = `本步减少 ${Number(step.removed_at_step || 0).toLocaleString("zh-CN")} 只`;
+        node.append(label, value, removed); container.appendChild(node);
+      });
+    }
+
     function renderLiZongStrategy(payload) {
       const items = payload?.items || [];
       const counts = payload?.counts || {};
@@ -3282,6 +3431,7 @@
       $("liZongQualified").textContent = counts.qualified ?? 0;
       $("liZongTriggered").textContent = counts.triggered ?? 0;
       $("liZongIncomplete").textContent = counts.data_incomplete ?? 0;
+      renderLiZongFunnel(payload?.funnel);
       $("liZongState").textContent = meta.full_market_coverage && meta.deep_check_complete
         ? "最新策略结果"
         : "当前可核验结果";
@@ -3291,8 +3441,12 @@
       const container = $("liZongResults"); container.innerHTML = "";
       if (!filtered.length) {
         const empty = document.createElement("div"); empty.className = "screener-empty";
-        empty.textContent = `${liZongStatusLabel(state.liZongFilter)}列表当前为空。可以切换其他分类，或使用下方通用筛选。`;
-        container.appendChild(empty); return;
+        empty.textContent = state.liZongFilter === "qualified" && Number(counts.qualified || 0) + Number(counts.triggered || 0) === 0
+          ? "当前没有股票同时满足全部严格规则。下方展示同一规则的历史真实命中及后续相对大盘走势。"
+          : `${liZongStatusLabel(state.liZongFilter)}列表当前为空。可以切换其他分类，或使用下方通用筛选。`;
+        container.appendChild(empty);
+        if (state.liZongHistory) renderLiZongHistory(state.liZongHistory);
+        return;
       }
       filtered.forEach(item => {
         const summary = item.summary || {};
@@ -3347,6 +3501,7 @@
         const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn"; ask.textContent = "让 Agent 核验"; ask.addEventListener("click", () => { void researchCandidateWithAgent(item, ask, entryContext, `请核验${item.name}（${item.internal_symbol}）的李总策略结果。逐条说明基本面、股性、量价和触发规则的证据时间、反方证据、数据缺口、失效条件与下一步需要核验什么；不要输出买卖指令。`); });
         actions.append(detail, follow, research, ask); card.appendChild(actions); container.appendChild(card);
       });
+      if (state.liZongHistory) renderLiZongHistory(state.liZongHistory);
     }
 
     async function loadLiZongStrategy() {
@@ -3356,9 +3511,16 @@
       state.liZongLoading = true;
       if (!hadPublishedResult) $("liZongPanel").hidden = true;
       try {
-        const payload = await api(`/v1/stock-strategies/li-zong/candidates?status=${encodeURIComponent(filter)}&limit=200`);
+        const [candidateResult, historyResult] = await Promise.allSettled([
+          api(`/v1/stock-strategies/li-zong/candidates?status=${encodeURIComponent(filter)}&limit=200`),
+          filter === "qualified"
+            ? api("/v1/stock-strategies/li-zong/history?limit=30")
+            : Promise.resolve(state.liZongHistory)
+        ]);
         if (loadToken !== state.liZongLoadToken) return;
-        renderLiZongStrategy(payload);
+        if (candidateResult.status !== "fulfilled") throw candidateResult.reason;
+        renderLiZongStrategy(candidateResult.value);
+        if (historyResult.status === "fulfilled" && historyResult.value) renderLiZongHistory(historyResult.value);
       } catch {
         if (loadToken !== state.liZongLoadToken) return;
         if (hadPublishedResult) {
@@ -6587,6 +6749,92 @@
       section.append(title, copy); container.appendChild(section);
     }
 
+    function appendTradeReviewFollowup(container, review, refreshCallback = null) {
+      const version = tradeReviewVersion(review) || {};
+      const improvement = String(version.improvement_text || "").trim();
+      if (!improvement || !["confirmed", "archived"].includes(review.status)) return;
+      const followups = review.followups || {};
+      const section = document.createElement("section"); section.className = "review-followup";
+      const title = document.createElement("div"); title.className = "review-followup-title"; title.textContent = "把复盘改进变成下一步";
+      const copy = document.createElement("div"); copy.className = "review-followup-copy"; copy.textContent = improvement;
+      const actions = document.createElement("div"); actions.className = "review-followup-actions";
+      const status = document.createElement("div"); status.className = "review-followup-status";
+
+      const refresh = async () => {
+        if (refreshCallback) await refreshCallback();
+        else if (review.symbol && $("deepStockSymbol")?.value === review.symbol) await refreshStockWorkflow(review.symbol, "history");
+      };
+      const taskButton = document.createElement("button"); taskButton.type = "button"; taskButton.className = "btn primary";
+      taskButton.textContent = followups.observation_task ? "已保存为观察任务" : "保存为观察任务";
+      taskButton.disabled = Boolean(followups.observation_task);
+      taskButton.addEventListener("click", async () => {
+        taskButton.disabled = true; status.textContent = "正在保存这条已确认的复盘改进…";
+        try {
+          const result = await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/followups`, {method: "POST", body: JSON.stringify({target: "observation_task", priority: "normal"})});
+          taskButton.textContent = "已保存为观察任务";
+          status.textContent = `已进入“任务与操作”：${result.observation_task?.title || "复盘改进"}`;
+          await refresh();
+        } catch (error) {
+          taskButton.disabled = false; status.textContent = error.message || "复盘改进暂未保存，请稍后重试。";
+        }
+      });
+      actions.appendChild(taskButton);
+
+      const renderThesisState = thesis => {
+        section.querySelector(".review-followup-draft")?.remove();
+        actions.querySelectorAll("[data-review-thesis-action]").forEach(node => node.remove());
+        if (!thesis) return;
+        const draft = document.createElement("div"); draft.className = "review-followup-draft"; draft.textContent = thesis.reason_text || "已生成判断草稿。";
+        section.insertBefore(draft, actions);
+        if (thesis.status === "active") {
+          status.textContent = "这条复盘改进已经写入当前正式判断。";
+          return;
+        }
+        const confirm = document.createElement("button"); confirm.type = "button"; confirm.className = "btn primary"; confirm.dataset.reviewThesisAction = "confirm"; confirm.textContent = "确认更新当前判断";
+        const reject = document.createElement("button"); reject.type = "button"; reject.className = "btn"; reject.dataset.reviewThesisAction = "reject"; reject.textContent = "放弃这份草稿";
+        confirm.addEventListener("click", async () => {
+          confirm.disabled = true; reject.disabled = true; status.textContent = "正在写入版本化当前判断…";
+          try {
+            await api(`/v1/stocks/${encodeURIComponent(review.symbol)}/theses/${encodeURIComponent(thesis.id)}/confirm`, {method: "POST"});
+            status.textContent = "已由你确认并写入当前判断；原判断版本仍保留。";
+            await loadWatchlist(); await refresh();
+          } catch (error) {
+            confirm.disabled = false; reject.disabled = false; status.textContent = error.message || "判断草稿暂未确认，请刷新后重试。";
+          }
+        });
+        reject.addEventListener("click", async () => {
+          confirm.disabled = true; reject.disabled = true; status.textContent = "正在保留原判断…";
+          try {
+            await api(`/v1/stocks/${encodeURIComponent(review.symbol)}/theses/${encodeURIComponent(thesis.id)}/reject`, {method: "POST"});
+            status.textContent = "已放弃草稿，当前正式判断没有变化。"; draft.remove(); confirm.remove(); reject.remove();
+            await refresh();
+          } catch (error) {
+            confirm.disabled = false; reject.disabled = false; status.textContent = error.message || "草稿暂未处理，请稍后重试。";
+          }
+        });
+        actions.append(confirm, reject);
+      };
+
+      const thesisButton = document.createElement("button"); thesisButton.type = "button"; thesisButton.className = "btn"; thesisButton.dataset.reviewThesisAction = "create";
+      thesisButton.textContent = followups.thesis ? (followups.thesis.status === "active" ? "已写入当前判断" : "查看判断草稿") : "形成判断草稿";
+      thesisButton.disabled = followups.thesis?.status === "active";
+      thesisButton.addEventListener("click", async () => {
+        if (followups.thesis) { renderThesisState(followups.thesis); return; }
+        thesisButton.disabled = true; status.textContent = "正在保留原判断并追加这条复盘改进…";
+        try {
+          const result = await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/followups`, {method: "POST", body: JSON.stringify({target: "thesis_draft", priority: "normal"})});
+          thesisButton.remove(); renderThesisState(result.thesis);
+          status.textContent = result.status === "already_applied" ? "这条改进已经在当前判断中。" : "草稿已生成；再次确认前不会改变正式判断。";
+        } catch (error) {
+          thesisButton.disabled = false; status.textContent = error.message || "判断草稿暂未生成，请稍后重试。";
+        }
+      });
+      actions.appendChild(thesisButton);
+      section.append(title, copy, actions, status); container.appendChild(section);
+      if (followups.observation_task) status.textContent = `已保存观察任务：${followups.observation_task.title || "复盘改进"}`;
+      if (followups.thesis) renderThesisState(followups.thesis);
+    }
+
     function renderTradeReviewCenterDetail(review, packet = null) {
       const container = $("tradeReviewDetail"); container.innerHTML = "";
       if (!review) {
@@ -6623,6 +6871,7 @@
         version.bias_tags.forEach(value => { const tag = document.createElement("span"); tag.className = "trade-center-tag"; tag.textContent = value; tags.appendChild(tag); });
         container.appendChild(tags);
       }
+      appendTradeReviewFollowup(container, review, async () => { await loadTradeReviewCenter(review.id); void loadTodayOverview(); });
 
       const actions = document.createElement("div"); actions.className = "trade-center-actions";
       if (review.status === "ready") {
@@ -6719,7 +6968,9 @@
         if (reviewStatus === "ready") { const generate = document.createElement("button"); generate.type = "button"; generate.className = "btn primary"; generate.textContent = "立即生成草稿"; generate.addEventListener("click", () => { void generateTradeReviewDraft(symbol, review, generate); }); actions.appendChild(generate); }
         if (["draft", "revised"].includes(reviewStatus)) { const edit = document.createElement("button"); edit.type = "button"; edit.className = "btn primary"; edit.textContent = "编辑并确认"; edit.addEventListener("click", () => showTradeReviewEditor(card, symbol, review)); actions.appendChild(edit); }
         if (reviewStatus === "confirmed") { const archive = document.createElement("button"); archive.type = "button"; archive.className = "btn"; archive.textContent = "归档"; archive.addEventListener("click", () => { void archiveTradeReview(symbol, review, archive); }); actions.appendChild(archive); }
-        card.append(cardHead, meta, columns); if (result.textContent) card.appendChild(result); card.appendChild(actions); grid.appendChild(card);
+        card.append(cardHead, meta, columns); if (result.textContent) card.appendChild(result); card.appendChild(actions);
+        appendTradeReviewFollowup(card, review, async () => { await refreshStockWorkflow(symbol, "history"); });
+        grid.appendChild(card);
       });
       section.appendChild(grid); return section;
     }

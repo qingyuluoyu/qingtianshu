@@ -7,9 +7,17 @@ from uuid import uuid4
 
 from app.catalog import normalize_symbol
 from app.db import Database
-from app.services.observation_tasks import ObservationTaskService
+from app.services.observation_tasks import (
+    ObservationTaskInvalidState,
+    ObservationTaskService,
+)
 from app.services.research_claims import build_research_claim_ledger
-from app.services.stock_domain import StockDomainService
+from app.services.stock_domain import (
+    StockDomainInvalidState,
+    StockDomainNotFound,
+    StockDomainService,
+    StockDomainVersionConflict,
+)
 from app.services.trade_workflow import (
     TradeWorkflowConflict,
     TradeWorkflowInvalidState,
@@ -405,6 +413,136 @@ class StructuredAIService:
         if row is None:
             raise StructuredAIInvalidState("复盘候选未能保存")
         return self.public_writeback(self._writeback_row(row))
+
+    def create_review_followup(
+        self,
+        *,
+        user_id: str,
+        review_id: str,
+        target: str,
+        title: str | None = None,
+        priority: str = "normal",
+    ) -> dict[str, Any]:
+        """Turn a user-confirmed review improvement into the next research object."""
+
+        try:
+            review = self.trade_workflow.get_trade_review(user_id, review_id)
+        except TradeWorkflowNotFound as exc:
+            raise StructuredAINotFound(str(exc)) from exc
+        except TradeWorkflowInvalidState as exc:
+            raise StructuredAIInvalidState(str(exc)) from exc
+        if review.get("status") not in {"confirmed", "archived"}:
+            raise StructuredAIInvalidState("只有用户已确认的复盘才能生成后续任务或判断草稿")
+        version = review.get("current_version") or {}
+        improvement = self._clean_optional_text(
+            version.get("improvement_text"), 4000
+        )
+        if not improvement:
+            raise StructuredAIInvalidState("这条复盘还没有用户确认的改进内容")
+        symbol = str(review.get("symbol") or "").strip()
+        workspace = self.database.get_stock_workspace(user_id, symbol)
+        if workspace is None or workspace.get("relation_type") == "ended":
+            raise StructuredAIConflict("股票研究空间已结束，请先恢复后再保存复盘改进")
+        active = self.database.get_active_thesis(user_id, str(workspace["id"]))
+        source_ref = f"trade-review:{review_id}:v{int(version.get('version_no') or 0)}"
+
+        if target == "observation_task":
+            task_title = self._clean_optional_text(title, 160) or (
+                f"复盘改进｜{review.get('name') or symbol}"
+            )
+            try:
+                task = self.observation_tasks.create_task(
+                    user_id=user_id,
+                    symbol=symbol,
+                    title=task_title,
+                    description=improvement,
+                    priority=priority,
+                    thesis_id=str(active["id"]) if active else None,
+                    source_type="research_action",
+                    source_ref_id=source_ref,
+                )
+            except ObservationTaskInvalidState as exc:
+                raise StructuredAIInvalidState(str(exc)) from exc
+            return {
+                "contract_version": self.CONTRACT_VERSION,
+                "followup_type": "observation_task",
+                "source_review_id": review_id,
+                "source_review_version": int(version.get("version_no") or 0),
+                "observation_task": task,
+                "boundary": "任务只保存用户已确认的复盘改进，不会生成交易指令。",
+            }
+
+        if target != "thesis_draft":
+            raise StructuredAIInvalidState("复盘后续类型不受支持")
+        active_reason = str((active or {}).get("reason_text") or "").strip()
+        if improvement in active_reason:
+            return {
+                "contract_version": self.CONTRACT_VERSION,
+                "followup_type": "thesis_draft",
+                "source_review_id": review_id,
+                "source_review_version": int(version.get("version_no") or 0),
+                "status": "already_applied",
+                "thesis": active,
+                "boundary": "该复盘改进已经在当前正式判断中，未重复创建新版本。",
+            }
+        proposed_reason = (
+            f"{active_reason}\n\n复盘后需要持续核验：{improvement}"
+            if active_reason
+            else f"复盘后需要持续核验：{improvement}"
+        )
+        current_version = int((active or {}).get("version_no") or 0)
+        with self.database.connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT id FROM thesis_versions
+                WHERE user_id = ? AND workspace_id = ?
+                  AND status IN ('draft', 'pending_confirmation')
+                  AND source = 'user' AND base_version = ? AND reason_text = ?
+                ORDER BY version_no DESC LIMIT 1
+                """,
+                (user_id, workspace["id"], current_version, proposed_reason),
+            ).fetchone()
+        if existing is not None:
+            draft = self.database.get_thesis_version(user_id, str(existing["id"]))
+        else:
+            source_run_id = next(
+                (
+                    str(item.get("source_run_id"))
+                    for item in review.get("versions") or []
+                    if item.get("source_run_id")
+                ),
+                None,
+            )
+            recheck_conditions = self._unique_text(
+                [*((active or {}).get("recheck_conditions") or []), improvement],
+                limit=20,
+            )
+            try:
+                draft = self.stock_domain.create_thesis_candidate(
+                    user_id=user_id,
+                    symbol=symbol,
+                    reason_text=proposed_reason,
+                    watch_items=list((active or {}).get("watch_items") or []),
+                    recheck_conditions=recheck_conditions,
+                    source="user",
+                    source_run_id=source_run_id,
+                    base_version=current_version,
+                )
+            except StockDomainNotFound as exc:
+                raise StructuredAINotFound(str(exc)) from exc
+            except StockDomainVersionConflict as exc:
+                raise StructuredAIConflict(str(exc)) from exc
+            except StockDomainInvalidState as exc:
+                raise StructuredAIInvalidState(str(exc)) from exc
+        return {
+            "contract_version": self.CONTRACT_VERSION,
+            "followup_type": "thesis_draft",
+            "source_review_id": review_id,
+            "source_review_version": int(version.get("version_no") or 0),
+            "status": "draft",
+            "thesis": draft,
+            "boundary": "已生成版本化判断草稿；只有用户再次确认后才会替换当前正式判断。",
+        }
 
     def list_writebacks(
         self, *, user_id: str, status: str | None = None, limit: int = 100

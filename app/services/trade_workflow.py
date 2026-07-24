@@ -850,6 +850,39 @@ class TradeWorkflowService:
             (item for item in version_items if item["id"] == review["current_version_id"]),
             None,
         )
+        followups: dict[str, Any] = {
+            "observation_task": None,
+            "thesis": None,
+        }
+        improvement = str((current or {}).get("improvement_text") or "").strip()
+        if current is not None and improvement:
+            source_ref = (
+                f"trade-review:{review['id']}:v{int(current.get('version_no') or 0)}"
+            )
+            task = connection.execute(
+                """
+                SELECT id, status, title, description, version, updated_at
+                FROM observation_tasks
+                WHERE user_id = ? AND source_type = 'research_action'
+                  AND source_ref_id = ?
+                ORDER BY updated_at DESC LIMIT 1
+                """,
+                (review["user_id"], source_ref),
+            ).fetchone()
+            thesis = connection.execute(
+                """
+                SELECT id, status, reason_text, version_no, created_at, confirmed_at
+                FROM thesis_versions
+                WHERE user_id = ? AND workspace_id = ?
+                  AND instr(reason_text, ?) > 0
+                ORDER BY version_no DESC LIMIT 1
+                """,
+                (review["user_id"], review["workspace_id"], improvement),
+            ).fetchone()
+            followups = {
+                "observation_task": dict(task) if task is not None else None,
+                "thesis": dict(thesis) if thesis is not None else None,
+            }
         return {
             **review,
             "symbol": workspace["symbol"] if workspace is not None else operation["symbol"],
@@ -860,6 +893,7 @@ class TradeWorkflowService:
             "price_observation": observation,
             "current_version": current,
             "versions": version_items,
+            "followups": followups,
             "can_generate_draft": review["status"] == "ready" and observation["ready"],
             "can_confirm": (
                 review["status"] == "draft"

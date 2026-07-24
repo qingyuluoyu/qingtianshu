@@ -3367,6 +3367,57 @@ class Database:
             ).fetchone()
         return self._tushare_snapshot_row(row)
 
+    def list_latest_tushare_dataset_snapshots(
+        self,
+        dataset: str,
+        *,
+        data_status: str | None = None,
+        include_payload: bool = True,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the newest published snapshot for every scope in a dataset."""
+
+        if data_status not in {None, "stable", "incomplete"}:
+            raise ValueError("unsupported Tushare snapshot status")
+        size = None if limit is None else max(1, min(int(limit), 20_000))
+        selected = "*" if include_payload else (
+            "id, dataset, scope_key, as_of_date, report_period, "
+            "source_updated_at, sync_run_id, data_version, data_status, created_at"
+        )
+        status_clause = "AND data_status = ?" if data_status else ""
+        parameters: list[Any] = [dataset]
+        if data_status:
+            parameters.append(data_status)
+        limit_clause = " LIMIT ?" if size is not None else ""
+        if size is not None:
+            parameters.append(size)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                WITH ranked AS (
+                    SELECT {selected},
+                           ROW_NUMBER() OVER (
+                               PARTITION BY scope_key
+                               ORDER BY created_at DESC, rowid DESC
+                           ) AS snapshot_rank
+                    FROM tushare_dataset_snapshots
+                    WHERE dataset = ? {status_clause}
+                )
+                SELECT * FROM ranked
+                WHERE snapshot_rank = 1
+                ORDER BY created_at DESC, scope_key ASC{limit_clause}
+                """,
+                parameters,
+            ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item.pop("snapshot_rank", None)
+            if include_payload:
+                item["payload"] = json.loads(item.pop("payload_json") or "{}")
+            items.append(item)
+        return items
+
     @staticmethod
     def _tushare_snapshot_row(
         row: sqlite3.Row | None,
