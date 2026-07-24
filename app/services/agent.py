@@ -1482,6 +1482,8 @@ _LI_ZONG_RULE_BOTTLENECK_LABEL = (
     "缺少逐规则汇总统计时不能推断李总策略的主要瓶颈或规则稀缺度"
 )
 _LI_ZONG_COVERAGE_CONFLATION_LABEL = "李总策略名单预筛覆盖不能冒充深度规则完成率"
+_STOCK_SCREEN_SCOPE_OVERCLAIM_LABEL = "通用选股覆盖不足时不能外推为全市场结论"
+_STOCK_SCREEN_CANDIDATE_COUNT_LABEL = "通用选股候选数量必须与确定性结果一致"
 _STOCK_DISCLOSURE_DATE_LABEL = "缺少披露日历证据时不能预测下一份报告日期"
 _STOCK_REPORT_DATE_CONFLICT_LABEL = "财报公告日期必须与结构化报告一致"
 _STOCK_DRAWDOWN_WINDOW_LABEL = "最大回撤观察窗口必须与确定性指标一致"
@@ -1740,6 +1742,66 @@ def _has_li_zong_coverage_conflation(answer: str, evidence: dict[str, Any]) -> b
     return has_legacy_coverage and not any(
         term in answer for term in ("深度处理", "深度核验", "深度规则完成率")
     )
+
+
+def _has_stock_screen_scope_overclaim(
+    answer: str, evidence: dict[str, Any]
+) -> bool:
+    if (
+        evidence.get("type") != "stock_screen"
+        or (evidence.get("profile") or {}).get("key") == "li_zong"
+    ):
+        return False
+    snapshot = (
+        ((evidence.get("data_contract") or {}).get("coverage") or {}).get(
+            "market_snapshot"
+        )
+        or {}
+    )
+    expected = int(snapshot.get("expected") or 0)
+    available = int(snapshot.get("available") or 0)
+    if not expected or available >= expected:
+        return False
+    if any(
+        term in answer
+        for term in (
+            "已覆盖范围",
+            "本轮覆盖范围",
+            "股票池覆盖",
+            "仍有未覆盖",
+            "不代表全市场",
+            "不能外推全市场",
+        )
+    ):
+        return False
+    return bool(
+        re.search(
+            r"(?:A股全市场|全市场|全部A股|所有A股|全体A股)"
+            r"[^。；\n]{0,100}(?:候选|筛选|股票|标的|没有|无|得到|共)",
+            answer,
+        )
+    )
+
+
+def _has_stock_screen_candidate_count_conflict(
+    answer: str, evidence: dict[str, Any]
+) -> bool:
+    if (
+        evidence.get("type") != "stock_screen"
+        or (evidence.get("profile") or {}).get("key") == "li_zong"
+    ):
+        return False
+    expected = len(evidence.get("items") or [])
+    pattern = re.compile(
+        r"(?:筛选出|筛出|得到|共有|共计|共命中|候选数量(?:为|是)?|"
+        r"本轮(?:共(?:命中)?|共有|得到|筛选出))\s*"
+        r"([\d,]{1,7})\s*只(?:研究)?候选"
+    )
+    for match in pattern.finditer(answer):
+        claimed = int(match.group(1).replace(",", ""))
+        if claimed != expected:
+            return True
+    return False
 
 
 def _has_unsupported_stock_disclosure_date(
@@ -2607,6 +2669,39 @@ def _is_public_component_source_boundary_clause(clause: str) -> bool:
     return True
 
 
+def _is_evidence_security_entity_clause(
+    clause: str, evidence: dict[str, Any]
+) -> bool:
+    """Keep listed companies whose names overlap with provider brand names."""
+    rows: list[dict[str, Any]] = []
+    if isinstance(evidence, dict):
+        rows.append(evidence)
+        for key in ("item", "target", "security"):
+            value = evidence.get(key)
+            if isinstance(value, dict):
+                rows.append(value)
+        for key in ("items", "targets"):
+            values = evidence.get(key)
+            if isinstance(values, list):
+                rows.extend(value for value in values if isinstance(value, dict))
+
+    for row in rows:
+        name = str(row.get("name") or "").strip()
+        symbol = str(
+            row.get("internal_symbol") or row.get("symbol") or ""
+        ).strip()
+        if not name or not symbol or name not in clause:
+            continue
+        code = symbol.split(".", 1)[0]
+        if re.search(
+            rf"(?<!\d){re.escape(code)}(?:\.(?:SZ|SS|SH|BJ))?(?!\d)",
+            clause,
+            re.IGNORECASE,
+        ):
+            return True
+    return False
+
+
 def _has_stock_event_sentiment_overclaim(answer: str) -> bool:
     for clause in re.split(r"[。；\n]", answer):
         if not re.search(r"(?:公告|媒体|报道|事件|披露)", clause):
@@ -2845,6 +2940,8 @@ class AgentService:
             prompt_evidence = self._compact_stock_comparison_evidence(prompt_evidence)
         elif intent == "stock_research":
             prompt_evidence = self._compact_stock_research_evidence(prompt_evidence)
+        elif intent == "stock_screen":
+            prompt_evidence = self._compact_stock_screen_evidence(prompt_evidence)
         prompt = self._build_prompt(
             message,
             prompt_evidence,
@@ -3123,11 +3220,22 @@ profile key 或策略内部版本标识。默认使用中文规则名称；只�
 
 ## 研究候选筛选回答要求
 
-筛选结果已经由确定性规则生成。不得新增、删除或重排候选，不得计算综合分、星级、目标价、
-上涨概率或买卖信号。第一段必须说明筛选模板、候选数量和最近完整交易日；随后只解释证据包
-中的实际规则、逐只命中原因与缺失项。行情交易日、5/20 日比较基准日、财务报告期和公告日
-必须分开表达。估值约束不等于低估，相对行业表现不等于官方行业排名，回撤后近 5 日转正
-不等于反转确认。最后建议用户选择一只股票进入研究空间核验财务、公告和反方证据，并保留
+筛选结果已经由确定性规则生成。不得新增或重排候选，不得计算综合分、星级、目标价、
+上涨概率或买卖信号。候选总数必须读取 candidate_count_total（与 universe.matched 一致），
+不得用 items 列表长度自行计数。若 items_in_prompt 小于 candidate_count_total，只能明确写
+“本轮共 X 只，下面解释按原顺序提供的前 Y 只”，不得把前 Y 只说成完整结果。第一段必须说明
+筛选模板、候选总数、最近完整交易日、股票池覆盖数量
+和 data_contract.data_version；数据版本应自然写成“数据版本”，不得输出字段名。覆盖率不足
+100% 时只能说“本轮已覆盖范围内”，不得把结果外推为全市场、全部A股或所有股票的结论。
+market_snapshot、market_cap、valuation、return_20d 和 financial_candidate_pool 是不同覆盖口径，
+不得互相替代；财务候选池覆盖只代表进入财务核验的候选范围，不代表全市场财务覆盖。
+
+随后只解释证据包中的实际规则、逐只命中原因与缺失项。缺失项必须优先使用 missing_reasons.reason
+的用户可读原因，不得只输出字段名或 code。行情交易日、5/20 日比较基准日、财务报告期和公告日
+必须分开表达；没有报告期或公告日时直接说未取得，不得拿行情日代替。来源口径只按股票基础、
+完整日线、估值市值截面和财务指标说明，不展示内部接口名。估值约束不等于低估，相对行业表现
+不等于官方行业排名，回撤后近 5 日转正不等于反转确认。最后建议用户选择一只股票进入研究空间
+核验财务、公告和反方证据，并保留
 “研究候选筛选，不构成推荐、评级或交易建议”的边界。证券代码必须使用 internal_symbol，
 不得展示 ts_code 或 Tushare 的 .SH 后缀。正文不使用 Markdown 表格。
 """
@@ -3768,6 +3876,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             if any(
                 pattern.search(clause)
                 and not _is_public_component_source_boundary_clause(clause)
+                and not _is_evidence_security_entity_clause(clause, evidence)
                 for clause in answer_clauses_for_privacy
             )
         ]
@@ -4251,6 +4360,12 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             unsupported_market_inferences.append(_LI_ZONG_RULE_BOTTLENECK_LABEL)
         if _has_li_zong_coverage_conflation(answer, evidence):
             unsupported_market_inferences.append(_LI_ZONG_COVERAGE_CONFLATION_LABEL)
+        if _has_stock_screen_scope_overclaim(answer, evidence):
+            unsupported_market_inferences.append(_STOCK_SCREEN_SCOPE_OVERCLAIM_LABEL)
+        if _has_stock_screen_candidate_count_conflict(answer, evidence):
+            unsupported_market_inferences.append(
+                _STOCK_SCREEN_CANDIDATE_COUNT_LABEL
+            )
         if (
             evidence.get("type") != "market_brief"
             and evidence.get("symbol")
@@ -5002,6 +5117,11 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 and _has_li_zong_coverage_conflation(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
+                _STOCK_SCREEN_SCOPE_OVERCLAIM_LABEL
+                in unsupported_market_inferences
+                and _has_stock_screen_scope_overclaim(line, evidence)
+            )
+            line_has_unsupported_inference = line_has_unsupported_inference or (
                 _STOCK_DISCLOSURE_DATE_LABEL in unsupported_market_inferences
                 and _has_unsupported_stock_disclosure_date(line, evidence)
             )
@@ -5071,7 +5191,10 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             )
             line_has_private_operation = any(
                 pattern.search(line) for pattern in _PRIVATE_OPERATIONAL_OUTPUT_PATTERNS
-            ) and not _is_public_component_source_boundary_clause(line)
+            ) and not (
+                _is_public_component_source_boundary_clause(line)
+                or _is_evidence_security_entity_clause(line, evidence)
+            )
             if (
                 line_tokens & unsupported
                 or line_has_unsupported_inference
@@ -6825,6 +6948,86 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         } | {"items": compact_items}
 
     @staticmethod
+    def _compact_stock_screen_evidence(
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        if (evidence.get("profile") or {}).get("key") == "li_zong":
+            return evidence
+
+        source_items = list(evidence.get("items") or [])
+        items: list[dict[str, Any]] = []
+        for item in source_items[:12]:
+            missing_reasons = [
+                {
+                    key: reason.get(key)
+                    for key in ("field", "reason")
+                    if reason.get(key) not in (None, "")
+                }
+                for reason in (item.get("missing_reasons") or [])[:8]
+                if isinstance(reason, dict)
+            ]
+            compact_item = {
+                key: item.get(key)
+                for key in (
+                    "name",
+                    "internal_symbol",
+                    "industry",
+                    "market",
+                    "list_date",
+                    "metrics",
+                    "financials",
+                    "evidence_times",
+                    "coverage_status",
+                    "matched_reasons",
+                    "missing_fields",
+                    "not_applicable_fields",
+                    "limitations",
+                )
+                if item.get(key) not in (None, [], {}, "")
+            }
+            if missing_reasons:
+                compact_item["missing_reasons"] = missing_reasons
+            items.append(compact_item)
+
+        contract = evidence.get("data_contract") or {}
+        compact_contract = {
+            key: contract.get(key)
+            for key in (
+                "contract_version",
+                "data_version",
+                "market_scope",
+                "universe_definition",
+                "as_of",
+                "coverage",
+                "sources",
+                "license_boundary",
+            )
+            if contract.get(key) not in (None, [], {}, "")
+        }
+        compact = {
+            key: evidence.get(key)
+            for key in (
+                "type",
+                "status",
+                "profile",
+                "rules",
+                "effective_filters",
+                "data_meta",
+                "universe",
+                "warnings",
+                "boundary",
+                "user_question",
+            )
+            if evidence.get(key) not in (None, [], {}, "")
+        }
+        if compact_contract:
+            compact["data_contract"] = compact_contract
+        compact["candidate_count_total"] = len(source_items)
+        compact["items_in_prompt"] = len(items)
+        compact["items"] = items
+        return compact
+
+    @staticmethod
     def _load_skill(skill_name: str) -> str:
         skill_dir = PROJECT_ROOT / "app" / "skills" / skill_name
         runtime_path = skill_dir / "PROMPT.md"
@@ -7376,7 +7579,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         preview = AgentService._render_li_zong_preview(evidence)
         cleaned = str(answer or "").strip()
         if any(
-            pattern.search(cleaned) for pattern in _PRIVATE_OPERATIONAL_OUTPUT_PATTERNS
+            any(pattern.search(clause) for pattern in _PRIVATE_OPERATIONAL_OUTPUT_PATTERNS)
+            and not _is_evidence_security_entity_clause(clause, evidence)
+            for clause in re.split(r"[。；\n]", cleaned)
         ):
             return preview
         return f"{preview}\n\n{cleaned}" if cleaned else preview
@@ -7817,6 +8022,34 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 return AgentService._render_li_zong_preview(evidence)
             items = evidence.get("items") or []
             data_meta = evidence.get("data_meta") or {}
+            data_contract = evidence.get("data_contract") or {}
+            contract_as_of = data_contract.get("as_of") or {}
+            coverage = data_contract.get("coverage") or {}
+            snapshot = coverage.get("market_snapshot") or {}
+            market_date = (
+                contract_as_of.get("market_date")
+                or data_meta.get("latest_completed_trade_date")
+                or "待确认"
+            )
+            data_version = str(
+                data_contract.get("data_version")
+                or data_meta.get("data_version")
+                or "待确认"
+            )
+            expected = int(snapshot.get("expected") or 0)
+            available_count = int(snapshot.get("available") or 0)
+            coverage_ratio = float(snapshot.get("ratio") or 0)
+            coverage_text = (
+                f"股票池覆盖 {available_count}/{expected} 只"
+                f"（{coverage_ratio * 100:.1f}%）"
+                if expected
+                else "股票池覆盖待确认"
+            )
+            scope_boundary = (
+                "结果只代表本轮已覆盖范围，不能外推为全市场结论。"
+                if expected and available_count < expected
+                else "本轮股票池行情快照已完整覆盖。"
+            )
             if evidence.get("status") == "unavailable":
                 return (
                     "选股数据正在准备中，当前没有足够的完整市场截面执行筛选。"
@@ -7825,25 +8058,55 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             if not items:
                 return (
                     f"本次使用“{profile.get('label') or '研究候选'}”规则，"
-                    f"行情基准日为 {data_meta.get('latest_completed_trade_date') or '待确认'}，"
-                    "没有股票同时满足全部条件。建议一次只放宽一项规则再筛选，"
+                    f"行情交易日为 {market_date}，{coverage_text}，数据版本 {data_version}。"
+                    f"{scope_boundary}"
+                    "当前覆盖范围内没有股票同时满足全部条件。建议一次只放宽一项规则再筛选，"
                     "避免把多项条件同时移除后失去研究边界。\n\n"
                     f"{evidence.get('boundary') or '研究候选筛选，不构成推荐或交易建议。'}"
                 )
             lines = [
                 f"本次使用“{profile.get('label') or '研究候选'}”规则，"
-                f"基于 {data_meta.get('latest_completed_trade_date') or '最近完整交易日'} 的完整日线与估值截面，"
-                f"共得到 {len(items)} 只研究候选。{profile.get('sort_rule') or ''}",
+                f"行情交易日为 {market_date}，{coverage_text}，数据版本 {data_version}；"
+                f"当前得到 {len(items)} 只研究候选。{scope_boundary}"
+                f"{profile.get('sort_rule') or ''}",
                 "",
             ]
-            for index, item in enumerate(items[:8], start=1):
+            preview_items = items[:12]
+            for index, item in enumerate(preview_items, start=1):
                 reasons = "；".join(
                     str(value) for value in (item.get("matched_reasons") or [])[:3]
                 )
-                missing = item.get("missing_fields") or []
-                suffix = f"；缺失项：{'、'.join(missing[:4])}" if missing else ""
+                evidence_times = item.get("evidence_times") or {}
+                time_parts = []
+                if evidence_times.get("market_date"):
+                    time_parts.append(f"行情日 {evidence_times['market_date']}")
+                if evidence_times.get("financial_report_period"):
+                    time_parts.append(
+                        f"财务报告期 {evidence_times['financial_report_period']}"
+                    )
+                if evidence_times.get("financial_announcement_date"):
+                    time_parts.append(
+                        f"财报公告日 {evidence_times['financial_announcement_date']}"
+                    )
+                missing_reasons = [
+                    str(value.get("reason") or "").strip()
+                    for value in (item.get("missing_reasons") or [])[:4]
+                    if isinstance(value, dict) and value.get("reason")
+                ]
+                time_suffix = f"；{'；'.join(time_parts)}" if time_parts else ""
+                missing_suffix = (
+                    f"；数据缺口：{'；'.join(missing_reasons)}"
+                    if missing_reasons
+                    else ""
+                )
                 lines.append(
-                    f"{index}. {item.get('name')}（{item.get('internal_symbol')}）：{reasons}{suffix}"
+                    f"{index}. {item.get('name')}（{item.get('internal_symbol')}）："
+                    f"{reasons or '命中当前透明筛选规则'}{time_suffix}{missing_suffix}"
+                )
+            if len(items) > len(preview_items):
+                lines.append(
+                    f"以上按原排序展示前 {len(preview_items)} 只；"
+                    f"另有 {len(items) - len(preview_items)} 只候选可在筛选结果中继续查看。"
                 )
             lines.extend(
                 [

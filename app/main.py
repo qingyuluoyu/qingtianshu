@@ -791,6 +791,37 @@ def _build_visible_evidence_sources(
         )
 
     if packet.get("type") == "stock_screen":
+        data_contract = packet.get("data_contract") or {}
+        contract_as_of = data_contract.get("as_of") or {}
+        contract_coverage = data_contract.get("coverage") or {}
+        snapshot_coverage = contract_coverage.get("market_snapshot") or {}
+        screen_date = (
+            contract_as_of.get("market_date")
+            or (packet.get("data_meta") or {}).get("latest_completed_trade_date")
+        )
+        snapshot_available = int(snapshot_coverage.get("available") or 0)
+        snapshot_expected = int(snapshot_coverage.get("expected") or 0)
+        scope_parts = []
+        if snapshot_expected:
+            scope_parts.append(
+                f"股票池覆盖 {snapshot_available}/{snapshot_expected} 只"
+            )
+        if data_contract.get("data_version"):
+            scope_parts.append(f"数据版本 {data_contract['data_version']}")
+        financial_periods = contract_as_of.get("financial_report_periods") or []
+        if financial_periods:
+            scope_parts.append(
+                "已取得财务报告期 " + "、".join(financial_periods[:3])
+            )
+        if scope_parts:
+            add(
+                "选股范围",
+                f"{(packet.get('profile') or {}).get('label') or '研究候选'}数据范围",
+                "；".join(scope_parts),
+                as_of=screen_date,
+                source="股票基础、完整日线、估值市值截面与财务指标",
+            )
+
         history_packet = packet.get("history") or {}
         benchmark_name = str(
             (history_packet.get("benchmark") or {}).get("name") or "沪深300"
@@ -850,16 +881,28 @@ def _build_visible_evidence_sources(
                 source="李总策略点时历史回放与沪深300复权日线",
             )
 
-        screen_date = (packet.get("data_meta") or {}).get("latest_completed_trade_date")
         for item in (packet.get("items") or [])[:6]:
             reasons = "；".join(
                 str(value) for value in (item.get("matched_reasons") or [])[:2]
             )
+            evidence_times = item.get("evidence_times") or {}
+            summary_parts = [reasons or "命中当前透明筛选规则"]
+            if evidence_times.get("financial_report_period"):
+                summary_parts.append(
+                    f"财务报告期 {evidence_times['financial_report_period']}"
+                )
+            missing_reasons = [
+                str(value.get("reason") or "").strip()
+                for value in (item.get("missing_reasons") or [])[:2]
+                if isinstance(value, dict) and value.get("reason")
+            ]
+            if missing_reasons:
+                summary_parts.append("数据缺口：" + "；".join(missing_reasons))
             add(
                 "选股证据",
                 f"{item.get('name')}（{item.get('internal_symbol')}）",
-                reasons or "命中当前透明筛选规则",
-                as_of=screen_date,
+                "；".join(summary_parts),
+                as_of=evidence_times.get("market_date") or screen_date,
                 source="确定性研究候选筛选",
             )
 
@@ -5445,9 +5488,16 @@ def _is_stock_screen_query(message: str) -> bool:
     direct_terms = (
         "筛选股票",
         "筛股票",
+        "筛选a股",
+        "筛a股",
         "研究候选",
         "候选股票",
         "股票候选",
+        "经营改善模板",
+        "经营改善候选",
+        "相对行业增强",
+        "估值约束",
+        "回撤后待复核",
         "低估值股票",
         "业绩增长股票",
         "趋势增强股票",
@@ -5498,7 +5548,16 @@ def _stock_screen_parameters(message: str) -> dict[str, Any]:
         profile = "trend"
     elif any(
         term in folded
-        for term in ("低估值", "估值低", "价值", "市盈率", "市净率", "pe", "pb")
+        for term in (
+            "低估值",
+            "估值低",
+            "估值约束",
+            "价值",
+            "市盈率",
+            "市净率",
+            "pe",
+            "pb",
+        )
     ):
         profile = "value"
     else:

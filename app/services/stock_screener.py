@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, time as clock_time, timedelta
+import hashlib
 import math
 import threading
 import time
@@ -187,6 +188,11 @@ class StockScreenerService:
         frame, snapshot_meta = self._load_snapshot(force_refresh=force_refresh)
         working = frame.copy()
         input_count = len(working)
+        market_cap_available = int(working["total_mv_yi"].notna().sum())
+        valuation_available = int(
+            working[["pe_ttm", "pb"]].notna().all(axis=1).sum()
+        )
+        return_20d_available = int(working["return_20d_pct"].notna().sum())
         working = self._apply_universe_rules(
             working,
             market=market,
@@ -206,8 +212,15 @@ class StockScreenerService:
         else:
             working = self._sort_frame(working, profile).head(max_results * 2)
 
-        finance_packets = self._load_financials_many(
-            [str(value) for value in working.get("ts_code", pd.Series(dtype=str)).tolist()]
+        financial_symbols = [
+            str(value)
+            for value in working.get("ts_code", pd.Series(dtype=str)).tolist()
+        ]
+        finance_packets = self._load_financials_many(financial_symbols)
+        financial_available = sum(
+            bool(packet.get("report_period"))
+            and str(packet.get("coverage_status") or "") != "unavailable"
+            for packet in finance_packets.values()
         )
 
         if needs_financial_filter:
@@ -239,6 +252,64 @@ class StockScreenerService:
             ),
             "cache_hit": bool(snapshot_meta.get("cache_hit")),
         }
+        expected_snapshot = int(snapshot_meta.get("listed_stock_count") or input_count)
+
+        def coverage(available: int, expected: int) -> dict[str, Any]:
+            return {
+                "available": available,
+                "expected": expected,
+                "missing": max(0, expected - available),
+                "ratio": round(available / expected, 6) if expected else 0.0,
+            }
+
+        data_contract = {
+            "contract_version": "stock_screen_data_v1",
+            "data_version": snapshot_meta.get("data_version"),
+            "market_scope": market,
+            "universe_definition": snapshot_meta.get("universe_definition"),
+            "as_of": {
+                "market_date": snapshot_meta.get("latest_completed_trade_date"),
+                "return_5d_base_date": snapshot_meta.get("return_5d_base_date"),
+                "return_20d_base_date": snapshot_meta.get("return_20d_base_date"),
+                "financial_report_periods": report_periods,
+                "generated_at": data_meta["generated_at"],
+            },
+            "coverage": {
+                "market_snapshot": coverage(input_count, expected_snapshot),
+                "market_cap": coverage(market_cap_available, input_count),
+                "valuation": coverage(valuation_available, input_count),
+                "return_20d": coverage(return_20d_available, input_count),
+                "financial_candidate_pool": coverage(
+                    financial_available, len(financial_symbols)
+                ),
+            },
+            "sources": [
+                {
+                    "module": "股票基础",
+                    "source": "Tushare Pro:stock_basic",
+                    "as_of": snapshot_meta.get("latest_completed_trade_date"),
+                },
+                {
+                    "module": "行情与收益",
+                    "source": "Tushare Pro:daily",
+                    "as_of": snapshot_meta.get("latest_completed_trade_date"),
+                },
+                {
+                    "module": "估值与市值",
+                    "source": "Tushare Pro:daily_basic",
+                    "as_of": snapshot_meta.get("latest_completed_trade_date"),
+                },
+                {
+                    "module": "财务质量",
+                    "source": "Tushare Pro:fina_indicator",
+                    "as_of": report_periods[0] if report_periods else None,
+                },
+            ],
+            "license_boundary": (
+                "当前兼容数据可用于MVP研究验证；商业展示、缓存和衍生使用仍需"
+                "按数据供应商许可书面确认。"
+            ),
+        }
         warnings: list[str] = []
         if items and any(item["missing_fields"] for item in items):
             warnings.append("部分候选的财务或估值字段不完整，缺失项已逐只列出。")
@@ -258,6 +329,7 @@ class StockScreenerService:
             "rules": self._rules(effective_filters),
             "effective_filters": effective_filters,
             "data_meta": data_meta,
+            "data_contract": data_contract,
             "universe": {
                 "listed_input": input_count,
                 "after_common_rules": common_count,
@@ -451,9 +523,47 @@ class StockScreenerService:
         )
         frame["internal_symbol"] = frame["ts_code"].map(self._internal_symbol)
         frame["trade_date"] = latest_date
+        fingerprint_columns = [
+            column
+            for column in (
+                "ts_code",
+                "trade_date",
+                "latest_close",
+                "return_5d_pct",
+                "return_20d_pct",
+                "pe_ttm",
+                "pb",
+                "total_mv_yi",
+                "volume_ratio",
+            )
+            if column in frame
+        ]
+        fingerprint_frame = frame[fingerprint_columns].sort_values(
+            "ts_code", kind="stable"
+        )
+        digest = hashlib.sha256(b"stock_screen_snapshot_v1")
+        digest.update(latest_date.encode("utf-8"))
+        digest.update(
+            pd.util.hash_pandas_object(
+                fingerprint_frame, index=False
+            ).values.tobytes()
+        )
+        data_version = f"stock-screen-v1-{digest.hexdigest()[:16]}"
+        listed_stock_count = int(stock_basic["ts_code"].nunique())
+        latest_daily_count = int(latest_daily["ts_code"].nunique())
+        daily_basic_count = int(daily_basic["ts_code"].nunique())
 
         return frame, {
             "source": "Tushare Pro",
+            "data_version": data_version,
+            "universe_definition": (
+                "Tushare stock_basic 中 list_status=L 的A股，且最近完整交易日"
+                "存在可用日线；ST、上市时长和市场范围随后按本轮规则过滤。"
+            ),
+            "listed_stock_count": listed_stock_count,
+            "latest_daily_count": latest_daily_count,
+            "daily_basic_count": daily_basic_count,
+            "snapshot_stock_count": len(frame),
             "latest_completed_trade_date": self._iso_date(latest_date),
             "return_5d_base_date": self._iso_date(date_5d),
             "return_20d_base_date": self._iso_date(date_20d),
@@ -773,6 +883,34 @@ class StockScreenerService:
         financial_coverage = str(
             clean_financials.get("coverage_status") or "unavailable"
         )
+        missing_reasons = []
+        for field in sorted(set(missing_fields)):
+            if field in financial_fields:
+                code = (
+                    "financial_report_unavailable"
+                    if not clean_financials.get("report_period")
+                    else "financial_field_missing"
+                )
+                reason = (
+                    "尚未取得可用财务报告期"
+                    if code == "financial_report_unavailable"
+                    else f"最新财务报告期未返回{FILTER_LABELS.get('min_' + field, field)}字段"
+                )
+            elif field in {"pe_ttm", "pb", "ps_ttm", "total_mv_yi", "circ_mv_yi"}:
+                code = "daily_basic_field_missing"
+                reason = "最近完整交易日的估值或市值截面未返回该字段"
+            elif field in {"return_5d_pct", "return_20d_pct"}:
+                code = "comparison_bar_missing"
+                reason = "当前或比较基准交易日缺少完整日线"
+            elif field in {"volume_ratio", "turnover_rate_pct"}:
+                code = "liquidity_field_missing"
+                reason = "最近完整交易日的流动性字段未返回"
+            else:
+                code = "market_field_missing"
+                reason = "最近完整交易日未返回该字段"
+            missing_reasons.append(
+                {"field": field, "code": code, "reason": reason}
+            )
         return {
             "ts_code": str(row.get("ts_code") or ""),
             "internal_symbol": str(row.get("internal_symbol") or ""),
@@ -782,6 +920,18 @@ class StockScreenerService:
             "list_date": self._iso_date(row.get("list_date")),
             "metrics": metrics,
             "financials": clean_financials,
+            "evidence_times": {
+                "market_date": self._iso_date(row.get("trade_date")),
+                "financial_report_period": clean_financials.get("report_period"),
+                "financial_announcement_date": clean_financials.get(
+                    "announcement_date"
+                ),
+            },
+            "source_contract": {
+                "market_and_trend": "Tushare Pro:daily",
+                "valuation": "Tushare Pro:daily_basic",
+                "financial_quality": "Tushare Pro:fina_indicator",
+            },
             "coverage_status": {
                 "market_and_trend": "sufficient",
                 "valuation": (
@@ -793,6 +943,7 @@ class StockScreenerService:
             },
             "matched_reasons": reasons,
             "missing_fields": sorted(set(missing_fields)),
+            "missing_reasons": missing_reasons,
             "not_applicable_fields": not_applicable_fields,
             "limitations": [
                 "阶段收益基于完整日线，不是盘中信号。",

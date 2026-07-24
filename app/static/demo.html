@@ -853,6 +853,12 @@
 
     .deep-stock-overview { padding: 16px; border-bottom: 1px solid var(--line); background: #f7f9fd; }
     .deep-overview-shell { display: grid; gap: 16px; }
+    .stock-load-alert { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 16px 18px; border: 1px solid #efc777; border-radius: 14px; background: #fff9ec; color: #684d18; }
+    .stock-load-alert-copy { min-width: 0; }
+    .stock-load-alert-title { font-size: 15px; font-weight: 800; color: #5c4212; }
+    .stock-load-alert-detail { margin-top: 4px; font-size: 13px; line-height: 1.65; }
+    .stock-load-alert-meta { margin-top: 3px; color: #8a6a2e; font-size: 12px; line-height: 1.55; }
+    .stock-load-alert .btn { flex: 0 0 auto; }
     .deep-quote-card { display: grid; grid-template-columns: minmax(280px,1.2fr) repeat(4,minmax(104px,.42fr)); gap: 0; padding: 18px 20px; border: 1px solid var(--line); border-radius: 14px; background: #fff; box-shadow: 0 8px 24px rgba(41,65,103,.045); }
     .deep-quote-title-row { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
     .deep-quote-name { color: #1f2f49; font-size: 23px; font-weight: 820; }
@@ -1112,7 +1118,7 @@
       .watchlist-workspace, .deep-market-grid { grid-template-columns: 1fr; }
       .stock-primary-grid { grid-template-columns: 1fr; }
       .stock-research-meta { grid-template-columns: repeat(3,minmax(0,1fr)); }
-      .stock-workspace-summary { grid-template-columns: 1fr; grid-template-areas: "primary" "changes" "tasks"; }
+      .stock-workspace-summary { grid-template-columns: 1fr; grid-template-areas: "primary" "map" "changes" "tasks"; }
       .stock-judgment-layout { grid-template-columns: 1fr; }
       .stock-research-meta-item:nth-child(4) { border-left: 0; border-top: 1px solid var(--line); }
       .stock-research-meta-item:nth-child(5) { border-top: 1px solid var(--line); }
@@ -1129,6 +1135,8 @@
     @media (max-width: 760px) {
       .app-shell { grid-template-columns: 76px minmax(0,1fr); }
       .home-focus-actions { grid-template-columns: 1fr; }
+      .stock-load-alert { align-items: stretch; flex-direction: column; }
+      .stock-load-alert .btn { width: 100%; }
       .watchlist-table-head { display: none; }
       .watchlist-stock-row { grid-template-columns: minmax(0,1fr) auto auto; }
       .watchlist-stock-reason { grid-column: 1 / -1; }
@@ -1515,6 +1523,7 @@
       .stock-research-map-head { align-items: stretch; flex-direction: column; }
       .stock-research-map-actions { justify-content: flex-start; }
       .stock-research-map-grid { grid-template-columns: 1fr; }
+      .stock-workspace-card, .stock-research-map { padding: 14px; }
       .evidence-coverage-grid { grid-template-columns: 1fr; }
       .account-hero { align-items: flex-start; flex-direction: column; }
       .account-actions { justify-content: flex-start; }
@@ -3836,14 +3845,34 @@
       state.stockScreener = payload;
       const profile = payload?.profile || {};
       const meta = payload?.data_meta || {};
+      const contract = payload?.data_contract || {};
+      const coverage = contract.coverage || {};
       const items = payload?.items || [];
       $("stockScreenTitle").textContent = profile.label || "研究候选";
       $("stockScreenCountBadge").textContent = `${items.length} 只`;
       const periods = meta.financial_report_periods || [];
+      const snapshotCoverage = coverage.market_snapshot || {};
+      const snapshotCoverageText = snapshotCoverage.expected
+        ? `股票池 ${Number(snapshotCoverage.available || 0).toLocaleString("zh-CN")}/${Number(snapshotCoverage.expected || 0).toLocaleString("zh-CN")}（${(Number(snapshotCoverage.ratio || 0) * 100).toFixed(1)}%）`
+        : "";
+      const coverageLabel = (label, value) => value?.expected
+        ? `${label} ${(Number(value.ratio || 0) * 100).toFixed(1)}%`
+        : "";
+      const coverageSummary = [
+        coverageLabel("行情", coverage.market_snapshot),
+        coverageLabel("市值", coverage.market_cap),
+        coverageLabel("估值", coverage.valuation),
+        coverageLabel("20日收益", coverage.return_20d),
+        coverageLabel("候选财务", coverage.financial_candidate_pool)
+      ].filter(Boolean).join(" / ");
+      const dataVersion = String(contract.data_version || meta.data_version || "");
       $("stockScreenMeta").textContent = [
         meta.latest_completed_trade_date ? `行情交易日 ${meta.latest_completed_trade_date}` : "行情日期待确认",
         meta.return_20d_base_date ? `20日比较基准 ${meta.return_20d_base_date}` : "",
         periods.length ? `财务报告期 ${periods.slice(0, 3).join("、")}` : "财务报告期逐只展示",
+        snapshotCoverageText,
+        coverageSummary ? `数据覆盖 ${coverageSummary}` : "",
+        dataVersion ? `数据版本 ${dataVersion.slice(-8)}` : "",
         profile.sort_rule || ""
       ].filter(Boolean).join(" · ");
       $("stockScreenBoundary").textContent = payload?.boundary || "这是可解释的研究候选筛选，不构成推荐、评级、目标价或交易建议。";
@@ -3900,7 +3929,11 @@
         card.appendChild(reasons);
         if (item.missing_fields?.length) {
           const missing = document.createElement("div"); missing.className = "screener-missing";
-          missing.textContent = `仍需补充：${item.missing_fields.slice(0, 6).map(stockScreenFieldLabel).join("、")}`;
+          const reasonByField = new Map((item.missing_reasons || []).map(entry => [entry.field, entry.reason]));
+          missing.textContent = `数据缺口：${item.missing_fields.slice(0, 6).map(field => {
+            const reason = reasonByField.get(field);
+            return `${stockScreenFieldLabel(field)}${reason ? `（${reason}）` : ""}`;
+          }).join("；")}`;
           card.appendChild(missing);
         }
         const entryContext = {
@@ -6467,6 +6500,21 @@
       catch { return null; }
     }
 
+    async function apiResult(path) {
+      try {
+        return {ok: true, value: await api(path), error: null};
+      } catch (error) {
+        return {
+          ok: false,
+          value: null,
+          error: {
+            status: error?.status || null,
+            message: error?.message || ""
+          }
+        };
+      }
+    }
+
     function structuredItemText(item) {
       if (typeof item === "string") return item;
       if (!item || typeof item !== "object") return "";
@@ -7760,8 +7808,8 @@
       container.innerHTML = '<div class="empty">正在汇总行情、财务、股东、研报与事件…</div>';
       const encoded = encodeURIComponent(symbol);
       const isAShare = /\.(?:SS|SZ)$/i.test(symbol);
-      const [workspace, history, fundamentals, earnings, drivers, shareholders, expectations, events, information, actionPlansPayload, tradeReviewsPayload] = await Promise.all([
-        optionalApi(`/v1/stocks/${encoded}/workspace`),
+      const [workspaceResult, history, fundamentals, earnings, drivers, shareholders, expectations, events, information, actionPlansPayload, tradeReviewsPayload] = await Promise.all([
+        apiResult(`/v1/stocks/${encoded}/workspace`),
         optionalApi(`/stocks/${encoded}/history?range=1y`),
         optionalApi(isAShare ? `/a-share/${encoded}/fundamentals` : `/us-equity/${encoded}/fundamentals`),
         optionalApi(`/stocks/${encoded}/earnings-quality`),
@@ -7775,6 +7823,8 @@
         loadPendingReviewDrafts()
       ]);
       if (state.deepStockOverviewSymbol !== symbol) return;
+      const workspace = workspaceResult.value;
+      const workspaceLoadError = workspaceResult.ok ? null : workspaceResult.error;
       if (actionPlansPayload !== null) state.stockActionPlans[symbol] = listPayloadItems(actionPlansPayload);
       if (tradeReviewsPayload !== null) state.stockTradeReviews[symbol] = listPayloadItems(tradeReviewsPayload);
 
@@ -7885,6 +7935,23 @@
 
       container.innerHTML = "";
       const shell = document.createElement("div"); shell.className = "deep-overview-shell";
+      if (workspaceLoadError) {
+        const alert = document.createElement("section"); alert.className = "stock-load-alert"; alert.setAttribute("role", "alert");
+        const copy = document.createElement("div"); copy.className = "stock-load-alert-copy";
+        const title = document.createElement("div"); title.className = "stock-load-alert-title"; title.textContent = "股票研究空间未完整加载";
+        const detail = document.createElement("div"); detail.className = "stock-load-alert-detail";
+        detail.textContent = "当前判断、关系、任务和证据地图暂未返回。下方只展示本次已经取得的行情与分析模块，不会把缺失内容显示成“没有数据”。";
+        const meta = document.createElement("div"); meta.className = "stock-load-alert-meta";
+        meta.textContent = "重新加载不会清空已保存的判断、任务、持仓或历史对话。";
+        copy.append(title, detail, meta);
+        const retry = document.createElement("button"); retry.type = "button"; retry.className = "btn primary"; retry.textContent = "重新加载股票空间";
+        retry.addEventListener("click", async () => {
+          retry.disabled = true;
+          retry.textContent = "正在重新加载…";
+          await loadDeepStockOverview(symbol);
+        });
+        alert.append(copy, retry); shell.appendChild(alert);
+      }
       const quote = document.createElement("section"); quote.className = "deep-quote-card";
       const identity = document.createElement("div"); identity.className = "deep-quote-identity";
       const titleRow = document.createElement("div"); titleRow.className = "deep-quote-title-row";

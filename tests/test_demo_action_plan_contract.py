@@ -152,6 +152,44 @@ def test_demo_agent_task_entry_requests_live_verification_and_draft_only() -> No
     assert 'ask.addEventListener("click", () => { void api(' not in section
 
 
+def test_demo_exposes_stock_workspace_load_failure_and_retry() -> None:
+    page = DEMO_HTML.read_text(encoding="utf-8")
+    section = _function_section(
+        page, "async function loadDeepStockOverview", "async function openDeepStockSymbol"
+    )
+
+    for fragment in (
+        "apiResult(`/v1/stocks/${encoded}/workspace`)",
+        "const workspaceLoadError = workspaceResult.ok ? null : workspaceResult.error;",
+        "股票研究空间未完整加载",
+        "不会把缺失内容显示成“没有数据”",
+        "重新加载不会清空已保存的判断、任务、持仓或历史对话",
+        "重新加载股票空间",
+        "await loadDeepStockOverview(symbol);",
+    ):
+        assert fragment in section
+    assert 'optionalApi(`/v1/stocks/${encoded}/workspace`)' not in section
+
+
+def test_demo_displays_stock_screen_data_contract_and_missing_reasons() -> None:
+    page = DEMO_HTML.read_text(encoding="utf-8")
+    section = _function_section(
+        page, "function renderStockScreener", "async function loadStockScreener"
+    )
+
+    for fragment in (
+        "const contract = payload?.data_contract || {};",
+        "股票池 ${Number(snapshotCoverage.available || 0)",
+        'coverageLabel("估值", coverage.valuation)',
+        'coverageLabel("20日收益", coverage.return_20d)',
+        "数据覆盖 ${coverageSummary}",
+        "数据版本 ${dataVersion.slice(-8)}",
+        "item.missing_reasons || []",
+        "数据缺口：",
+    ):
+        assert fragment in section
+
+
 def test_demo_explains_trade_review_trigger_and_horizon() -> None:
     page = DEMO_HTML.read_text(encoding="utf-8")
     section = _function_section(
