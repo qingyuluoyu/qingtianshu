@@ -399,6 +399,12 @@ class DeepStockResearchService:
         session = self._reconcile_legacy_stages(user_id, session)
         if symbol and normalize_symbol(symbol) != session["symbol"]:
             return self._public_session(session)
+        if intent == "market_brief":
+            # A user may ask about the broad market while a stock-bound
+            # conversation is open. Keep the answer in conversation history,
+            # but never let market-only evidence advance or overwrite the
+            # single-stock research workflow.
+            return self._public_session(session)
 
         stages = list(session.get("stages") or [])
         evidence_modules = dict(session.get("evidence_modules") or {})

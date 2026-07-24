@@ -800,3 +800,17 @@ uv run pytest
 - 全量 `553 tests collected` 全部通过；Ruff、`compileall`、内联 JavaScript、`uv lock --check`、`git diff --check` 和敏感文件检查全部通过。运行中 `/health=ok`、Hermes 已启用、数据健康 `54/54`。
 
 当前边界：候选确认与正式领域写入在 MVP 中已经可恢复和幂等，但生产环境仍需把跨表确认收敛为单事务或补偿事务，并补齐 Outbox、正式通知和失败模块独立重试。
+
+## 2026-07-24 诊断一级入口、唯一股票会话与 Hermes 失败恢复
+
+- AI 研究新会话新增 `agentEntryHub`，提供“诊大盘、诊个股、智能选股”三个高频入口。用户发出第一条问题、打开历史对话或进入股票内嵌 Agent 后，入口自动隐藏。
+- 大盘入口调用 `startNewConversation()` 后才运行 `sendChat(marketDiagnosisPrompt)`，避免把大盘问题写入此前股票绑定会话。真实浏览器创建会话 `dd38f4ad-5c83-4226-ba17-eca3da2e2891`，约 17 秒完成；页面识别“中国A股 · 上证综指”，展示上证综指 K 线、全市场上涨/下跌家数、行业涨幅、数据时间、反方边界和 9 条引用。刷新后同一会话、诊断侧栏和引用恢复。
+- 个股入口调用 `/v1/search` 精确解析。输入“中”返回中兴通讯 `000063.SZ`、中际旭创 `300308.SZ`、中关村 `000931.SZ` 并要求补全，没有静默选择。输入“贵州茅台”解析为 `600519.SS`，复用 `/me/deep-stock` 唯一会话，进入 `/stocks/600519.SS?tab=ai` 后自动发起 Hermes。
+- 贵州茅台真实回答约 13 秒完成，包含 2026-07-24 09:20:30+08:00 最新报价、2026-07-23 完整日线、2026 一季报、估值口径、公告、分析师预期、反方证据、失效条件和 11 条引用；不输出目标价或买卖建议。等待股票空间异步恢复完成后刷新，URL、唯一会话、回答、引用与 K 线标的全部恢复。
+- “智能选股”入口已验证进入 `/research?mode=screening`，继续使用透明确定性规则，不把 Agent 当作黑盒股票排名器。
+- `DeepStockResearchService.observe_chat()` 对 `market_brief` 增加早返回。回归测试确认股票阶段、覆盖快照、覆盖历史和 `latest_run_id` 均不被市场证据修改。
+- 前端在 Hermes 未连接时不调用 `/me/chat` 生成基础预览，不保存确定性摘要冒充 AI 回答；失败节点明确说明没有形成 AI 结论，并提供“重新用 Hermes 研究”。非 `completed` 回包显示降级边界并保留整轮重试。
+- 使用端口 `8774` 启动独立 `HERMES_ENABLED=false BACKGROUND_JOBS_ENABLED=false TUSHARE_ENABLED=false` 服务进行真实浏览器故障注入。失败卡和重试按钮可见；重试重新读取健康状态、复用原问题，DOM 始终只有 1 条用户问题和 1 条当前失败回答。临时服务已正常关闭，主服务未受影响。
+- 全量 569 项测试全部通过；Ruff、`compileall`、内联 JavaScript 解析、`uv lock --check`、`tests/test_portability.py` 和 `git diff --check` 均通过。
+
+当前边界：整轮模型失败和守卫降级已有清楚的用户状态与重试；失败证据模块仍没有独立重试 API。全局搜索尚未实现拼音简称；市场复盘仍不是带版本、状态和后续验证链的正式结构化对象。

@@ -131,6 +131,38 @@ def test_deep_stock_rejects_one_conversation_bound_to_two_stocks(app):
     assert "另一只股票" in shared.json()["detail"]
 
 
+def test_market_diagnosis_does_not_mutate_bound_stock_research_state(app):
+    client = TestClient(app)
+    user = _create_user(client, "Deep Stock Market Boundary User")
+    session = client.post("/me/deep-stock", json={"symbol": "000063"}).json()
+    before = client.get("/me/deep-stock/000063").json()
+
+    observed = app.state.deep_stock.observe_chat(
+        user_id=user["id"],
+        conversation_id=session["conversation_id"],
+        symbol=None,
+        intent="market_brief",
+        message="请诊断当前A股大盘",
+        run={
+            "id": "market-run-must-not-bind",
+            "status": "completed",
+            "usage": {"output_guard": {"passed": True}},
+        },
+        evidence={
+            "market_drivers": {"status": "available"},
+            "market_breadth": {"status": "available"},
+        },
+    )
+
+    assert observed is not None
+    after = client.get("/me/deep-stock/000063").json()
+    assert after["progress"] == before["progress"]
+    assert after["stages"] == before["stages"]
+    assert after["evidence_coverage"] == before["evidence_coverage"]
+    assert after["coverage_history"] == before["coverage_history"]
+    assert after["latest_run_id"] == before["latest_run_id"]
+
+
 def test_screening_candidate_entry_is_saved_without_completing_research_stage(app):
     client = TestClient(app)
     _create_user(client, "Screening Entry User")

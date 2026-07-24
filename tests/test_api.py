@@ -769,8 +769,18 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "return {source, ready, context};" in page.text
     assert "pending.remove();\n        state.conversationId" not in page.text
     assert "responseNode = finalizeStreamingMessage(pending, data.answer" in page.text
-    assert "诊大盘" not in page.text
-    assert "诊个股" not in page.text
+    assert 'id="agentEntryHub"' in page.text
+    assert "诊大盘" in page.text
+    assert "诊个股" in page.text
+    assert 'id="agentMarketDiagnosis"' in page.text
+    assert 'id="agentStockDiagnosisForm"' in page.text
+    assert "async function runMarketDiagnosisEntry()" in page.text
+    assert "async function runStockDiagnosisEntry(query)" in page.text
+    assert "prefer_precomputed: false" in page.text
+    assert "await sendChat(marketDiagnosisPrompt)" in page.text
+    assert "await continueDeepStockConversation(question, session)" in page.text
+    assert "await sendChat(question)" in page.text
+    assert "歧义结果不会被静默选中" in page.text
     assert 'data-page="insights"' in page.text
     assert 'data-page="agent"' in page.text
     assert 'data-page="deep_stock"' in page.text
@@ -869,6 +879,13 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "execute_agent: attachedImage ? true : directHermes" in page.text
     assert "prefer_precomputed: false" in page.text
     assert "AI 正在检索实时证据、资料库和金融研究工具" in page.text
+    assert "function renderAgentFailure(node, question, error, directHermes)" in page.text
+    assert "function appendAgentRunBoundary(node" in page.text
+    assert "重新用 Hermes 研究" in page.text
+    assert "系统不会用预存文案" in page.text
+    assert "本轮已降级为确定性证据摘要" in page.text
+    assert 'sendChat(question, {reuseUserMessage: true})' in page.text
+    assert 'if (!directHermes) {' in page.text
     assert "function renderMarkdown(text)" in page.text
     assert "navigator.clipboard.writeText(text)" in page.text
     assert "AI 正在补充深度解读" in page.text
@@ -885,7 +902,9 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "首个安全可见" in page.text
     assert 'new URLSearchParams(window.location.search).get("qa") === "1"' in page.text
     assert 'quality_scope: state.evaluationMode ? "evaluation" : "user"' in page.text
-    send_chat = page.text[page.text.index("async function sendChat(message)") :]
+    send_chat = page.text[
+        page.text.index("async function sendChat(message, options = {})") :
+    ]
     assert "setAgentProcessExpanded(true)" not in send_chat
     assert send_chat.index('$("sendButton").disabled = true') < send_chat.index(
         "privateStream = connectPrivateAgentStream(requestId, pending)"

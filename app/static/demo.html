@@ -508,6 +508,14 @@
     .message:hover .message-actions { opacity: 1; }
     .message-action { border: 0; border-radius: 7px; padding: 4px 8px; background: transparent; color: #718b91; font-size: 10px; }
     .message-action:hover { background: rgba(255,255,255,.055); color: #cfe6e1; }
+    .agent-run-boundary { margin-top: 13px; padding: 12px 13px; border: 1px solid #ead9ab; border-radius: 11px; background: #fffaf0; }
+    .agent-run-boundary.failed { border-color: #efc7cb; background: #fff6f7; }
+    .agent-run-boundary-title { color: #775c20; font-size: 12px; font-weight: 780; }
+    .agent-run-boundary.failed .agent-run-boundary-title { color: #a63f49; }
+    .agent-run-boundary-copy { margin-top: 5px; color: #6f654e; font-size: 11px; line-height: 1.6; }
+    .agent-run-boundary.failed .agent-run-boundary-copy { color: #76575a; }
+    .agent-run-boundary-actions { display: flex; gap: 8px; margin-top: 9px; }
+    .agent-run-boundary-actions .btn { padding: 7px 10px; font-size: 10px; }
     .refine-status { margin-top: 8px; color: #8fb8ad; font-size: 10px; animation: breathe 1.2s infinite alternate; }
     .message.streaming-progress { border-color: rgba(85,219,182,.23); }
     .message.stream-finalized { border-color: rgba(85,219,182,.2); }
@@ -1681,7 +1689,28 @@
     .agent-research-stats, .agent-research-actions { display: none; }
     .agent-research-process.collapsed { display: none; }
     .agent-research-process:not(.collapsed) { margin-top: 10px; }
-    body.agent-page #agentSection .messages { padding: 28px clamp(30px,6vw,88px); background: #fff; }
+    .agent-entry-hub { grid-column: 1 / -1; grid-row: 3; display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--line); background: linear-gradient(120deg,#f8fbff,#f3f7ff); }
+    .agent-entry-hub[hidden], body.stock-agent-page #agentEntryHub { display: none !important; }
+    .agent-entry-intro { grid-column: 1 / -1; min-width: 0; padding: 0 3px 2px; align-self: center; }
+    .agent-entry-eyebrow { color: #1768ef; font-size: 10px; font-weight: 800; letter-spacing: .08em; }
+    .agent-entry-title { margin-top: 5px; color: #1e304b; font-size: 16px; font-weight: 790; }
+    .agent-entry-copy { margin-top: 5px; color: #718096; font-size: 11px; line-height: 1.55; }
+    .agent-entry-card { min-width: 0; display: flex; flex-direction: column; justify-content: space-between; gap: 9px; padding: 12px; border: 1px solid #dce6f5; border-radius: 12px; background: rgba(255,255,255,.92); box-shadow: 0 6px 18px rgba(43,72,119,.04); }
+    .agent-entry-card strong { color: #263850; font-size: 13px; }
+    .agent-entry-card span { display: block; margin-top: 4px; color: #748297; font-size: 10px; line-height: 1.5; }
+    .agent-entry-actions { display: flex; gap: 7px; align-items: center; }
+    .agent-entry-actions .btn { flex: 1; padding: 8px 10px; font-size: 11px; white-space: nowrap; }
+    .agent-stock-diagnosis-form { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 7px; }
+    .agent-stock-diagnosis-form input { min-width: 0; width: 100%; border: 1px solid #d7e1ef; border-radius: 9px; padding: 8px 9px; color: #263850; background: #fff; font-size: 11px; outline: none; }
+    .agent-stock-diagnosis-form input:focus { border-color: #8eb3fa; box-shadow: 0 0 0 3px rgba(23,104,239,.08); }
+    .agent-entry-status { min-height: 15px; color: #718096; font-size: 10px; line-height: 1.5; }
+    .agent-entry-status.attention { color: #9a6819; }
+    .agent-entry-status.error { color: #bd4650; }
+    body.agent-page #agentSection { grid-template-rows: auto auto auto minmax(0,1fr) auto auto; }
+    body.agent-page #agentSection .messages { grid-row: 4; padding: 28px clamp(30px,6vw,88px); background: #fff; }
+    body.agent-page #agentSection .quick-actions { grid-row: 5; }
+    body.agent-page #agentSection .composer { grid-row: 6; }
+    body.agent-page #agentSection .diagnosis-context { grid-row: 4 / 7; }
     body.agent-page #agentSection .message { width: min(860px,100%); }
     body.agent-page #agentSection .message.agent { margin-left: auto; margin-right: auto; }
     body.agent-page #agentSection .message.user { margin-left: auto; }
@@ -1711,7 +1740,15 @@
       .app-shell { grid-template-columns: 76px minmax(0,1fr); }
       .sidebar-conversations { display: none !important; }
       .workspace-header { padding-left: 16px; padding-right: 16px; }
-      body.agent-page #agentSection { grid-template-columns: minmax(0,1fr); }
+      body.agent-page #agentSection { grid-template-columns: minmax(0,1fr); grid-template-rows: auto auto auto auto auto minmax(0,1fr) auto auto; }
+      body.agent-page #agentSection .agent-entry-hub { grid-column: 1; grid-row: 3; }
+      body.agent-page #agentSection .conversation-switcher { grid-row: 4; }
+      body.agent-page #agentSection .diagnosis-context { grid-row: 5; }
+      body.agent-page #agentSection .messages { grid-row: 6; }
+      body.agent-page #agentSection .quick-actions { grid-row: 7; }
+      body.agent-page #agentSection .composer { grid-row: 8; }
+      .agent-entry-hub { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+      .agent-entry-intro { grid-column: 1 / -1; }
       .agent-research-target small { display: none; }
     }
     @media (max-width: 760px) {
@@ -1726,6 +1763,8 @@
       body.agent-page #agentSection .composer { width: calc(100% - 20px); margin-bottom: 10px; }
       .agent-head-actions .research-mode-switch { display: none; }
       .agent-research-target span { display: none; }
+      .agent-entry-hub { grid-template-columns: 1fr; max-height: 276px; overflow-y: auto; padding: 10px; }
+      .agent-entry-intro { grid-column: 1; }
       .watchlist-table-head { display: none; }
       .watchlist-stock-row { grid-template-columns: minmax(0,1fr) auto; }
       .watchlist-stock-row > :not(:first-child):not(.watchlist-stock-actions) { grid-column: 1 / -1; }
@@ -2475,6 +2514,42 @@
             </div>
             <div id="agentResearchProcess" class="agent-research-process collapsed" aria-label="当前研究过程"></div>
           </div>
+          <section id="agentEntryHub" class="agent-entry-hub" aria-label="开始金融研究">
+            <div class="agent-entry-intro">
+              <div class="agent-entry-eyebrow">即时研究入口</div>
+              <div class="agent-entry-title">从一个明确对象开始</div>
+              <div class="agent-entry-copy">每次点击都会读取最新可用数据并由 Hermes 即时生成。事实、反方证据、失效条件和数据时间会分开呈现，不调用预存答案。</div>
+            </div>
+            <article class="agent-entry-card">
+              <div>
+                <strong>诊大盘</strong>
+                <span>诊断 A 股主要指数、全市场广度、成交与行业结构，不预测下一交易日涨跌。</span>
+              </div>
+              <div class="agent-entry-actions">
+                <button id="agentMarketDiagnosis" class="btn primary" type="button">即时诊断大盘</button>
+              </div>
+            </article>
+            <article class="agent-entry-card">
+              <div>
+                <strong>诊个股</strong>
+                <span>输入股票名称、6 位代码或完整代码；歧义结果不会被静默选中。</span>
+              </div>
+              <form id="agentStockDiagnosisForm" class="agent-stock-diagnosis-form">
+                <input id="agentStockDiagnosisQuery" type="search" autocomplete="off" aria-label="诊个股股票名称或代码" placeholder="如 贵州茅台 / 600519">
+                <button id="agentStockDiagnosis" class="btn primary" type="submit">开始</button>
+              </form>
+              <div id="agentStockDiagnosisStatus" class="agent-entry-status" aria-live="polite"></div>
+            </article>
+            <article class="agent-entry-card">
+              <div>
+                <strong>智能选股</strong>
+                <span>先用透明、可解释规则形成研究候选，再进入个股空间核验证据。</span>
+              </div>
+              <div class="agent-entry-actions">
+                <button class="btn" type="button" data-open-page="screening">打开透明选股</button>
+              </div>
+            </article>
+          </section>
           <aside class="agent-history" aria-label="历史研究对话">
             <div class="agent-history-head">
               <div class="agent-history-title">历史研究对话</div>
@@ -2678,6 +2753,118 @@
     const $ = (id) => document.getElementById(id);
     function currentWelcomeMessage() {
       return welcomeMessage;
+    }
+
+    const marketDiagnosisPrompt = "请诊断当前A股大盘。必须基于最新可用且尽量属于同一交易日的主要指数、全市场涨跌分布、成交额、市场广度和行业结构，说明当前市场状态、核心驱动、反方证据、失效条件与数据时间；如数据日期不一致要明确指出。不要预测下一交易日方向，不要给出买卖建议。";
+
+    function syncAgentEntryHubVisibility() {
+      const hub = $("agentEntryHub");
+      if (!hub) return;
+      const hasUserMessage = Boolean($("messages")?.querySelector(".message.user"));
+      hub.hidden = state.workspacePage !== "agent"
+        || stockAgentIsEmbedded()
+        || state.agentResearchRunning
+        || hasUserMessage;
+    }
+
+    function normalizedStockLookup(value) {
+      return String(value || "")
+        .normalize("NFKC")
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, "")
+        .replace(/\.SH$/, ".SS");
+    }
+
+    function stockDiagnosisCandidates(data) {
+      const bySymbol = new Map();
+      for (const group of (data?.groups || [])) {
+        if (!["stocks", "workspaces"].includes(group.key)) continue;
+        for (const item of (group.items || [])) {
+          const symbol = normalizedStockLookup(item.symbol);
+          if (!symbol) continue;
+          const existing = bySymbol.get(symbol);
+          if (!existing || item.type === "stock") {
+            bySymbol.set(symbol, {
+              symbol,
+              name: String(item.title || existing?.name || symbol).trim() || symbol
+            });
+          }
+        }
+      }
+      return [...bySymbol.values()];
+    }
+
+    async function resolveStockDiagnosisTarget(query) {
+      const raw = String(query || "").normalize("NFKC").trim();
+      if (!raw) throw new Error("请输入股票名称或代码。");
+      const data = await api(`/v1/search?q=${encodeURIComponent(raw)}&limit=8`);
+      const candidates = stockDiagnosisCandidates(data);
+      if (!candidates.length) {
+        throw new Error(`没有找到“${raw}”对应的股票，请输入完整名称或 6 位代码。`);
+      }
+      const key = normalizedStockLookup(raw);
+      const exact = candidates.filter(item => {
+        const symbol = normalizedStockLookup(item.symbol);
+        return key === symbol
+          || key === symbol.split(".", 1)[0]
+          || key === normalizedStockLookup(item.name);
+      });
+      if (exact.length === 1) return exact[0];
+      if (!exact.length && candidates.length === 1) return candidates[0];
+      const examples = (exact.length ? exact : candidates)
+        .slice(0, 3)
+        .map(item => `${item.name}（${item.symbol}）`)
+        .join("、");
+      throw new Error(`找到多个可能结果：${examples}。请输入完整名称或代码。`);
+    }
+
+    async function runMarketDiagnosisEntry() {
+      const button = $("agentMarketDiagnosis");
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = "正在建立实时诊断…";
+      try {
+        startNewConversation(true, "push");
+        await sendChat(marketDiagnosisPrompt);
+      } finally {
+        button.disabled = false;
+        button.textContent = original;
+      }
+    }
+
+    async function runStockDiagnosisEntry(query) {
+      const button = $("agentStockDiagnosis");
+      const status = $("agentStockDiagnosisStatus");
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = "识别中…";
+      status.className = "agent-entry-status";
+      status.textContent = "正在从稳定股票范围和你的研究空间中识别标的…";
+      try {
+        const target = await resolveStockDiagnosisTarget(query);
+        status.textContent = `已识别 ${target.name}（${target.symbol}），正在进入唯一绑定研究对话…`;
+        const session = await api("/me/deep-stock", {
+          method: "POST",
+          body: JSON.stringify({symbol: target.symbol})
+        });
+        state.deepStock = session;
+        await loadConversations(false);
+        await loadDeepStock({force: true});
+        const question = `请诊断${target.name}（${target.symbol}）当前研究状态。基于最新可验证的行情与技术结构、经营和财务质量、行业相对位置、估值口径、公告与事件，给出证据链、反方证据、原判断失效条件和下一条最值得核验的证据；明确行情数据时间和财务报告期。不要给目标价或买卖建议。`;
+        await continueDeepStockConversation(question, session);
+        $("chatInput").value = "";
+        const completed = await sendChat(question);
+        status.textContent = completed
+          ? `已在 ${target.name} 的长期研究空间完成本轮即时诊断。`
+          : `已进入 ${target.name} 的长期研究空间；本轮即时诊断未完整完成，可在对话中重试。`;
+      } catch (error) {
+        status.className = "agent-entry-status error";
+        status.textContent = error.message || "这只股票暂时无法诊断，请稍后重试。";
+      } finally {
+        button.disabled = false;
+        button.textContent = original;
+      }
     }
 
     function agentIntentLabel(intent) {
@@ -2962,6 +3149,7 @@
       $("methodSection").hidden = page !== "review";
       $("productNotice").hidden = page === "agent" || page === "review";
       syncAgentPlacement();
+      syncAgentEntryHubVisibility();
       document.body.classList.toggle("review-page", page === "review");
       $("workspaceTitle").textContent = pages[page][0];
       $("workspaceSubtitle").textContent = pages[page][1];
@@ -4309,6 +4497,60 @@
       actions.appendChild(copy); node.appendChild(actions);
     }
 
+    function appendAgentRunBoundary(node, {kind = "degraded", title, copy, question}) {
+      if (!node) return;
+      node.querySelectorAll(":scope > .agent-run-boundary").forEach(item => item.remove());
+      const boundary = document.createElement("section");
+      boundary.className = `agent-run-boundary ${kind}`;
+      const heading = document.createElement("div");
+      heading.className = "agent-run-boundary-title";
+      heading.textContent = title;
+      const detail = document.createElement("div");
+      detail.className = "agent-run-boundary-copy";
+      detail.textContent = copy;
+      const actions = document.createElement("div");
+      actions.className = "agent-run-boundary-actions";
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "btn primary";
+      retry.textContent = "重新用 Hermes 研究";
+      retry.addEventListener("click", async () => {
+        retry.disabled = true;
+        retry.textContent = "正在重新连接…";
+        await loadHealth().catch(() => null);
+        if (kind === "failed") node.remove();
+        else boundary.remove();
+        await sendChat(question, {reuseUserMessage: true});
+      });
+      actions.appendChild(retry);
+      boundary.append(heading, detail, actions);
+      node.appendChild(boundary);
+    }
+
+    function renderAgentFailure(node, question, error, directHermes) {
+      const title = directHermes ? "本轮即时研究没有完成" : "Hermes 当前未连接";
+      const copy = directHermes
+        ? "没有形成通过校验的 AI 结论。当前问题和已保存会话仍然保留，系统不会用预存文案或未经标注的确定性摘要冒充即时回答。"
+        : "当前只具备确定性数据工具，尚不能即时生成 AI 回答。系统没有发送或保存一段基础摘要来冒充 Hermes；恢复连接后可直接重试原问题。";
+      const statusHint = Number(error?.status || 0);
+      const visibleCopy = statusHint === 429
+        ? `${copy} 当前服务请求较多，请稍后重试。`
+        : copy;
+      const response = finalizeStreamingMessage(
+        node,
+        directHermes
+          ? "本轮没有生成可用的即时研究回答。"
+          : "Hermes 未连接，本轮没有生成 AI 回答。",
+        null
+      );
+      appendAgentRunBoundary(response, {
+        kind: "failed",
+        title,
+        copy: visibleCopy,
+        question
+      });
+    }
+
     function renderMessageContent(node, role, text, pending, metadata) {
       node.textContent = "";
       if (role === "agent" && !pending) {
@@ -4512,6 +4754,7 @@
       if (state.workspacePage === "agent" || stockAgentIsEmbedded()) $("chatInput").focus();
       if (state.workspacePage === "agent") syncWorkspaceUrl(historyMode || (activatePage ? "push" : "replace"));
       else if (stockAgentIsEmbedded()) syncWorkspaceUrl(historyMode || "replace");
+      syncAgentEntryHubVisibility();
     }
 
     function startNewConversation(activatePage = true, historyMode = null) {
@@ -4530,6 +4773,7 @@
       $("chatInput").value = "";
       if (state.workspacePage === "agent") $("chatInput").focus();
       if (state.workspacePage === "agent") syncWorkspaceUrl(historyMode || (activatePage ? "push" : "replace"));
+      syncAgentEntryHubVisibility();
     }
 
     async function archiveConversation(conversationId) {
@@ -8951,12 +9195,13 @@
       }
     }
 
-    async function sendChat(message) {
+    async function sendChat(message, options = {}) {
       const attachedImage = state.pendingImage;
       const question = message.trim() || (attachedImage ? "请分析这张图片，并说明可验证的观察和不能确认的内容。" : "");
       if (!question) return;
       state.agentContextQuestion = question;
       state.agentResearchRunning = true;
+      syncAgentEntryHubVisibility();
       setAgentProcessExpanded(false);
       renderAgentResearchContext(state.agentContextMetadata, question);
       // Saved reports may enrich the evidence packet, but they never replace
@@ -8965,7 +9210,9 @@
       const requestId = directHermes
         ? (globalThis.crypto?.randomUUID?.() || `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`)
         : null;
-      addMessage("user", attachedImage ? `已附加图片：${attachedImage.original_name}\n${question}` : question);
+      if (!options.reuseUserMessage) {
+        addMessage("user", attachedImage ? `已附加图片：${attachedImage.original_name}\n${question}` : question);
+      }
       const pending = addMessage(
         "agent",
         directHermes
@@ -8977,6 +9224,10 @@
       $("sendButton").disabled = true;
       $("attachImage").disabled = true;
       try {
+        if (!directHermes) {
+          renderAgentFailure(pending, question, null, false);
+          return false;
+        }
         if (requestId) {
           privateStream = connectPrivateAgentStream(requestId, pending);
           await privateStream.ready;
@@ -9030,6 +9281,14 @@
         } else {
           responseNode = finalizeStreamingMessage(pending, data.reason || "任务已完成。", responseMetadata);
         }
+        if (responseNode && data.status !== "completed") {
+          appendAgentRunBoundary(responseNode, {
+            kind: "degraded",
+            title: "本轮已降级为确定性证据摘要",
+            copy: "Hermes 输出没有通过完整生成与校验流程。页面保留了本轮可验证数据，但这不是完整的即时 AI 研究回答，也不会据此推进个股研究阶段。",
+            question
+          });
+        }
         if (["watchlist_update", "watchlist_brief"].includes(data.intent)) await loadWatchlist();
         if (["research_priority", "research_outcome"].includes(data.intent)) await loadKnowledge();
         if (data.deep_stock_session) {
@@ -9041,18 +9300,17 @@
         }
         await maybeUpdateDiagnosis(data, question);
         await loadConversations(false);
+        return data.status === "completed";
       } catch (error) {
-        finalizeStreamingMessage(
-          pending,
-          "这次研究暂未完成，我会保留当前可用数据，请稍后重试。",
-          null
-        );
+        renderAgentFailure(pending, question, error, true);
+        return false;
       } finally {
         if (requestId) {
           privateStream?.source?.close();
           state.pendingAgentRequests.delete(requestId);
         }
         state.agentResearchRunning = false;
+        syncAgentEntryHubVisibility();
         setAgentProcessExpanded(false);
         renderAgentResearchContext(state.agentContextMetadata, state.agentContextQuestion);
         $("sendButton").disabled = false;
@@ -9141,6 +9399,11 @@
     $("removeImage").addEventListener("click", clearImageAttachment);
     $("startDeepStock").addEventListener("click", startDeepStockSession);
     $("deepStockAgent").addEventListener("click", () => { void continueDeepStockConversation(); });
+    $("agentMarketDiagnosis").addEventListener("click", () => { void runMarketDiagnosisEntry(); });
+    $("agentStockDiagnosisForm").addEventListener("submit", event => {
+      event.preventDefault();
+      void runStockDiagnosisEntry($("agentStockDiagnosisQuery").value);
+    });
     $("deepStockSymbol").addEventListener("change", () => {
       const symbol = $("deepStockSymbol").value;
       state.deepStockOverviewSymbol = symbol;
