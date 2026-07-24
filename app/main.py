@@ -408,6 +408,12 @@ class ArticleGenerateRequest(BaseModel):
     execute_agent: bool = False
 
 
+class BackgroundJobEnqueueRequest(BaseModel):
+    job_name: str = Field(min_length=3, max_length=100)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
+
+
 def _public_evidence_number(
     value: Any, *, digits: int = 2, signed: bool = False
 ) -> str | None:
@@ -960,7 +966,11 @@ def create_app(
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.ensure_directories()
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(
+        settings.database_path,
+        settings.workspace_root,
+        settings.database_url,
+    )
     database.initialize()
     knowledge = KnowledgeService(
         database, PROJECT_ROOT / "app" / "knowledge" / "common"
@@ -1200,6 +1210,9 @@ def create_app(
             yield
         finally:
             background.stop()
+            event_broker.close()
+            background.job_store.close()
+            database.close()
 
     app = FastAPI(
         title="清数智算 Agent Demo",
@@ -1398,12 +1411,22 @@ def create_app(
 
     @app.get("/health")
     def health() -> dict[str, Any]:
+        queue_status = background.status()
         return {
             "status": "ok",
             "time": utc_now(),
             "hermes_enabled": settings.hermes_enabled,
+            "storage": {
+                "domain_database": database.schema_status(),
+                "operational_database": {
+                    "backend": queue_status["persistent_queue"]["backend"],
+                    "schema_version": queue_status["persistent_queue"][
+                        "schema_version"
+                    ],
+                },
+            },
             "data_health": data_health.public_summary(data_health.latest()),
-            "background_jobs": background.status(),
+            "background_jobs": queue_status,
         }
 
     @app.get("/events", include_in_schema=False)
@@ -1440,6 +1463,49 @@ def create_app(
     @app.get("/system/background")
     def background_status() -> dict[str, Any]:
         return background.status()
+
+    @app.get("/admin/job-queue")
+    def job_queue_list(
+        request: Request,
+        status: Literal[
+            "queued", "running", "succeeded", "failed", "cancelled"
+        ]
+        | None = None,
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> dict[str, Any]:
+        require_admin_api(request)
+        return {
+            "queue": background.job_store.health(),
+            "jobs": background.list_jobs(status=status, limit=limit),
+        }
+
+    @app.post("/admin/job-queue/enqueue", status_code=202)
+    def job_queue_enqueue(
+        payload: BackgroundJobEnqueueRequest, request: Request
+    ) -> dict[str, Any]:
+        require_admin_api(request)
+        try:
+            return background.enqueue(
+                payload.job_name,
+                payload=payload.payload,
+                idempotency_key=payload.idempotency_key,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="后台任务类型不存在") from exc
+
+    @app.post("/admin/job-queue/{job_id}/retry", status_code=202)
+    def job_queue_retry(job_id: UUID, request: Request) -> dict[str, Any]:
+        require_admin_api(request)
+        if not background.job_store.retry(str(job_id)):
+            raise HTTPException(status_code=409, detail="任务当前状态不可重试")
+        return {"status": "queued", "job_id": str(job_id)}
+
+    @app.post("/admin/job-queue/{job_id}/cancel")
+    def job_queue_cancel(job_id: UUID, request: Request) -> dict[str, Any]:
+        require_admin_api(request)
+        if not background.job_store.cancel(str(job_id)):
+            raise HTTPException(status_code=409, detail="仅等待中的任务可取消")
+        return {"status": "cancelled", "job_id": str(job_id)}
 
     @app.get("/system/data-health")
     def data_health_status() -> dict[str, Any]:

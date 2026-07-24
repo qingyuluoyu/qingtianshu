@@ -1,11 +1,33 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: qingshu
+      POSTGRES_USER: qingshu
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-qingshu-local-only}"
+    volumes:
+      - qingshu-postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qingshu -d qingshu"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   qingshu-agent:
     build: .
     ports:
       - "8000:8000"
-    environment:
+    environment: &qingshu-environment
       QINGSHU_DATA_DIR: /data
+      QINGSHU_DATABASE_URL: "postgresql://qingshu:${POSTGRES_PASSWORD:-qingshu-local-only}@postgres:5432/qingshu"
       BACKGROUND_JOBS_ENABLED: "true"
+      BACKGROUND_WORKER_MODE: "external"
+      JOB_WORKER_CONCURRENCY: "${JOB_WORKER_CONCURRENCY:-2}"
+      JOB_LEASE_SECONDS: "${JOB_LEASE_SECONDS:-300}"
+      JOB_MAX_ATTEMPTS: "${JOB_MAX_ATTEMPTS:-3}"
+      JOB_RETRY_BASE_SECONDS: "${JOB_RETRY_BASE_SECONDS:-10}"
+      JOB_RETRY_MAX_SECONDS: "${JOB_RETRY_MAX_SECONDS:-600}"
       BACKGROUND_MARKET_REFRESH_SECONDS: "30"
       BACKGROUND_ARTICLE_CHECK_SECONDS: "1800"
       BACKGROUND_INFO_REFRESH_SECONDS: "600"
@@ -17,8 +39,12 @@ services:
       SEC_USER_AGENT: "${SEC_USER_AGENT:-QingshuFinancialResearch/0.1 research@example.com}"
       DEFAULT_A_SHARE_SYMBOLS: "${DEFAULT_A_SHARE_SYMBOLS:-000063.SZ,300308.SZ}"
       DEFAULT_RESEARCH_SYMBOLS: "${DEFAULT_RESEARCH_SYMBOLS:-000063.SZ,300308.SZ,NVDA}"
+      QINGSHU_ADMIN_API_TOKEN: "${QINGSHU_ADMIN_API_TOKEN:-}"
     volumes:
       - qingshu-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test:
@@ -32,5 +58,28 @@ services:
       timeout: 10s
       retries: 3
 
+  qingshu-worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    environment: *qingshu-environment
+    volumes:
+      - qingshu-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "from app.config import Settings; from app.operational_db import OperationalDatabase; assert OperationalDatabase(Settings.from_env().operational_database_url).health()['status'] == 'ok'",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 volumes:
   qingshu-data:
+  qingshu-postgres:

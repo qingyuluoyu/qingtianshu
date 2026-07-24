@@ -529,3 +529,38 @@ curl -fsS http://127.0.0.1:8773/health
 2. 继续做选股/个股分析的高收益可信度工作：单证据模块原位重试、更多财务/公告原文核验、跨报告期比较边界和用户可理解的缺失解释。
 3. 正式认证、生产数据库、持久化队列、监控、备份恢复、staging 和回滚仍属于生产底座，不得因本地 Runner 通过而宣称生产发布完成。
 4. 不新增黑盒综合分，不自动交易，不提供目标价、仓位、胜率或确定性收益预测。
+
+## 17. 2026-07-24 最新断点：PostgreSQL 主库与持久化队列
+
+本节晚于前文全部断点。生产数据库和持久化队列已从“待办”变为可运行实现。
+
+已完成：
+
+1. `QINGSHU_DATABASE_URL` 支持 PostgreSQL；不设置时继续使用
+   `QINGSHU_DB_PATH` SQLite。本地开发兼容不变。
+2. 现有 6000 余行业务仓储通过 PostgreSQL 连接池和受控 SQL 方言适配运行；
+   核心业务读写、完整应用启动和迁移后运行已在 PostgreSQL 17 验证。
+3. 新建 `app/operational_db.py`：持久化任务、周期计划、原子抢占、租约心跳、
+   过期恢复、指数退避、最大尝试失败归档、取消、重试、幂等键和健康统计。
+   运维 schema v2 同时持久化跨进程 SSE 事件，Web 使用单一轮询线程广播。
+4. `BackgroundScheduler` 不再用 `time.monotonic()` 保存调度状态。18 类刷新和
+   李总策略统一注册为数据库周期计划；`app/worker.py` 是独立 Worker 入口。
+5. Compose 包含 `postgres`、`qingshu-agent`、`qingshu-worker`；生产 Web 使用
+   `BACKGROUND_WORKER_MODE=external`，可横向扩 Worker。
+6. 新增管理员队列 API，但不在用户网页展示。
+7. 新增 SQLite→PostgreSQL 迁移工具；真实 52MB 样本迁移 67 表、18,107 行，
+   逐表计数一致，迁移后健康检查和新用户写入通过。
+8. 自动化：常规 `601 passed, 5 skipped`；真实 PostgreSQL 专项 5 项全部通过；
+   Ruff 通过；重启后的浏览器 Runner `12 passed / 0 failed`。
+
+下一步优先级：
+
+1. 增加 PostgreSQL 定时备份、恢复演练和保留策略。
+2. 用户工作区从单机/共享卷迁移到对象存储或共享文件系统。
+3. 增加队列延迟、失败率、租约恢复次数和 Worker 存活指标告警。
+4. 在 staging 使用与生产一致的 PostgreSQL、Worker 数和密钥管理完成回滚演练。
+5. 继续选股/个股分析证据深度和单模块重试；不回头扩低收益 Guard。
+
+当前本地服务已重启为新代码：`http://127.0.0.1:8773`，PID `75046`，工具会话
+`83675`；业务库为 SQLite schema v1、运维库为 schema v2（本地开发模式），embedded
+Worker 正常，队列无积压，数据健康 54/54。

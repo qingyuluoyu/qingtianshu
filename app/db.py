@@ -9,17 +9,39 @@ import sqlite3
 from typing import Any
 from uuid import uuid4
 
+from app.postgres_compat import PostgresConnection, create_postgres_pool
 from app.utils import json_dumps, utc_now, write_json
 
 
 class Database:
     SYSTEM_EDITOR_ID = "system-market-editor"
+    SCHEMA_VERSION = 1
 
-    def __init__(self, path: Path, workspace_root: Path):
+    def __init__(
+        self,
+        path: Path,
+        workspace_root: Path,
+        database_url: str = "",
+    ):
         self.path = Path(path)
         self.workspace_root = Path(workspace_root)
+        self.database_url = str(database_url or "").strip()
+        self.backend = (
+            "postgresql"
+            if self.database_url.startswith(
+                ("postgresql://", "postgres://", "postgresql+psycopg://")
+            )
+            else "sqlite"
+        )
+        self._postgres_pool = (
+            create_postgres_pool(self.database_url)
+            if self.backend == "postgresql"
+            else None
+        )
 
-    def connect(self) -> sqlite3.Connection:
+    def connect(self) -> sqlite3.Connection | PostgresConnection:
+        if self.backend == "postgresql":
+            return PostgresConnection(self._postgres_pool)
         connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
@@ -27,7 +49,8 @@ class Database:
         return connection
 
     def initialize(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.backend == "sqlite":
+            self.path.parent.mkdir(parents=True, exist_ok=True)
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
             connection.executescript(
@@ -1409,6 +1432,18 @@ class Database:
                 "idempotency_key",
                 "TEXT",
             )
+            self._ensure_column(
+                connection,
+                "background_job_runs",
+                "queue_job_id",
+                "TEXT",
+            )
+            self._ensure_column(
+                connection,
+                "background_job_runs",
+                "worker_id",
+                "TEXT",
+            )
             connection.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_action_plans_idempotency
@@ -1422,17 +1457,64 @@ class Database:
                 ON deep_stock_sessions(user_id, conversation_id)
                 """
             )
-            self._ensure_ai_writeback_candidate_types(connection)
+            if self.backend == "sqlite":
+                self._ensure_ai_writeback_candidate_types(connection)
             self._backfill_stock_domains(connection)
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS domain_schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO domain_schema_migrations(version, applied_at)
+                VALUES (?, ?)
+                """,
+                (self.SCHEMA_VERSION, utc_now()),
+            )
+
+    def close(self) -> None:
+        if self._postgres_pool is not None:
+            self._postgres_pool.close()
+            self._postgres_pool = None
+
+    def schema_status(self) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT MAX(version) AS version FROM domain_schema_migrations"
+            ).fetchone()
+        return {
+            "backend": self.backend,
+            "schema_version": int(row["version"] or 0),
+        }
 
     @staticmethod
     def _ensure_column(
-        connection: sqlite3.Connection, table: str, column: str, definition: str
+        connection: sqlite3.Connection | PostgresConnection,
+        table: str,
+        column: str,
+        definition: str,
     ) -> None:
-        columns = {
-            str(row["name"])
-            for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
-        }
+        if isinstance(connection, PostgresConnection):
+            columns = {
+                str(row["column_name"])
+                for row in connection.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = current_schema() AND table_name = ?
+                    """,
+                    (table,),
+                ).fetchall()
+            }
+        else:
+            columns = {
+                str(row["name"])
+                for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+            }
         if column not in columns:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
@@ -3109,15 +3191,23 @@ class Database:
             )
         return cursor.rowcount
 
-    def start_background_job(self, job_name: str) -> str:
+    def start_background_job(
+        self,
+        job_name: str,
+        *,
+        queue_job_id: str | None = None,
+        worker_id: str | None = None,
+    ) -> str:
         job_id = str(uuid4())
         with self.connect() as connection:
             connection.execute(
                 """
-                INSERT INTO background_job_runs(id, job_name, status, started_at)
-                VALUES (?, ?, 'running', ?)
+                INSERT INTO background_job_runs(
+                    id, job_name, status, queue_job_id, worker_id, started_at
+                )
+                VALUES (?, ?, 'running', ?, ?, ?)
                 """,
-                (job_id, job_name, utc_now()),
+                (job_id, job_name, queue_job_id, worker_id, utc_now()),
             )
         return job_id
 
@@ -3184,6 +3274,35 @@ class Database:
             )
             repaired["strategy_screen_runs"] = strategy.rowcount
         return repaired
+
+    def repair_background_job_runs_from_queue(self) -> int:
+        """Close audit rows whose durable queue lease is no longer active."""
+
+        finished_at = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE background_job_runs
+                SET status = 'failed',
+                    error = COALESCE(
+                        error, 'queue_lease_no_longer_active'
+                    ),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE status = 'running'
+                    AND (
+                        queue_job_id IS NULL
+                        OR NOT EXISTS (
+                            SELECT 1
+                            FROM persistent_jobs AS jobs
+                            WHERE CAST(jobs.id AS TEXT) =
+                                  background_job_runs.queue_job_id
+                                AND jobs.status = 'running'
+                        )
+                    )
+                """,
+                (finished_at,),
+            )
+        return int(cursor.rowcount)
 
     def latest_background_jobs(self) -> list[dict[str, Any]]:
         with self.connect() as connection:

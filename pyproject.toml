@@ -19,6 +19,7 @@ dependencies = [
   "pillow>=10,<12",
   "python-multipart>=0.0.9",
   "python-dotenv>=1.0",
+  "psycopg[binary,pool]>=3.2,<4",
   "tushare>=1.4",
 ]
 
@@ -32,6 +33,7 @@ dev = [
 
 [project.scripts]
 qingshu-start = "app.cli:main"
+qingshu-worker = "app.worker:main"
 
 [tool.setuptools]
 include-package-data = true

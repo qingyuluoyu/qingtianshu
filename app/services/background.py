@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 from queue import Empty, Full, Queue
+import socket
 import threading
-import time
 from typing import Any, Callable, Iterator
+from uuid import uuid4
 
 from app.config import Settings
 from app.db import Database
+from app.operational_db import ClaimedJob, OperationalDatabase
 from app.services.article import MarketPulseArticleService
 from app.services.china_info import ChinaInformationService
 from app.services.business_structure import BusinessStructureAnalysisService
@@ -38,8 +41,35 @@ class EventBroker:
     def __init__(self):
         self._subscribers: set[Queue[dict[str, Any]]] = set()
         self._lock = threading.Lock()
+        self._store: OperationalDatabase | None = None
+        self._sequence_id = 0
+        self._poll_stop = threading.Event()
+        self._poll_thread: threading.Thread | None = None
+
+    def attach_store(self, store: OperationalDatabase) -> None:
+        self._store = store
+        self._sequence_id = store.latest_event_sequence()
+
+    def close(self) -> None:
+        self._poll_stop.set()
+        if self._poll_thread and self._poll_thread.is_alive():
+            self._poll_thread.join(timeout=3)
+        self._poll_thread = None
 
     def publish(self, event: dict[str, Any]) -> None:
+        persisted = event
+        if self._store is not None:
+            try:
+                persisted = self._store.publish_event(event)
+            except Exception:
+                persisted = event
+        with self._lock:
+            self._sequence_id = max(
+                self._sequence_id, int(persisted.get("_sequence_id") or 0)
+            )
+        self._fanout(persisted)
+
+    def _fanout(self, event: dict[str, Any]) -> None:
         with self._lock:
             subscribers = list(self._subscribers)
         for subscriber in subscribers:
@@ -52,16 +82,54 @@ class EventBroker:
                 except (Empty, Full):
                     continue
 
+    def _ensure_poller(self) -> None:
+        with self._lock:
+            if self._store is None or (
+                self._poll_thread is not None and self._poll_thread.is_alive()
+            ):
+                return
+            self._poll_stop.clear()
+            thread = threading.Thread(
+                target=self._poll_events,
+                name="qingshu-persistent-event-poller",
+                daemon=True,
+            )
+            self._poll_thread = thread
+        thread.start()
+
+    def _poll_events(self) -> None:
+        while not self._poll_stop.wait(timeout=1):
+            with self._lock:
+                has_subscribers = bool(self._subscribers)
+                sequence_id = self._sequence_id
+            if not has_subscribers or self._store is None:
+                continue
+            try:
+                events = self._store.events_after(sequence_id)
+            except Exception:
+                continue
+            for event in events:
+                with self._lock:
+                    self._sequence_id = max(
+                        self._sequence_id, int(event["_sequence_id"])
+                    )
+                self._fanout(event)
+
     def stream(self) -> Iterator[str]:
         subscriber: Queue[dict[str, Any]] = Queue(maxsize=20)
         with self._lock:
             self._subscribers.add(subscriber)
+        self._ensure_poller()
         try:
             yield f"data: {json.dumps({'type': 'connected', 'time': utc_now()}, ensure_ascii=False)}\n\n"
             while True:
                 try:
                     event = subscriber.get(timeout=15)
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    public_event = dict(event)
+                    public_event.pop("_sequence_id", None)
+                    yield (
+                        f"data: {json.dumps(public_event, ensure_ascii=False)}\n\n"
+                    )
                 except Empty:
                     yield ": heartbeat\n\n"
         finally:
@@ -131,42 +199,138 @@ class BackgroundScheduler:
         self.change_events = change_events
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._li_zong_thread: threading.Thread | None = None
+        self._threads: list[threading.Thread] = []
+        self.worker_id = (
+            f"{socket.gethostname()}-{os.getpid()}-{str(uuid4()).split('-')[0]}"
+        )
+        self.job_store = OperationalDatabase(settings.operational_database_url)
+        self.job_store.initialize()
+        self.broker.attach_store(self.job_store)
+        self.job_store.prune_events(retention_hours=48)
+        self.job_store.recover_dead_local_workers()
+        self._register_schedules()
+        self.database.repair_background_job_runs_from_queue()
 
     def start(self) -> None:
-        if not self.settings.background_jobs_enabled or self.is_running:
+        if (
+            not self.settings.background_jobs_enabled
+            or self.settings.background_worker_mode != "embedded"
+            or self.is_running
+        ):
             return
-        self.database.repair_interrupted_background_runs()
         self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._loop,
-            name="qingshu-background-scheduler",
-            daemon=True,
-        )
-        self._thread.start()
-        if self._li_zong_enabled:
-            self._li_zong_thread = threading.Thread(
-                target=self._li_zong_loop,
-                name="qingshu-li-zong-worker",
+        self._threads = []
+        for index in range(self.settings.job_worker_concurrency):
+            thread = threading.Thread(
+                target=self._worker_loop,
+                args=(f"{self.worker_id}-t{index + 1}",),
+                name=f"qingshu-persistent-worker-{index + 1}",
                 daemon=True,
             )
-            self._li_zong_thread.start()
+            self._threads.append(thread)
+            thread.start()
+        self._thread = self._threads[0] if self._threads else None
+
+    def run_forever(self) -> None:
+        """Run the durable scheduler/worker loop in a dedicated process."""
+
+        if (
+            not self.settings.background_jobs_enabled
+            or self.settings.background_worker_mode == "disabled"
+        ):
+            raise RuntimeError("Background jobs are disabled")
+        self._stop.clear()
+        self._register_schedules()
+        if self.settings.job_worker_concurrency == 1:
+            self._worker_loop(self.worker_id)
+            return
+        self._threads = []
+        for index in range(self.settings.job_worker_concurrency):
+            thread = threading.Thread(
+                target=self._worker_loop,
+                args=(f"{self.worker_id}-t{index + 1}",),
+                name=f"qingshu-persistent-worker-{index + 1}",
+                daemon=True,
+            )
+            self._threads.append(thread)
+            thread.start()
+        try:
+            for thread in self._threads:
+                thread.join()
+        finally:
+            self.stop()
+
+    def run_once(self, worker_id: str | None = None) -> bool:
+        """Schedule due work and execute at most one job."""
+
+        self._register_schedules()
+        self.job_store.enqueue_due_schedules()
+        resolved_worker = worker_id or self.worker_id
+        claimed = self.job_store.claim(
+            resolved_worker,
+            queue_name="background",
+            lease_seconds=self.settings.job_lease_seconds,
+        )
+        if claimed is None:
+            return False
+        function = self._job_functions().get(claimed.job_name)
+        if function is None:
+            self.job_store.fail(
+                claimed.id,
+                resolved_worker,
+                f"unregistered_job:{claimed.job_name}",
+                retry_base_seconds=self.settings.job_retry_base_seconds,
+                retry_max_seconds=self.settings.job_retry_max_seconds,
+            )
+            return True
+        self._execute_claimed_job(claimed, function, resolved_worker)
+        return True
+
+    def enqueue(
+        self,
+        job_name: str,
+        *,
+        payload: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        if job_name not in self._job_functions():
+            raise KeyError(job_name)
+        return self.job_store.enqueue(
+            job_name,
+            payload,
+            queue_name="background",
+            priority=100,
+            max_attempts=self.settings.job_max_attempts,
+            idempotency_key=idempotency_key,
+        )
+
+    def list_jobs(
+        self, *, status: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        return self.job_store.list_jobs(status=status, limit=limit)
 
     def stop(self) -> None:
         self._stop.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=10)
-        if self._li_zong_thread and self._li_zong_thread.is_alive():
-            self._li_zong_thread.join(timeout=10)
+        current = threading.current_thread()
+        for thread in self._threads:
+            if thread is not current and thread.is_alive():
+                thread.join(timeout=10)
+        self._threads = []
+        self._thread = None
 
     @property
     def is_running(self) -> bool:
-        return bool(self._thread and self._thread.is_alive())
+        return any(thread.is_alive() for thread in self._threads)
 
     def status(self) -> dict[str, Any]:
+        queue_health = self.job_store.health()
         return {
             "enabled": self.settings.background_jobs_enabled,
             "running": self.is_running,
+            "worker_mode": self.settings.background_worker_mode,
+            "worker_id": self.worker_id if self.is_running else None,
+            "worker_concurrency": self.settings.job_worker_concurrency,
+            "persistent_queue": queue_health,
             "market_refresh_seconds": self.settings.background_market_refresh_seconds,
             "article_check_seconds": self.settings.background_article_check_seconds,
             "a_share_info_refresh_seconds": self.settings.background_info_refresh_seconds,
@@ -190,181 +354,200 @@ class BackgroundScheduler:
             "article_uses_hermes": self.settings.background_use_hermes
             and self.settings.hermes_enabled,
             "li_zong_strategy_enabled": bool(self._li_zong_enabled),
-            "li_zong_worker_running": bool(
-                self._li_zong_thread and self._li_zong_thread.is_alive()
-            ),
+            "li_zong_worker_running": bool(self.is_running and self._li_zong_enabled),
             "li_zong_refresh_seconds": self.settings.li_zong_refresh_seconds,
             "latest_jobs": self.database.latest_background_jobs(),
         }
 
-    def _loop(self) -> None:
-        next_market = 0.0
-        next_article = 0.0
-        next_info = 0.0
-        next_filings = 0.0
-        next_business_structure = 0.0
-        next_shareholders = 0.0
-        next_analyst_expectations = 0.0
-        next_fundamentals = 0.0
-        next_us_fundamentals = 0.0
-        next_earnings_quality = 0.0
-        next_financial_drivers = 0.0
-        next_peer_valuation = 0.0
-        next_research = 0.0
-        next_research_outcomes = 0.0
-        next_trade_reviews = 0.0
-        next_market_news = 0.0
-        next_evidence_tasks = 0.0
-        next_calibration = 0.0
-        next_data_quality = 0.0
-        while not self._stop.is_set():
-            now = time.monotonic()
-            if now >= next_market:
-                self._run_job("market_intraday_refresh", self._refresh_markets)
-                next_market = time.monotonic() + max(
-                    10, self.settings.background_market_refresh_seconds
-                )
-            if now >= next_article:
-                self._run_job("market_pulse_article", self._refresh_article)
-                next_article = time.monotonic() + max(
-                    60, self.settings.background_article_check_seconds
-                )
-            if now >= next_info:
-                self._run_job(
-                    "a_share_information_refresh", self._refresh_a_share_information
-                )
-                next_info = time.monotonic() + max(
-                    60, self.settings.background_info_refresh_seconds
-                )
-            if now >= next_filings:
-                self._run_job("a_share_filing_refresh", self._refresh_a_share_filings)
-                next_filings = time.monotonic() + max(
-                    300, self.settings.background_fundamentals_refresh_seconds
-                )
-            if now >= next_business_structure:
-                self._run_job(
-                    "business_structure_refresh",
-                    self._refresh_business_structure,
-                )
-                next_business_structure = time.monotonic() + max(
-                    300, self.settings.background_fundamentals_refresh_seconds
-                )
-            if now >= next_shareholders:
-                self._run_job(
-                    "shareholder_structure_refresh",
-                    self._refresh_shareholders,
-                )
-                next_shareholders = time.monotonic() + max(
-                    300, self.settings.background_fundamentals_refresh_seconds
-                )
-            if now >= next_analyst_expectations:
-                self._run_job(
-                    "analyst_expectations_refresh",
-                    self._refresh_analyst_expectations,
-                )
-                next_analyst_expectations = time.monotonic() + max(
-                    300, self.settings.background_fundamentals_refresh_seconds
-                )
-            if now >= next_fundamentals:
-                self._run_job(
-                    "a_share_fundamentals_refresh", self._refresh_a_share_fundamentals
-                )
-                next_fundamentals = time.monotonic() + max(
-                    300, self.settings.background_fundamentals_refresh_seconds
-                )
-            if now >= next_us_fundamentals:
-                self._run_job(
-                    "us_equity_fundamentals_refresh",
-                    self._refresh_us_equity_fundamentals,
-                )
-                next_us_fundamentals = time.monotonic() + max(
-                    300, self.settings.background_fundamentals_refresh_seconds
-                )
-            if now >= next_earnings_quality:
-                self._run_job(
-                    "earnings_quality_refresh", self._refresh_earnings_quality
-                )
-                next_earnings_quality = time.monotonic() + max(
-                    300, self.settings.background_fundamentals_refresh_seconds
-                )
-            if now >= next_financial_drivers:
-                self._run_job(
-                    "financial_driver_refresh", self._refresh_financial_drivers
-                )
-                next_financial_drivers = time.monotonic() + max(
-                    300, self.settings.background_fundamentals_refresh_seconds
-                )
-            if now >= next_peer_valuation:
-                self._run_job("peer_valuation_refresh", self._refresh_peer_valuations)
-                next_peer_valuation = time.monotonic() + max(
-                    300, self.settings.background_fundamentals_refresh_seconds
-                )
-            if now >= next_calibration:
-                self._run_job(
-                    "outlook_calibration_refresh", self._refresh_outlook_calibrations
-                )
-                next_calibration = time.monotonic() + max(
-                    1800, self.settings.background_calibration_refresh_seconds
-                )
-            if now >= next_research:
-                self._run_job(
-                    "stock_research_reports_refresh", self._refresh_research_reports
-                )
-                next_research = time.monotonic() + max(
-                    300, self.settings.background_research_refresh_seconds
-                )
-            if now >= next_research_outcomes:
-                self._run_job(
-                    "research_outcomes_backfill", self._refresh_research_outcomes
-                )
-                next_research_outcomes = time.monotonic() + max(
-                    300, self.settings.background_research_refresh_seconds
-                )
-            if self.trade_workflow is not None and now >= next_trade_reviews:
-                self._run_job(
-                    "trade_reviews_readiness_refresh",
-                    self.trade_workflow.refresh_pending_reviews,
-                )
-                next_trade_reviews = time.monotonic() + max(
-                    60, self.settings.background_research_refresh_seconds
-                )
-            if now >= next_market_news:
-                self._run_job("market_news_refresh", self._refresh_market_news)
-                next_market_news = time.monotonic() + max(
-                    300, self.settings.background_market_news_refresh_seconds
-                )
-            if now >= next_evidence_tasks:
-                self._run_job("evidence_tasks_process", self._process_evidence_tasks)
-                next_evidence_tasks = time.monotonic() + max(
-                    60, self.settings.background_research_refresh_seconds
-                )
-            if now >= next_data_quality:
-                self._run_job("data_quality_audit", self._refresh_data_health)
-                next_data_quality = time.monotonic() + max(
-                    30, self.settings.background_data_quality_seconds
-                )
-            next_due = min(
-                next_market,
-                next_article,
-                next_info,
-                next_filings,
-                next_business_structure,
-                next_shareholders,
-                next_analyst_expectations,
-                next_fundamentals,
-                next_us_fundamentals,
-                next_earnings_quality,
-                next_financial_drivers,
-                next_peer_valuation,
-                next_calibration,
-                next_research,
-                next_research_outcomes,
-                next_trade_reviews,
-                next_market_news,
-                next_evidence_tasks,
-                next_data_quality,
+    def _job_functions(self) -> dict[str, Callable[[], dict[str, Any]]]:
+        functions: dict[str, Callable[[], dict[str, Any]]] = {
+            "market_intraday_refresh": self._refresh_markets,
+            "market_pulse_article": self._refresh_article,
+            "a_share_information_refresh": self._refresh_a_share_information,
+            "a_share_filing_refresh": self._refresh_a_share_filings,
+            "business_structure_refresh": self._refresh_business_structure,
+            "shareholder_structure_refresh": self._refresh_shareholders,
+            "analyst_expectations_refresh": self._refresh_analyst_expectations,
+            "a_share_fundamentals_refresh": self._refresh_a_share_fundamentals,
+            "us_equity_fundamentals_refresh": self._refresh_us_equity_fundamentals,
+            "earnings_quality_refresh": self._refresh_earnings_quality,
+            "financial_driver_refresh": self._refresh_financial_drivers,
+            "peer_valuation_refresh": self._refresh_peer_valuations,
+            "outlook_calibration_refresh": self._refresh_outlook_calibrations,
+            "stock_research_reports_refresh": self._refresh_research_reports,
+            "research_outcomes_backfill": self._refresh_research_outcomes,
+            "market_news_refresh": self._refresh_market_news,
+            "evidence_tasks_process": self._process_evidence_tasks,
+            "data_quality_audit": self._refresh_data_health,
+            "li_zong_strategy_refresh": self._refresh_li_zong_strategy,
+        }
+        if self.trade_workflow is not None:
+            functions["trade_reviews_readiness_refresh"] = (
+                self.trade_workflow.refresh_pending_reviews
             )
-            self._stop.wait(timeout=max(0.5, min(5.0, next_due - time.monotonic())))
+        return functions
+
+    def _schedule_specs(self) -> list[tuple[str, int, int, bool]]:
+        fundamentals = max(
+            300, self.settings.background_fundamentals_refresh_seconds
+        )
+        research = max(300, self.settings.background_research_refresh_seconds)
+        return [
+            (
+                "market_intraday_refresh",
+                max(10, self.settings.background_market_refresh_seconds),
+                100,
+                True,
+            ),
+            (
+                "market_pulse_article",
+                max(60, self.settings.background_article_check_seconds),
+                40,
+                True,
+            ),
+            (
+                "a_share_information_refresh",
+                max(60, self.settings.background_info_refresh_seconds),
+                70,
+                True,
+            ),
+            ("a_share_filing_refresh", fundamentals, 50, True),
+            ("business_structure_refresh", fundamentals, 45, True),
+            ("shareholder_structure_refresh", fundamentals, 45, True),
+            ("analyst_expectations_refresh", fundamentals, 45, True),
+            ("a_share_fundamentals_refresh", fundamentals, 60, True),
+            ("us_equity_fundamentals_refresh", fundamentals, 55, True),
+            ("earnings_quality_refresh", fundamentals, 40, True),
+            ("financial_driver_refresh", fundamentals, 40, True),
+            ("peer_valuation_refresh", fundamentals, 40, True),
+            (
+                "outlook_calibration_refresh",
+                max(1800, self.settings.background_calibration_refresh_seconds),
+                30,
+                True,
+            ),
+            ("stock_research_reports_refresh", research, 65, True),
+            ("research_outcomes_backfill", research, 35, True),
+            (
+                "trade_reviews_readiness_refresh",
+                max(60, self.settings.background_research_refresh_seconds),
+                55,
+                self.trade_workflow is not None,
+            ),
+            (
+                "market_news_refresh",
+                max(300, self.settings.background_market_news_refresh_seconds),
+                75,
+                True,
+            ),
+            (
+                "evidence_tasks_process",
+                max(60, self.settings.background_research_refresh_seconds),
+                70,
+                True,
+            ),
+            (
+                "data_quality_audit",
+                max(30, self.settings.background_data_quality_seconds),
+                90,
+                True,
+            ),
+            (
+                "li_zong_strategy_refresh",
+                max(10, self.settings.li_zong_refresh_seconds),
+                80,
+                self._li_zong_enabled,
+            ),
+        ]
+
+    def _register_schedules(self) -> None:
+        for job_name, interval, priority, enabled in self._schedule_specs():
+            self.job_store.register_schedule(
+                name=job_name,
+                job_name=job_name,
+                interval_seconds=interval,
+                queue_name="background",
+                priority=priority,
+                max_attempts=self.settings.job_max_attempts,
+                enabled=enabled
+                and self.settings.background_jobs_enabled
+                and self.settings.background_worker_mode != "disabled",
+                run_immediately=True,
+            )
+
+    def _worker_loop(self, worker_id: str) -> None:
+        functions = self._job_functions()
+        while not self._stop.is_set():
+            self.job_store.recover_dead_local_workers()
+            self.job_store.enqueue_due_schedules()
+            self.database.repair_background_job_runs_from_queue()
+            claimed = self.job_store.claim(
+                worker_id,
+                queue_name="background",
+                lease_seconds=self.settings.job_lease_seconds,
+            )
+            if claimed is None:
+                self._stop.wait(timeout=self.settings.job_queue_poll_seconds)
+                continue
+            function = functions.get(claimed.job_name)
+            if function is None:
+                self.job_store.fail(
+                    claimed.id,
+                    worker_id,
+                    f"unregistered_job:{claimed.job_name}",
+                    retry_base_seconds=self.settings.job_retry_base_seconds,
+                    retry_max_seconds=self.settings.job_retry_max_seconds,
+                )
+                continue
+            self._execute_claimed_job(claimed, function, worker_id)
+
+    def _execute_claimed_job(
+        self,
+        claimed: ClaimedJob,
+        function: Callable[[], dict[str, Any]],
+        worker_id: str,
+    ) -> None:
+        run_id = self.database.start_background_job(
+            claimed.job_name,
+            queue_job_id=claimed.id,
+            worker_id=worker_id,
+        )
+        heartbeat_stop = threading.Event()
+
+        def keep_lease_alive() -> None:
+            interval = max(1.0, self.settings.job_lease_seconds / 3)
+            while not heartbeat_stop.wait(timeout=interval):
+                if not self.job_store.heartbeat(
+                    claimed.id,
+                    worker_id,
+                    lease_seconds=self.settings.job_lease_seconds,
+                ):
+                    return
+
+        heartbeat = threading.Thread(
+            target=keep_lease_alive,
+            name=f"qingshu-job-heartbeat-{claimed.id[:8]}",
+            daemon=True,
+        )
+        heartbeat.start()
+        try:
+            summary = function()
+            self.database.finish_background_job(run_id, "completed", summary=summary)
+            if not self.job_store.complete(claimed.id, worker_id, summary):
+                raise RuntimeError("job_lease_lost_before_completion")
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            self.database.finish_background_job(run_id, "failed", error=error)
+            self.job_store.fail(
+                claimed.id,
+                worker_id,
+                error,
+                retry_base_seconds=self.settings.job_retry_base_seconds,
+                retry_max_seconds=self.settings.job_retry_max_seconds,
+            )
+        finally:
+            heartbeat_stop.set()
+            heartbeat.join(timeout=2)
 
     @property
     def _li_zong_enabled(self) -> bool:
@@ -373,11 +556,6 @@ class BackgroundScheduler:
             and self.tushare_snapshots.client is not None
             and self.li_zong_strategy is not None
         )
-
-    def _li_zong_loop(self) -> None:
-        while not self._stop.is_set():
-            self._run_job("li_zong_strategy_refresh", self._refresh_li_zong_strategy)
-            self._stop.wait(timeout=max(10, self.settings.li_zong_refresh_seconds))
 
     def _run_job(self, job_name: str, function: Callable[[], dict[str, Any]]) -> None:
         job_id = self.database.start_background_job(job_name)
@@ -896,6 +1074,7 @@ class BackgroundScheduler:
 
     def _refresh_data_health(self) -> dict[str, Any]:
         snapshot = self.data_health.audit()
+        pruned_events = self.job_store.prune_events(retention_hours=48)
         public = self.data_health.public_summary(snapshot)
         self.broker.publish(
             {
@@ -906,5 +1085,6 @@ class BackgroundScheduler:
         )
         return {
             "status": snapshot["status"],
+            "events_pruned": pruned_events,
             **snapshot["summary"],
         }

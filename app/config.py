@@ -102,13 +102,28 @@ class Settings:
     li_zong_universe_batch_size: int = 10
     li_zong_refresh_seconds: int = 30
     admin_api_token: str = ""
+    database_url: str = ""
+    background_worker_mode: str = "embedded"
+    job_queue_poll_seconds: float = 1.0
+    job_lease_seconds: int = 300
+    job_max_attempts: int = 3
+    job_retry_base_seconds: int = 10
+    job_retry_max_seconds: int = 600
+    job_worker_concurrency: int = 1
 
     @classmethod
     def from_env(cls) -> "Settings":
         data_dir = _path_from_env("QINGSHU_DATA_DIR", DEFAULT_DATA_DIR)
+        database_path = _path_from_env("QINGSHU_DB_PATH", data_dir / "qingshu.db")
+        database_url = os.getenv("QINGSHU_DATABASE_URL", "").strip()
+        worker_mode = os.getenv("BACKGROUND_WORKER_MODE", "embedded").strip().lower()
+        if worker_mode not in {"embedded", "external", "disabled"}:
+            raise ValueError(
+                "BACKGROUND_WORKER_MODE must be embedded, external, or disabled"
+            )
         return cls(
             data_dir=data_dir,
-            database_path=_path_from_env("QINGSHU_DB_PATH", data_dir / "qingshu.db"),
+            database_path=database_path,
             workspace_root=_path_from_env(
                 "QINGSHU_WORKSPACE_ROOT", data_dir / "workspaces"
             ),
@@ -191,7 +206,29 @@ class Settings:
                 10, int(os.getenv("LI_ZONG_REFRESH_SECONDS", "30"))
             ),
             admin_api_token=os.getenv("QINGSHU_ADMIN_API_TOKEN", "").strip(),
+            database_url=database_url,
+            background_worker_mode=worker_mode,
+            job_queue_poll_seconds=max(
+                0.1, float(os.getenv("JOB_QUEUE_POLL_SECONDS", "1"))
+            ),
+            job_lease_seconds=max(10, int(os.getenv("JOB_LEASE_SECONDS", "300"))),
+            job_max_attempts=max(1, int(os.getenv("JOB_MAX_ATTEMPTS", "3"))),
+            job_retry_base_seconds=max(
+                1, int(os.getenv("JOB_RETRY_BASE_SECONDS", "10"))
+            ),
+            job_retry_max_seconds=max(
+                1, int(os.getenv("JOB_RETRY_MAX_SECONDS", "600"))
+            ),
+            job_worker_concurrency=max(
+                1, int(os.getenv("JOB_WORKER_CONCURRENCY", "1"))
+            ),
         )
+
+    @property
+    def operational_database_url(self) -> str:
+        if self.database_url:
+            return self.database_url
+        return f"sqlite:///{self.database_path}"
 
     def ensure_directories(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

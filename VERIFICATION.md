@@ -876,6 +876,25 @@ uv run pytest
 
 当前边界：整轮模型失败和守卫降级已有清楚的用户状态与重试；失败证据模块仍没有独立重试 API。全局搜索尚未实现拼音简称；市场复盘仍不是带版本、状态和后续验证链的正式结构化对象。
 
+## 2026-07-24 PostgreSQL 生产主库与持久化任务队列
+
+- 业务仓储 `Database` 新增 PostgreSQL 兼容连接池和方言适配，保留 SQLite 本地模式；用户、会话、自选股、对话消息、Run 和后台运行记录已在本机 PostgreSQL 17 真实读写通过。
+- 业务库和运维库分别记录 `domain_schema_migrations` /
+  `qingshu_schema_migrations` 版本；`/health.storage` 返回两个后端和版本。
+- `OperationalDatabase` 已实现 SQLite/PostgreSQL 双后端的幂等入队、持久化周期计划、优先级、原子租约、`FOR UPDATE SKIP LOCKED`、心跳、租约过期恢复、指数退避、最大次数失败归档、取消、人工重试与队列健康统计。
+- 跨进程事件写入 `persistent_events`，Web 端用单一轮询线程向所有 SSE 订阅者广播；独立进程探针已验证直接写库后 `/events` 收到 `cross_process_probe`，不会把内部序号暴露给前端。
+- 18 类原进程内 `time.monotonic()` 后台刷新和李总策略已迁入持久化队列；本地可使用 embedded Worker，生产使用 `python -m app.worker` 独立进程并支持多 Worker。
+- 管理 API 仅在有效用户会话和 `X-Qingshu-Admin-Token` 同时存在时开放，支持查看、手工幂等入队、取消和重试，不在用户网页展示。
+- Docker Compose 更新为 PostgreSQL + Web + Worker 三服务，Web 不执行后台任务，Worker 与 Web 共用 PostgreSQL 和工作区卷。
+- 新增只读源库迁移工具 `scripts/migrate_sqlite_to_postgres.py`。真实将仓库 52MB SQLite 样本的 67 张表迁移到 PostgreSQL：45 张非空表、18,107 行，逐表行数一致；迁移后应用 `/health=ok`、数据健康 `healthy`，可继续创建用户。
+- SQLite 队列/后台专项 12 项通过；真实 PostgreSQL 专项 5 项通过，覆盖多 Worker 单次抢占、重启后租约恢复、周期计划、失败重试、跨进程事件、业务核心读写和 SQLite→PostgreSQL 迁移。
+- 常规全量回归为 `601 passed, 5 skipped`；5 项跳过均为需要
+  `QINGSHU_TEST_POSTGRES_URL` 的 PostgreSQL 集成测试，并已在本机真实
+  PostgreSQL 17 上单独全部通过。Ruff 当前通过。
+- 新代码重启后的 8773 服务显示业务库 schema v1、运维库 schema v2、embedded Worker 正常、异常退出遗留本机租约自动回收、队列无积压、数据健康 54/54；浏览器 Runner 再次 `12 passed / 0 failed`。
+
+当前边界：结构化业务数据和任务状态已支持 PostgreSQL，但用户工作区文件仍在共享卷；生产多机还需对象存储/共享文件系统、数据库备份恢复演练、指标告警、正式认证、staging 与回滚演练。任务语义为 at-least-once，处理函数需保持幂等。
+
 ## 2026-07-24 自选股每日研究摘要、报告审计阅读与即时 Hermes
 
 - `StockAssetListService` 现在为每个当前用户股票空间返回报告元数据与 freshness、报价/完整日线/财务报告期/报告时间、最多三条反方证据、失效条件、下一证据，以及最新用户变化的 `link_id/read_at/handled_at/relevance_status`。公共报告明确标为“服务器公共证据快照”，用户判断和反馈状态继续隔离。

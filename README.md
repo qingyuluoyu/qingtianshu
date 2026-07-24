@@ -282,10 +282,48 @@ uv run python scripts/verify_tushare.py
 Docker 方式：
 
 ```bash
+export POSTGRES_PASSWORD='<use-a-long-random-password>'
+export QINGSHU_ADMIN_API_TOKEN='<use-another-long-random-value>'
 docker compose up --build -d
 ```
 
-行情数据库保存在 `qingshu-data` volume。容器默认使用无需模型费用的确定性 preview；生产 Hermes Provider 应通过云端密钥管理和独立 Agent Worker 接入。
+Compose 会启动三个服务：
+
+- `postgres`：保存用户、会话、自选股、研究对话、证据、分析结果、周期计划、任务租约和重试状态；
+- `qingshu-agent`：只提供 Web/API，不在 Web 进程中执行后台刷新；
+- `qingshu-worker`：从 PostgreSQL 原子抢占任务并执行，可用
+  `docker compose up --scale qingshu-worker=2` 扩展 Worker。
+
+用户工作区文件仍保存在 `qingshu-data` volume；生产多机部署应再迁移到共享文件系统或对象存储。容器默认使用无需模型费用的确定性 preview；生产 Hermes Provider 应通过云端密钥管理接入。
+
+本地直接启动时，不设置 `QINGSHU_DATABASE_URL` 会继续使用 SQLite，并以
+`BACKGROUND_WORKER_MODE=embedded` 在 Web 进程内运行同一套持久化队列，方便开发。
+生产模式设置：
+
+```bash
+export QINGSHU_DATABASE_URL='postgresql://qingshu:***@db-host:5432/qingshu'
+export BACKGROUND_WORKER_MODE=external
+
+# Web
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# 独立 Worker
+uv run qingshu-worker
+```
+
+已有 SQLite 数据迁移前，应先备份数据库和用户工作区。迁移工具只读源 SQLite，
+要求目标业务表为空，逐表复制后核对行数：
+
+```bash
+uv run python scripts/migrate_sqlite_to_postgres.py \
+  --source ./data/qingshu.db \
+  --database-url "$QINGSHU_DATABASE_URL" \
+  --dry-run
+
+uv run python scripts/migrate_sqlite_to_postgres.py \
+  --source ./data/qingshu.db \
+  --database-url "$QINGSHU_DATABASE_URL"
+```
 
 ## 最短 Demo 流程
 
@@ -387,15 +425,34 @@ Hermes 返回后会经过 `deterministic_numeric_and_policy_guard_v2`：守卫�
 - 热门板块资金字段只按数据源口径展示，不解释为真实资金意图；
 - 系统不生成目标价、胜率或确定性收益承诺。
 
-## 低频实时文章调度
+## 持久化后台任务
 
-服务器内置后台任务会自动做发布评估。`scripts/publish_market_pulse.py` 只是开发人员需要单独验证文章逻辑时使用；系统只有在证据质量达标、距离上一篇至少四小时、市场结构指纹变化且未超过 24 小时三篇上限时才真正生成文章。
+市场刷新、资讯、财报、研究报告、证据任务、数据健康、李总策略和文章发布评估都使用数据库持久化队列。任务包含幂等键、到期时间、优先级、尝试次数、租约所有者、心跳、结果和错误；PostgreSQL Worker 通过 `FOR UPDATE SKIP LOCKED` 防止多实例重复抢占。Worker 异常退出后，租约到期的任务会重新入队；失败按指数退避重试，达到最大尝试次数后进入失败归档，可由管理员重试。
+
+任务执行语义是 at-least-once，后台处理函数必须保持幂等；同一周期任务在已有
+`queued/running` 实例时会合并，不会无限堆积。
+
+Worker 产生的市场更新、文章发布和数据健康事件会先写入数据库事件表，再由 Web
+进程统一轮询并推送 `/events` SSE；因此 Web/Worker 分进程后仍能实时更新页面，
+不会依赖某个进程内存中的临时订阅者。事件默认保留 48 小时并由数据健康任务清理。
+
+`scripts/publish_market_pulse.py` 只是开发人员单独验证文章逻辑时使用；系统只有在证据质量达标、距离上一篇至少四小时、市场结构指纹变化且未超过 24 小时三篇上限时才真正生成文章。
 
 ```bash
 uv run python scripts/publish_market_pulse.py
 ```
 
-需要后台模型润色时同时设置 `HERMES_ENABLED=true` 和 `BACKGROUND_USE_HERMES=true`。生产版应把后台任务迁移到独立 Worker/任务队列；当前实现使用一个通用调度线程和一个独立李总策略线程，属于可运行的 MVP 编排，不等同于分布式任务队列。
+需要后台模型润色时同时设置 `HERMES_ENABLED=true` 和
+`BACKGROUND_USE_HERMES=true`。本地默认嵌入式 Worker，生产 Compose 默认独立
+Worker；两种模式使用相同的数据库任务合同。
+
+后台管理接口不会显示在用户网页，且同时要求个人会话和
+`X-Qingshu-Admin-Token`：
+
+- `GET /admin/job-queue`：查看队列健康和任务；
+- `POST /admin/job-queue/enqueue`：手工幂等入队已注册任务；
+- `POST /admin/job-queue/{job_id}/retry`：重试失败/取消任务；
+- `POST /admin/job-queue/{job_id}/cancel`：取消尚未执行的任务。
 
 ## 测试
 
