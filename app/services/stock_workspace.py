@@ -110,6 +110,7 @@ class StockWorkspaceService:
         session = self.deep_stock.get(user_id, canonical)
         report = self.database.latest_research_report(canonical)
         evidence = dict((report or {}).get("evidence") or {})
+        financial_report_period = self._financial_report_period(evidence)
         claim_ledger = build_research_claim_ledger(evidence)
         tracking = self.research_tracking.get_packet(
             user_id, symbol=canonical, limit=20
@@ -279,6 +280,7 @@ class StockWorkspaceService:
                 "status": data_status,
                 "quote_as_of": quote_meta.get("quote_as_of"),
                 "daily_as_of": quote_meta.get("daily_as_of"),
+                "financial_report_period": financial_report_period,
                 "report_generated_at": (report or {}).get("generated_at"),
                 "report_market_timestamp": (report or {}).get("market_timestamp"),
                 "strategy_as_of": (strategy_evidence or {}).get("as_of_date"),
@@ -326,6 +328,15 @@ class StockWorkspaceService:
                 "不提供无来源综合评分、自产目标价或确定性买卖建议。"
             ),
         }
+
+    @staticmethod
+    def _financial_report_period(evidence: dict[str, Any]) -> Any:
+        fundamentals = evidence.get("fundamentals") or {}
+        financial_periods = list(fundamentals.get("financial_periods") or [])
+        latest = financial_periods[0] if financial_periods else {}
+        if not latest:
+            latest = (fundamentals.get("summary") or {}).get("latest_report") or {}
+        return latest.get("report_period") or latest.get("report_date")
 
     def get_evidence_workspace(self, user_id: str, symbol: str) -> dict[str, Any]:
         workspace = self.get_workspace(user_id, symbol)

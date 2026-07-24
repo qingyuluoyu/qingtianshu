@@ -2853,6 +2853,28 @@ class AgentService:
             conversation_history=prompt_history,
             knowledge_context=prompt_knowledge_context,
         )
+        if intent == "watchlist_brief" and evidence.get("answer_contract"):
+            prompt += """
+
+## 自选股每日研究摘要的时间与证据合同
+
+这是一次新的 Hermes 即时综合，不是预生成报告的原文回放。按研究优先级逐只回答，每只股票都要
+使用同一组明确标签：
+
+- 最新报价：只使用 items.current_quote 的价格、涨跌幅和 market_timestamp，并写明它是盘中、
+  收盘后或中性“最新报价快照”；不得把它称为完整日线。
+- 最近完整日线：只使用 items.latest_bar 及其 timestamp；技术指标只归属于这个日期。
+- 最新财务报告期：只使用 research_assets.data_times.financial_report_period；缺失时直写“证据包
+  未提供”，不得拿报告生成时间、行情时间或公告日期代替。
+- 服务器报告：可说明 report_meta.status、generated_at 和 market_timestamp，但它只是公共证据
+  快照；不得把正文逐段复述成当前回答，也不得把 partial、degraded 或 failed 写成完整报告。
+- 研究判断与变化：active_thesis、latest_change、next_action、counterevidence、
+  invalidation_conditions 和 next_evidence 属于当前用户研究空间；事实、用户假设和系统建议必须分开。
+
+每只股票至少包含：优先级原因、上述三个时间锚点、最关键反方证据、明确失效条件或“尚未建立”、
+一项下一步研究任务。不得用单一“数据截止时间”代替多个时间字段，不得补写不存在的财务期，
+不得给目标价、买卖建议或收益概率。总览和排序是研究工作顺序，不是投资排名。
+"""
         if intent in {
             "stock_research",
             "earnings_quality",

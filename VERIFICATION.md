@@ -814,3 +814,18 @@ uv run pytest
 - 全量 569 项测试全部通过；Ruff、`compileall`、内联 JavaScript 解析、`uv lock --check`、`tests/test_portability.py` 和 `git diff --check` 均通过。
 
 当前边界：整轮模型失败和守卫降级已有清楚的用户状态与重试；失败证据模块仍没有独立重试 API。全局搜索尚未实现拼音简称；市场复盘仍不是带版本、状态和后续验证链的正式结构化对象。
+
+## 2026-07-24 自选股每日研究摘要、报告审计阅读与即时 Hermes
+
+- `StockAssetListService` 现在为每个当前用户股票空间返回报告元数据与 freshness、报价/完整日线/财务报告期/报告时间、最多三条反方证据、失效条件、下一证据，以及最新用户变化的 `link_id/read_at/handled_at/relevance_status`。公共报告明确标为“服务器公共证据快照”，用户判断和反馈状态继续隔离。
+- 回归创建 1 只当前用户自选和 25 只非自选报告；`GET /v1/stock-workspaces` 仍只返回该用户的 1 只股票及其正确报告。测试同时把 `ResearchReportService.generate()` 替换为失败函数，证明列表 GET 不触发同步报告生成。
+- “我的关注”不再请求全局 `/research-reports?limit=20/100`。首屏“今日研究更新”直接显示每只资产的 `completed/partial/failed/missing` 状态、报告生成时间、完整日线日期、公共证据边界与最新变化；桌面真实页面显示 4 只当前关注股票，数据来自同一用户空间。
+- “阅读报告”改用 `/v1/stocks/{symbol}/workspace`。真实点击中兴通讯后，阅读器显示服务器报告正文，并追加“证据覆盖与来源、反方证据、失效条件、下一步证据、公共快照边界”；元数据明确为“生成于 07/24 09:44 · 完整日线截至 2026-07-23”，不会把两个时间混成一个“数据时间”。
+- 卡片可直接标记变化已读、与我有关或与我无关。服务/API 回归验证保存后刷新仍恢复 `read_at/handled_at/relevance_status`；真实浏览器未替当前用户执行不可逆反馈操作。
+- 首轮真实“让 Agent 即时汇总”被旧关键词误路由到 `research_actions`，虽即时生成却只写单一“数据截止时间”。新增专属日摘要路由、用户范围 `research_assets` 证据与 Agent 时间合同后重新运行。
+- 最终会话 `0b9cb63d-d037-447f-a42b-c4d008a8daca` 为新的 Hermes 生成结果：覆盖杰瑞股份、中兴通讯、英伟达、中际旭创；每只均单列最新报价及市场时区、最近完整日线、最新财务报告期，并给出研究顺序、反方证据或压力、失效条件与下一任务。页面显示 5 项证据引用，不含目标价或买卖指令。
+- 刷新 `/research/0b9cb63d-d037-447f-a42b-c4d008a8daca` 后，问题、完整回答、三个时间锚和引用数量均从历史会话恢复；页面同时提示历史回答保留生成时证据，需用新问题获取最新行情。
+- 最终完整回归：`572 tests collected`，全部通过；`ruff check .`、`compileall`、内联 JavaScript 解析、`uv lock --check`、`tests/test_portability.py` 与 `git diff --check` 通过。
+- 最终服务进程 PID `35960`；`/health=ok`、`hermes_enabled=true`、数据健康 `54/54`，通用后台与李总策略 Worker 均运行。
+
+当前边界：现有后台报告多数处于 `degraded/partial`，页面按实际状态展示，不能宣传为完整 Agent 报告；服务器报告是公共证据快照，用户私有判断和任务不会写入公共报告。单证据模块独立重试与正式结构化市场复盘仍属后续。

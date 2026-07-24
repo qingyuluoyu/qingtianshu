@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from app.db import Database
 from app.services.stock_workspace import StockWorkspaceService
@@ -62,6 +64,9 @@ class StockAssetListService:
     ) -> dict[str, Any]:
         workspace_id = str(formal_workspace["id"])
         active_thesis = self._safe_active_thesis(user_id, workspace_id)
+        report = self.database.latest_research_report(
+            str(formal_workspace.get("symbol") or "")
+        )
         base = {
             "workspace_id": workspace_id,
             "version": formal_workspace.get("version"),
@@ -84,6 +89,20 @@ class StockAssetListService:
                 "available": False,
                 "status": "not_configured",
             },
+            "report_meta": self._report_meta(report),
+            "report_freshness": self._report_freshness(
+                report, str(formal_workspace.get("symbol") or "")
+            ),
+            "data_times": {
+                "quote_as_of": None,
+                "daily_as_of": None,
+                "financial_report_period": None,
+                "report_generated_at": (report or {}).get("generated_at"),
+                "report_market_timestamp": (report or {}).get("market_timestamp"),
+            },
+            "counterevidence": [],
+            "invalidation_conditions": [],
+            "next_evidence": [],
             "quote": self._empty_quote(),
             "data_status": "partial" if active_thesis is None else "ready",
             "warnings": [],
@@ -118,7 +137,23 @@ class StockAssetListService:
             "status": "not_configured",
         }
         base["quote"] = self._quote(aggregate)
-        aggregate_status = str((aggregate.get("data_meta") or {}).get("status") or "")
+        data_meta = aggregate.get("data_meta") or {}
+        base["data_times"] = {
+            "quote_as_of": data_meta.get("quote_as_of"),
+            "daily_as_of": data_meta.get("daily_as_of"),
+            "financial_report_period": data_meta.get("financial_report_period"),
+            "report_generated_at": data_meta.get("report_generated_at"),
+            "report_market_timestamp": data_meta.get("report_market_timestamp"),
+        }
+        base["counterevidence"] = [
+            self._public_counterevidence(item)
+            for item in (aggregate.get("counterevidence") or [])[:3]
+        ]
+        base["invalidation_conditions"] = list(
+            (aggregate.get("invalidation_conditions") or [])[:3]
+        )
+        base["next_evidence"] = list((aggregate.get("next_evidence") or [])[:3])
+        aggregate_status = str(data_meta.get("status") or "")
         base["data_status"] = "ready" if aggregate_status == "ready" else "partial"
         return base
 
@@ -150,11 +185,89 @@ class StockAssetListService:
         if not isinstance(change, dict):
             return None
         return {
+            "link_id": change.get("link_id"),
+            "event_id": change.get("event_id") or change.get("id"),
+            "event_type": change.get("event_type"),
+            "title": change.get("title"),
             "summary": change.get("summary") or change.get("title"),
+            "occurred_at": change.get("occurred_at") or change.get("data_as_of"),
+            "detected_at": change.get("detected_at"),
             "created_at": change.get("created_at")
             or change.get("data_as_of")
             or change.get("as_of_date"),
+            "read_at": change.get("read_at"),
+            "handled_at": change.get("handled_at"),
+            "relevance_status": change.get("relevance_status"),
+            "relevance_status_label": change.get("relevance_status_label"),
+            "source_name": change.get("source_name"),
+            "source_url": change.get("source_url") or change.get("url"),
+            "boundary": change.get("boundary"),
         }
+
+    @staticmethod
+    def _report_meta(report: dict[str, Any] | None) -> dict[str, Any] | None:
+        if report is None:
+            return None
+        return {
+            "id": report.get("id"),
+            "symbol": report.get("symbol"),
+            "name": report.get("name"),
+            "title": report.get("title"),
+            "summary": report.get("summary"),
+            "status": report.get("status"),
+            "generated_at": report.get("generated_at"),
+            "market_timestamp": report.get("market_timestamp"),
+            "source_scope": "server_evidence_snapshot",
+            "source_scope_label": "服务器公共证据快照",
+        }
+
+    @classmethod
+    def _report_freshness(
+        cls,
+        report: dict[str, Any] | None,
+        symbol: str,
+    ) -> dict[str, Any]:
+        if report is None:
+            return {
+                "status": "missing",
+                "label": "等待生成",
+                "is_today": False,
+            }
+        generated_at = cls._parse_datetime(report.get("generated_at"))
+        timezone_name = (
+            "Asia/Shanghai"
+            if symbol.upper().endswith((".SS", ".SZ"))
+            else "America/New_York"
+        )
+        is_today = bool(
+            generated_at
+            and generated_at.astimezone(ZoneInfo(timezone_name)).date()
+            == datetime.now(ZoneInfo(timezone_name)).date()
+        )
+        report_status = str(report.get("status") or "unknown")
+        if report_status == "failed":
+            status, label = "failed", "生成失败"
+        elif report_status != "completed":
+            status, label = "partial", "部分完成"
+        elif is_today:
+            status, label = "today", "今日已更新"
+        else:
+            status, label = "existing", "已有快照"
+        return {
+            "status": status,
+            "label": label,
+            "is_today": is_today,
+        }
+
+    @staticmethod
+    def _parse_datetime(value: Any) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
 
     @staticmethod
     def _next_action(aggregate: dict[str, Any]) -> dict[str, Any] | None:
@@ -166,6 +279,19 @@ class StockAssetListService:
             "title": action.get("title"),
             "next_step": action.get("next_step") or action.get("current_evidence"),
             "status": action.get("task_status") or action.get("status"),
+        }
+
+    @staticmethod
+    def _public_counterevidence(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "label": item.get("label"),
+            "statement": item.get("statement"),
+            "evidence": item.get("evidence"),
+            "source_name": item.get("source_name"),
+            "data_time": item.get("data_time"),
+            "coverage_status": item.get("coverage_status"),
+            "limitations": list(item.get("limitations") or [])[:2],
+            "next_step": item.get("next_step"),
         }
 
     @staticmethod

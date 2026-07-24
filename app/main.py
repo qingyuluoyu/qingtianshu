@@ -4074,6 +4074,49 @@ def create_app(
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
+        elif _is_watchlist_daily_query(message):
+            intent = "watchlist_brief"
+            evidence = analysis.watchlist_brief(user_id)
+            asset_packet = stock_assets.list_assets(user_id)
+            research_assets = [
+                item
+                for item in (asset_packet.get("items") or [])
+                if item.get("relation_type") != "ended"
+            ]
+            active_symbols = {
+                str(item.get("symbol") or "") for item in research_assets
+            }
+            evidence["items"] = [
+                item
+                for item in (evidence.get("items") or [])
+                if str(item.get("symbol") or "") in active_symbols
+            ]
+            evidence["research_assets"] = research_assets
+            evidence["user_question"] = message
+            evidence["answer_contract"] = {
+                "per_stock_time_fields": (
+                    "current_quote.market_timestamp",
+                    "latest_bar.timestamp",
+                    "research_assets.data_times.financial_report_period",
+                    "research_assets.report_meta.generated_at",
+                    "research_assets.report_meta.market_timestamp",
+                ),
+                "required_sections": (
+                    "优先级与原因",
+                    "最新报价",
+                    "最近完整日线",
+                    "最新财务报告期",
+                    "反方证据",
+                    "失效条件",
+                    "下一步研究任务",
+                ),
+                "report_scope": "server_public_evidence_snapshot_only",
+            }
+            evidence["boundary"] = (
+                "服务器预生成报告只作为公共证据快照；用户正式判断、任务和变化处理状态"
+                "来自当前账号的股票研究空间。回答必须即时生成，不得直接回放报告正文，"
+                "不得输出目标价或买卖建议。"
+            )
         elif _is_research_action_query(message) and symbol is None:
             intent = "research_actions"
             evidence = research_actions.get_packet(user_id)
@@ -7051,6 +7094,16 @@ def _is_research_priority_query(message: str) -> bool:
         "自选股先看什么",
     )
     return any(term in folded for term in priority_terms)
+
+
+def _is_watchlist_daily_query(message: str) -> bool:
+    folded = re.sub(r"\s+", "", message).casefold()
+    daily_terms = (
+        "自选股每日研究摘要",
+        "自选股今日研究摘要",
+        "关注组合每日研究摘要",
+    )
+    return any(term in folded for term in daily_terms)
 
 
 def _is_research_action_query(message: str) -> bool:

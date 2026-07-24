@@ -726,6 +726,16 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'data-watchlist-filter="watching"' in page.text
     assert 'data-watchlist-filter="ended"' in page.text
     assert 'id="watchlistSecondaryFilter"' in page.text
+    assert 'id="watchlistReports"' in page.text
+    assert 'id="watchlistAgentBrief"' in page.text
+    assert "function renderWatchlistReports(reportMap)" in page.text
+    assert "async function reviewWatchlistReportWithAgent(" in page.text
+    assert "async function runWatchlistAgentBrief()" in page.text
+    assert "服务器快照只作为公共证据" in page.text
+    assert "function workspaceReportReaderBody(workspace)" in page.text
+    assert 'api(`/v1/stocks/${encodeURIComponent(symbol)}/workspace`)' in page.text
+    assert 'api("/research-reports?limit=100")' not in page.text
+    assert "async function updateWatchlistChange(" in page.text
     assert "async function updateStockAssetRelation(" in page.text
     assert "base_version: item.version" in page.text
     assert "结束跟踪不会删除判断和历史" in page.text

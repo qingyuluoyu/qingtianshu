@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 
@@ -176,6 +178,23 @@ def test_stock_workspaces_return_all_relations_and_stable_contract(app):
         "recheck_conditions": [],
     }
     assert watching["latest_change"]["summary"] == "利润和现金流的背离需要复核。"
+    assert watching["report_meta"] == {
+        "id": watching["report_meta"]["id"],
+        "symbol": "000063.SZ",
+        "name": "中兴通讯",
+        "title": "中兴通讯研究快照",
+        "summary": "需要继续核验利润和现金流。",
+        "status": "completed",
+        "generated_at": watching["report_meta"]["generated_at"],
+        "market_timestamp": "2026-07-22T15:00:00+08:00",
+        "source_scope": "server_evidence_snapshot",
+        "source_scope_label": "服务器公共证据快照",
+    }
+    assert watching["report_freshness"] == {
+        "status": "today",
+        "label": "今日已更新",
+        "is_today": True,
+    }
     assert watching["next_action"] == {
         "title": "复核经营现金流",
         "next_step": "下一份财报披露后核对经营现金流与利润是否同步。",
@@ -227,6 +246,163 @@ def test_stock_workspaces_are_user_isolated(app):
     assert [item["symbol"] for item in other_payload["items"]] == ["300308.SZ"]
     assert "仅属于乙用户" not in str(owner_payload)
     assert "仅属于甲用户" not in str(other_payload)
+
+
+def test_stock_workspaces_reports_are_scoped_without_global_top_limit_or_generation(
+    app, monkeypatch
+):
+    client = TestClient(app)
+    _create_user(client, "Scoped Report Owner")
+    _add_stock(client, "000063", "中兴通讯", "仅跟踪自己的股票空间")
+    app.state.database.create_research_report(
+        symbol="000063.SZ",
+        name="中兴通讯",
+        title="我的关注股票快照",
+        summary="当前用户范围内必须稳定出现。",
+        body="证据正文",
+        status="completed",
+        fingerprint="scoped-report",
+        evidence={},
+        run_id=None,
+        market_timestamp="2026-07-23T15:00:00+08:00",
+    )
+    for index in range(25):
+        app.state.database.create_research_report(
+            symbol=f"NOISE{index:02d}",
+            name=f"非自选{index:02d}",
+            title=f"非自选报告{index:02d}",
+            summary="不应进入当前用户资产列表。",
+            body="公共报告正文",
+            status="completed",
+            fingerprint=f"noise-{index}",
+            evidence={},
+            run_id=None,
+            market_timestamp="2026-07-23T15:00:00+08:00",
+        )
+
+    def unexpected_generate(*args, **kwargs):
+        raise AssertionError("GET /v1/stock-workspaces must not generate reports")
+
+    monkeypatch.setattr(app.state.research_reports, "generate", unexpected_generate)
+    response = client.get("/v1/stock-workspaces")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["symbol"] for item in payload["items"]] == ["000063.SZ"]
+    assert payload["items"][0]["report_meta"]["title"] == "我的关注股票快照"
+    assert "非自选" not in str(payload)
+
+
+def test_stock_asset_latest_change_keeps_user_read_and_relevance_state(app):
+    client = TestClient(app)
+    user = _create_user(client, "Daily Change Owner")
+    _add_stock(client, "000063", "中兴通讯", "核验价格异常")
+    app.state.database.upsert_change_event(
+        symbol="000063.SZ",
+        event_type="daily_price_anomaly",
+        title="中兴通讯完整日线变化",
+        fact_summary="最近完整日线变化达到白名单阈值。",
+        occurred_at="2026-07-23T15:00:00+08:00",
+        detected_at="2026-07-24T01:00:00+00:00",
+        source_name="Test verified daily source",
+        source_url="https://example.invalid/daily",
+        data_status="confirmed_daily_bar",
+        rule_version=app.state.change_events.PRICE_RULE_VERSION,
+        dedupe_hash="stock-asset-user-state",
+        payload={
+            "name": "中兴通讯",
+            "daily_date": "2026-07-23",
+            "return_1d_pct": 5.5,
+        },
+    )
+    app.state.database.ensure_user_change_links(user["id"], "000063.SZ")
+
+    first = client.get("/v1/stock-workspaces").json()["items"][0]["latest_change"]
+    assert first["link_id"]
+    assert first["read_at"] is None
+    assert first["relevance_status"] == "pending"
+
+    assert client.post(f"/v1/user-changes/{first['link_id']}/read").status_code == 200
+    relevant = client.post(
+        f"/v1/user-changes/{first['link_id']}/relevance",
+        json={"relevance_status": "relevant"},
+    )
+    assert relevant.status_code == 200
+    refreshed = client.get("/v1/stock-workspaces").json()["items"][0]["latest_change"]
+    assert refreshed["read_at"]
+    assert refreshed["handled_at"]
+    assert refreshed["relevance_status"] == "relevant"
+
+
+def test_daily_watchlist_chat_uses_rich_scoped_evidence_and_time_contract(app):
+    client = TestClient(app)
+    user = _create_user(client, "Daily Hermes Contract")
+    _add_stock(client, "000063", "中兴通讯", "关注利润兑现与经营现金流")
+    app.state.database.create_research_report(
+        symbol="000063.SZ",
+        name="中兴通讯",
+        title="中兴通讯服务器快照",
+        summary="服务器证据摘要",
+        body="服务器报告正文不应被直接回放。",
+        status="degraded",
+        fingerprint="daily-hermes-contract",
+        evidence={
+            "display_name": "中兴通讯",
+            "current_quote": {
+                "name": "中兴通讯",
+                "price": 35.49,
+                "pct_change": -1.2,
+                "currency": "CNY",
+                "quote_label": "盘中最新报价",
+                "quote_basis": "intraday_snapshot",
+                "market_timestamp": "2026-07-24T09:44:21+08:00",
+            },
+            "metrics": {"latest_close": 35.92, "return_1d_pct": -4.21},
+            "fundamentals": {
+                "summary": {
+                    "latest_report": {
+                        "report_date": "2026-03-31",
+                        "revenue_yoy_pct": 6.13,
+                    }
+                }
+            },
+            "provenance": {"market_timestamp": "2026-07-23T15:00:00+08:00"},
+        },
+        run_id=None,
+        market_timestamp="2026-07-23T15:00:00+08:00",
+    )
+
+    response = client.post(
+        "/me/chat",
+        json={
+            "message": (
+                "请生成我的自选股每日研究摘要，并列出今天要复核的研究任务。"
+            ),
+            "execute_agent": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "watchlist_brief"
+    assert payload["evidence"]["answer_contract"]["report_scope"] == (
+        "server_public_evidence_snapshot_only"
+    )
+    assert len(payload["evidence"]["research_assets"]) == 1
+    asset = payload["evidence"]["research_assets"][0]
+    assert asset["symbol"] == "000063.SZ"
+    assert asset["report_meta"]["status"] == "degraded"
+    assert asset["report_meta"]["source_scope"] == "server_evidence_snapshot"
+    assert asset["data_times"]["financial_report_period"] == "2026-03-31"
+    prompt_path = (
+        Path(app.state.database.get_user(user["id"])["workspace_path"])
+        / "runs"
+        / payload["run_id"]
+        / "prompt.md"
+    )
+    prompt = prompt_path.read_text(encoding="utf-8")
+    assert "自选股每日研究摘要的时间与证据合同" in prompt
+    assert "不得用单一“数据截止时间”代替多个时间字段" in prompt
 
 
 def test_one_stock_workspace_failure_does_not_break_the_asset_list(app, monkeypatch):

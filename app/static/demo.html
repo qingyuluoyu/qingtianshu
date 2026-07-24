@@ -1720,6 +1720,27 @@
 
     /* Research assets stay scannable; secondary summaries follow the main list. */
     .watchlist-workspace { grid-template-columns: minmax(0,1fr); gap: 12px; }
+    .watchlist-report-digest { grid-column: 1; overflow: hidden; border: 1px solid #dbe5f4; border-radius: 14px; background: linear-gradient(120deg,#fff,#f7faff); }
+    .watchlist-report-digest-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px 16px 11px; border-bottom: 1px solid var(--line); }
+    .watchlist-report-digest-title { color: #243750; font-size: 14px; font-weight: 780; }
+    .watchlist-report-digest-copy { margin-top: 4px; color: #748297; font-size: 10px; line-height: 1.55; }
+    .watchlist-report-digest-head .btn { flex-shrink: 0; padding: 8px 11px; font-size: 11px; }
+    .watchlist-report-list { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; padding: 11px; }
+    .watchlist-report-item { min-width: 0; display: flex; flex-direction: column; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: #fff; }
+    .watchlist-report-item-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    .watchlist-report-item-title { min-width: 0; overflow: hidden; color: #263850; font-size: 12px; font-weight: 760; text-overflow: ellipsis; white-space: nowrap; }
+    .watchlist-report-badge { flex-shrink: 0; padding: 3px 6px; border-radius: 999px; color: #55709a; background: #edf3fb; font-size: 9px; }
+    .watchlist-report-badge.fresh { color: #147757; background: #e9f7f1; }
+    .watchlist-report-item-meta { margin-top: 6px; color: #8491a3; font-size: 9px; line-height: 1.5; }
+    .watchlist-report-item-copy { flex: 1; margin-top: 8px; overflow: hidden; color: #52647c; font-size: 11px; line-height: 1.58; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+    .watchlist-report-change { margin-top: 9px; padding: 8px 9px; border-radius: 8px; color: #53647b; background: #f6f8fc; font-size: 10px; line-height: 1.5; }
+    .watchlist-report-change.unread { color: #295b9f; background: #edf4ff; }
+    .watchlist-report-change strong { color: inherit; }
+    .watchlist-change-actions { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+    .watchlist-change-actions button { border: 1px solid #cfdbec; border-radius: 7px; background: #fff; color: #61738b; padding: 4px 7px; font-size: 9px; }
+    .watchlist-change-actions button:hover { color: var(--blue); border-color: #a9c1f7; }
+    .watchlist-report-item-actions { display: flex; gap: 7px; margin-top: 10px; }
+    .watchlist-report-item-actions .btn { flex: 1; padding: 7px 8px; font-size: 10px; }
     .watchlist-table-card { grid-column: 1; }
     .watchlist-detail { grid-column: 1; }
     .watchlist-side { grid-column: 1; display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
@@ -1749,6 +1770,7 @@
       body.agent-page #agentSection .composer { grid-row: 8; }
       .agent-entry-hub { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
       .agent-entry-intro { grid-column: 1 / -1; }
+      .watchlist-report-list { grid-template-columns: repeat(2,minmax(0,1fr)); }
       .agent-research-target small { display: none; }
     }
     @media (max-width: 760px) {
@@ -1765,6 +1787,8 @@
       .agent-research-target span { display: none; }
       .agent-entry-hub { grid-template-columns: 1fr; max-height: 276px; overflow-y: auto; padding: 10px; }
       .agent-entry-intro { grid-column: 1; }
+      .watchlist-report-digest-head { align-items: stretch; flex-direction: column; }
+      .watchlist-report-list { grid-template-columns: 1fr; }
       .watchlist-table-head { display: none; }
       .watchlist-stock-row { grid-template-columns: minmax(0,1fr) auto; }
       .watchlist-stock-row > :not(:first-child):not(.watchlist-stock-actions) { grid-column: 1 / -1; }
@@ -2311,6 +2335,16 @@
             <button id="cancelWatchlistAdd" class="btn" type="button">取消</button>
           </form>
           <div class="watchlist-workspace">
+            <section class="watchlist-report-digest" aria-label="今日研究更新">
+              <div class="watchlist-report-digest-head">
+                <div>
+                  <div class="watchlist-report-digest-title">今日研究更新</div>
+                  <div id="watchlistReportSummary" class="watchlist-report-digest-copy">正在汇总关注股票的预生成报告与最新研究时间…</div>
+                </div>
+                <button id="watchlistAgentBrief" class="btn primary" type="button">让 Agent 即时汇总</button>
+              </div>
+              <div id="watchlistReports" class="watchlist-report-list"><div class="empty">正在读取研究报告…</div></div>
+            </section>
             <div class="watchlist-table-card">
               <div class="watchlist-tabs">
                 <button class="active" type="button" data-watchlist-filter="all">全部</button>
@@ -5348,6 +5382,169 @@
       }[relationType] || {label: "研究资产", color: "#9aa6b5"};
     }
 
+    async function reviewWatchlistReportWithAgent(item, report, button) {
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = "正在进入即时研究…";
+      try {
+        const session = await api("/me/deep-stock", {
+          method: "POST",
+          body: JSON.stringify({symbol: item.symbol})
+        });
+        state.deepStock = session;
+        await loadConversations(false);
+        await loadDeepStock({force: true});
+        const timezoneName = /\.(?:SS|SZ)$/i.test(item.symbol || "") ? "Asia/Shanghai" : "America/New_York";
+        const completeBarDate = report?.market_timestamp
+          ? marketDateLabel(report.market_timestamp, timezoneName)
+          : "待确认";
+        const question = `请用最新可验证数据复核${item.name || item.symbol}（${item.symbol}）的服务器预生成研究快照。快照生成于${readableTime(report?.generated_at)}，其中完整日线截至${completeBarDate}。请先说明本轮相较快照有哪些事实更新，再分别列出仍成立的判断、反方证据、失效条件和下一条最值得核验的证据；行情时间与财务报告期必须分开写。不要直接复述快照原文，不要给目标价或买卖建议。`;
+        await continueDeepStockConversation(question, session);
+        $("chatInput").value = "";
+        await sendChat(question);
+      } catch (error) {
+        openReader(
+          "即时复核暂未开始",
+          error?.message || "股票研究空间暂时无法打开，请稍后重试。",
+          "预生成报告仍保留，可先阅读报告"
+        );
+      } finally {
+        button.disabled = false;
+        button.textContent = original;
+      }
+    }
+
+    async function updateWatchlistChange(linkId, action, button) {
+      if (!linkId) return;
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = "保存中…";
+      try {
+        if (action === "read") {
+          await api(`/v1/user-changes/${encodeURIComponent(linkId)}/read`, {method: "POST"});
+        } else {
+          await api(`/v1/user-changes/${encodeURIComponent(linkId)}/relevance`, {
+            method: "POST",
+            body: JSON.stringify({relevance_status: action})
+          });
+        }
+        await loadWatchlist();
+      } catch (error) {
+        $("watchlistSource").textContent = error?.message || "变化处理状态暂未保存，请稍后重试。";
+        button.disabled = false;
+        button.textContent = original;
+      }
+    }
+
+    function renderWatchlistReports(reportMap) {
+      const container = $("watchlistReports"); container.innerHTML = "";
+      const activeAssets = (state.stockAssets || [])
+        .filter(item => item.relation_type !== "ended")
+        .sort((a, b) => {
+          const priorityRank = {high: 3, normal: 2, low: 1};
+          const priorityGap = (priorityRank[b.priority] || 0) - (priorityRank[a.priority] || 0);
+          const reportA = reportMap.get(a.symbol);
+          const reportB = reportMap.get(b.symbol);
+          const generatedA = Date.parse(reportA?.generated_at || "") || 0;
+          const generatedB = Date.parse(reportB?.generated_at || "") || 0;
+          return priorityGap || generatedB - generatedA;
+        });
+      const items = activeAssets.slice(0, 6);
+      let readyCount = 0;
+      let newestGeneratedAt = null;
+      for (const item of items) {
+        const report = reportMap.get(item.symbol) || null;
+        if (report?.status === "completed") {
+          readyCount += 1;
+          if (!newestGeneratedAt || Date.parse(report.generated_at || 0) > Date.parse(newestGeneratedAt)) {
+            newestGeneratedAt = report.generated_at;
+          }
+        }
+        const card = document.createElement("article"); card.className = "watchlist-report-item";
+        const head = document.createElement("div"); head.className = "watchlist-report-item-head";
+        const title = document.createElement("div"); title.className = "watchlist-report-item-title"; title.textContent = `${item.name || item.symbol} · ${item.symbol}`;
+        const badge = document.createElement("span"); badge.className = "watchlist-report-badge";
+        const freshness = item.report_freshness || {};
+        badge.textContent = freshness.label || (report ? "已有快照" : "等待生成");
+        if (freshness.status === "today") badge.classList.add("fresh");
+        head.append(title, badge);
+        const timezoneName = /\.(?:SS|SZ)$/i.test(item.symbol || "") ? "Asia/Shanghai" : "America/New_York";
+        const meta = document.createElement("div"); meta.className = "watchlist-report-item-meta";
+        meta.textContent = report
+          ? `${report.source_scope_label || "服务器公共证据快照"} · 生成 ${readableTime(report.generated_at)} · 完整日线截至 ${marketDateLabel(report.market_timestamp, timezoneName)}`
+          : "后台尚未形成这只股票的最新研究快照";
+        const copy = document.createElement("div"); copy.className = "watchlist-report-item-copy";
+        copy.textContent = report
+          ? readableResearchPreview(report.summary)
+          : (item.next_action?.next_step || item.thesis || "进入股票空间后可继续研究；报告生成前不会展示虚构摘要。");
+        const change = item.latest_change;
+        let changeNode = null;
+        if (change?.summary) {
+          changeNode = document.createElement("div");
+          changeNode.className = `watchlist-report-change${change.link_id && !change.read_at ? " unread" : ""}`;
+          const changeCopy = document.createElement("div");
+          const stateLabel = change.link_id
+            ? (change.relevance_status === "relevant" ? "已标相关" : change.relevance_status === "irrelevant" ? "已标无关" : change.read_at ? "已读" : "新变化")
+            : "公共变化";
+          const strong = document.createElement("strong"); strong.textContent = `${stateLabel} · `;
+          changeCopy.append(strong, document.createTextNode(change.summary));
+          changeNode.appendChild(changeCopy);
+          if (change.link_id && (!change.read_at || change.relevance_status === "pending")) {
+            const changeActions = document.createElement("div"); changeActions.className = "watchlist-change-actions";
+            if (!change.read_at) {
+              const read = document.createElement("button"); read.type = "button"; read.textContent = "标为已读";
+              read.addEventListener("click", () => { void updateWatchlistChange(change.link_id, "read", read); });
+              changeActions.appendChild(read);
+            }
+            if (change.relevance_status === "pending") {
+              const relevant = document.createElement("button"); relevant.type = "button"; relevant.textContent = "与我有关";
+              relevant.addEventListener("click", () => { void updateWatchlistChange(change.link_id, "relevant", relevant); });
+              const irrelevant = document.createElement("button"); irrelevant.type = "button"; irrelevant.textContent = "与我无关";
+              irrelevant.addEventListener("click", () => { void updateWatchlistChange(change.link_id, "irrelevant", irrelevant); });
+              changeActions.append(relevant, irrelevant);
+            }
+            changeNode.appendChild(changeActions);
+          }
+        }
+        const actions = document.createElement("div"); actions.className = "watchlist-report-item-actions";
+        if (report) {
+          const read = document.createElement("button"); read.type = "button"; read.className = "btn"; read.textContent = "阅读报告";
+          read.addEventListener("click", () => { void openResearchReport(item.symbol, read); });
+          const review = document.createElement("button"); review.type = "button"; review.className = "btn primary"; review.textContent = "用最新数据复核";
+          review.addEventListener("click", () => { void reviewWatchlistReportWithAgent(item, report, review); });
+          actions.append(read, review);
+        } else {
+          const open = document.createElement("button"); open.type = "button"; open.className = "btn primary"; open.textContent = "进入股票研究";
+          open.addEventListener("click", () => { void openDeepStockSymbol(item.symbol); });
+          actions.appendChild(open);
+        }
+        card.append(head, meta, copy);
+        if (changeNode) card.appendChild(changeNode);
+        card.appendChild(actions); container.appendChild(card);
+      }
+      if (!items.length) {
+        container.innerHTML = '<div class="empty">添加关注后，后台研究报告与即时复核入口会出现在这里。</div>';
+      }
+      const hiddenCount = Math.max(0, activeAssets.length - items.length);
+      $("watchlistReportSummary").textContent = activeAssets.length
+        ? `${readyCount}/${items.length} 份完整快照${hiddenCount ? ` · 另有 ${hiddenCount} 项可在下方列表查看` : ""}${newestGeneratedAt ? ` · 最近生成 ${readableTime(newestGeneratedAt)}` : ""}。服务器快照只作为公共证据，点击复核才会由 Hermes 即时回答。`
+        : "添加关注后，系统会按可用数据生成研究快照；不会用虚构报告填充空状态。";
+    }
+
+    async function runWatchlistAgentBrief() {
+      const button = $("watchlistAgentBrief");
+      const original = button.textContent;
+      button.disabled = true;
+      button.textContent = "正在建立即时汇总…";
+      try {
+        startNewConversation(true, "push");
+        await sendChat("请生成我的自选股每日研究摘要。基于当前持续跟踪的关注与持仓股票，以及最新可验证行情、重要变化、正式判断、观察任务和服务器研究快照，按优先级说明今天最值得先核验什么。每只股票必须区分最新报价时间、完整日线日期与财务报告期，并给出反方证据、失效条件和下一步研究任务。预生成报告只能作为证据，不能直接复述成当前回答；不要给目标价或买卖建议。");
+      } finally {
+        button.disabled = false;
+        button.textContent = original;
+      }
+    }
+
     function renderWatchlistOverview(reportMap) {
       const stats = $("watchlistOverviewStats"); stats.innerHTML = "";
       const assets = state.stockAssets || [];
@@ -5461,7 +5658,7 @@
       }
     }
 
-    function renderWatchlist(data, reports = [], actionsPacket = {}, assetsPacket = null) {
+    function renderWatchlist(data, actionsPacket = {}, assetsPacket = null) {
       const briefItems = data.items || [];
       const briefMap = new Map(briefItems.map(item => [item.symbol, item]));
       const rawAssets = assetsPacket?.items?.length
@@ -5492,12 +5689,14 @@
         };
       });
       state.watchlist = state.stockAssets.filter(item => item.relation_type !== "ended");
-      state.researchReports = reports;
+      state.researchReports = state.stockAssets
+        .map(item => item.report_meta)
+        .filter(Boolean);
       state.researchActions = actionsPacket.items || [];
       state.researchActionSummary = actionsPacket.summary || {};
       refreshDeepStockSymbolOptions();
       const container = $("watchlist"); container.innerHTML = "";
-      const reportMap = new Map(reports.map(item => [item.symbol, item]));
+      const reportMap = new Map(state.researchReports.map(item => [item.symbol, item]));
       const actionMap = new Map(state.researchActions.map(item => [item.symbol, item]));
       const visibleItems = state.stockAssets.filter(item => {
         const primaryMatch = state.watchlistFilter === "all" || item.relation_type === state.watchlistFilter;
@@ -5611,6 +5810,7 @@
         const selected = visibleItems.find(item => item.symbol === state.selectedWatchlistSymbol) || visibleItems[0];
         if (state.selectedWatchlistSymbol !== selected.symbol) void loadWatchlistDetail(selected, state.watchlistTimeframe);
       }
+      renderWatchlistReports(reportMap);
       renderWatchlistOverview(reportMap);
       renderWatchlistTasks();
       renderWatchlistPulse();
@@ -6226,18 +6426,16 @@
     async function loadWatchlist() {
       if (!state.user) return;
       try {
-        const [watchlistResult, assetsResult, reportsResult, actionsResult] = await Promise.allSettled([
+        const [watchlistResult, assetsResult, actionsResult] = await Promise.allSettled([
           api("/me/watchlist/brief"),
           api("/v1/stock-workspaces"),
-          api("/research-reports?limit=20"),
           api("/me/research-actions")
         ]);
         if (watchlistResult.status !== "fulfilled") throw watchlistResult.reason;
         const watchlist = watchlistResult.value;
         const assets = assetsResult.status === "fulfilled" ? assetsResult.value : null;
-        const reports = reportsResult.status === "fulfilled" ? reportsResult.value.items || [] : [];
         const actions = actionsResult.status === "fulfilled" ? actionsResult.value : {items: [], summary: {}};
-        renderWatchlist(watchlist, reports, actions, assets);
+        renderWatchlist(watchlist, actions, assets);
       } catch (error) { $("watchlistSource").textContent = "自选股正在更新"; }
     }
 
@@ -8432,20 +8630,53 @@
       syncWorkspaceUrl("push");
     }
 
+    function workspaceReportReaderBody(workspace) {
+      const report = workspace?.latest_report || {};
+      const sections = [report.body || report.summary || "报告正文暂不可用。"];
+      const dimensions = workspace?.evidence_summary?.dimensions || [];
+      if (dimensions.length) {
+        const coverageLabels = {sufficient: "充分", partial: "部分", insufficient: "不足", unavailable: "不可用"};
+        const rows = dimensions.map(item => {
+          const sources = (item.sources || []).map(source => {
+            if (typeof source === "string") return source;
+            return source?.source_name || source?.name || source?.title || "";
+          }).filter(Boolean);
+          const asOf = (item.as_of || []).filter(Boolean);
+          return `- ${item.label || item.key || "证据维度"}：${coverageLabels[item.coverage_status] || item.coverage_status || "待核验"}${sources.length ? `；来源 ${sources.slice(0, 3).join("、")}` : ""}${asOf.length ? `；时间 ${asOf.slice(0, 3).join("、")}` : ""}`;
+        });
+        sections.push(`证据覆盖与来源\n${rows.join("\n")}`);
+      }
+      const counters = (workspace?.counterevidence || []).slice(0, 3).map(item => {
+        const dataTime = item.data_time ? `；数据时间 ${String(item.data_time).slice(0, 10)}` : "";
+        const source = item.source_name ? `；来源 ${item.source_name}` : "";
+        return `- ${item.statement || structuredItemText(item) || "反方证据待核验"}${source}${dataTime}`;
+      });
+      sections.push(`反方证据\n${counters.length ? counters.join("\n") : "- 当前快照未形成可确认的结构化反方证据，不能据此理解为没有风险。"}`);
+      const invalidations = (workspace?.invalidation_conditions || []).slice(0, 5).map(item => `- ${typeof item === "string" ? item : invalidationConditionText(item)}`);
+      sections.push(`失效条件\n${invalidations.length ? invalidations.join("\n") : "- 当前快照未形成明确失效条件，相关判断只能视为待核验。"}`);
+      const nextEvidence = (workspace?.next_evidence || []).slice(0, 4).map(item => `- ${item.description || item.next_step || structuredItemText(item)}`).filter(item => item !== "- ");
+      if (nextEvidence.length) sections.push(`下一步证据\n${nextEvidence.join("\n")}`);
+      sections.push("边界\n服务器报告是公共证据快照，不是当前用户的私有判断；报告不会替代 Hermes 即时复核，也不构成目标价或买卖建议。");
+      return sections.join("\n\n");
+    }
+
     async function openResearchReport(symbol, button) {
       const original = button.textContent;
       button.disabled = true;
       button.textContent = "读取中…";
       try {
-        const report = await api(`/research-reports/${encodeURIComponent(symbol)}`);
+        const workspace = await api(`/v1/stocks/${encodeURIComponent(symbol)}/workspace`);
+        const report = workspace.latest_report;
+        if (!report) throw new Error("研究报告尚未生成");
+        const timezoneName = /\.(?:SS|SZ)$/i.test(symbol || "") ? "Asia/Shanghai" : "America/New_York";
         openReader(
           report.title || `${symbol}研究快照`,
-          report.body || report.summary,
-          `数据时间 ${readableTime(report.market_timestamp)} · 生成于 ${readableTime(report.generated_at)}`
+          workspaceReportReaderBody(workspace),
+          `服务器公共证据快照 · 生成于 ${readableTime(report.generated_at)} · 完整日线截至 ${marketDateLabel(report.market_timestamp, timezoneName)}`
         );
         button.textContent = "阅读分析";
       } catch (error) {
-        openReader(`${symbol}研究快照`, "研究证据正在更新，请稍后重试。", "尚未生成可阅读版本");
+        openReader(`${symbol}研究快照`, error?.message || "研究证据正在更新，请稍后重试。", "尚未生成可阅读版本；读取不会触发同步生成");
         button.textContent = original;
       } finally { button.disabled = false; }
     }
@@ -9421,6 +9652,7 @@
       $("watchlistAddForm").hidden = false;
       $("watchlistSymbol").focus();
     });
+    $("watchlistAgentBrief").addEventListener("click", () => { void runWatchlistAgentBrief(); });
     $("cancelWatchlistAdd").addEventListener("click", resetWatchlistForm);
     $("watchlistAddForm").addEventListener("submit", async event => {
       event.preventDefault();
