@@ -2745,6 +2745,8 @@
       liZongRenderedFilter: "qualified",
       stockActionPlans: {},
       stockTradeReviews: {},
+      pendingReviewDrafts: {},
+      pendingReviewDraftsLoaded: false,
       deepStock: null,
       deepStockSessions: [],
       deepStockLoaded: false,
@@ -6790,6 +6792,11 @@
       return new Date(date.getTime() - offset).toISOString().slice(0, 16);
     }
 
+    function localDateValue(date = new Date()) {
+      const offset = date.getTimezoneOffset() * 60000;
+      return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+    }
+
     function positionField(labelText, input) {
       const label = document.createElement("label");
       if (input.classList.contains("position-form-wide") || input.classList.contains("form-wide")) label.classList.add("position-form-wide");
@@ -6805,7 +6812,8 @@
     function showPositionOpeningForm(host, symbol) {
       if (host.querySelector(".position-entry-form")) return;
       const form = document.createElement("form"); form.className = "position-entry-form";
-      const asOf = document.createElement("input"); asOf.type = "date"; asOf.required = true; asOf.value = new Date().toISOString().slice(0, 10);
+      const openingIdempotencyKey = positionIdempotencyKey("opening");
+      const asOf = document.createElement("input"); asOf.type = "date"; asOf.required = true; asOf.value = localDateValue();
       const quantity = document.createElement("input"); quantity.inputMode = "decimal"; quantity.required = true; quantity.placeholder = "例如 1000";
       const cost = document.createElement("input"); cost.inputMode = "decimal"; cost.required = true; cost.placeholder = "每股成本，例如 37.50";
       const fees = document.createElement("input"); fees.inputMode = "decimal"; fees.placeholder = "不知道可留空，不会按 0 处理";
@@ -6821,7 +6829,7 @@
         try {
           await api(`/v1/stocks/${encodeURIComponent(symbol)}/position/opening`, {
             method: "POST",
-            headers: {"Idempotency-Key": positionIdempotencyKey("opening")},
+            headers: {"Idempotency-Key": openingIdempotencyKey},
             body: JSON.stringify({as_of_date: asOf.value, quantity: quantity.value.trim(), cost_price: cost.value.trim(), fees: fees.value.trim() || null, note: note.value.trim() || null})
           });
           await refreshPositionWorkspace(symbol);
@@ -6833,6 +6841,7 @@
     function showPositionOperationForm(host, symbol, preferredPlanId = null) {
       if (host.querySelector(".position-entry-form")) return;
       const form = document.createElement("form"); form.className = "position-entry-form";
+      const operationIdempotencyKey = positionIdempotencyKey("operation");
       const type = document.createElement("select");
       [["buy", "首次买入"], ["add", "增加持仓"], ["reduce", "减少持仓"], ["sell", "卖出"]].forEach(([value, label]) => { const option = document.createElement("option"); option.value = value; option.textContent = label; type.appendChild(option); });
       const preferredPlan = (state.stockActionPlans[symbol] || []).find(item => ["saved", "partially_executed"].includes(item.status) && String(item.id) === String(preferredPlanId));
@@ -6854,7 +6863,7 @@
       const quantity = document.createElement("input"); quantity.inputMode = "decimal"; quantity.required = true; quantity.placeholder = "成交数量";
       const fees = document.createElement("input"); fees.inputMode = "decimal"; fees.placeholder = "不知道可留空";
       const reason = document.createElement("textarea"); reason.className = "position-form-wide"; reason.required = true; reason.placeholder = "记录当时的事实和理由；请勿填写系统生成的买卖建议";
-      const status = document.createElement("div"); status.className = "position-form-status"; status.textContent = "操作只追加流水；错误记录通过修订保留历史，不直接覆盖。";
+      const status = document.createElement("div"); status.className = "position-form-status"; status.textContent = "操作只追加流水；只有减仓或卖出会创建交易复盘，并需等待 3 个后续交易日数据；买入和加仓不会创建复盘。错误记录通过修订保留历史，不直接覆盖。";
       const actions = document.createElement("div"); actions.className = "position-form-actions";
       const save = document.createElement("button"); save.type = "submit"; save.className = "btn primary"; save.textContent = "保存操作";
       const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "取消"; cancel.addEventListener("click", () => form.remove());
@@ -6865,7 +6874,7 @@
         try {
           await api(`/v1/stocks/${encodeURIComponent(symbol)}/operations`, {
             method: "POST",
-            headers: {"Idempotency-Key": positionIdempotencyKey("operation")},
+            headers: {"Idempotency-Key": operationIdempotencyKey},
             body: JSON.stringify({operation_type: type.value, plan_id: plan.value || null, operated_at: new Date(operatedAt.value).toISOString(), price: price.value.trim(), quantity: quantity.value.trim(), fees: fees.value.trim() || null, reason_text: reason.value.trim()})
           });
           await refreshPositionWorkspace(symbol);
@@ -6877,6 +6886,7 @@
     function showPositionAdjustmentForm(host, symbol) {
       if (host.querySelector(".position-entry-form")) return;
       const form = document.createElement("form"); form.className = "position-entry-form";
+      const adjustmentIdempotencyKey = positionIdempotencyKey("adjustment");
       const type = document.createElement("select");
       [["corporate_action", "送转、拆并等公司行动"], ["quantity_correction", "数量调整"], ["cost_correction", "成本调整"], ["other", "其他非交易调整"]].forEach(([value, label]) => { const option = document.createElement("option"); option.value = value; option.textContent = label; type.appendChild(option); });
       const effectiveAt = document.createElement("input"); effectiveAt.type = "datetime-local"; effectiveAt.required = true; effectiveAt.value = localDateTimeValue();
@@ -6895,7 +6905,7 @@
         try {
           await api(`/v1/stocks/${encodeURIComponent(symbol)}/position-adjustments`, {
             method: "POST",
-            headers: {"Idempotency-Key": positionIdempotencyKey("adjustment")},
+            headers: {"Idempotency-Key": adjustmentIdempotencyKey},
             body: JSON.stringify({adjustment_type: type.value, effective_at: new Date(effectiveAt.value).toISOString(), quantity_delta: quantity.value.trim() || "0", cost_delta: cost.value.trim() || "0", reason_text: reason.value.trim(), evidence_text: evidence.value.trim() || null})
           });
           await refreshPositionWorkspace(symbol);
@@ -6907,6 +6917,7 @@
     function showPositionRevisionForm(host, symbol, operation) {
       if (host.querySelector(".position-entry-form")) return;
       const form = document.createElement("form"); form.className = "position-entry-form";
+      const revisionIdempotencyKey = positionIdempotencyKey("revision");
       const price = document.createElement("input"); price.inputMode = "decimal"; price.required = true; price.value = operation.price || "";
       const quantity = document.createElement("input"); quantity.inputMode = "decimal"; quantity.required = true; quantity.value = operation.quantity || "";
       const fees = document.createElement("input"); fees.inputMode = "decimal"; fees.value = operation.fees ?? ""; fees.placeholder = "不知道可留空";
@@ -6922,7 +6933,7 @@
         try {
           await api(`/v1/operations/${encodeURIComponent(operation.id)}`, {
             method: "PATCH",
-            headers: {"Idempotency-Key": positionIdempotencyKey("revision")},
+            headers: {"Idempotency-Key": revisionIdempotencyKey},
             body: JSON.stringify({base_revision: operation.current_revision || 0, price: price.value.trim(), quantity: quantity.value.trim(), fees: fees.value.trim() || null, reason_text: reason.value.trim()})
           });
           await refreshPositionWorkspace(symbol);
@@ -7036,6 +7047,7 @@
     function showActionPlanForm(host, symbol, plan = null) {
       host.querySelector(".action-plan-form")?.remove();
       const form = document.createElement("form"); form.className = "action-plan-form";
+      const actionPlanIdempotencyKey = plan ? null : positionIdempotencyKey("action-plan");
       const actionType = document.createElement("select");
       [["buy", "买入"], ["add", "增加持仓"], ["reduce", "减少持仓"], ["sell", "卖出"], ["hold", "保持观察"]].forEach(([value, label]) => { const option = document.createElement("option"); option.value = value; option.textContent = label; actionType.appendChild(option); });
       actionType.value = plan?.action_type || "buy";
@@ -7077,7 +7089,7 @@
           } else {
             await api(`/v1/stocks/${encodeURIComponent(symbol)}/action-plans`, {
               method: "POST",
-              headers: {"Idempotency-Key": `action-plan-${Date.now()}-${Math.random().toString(16).slice(2)}`},
+              headers: {"Idempotency-Key": actionPlanIdempotencyKey},
               body: JSON.stringify(body)
             });
           }
@@ -7144,16 +7156,65 @@
       return {waiting_data: "等待数据", ready: "可生成", draft: "待确认草稿", confirmed: "已确认", archived: "已归档", revised: "已修订"}[status] || "等待复盘";
     }
 
+    function pendingReviewDraftFor(review) {
+      return state.pendingReviewDrafts[String(review?.id || "")] || null;
+    }
+
+    function rememberPendingReviewDraft(candidate) {
+      const reviewId = String(candidate?.payload?.review_id || "");
+      if (!reviewId || candidate?.candidate_type !== "review_draft") return;
+      state.pendingReviewDrafts[reviewId] = candidate;
+      state.pendingReviewDraftsLoaded = true;
+    }
+
+    function forgetPendingReviewDraft(reviewId) {
+      delete state.pendingReviewDrafts[String(reviewId || "")];
+    }
+
+    async function loadPendingReviewDrafts() {
+      try {
+        const payload = await api("/v1/ai-writebacks?status=pending_confirmation&limit=300");
+        const drafts = {};
+        for (const candidate of (payload.items || [])) {
+          const reviewId = String(candidate?.payload?.review_id || "");
+          if (candidate.candidate_type === "review_draft" && reviewId) drafts[reviewId] = candidate;
+        }
+        state.pendingReviewDrafts = drafts;
+        state.pendingReviewDraftsLoaded = true;
+        return true;
+      } catch {
+        state.pendingReviewDraftsLoaded = false;
+        return false;
+      }
+    }
+
+    function appendPendingReviewDraftCandidate(host, review, refreshCallback) {
+      const candidate = pendingReviewDraftFor(review);
+      if (!candidate) return false;
+      appendAIWritebackCandidate(host, candidate, {
+        onConfirmed: async () => {
+          forgetPendingReviewDraft(review.id);
+          await refreshCallback();
+        },
+        onRejected: async () => {
+          forgetPendingReviewDraft(review.id);
+          await refreshCallback();
+        }
+      });
+      return true;
+    }
+
     async function generateTradeReviewDraft(symbol, review, button) {
       button.disabled = true;
       try {
         const candidate = await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/generate-draft`, {method: "POST", body: JSON.stringify({base_version: tradeReviewVersion(review)?.version_no || 0})});
+        rememberPendingReviewDraft(candidate);
         const host = button.closest(".trade-review-card") || button.parentElement;
         host.querySelector(":scope > .ai-writeback-card")?.remove();
         button.hidden = true;
         appendAIWritebackCandidate(host, candidate, {
           onConfirmed: async () => { await refreshStockWorkflow(symbol, "history"); },
-          onRejected: async () => { button.hidden = false; button.disabled = false; }
+          onRejected: async () => { forgetPendingReviewDraft(review.id); button.hidden = false; button.disabled = false; }
         });
       } catch { button.disabled = false; button.textContent = "重新生成草稿"; }
     }
@@ -7217,11 +7278,12 @@
       button.textContent = "AI 正在复盘…";
       try {
         const candidate = await api(`/v1/trade-reviews/${encodeURIComponent(review.id)}/generate-draft`, {method: "POST", body: JSON.stringify({base_version: tradeReviewVersion(review)?.version_no || 0})});
+        rememberPendingReviewDraft(candidate);
         button.hidden = true;
         $("tradeReviewDetail").querySelector(":scope > .ai-writeback-card")?.remove();
         appendAIWritebackCandidate($("tradeReviewDetail"), candidate, {
           onConfirmed: async () => { await loadTradeReviewCenter(review.id); void loadTodayOverview(); },
-          onRejected: async () => { button.hidden = false; button.disabled = false; button.textContent = "生成 AI 逻辑草稿"; }
+          onRejected: async () => { forgetPendingReviewDraft(review.id); button.hidden = false; button.disabled = false; button.textContent = "生成 AI 逻辑草稿"; }
         });
       } catch (error) {
         button.disabled = false;
@@ -7380,8 +7442,12 @@
       appendTradeReviewFollowup(container, review, async () => { await loadTradeReviewCenter(review.id); void loadTodayOverview(); });
 
       const actions = document.createElement("div"); actions.className = "trade-center-actions";
-      if (review.status === "ready") {
+      const pendingCandidate = pendingReviewDraftFor(review);
+      if (review.status === "ready" && !pendingCandidate && state.pendingReviewDraftsLoaded) {
         const generate = document.createElement("button"); generate.type = "button"; generate.className = "btn primary"; generate.textContent = "生成 AI 逻辑草稿"; generate.addEventListener("click", () => { void generateTradeReviewCenterDraft(review, generate); }); actions.appendChild(generate);
+      }
+      if (review.status === "ready" && !pendingCandidate && !state.pendingReviewDraftsLoaded) {
+        const waiting = document.createElement("button"); waiting.type = "button"; waiting.className = "btn"; waiting.disabled = true; waiting.textContent = "正在核对已有草稿…"; actions.appendChild(waiting);
       }
       if (["draft", "revised"].includes(review.status)) {
         const edit = document.createElement("button"); edit.type = "button"; edit.className = "btn primary"; edit.textContent = "编辑并确认"; edit.addEventListener("click", () => showTradeReviewEditor(container, review.symbol, review, async () => { await loadTradeReviewCenter(review.id); void loadTodayOverview(); })); actions.appendChild(edit);
@@ -7392,6 +7458,7 @@
       const stock = document.createElement("button"); stock.type = "button"; stock.className = "btn"; stock.textContent = "进入股票研究空间"; stock.addEventListener("click", () => { void openDeepStockSymbol(review.symbol); }); actions.appendChild(stock);
       container.appendChild(actions);
       const boundary = document.createElement("div"); boundary.className = "review-outcome-boundary"; boundary.textContent = packet?.boundary || "价格结果与逻辑结果分开；盈利不自动等于逻辑正确，亏损也不自动等于逻辑错误。"; container.appendChild(boundary);
+      if (pendingCandidate) appendPendingReviewDraftCandidate(container, review, async () => { await loadTradeReviewCenter(review.id); void loadTodayOverview(); });
     }
 
     function openTradeReviewCenterItem(reviewId) {
@@ -7440,7 +7507,10 @@
       const query = $("tradeReviewSearch").value.trim();
       if (status) params.set("status", status);
       if (query) params.set("q", query);
-      const data = await api(`/v1/trade-reviews?${params.toString()}`);
+      const [data] = await Promise.all([
+        api(`/v1/trade-reviews?${params.toString()}`),
+        loadPendingReviewDrafts()
+      ]);
       renderTradeReviewCenter(data, preferredId || state.pendingTradeReviewId);
       state.pendingTradeReviewId = null;
       return data;
@@ -7461,6 +7531,7 @@
       reviews.forEach(review => {
         const version = tradeReviewVersion(review) || {};
         const reviewStatus = review.status || version.status;
+        const pendingCandidate = pendingReviewDraftFor(review);
         const card = document.createElement("article"); card.className = "trade-review-card";
         const cardHead = document.createElement("div"); cardHead.className = "trade-review-card-head";
         const titleNode = document.createElement("div"); titleNode.className = "trade-review-card-title"; titleNode.textContent = review.title || `${actionPlanTypeLabel(review.operation?.operation_type || review.operation_type)}复盘`;
@@ -7471,11 +7542,13 @@
         [["价格结果", version.price_result || review.price_result], ["逻辑结果", version.logic_result || review.logic_result]].forEach(([label, value]) => { const column = document.createElement("div"); column.className = "trade-review-column"; const labelNode = document.createElement("span"); labelNode.textContent = label; const valueNode = document.createElement("strong"); valueNode.textContent = friendlyStructuredText(value); column.append(labelNode, valueNode); columns.appendChild(column); });
         const result = document.createElement("div"); result.className = "trade-review-result"; result.textContent = [version.plan_deviation ? `计划偏离：${friendlyStructuredText(version.plan_deviation)}` : "", version.bias_tags?.length ? `偏差标签：${version.bias_tags.join("、")}` : "", version.improvement_text ? `改进：${version.improvement_text}` : ""].filter(Boolean).join("\n");
         const actions = document.createElement("div"); actions.className = "trade-review-actions";
-        if (reviewStatus === "ready") { const generate = document.createElement("button"); generate.type = "button"; generate.className = "btn primary"; generate.textContent = "立即生成草稿"; generate.addEventListener("click", () => { void generateTradeReviewDraft(symbol, review, generate); }); actions.appendChild(generate); }
+        if (reviewStatus === "ready" && !pendingCandidate && state.pendingReviewDraftsLoaded) { const generate = document.createElement("button"); generate.type = "button"; generate.className = "btn primary"; generate.textContent = "立即生成草稿"; generate.addEventListener("click", () => { void generateTradeReviewDraft(symbol, review, generate); }); actions.appendChild(generate); }
+        if (reviewStatus === "ready" && !pendingCandidate && !state.pendingReviewDraftsLoaded) { const waiting = document.createElement("button"); waiting.type = "button"; waiting.className = "btn"; waiting.disabled = true; waiting.textContent = "正在核对已有草稿…"; actions.appendChild(waiting); }
         if (["draft", "revised"].includes(reviewStatus)) { const edit = document.createElement("button"); edit.type = "button"; edit.className = "btn primary"; edit.textContent = "编辑并确认"; edit.addEventListener("click", () => showTradeReviewEditor(card, symbol, review)); actions.appendChild(edit); }
         if (reviewStatus === "confirmed") { const archive = document.createElement("button"); archive.type = "button"; archive.className = "btn"; archive.textContent = "归档"; archive.addEventListener("click", () => { void archiveTradeReview(symbol, review, archive); }); actions.appendChild(archive); }
         card.append(cardHead, meta, columns); if (result.textContent) card.appendChild(result); card.appendChild(actions);
         appendTradeReviewFollowup(card, review, async () => { await refreshStockWorkflow(symbol, "history"); });
+        if (pendingCandidate) appendPendingReviewDraftCandidate(card, review, async () => { await refreshStockWorkflow(symbol, "history"); });
         grid.appendChild(card);
       });
       section.appendChild(grid); return section;
@@ -7511,8 +7584,10 @@
       const title = document.createElement("div"); title.className = "stock-space-section-title"; title.textContent = "任务与操作";
       const copy = document.createElement("div"); copy.className = "stock-space-section-copy"; copy.textContent = "我的观察任务会保存状态、结果和历史；系统建议只有在你确认后才成为个人任务。";
       copyWrap.append(title, copy);
+      const taskFocus = userTasks.find(task => !task.terminal)?.description || actions[0]?.next_step || session?.next_question || "核验当前最重要的反方证据与失效条件";
+      const agentTaskPrompt = `请立即核验 ${symbol} 当前最优先的研究问题：${taskFocus}\n\n必须使用当前可用的实时数据、资料库和证据链，区分已确认事实、推断与信息缺口，明确反方证据、数据时间和失效条件。完成即时核验后，生成观察任务草稿供我确认。正式任务必须等我点击确认后才写入；不要给出买卖建议。`;
       const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn primary"; ask.textContent = "让 Agent 帮我处理";
-      ask.addEventListener("click", () => { void continueDeepStockConversation(userTasks.find(task => !task.terminal)?.description || actions[0]?.next_step || session?.next_question); });
+      ask.addEventListener("click", () => { void continueDeepStockConversation(agentTaskPrompt); });
       head.append(copyWrap, ask); container.appendChild(head);
       const plans = actionPlans || state.stockActionPlans[symbol] || [];
       const positionWorkspace = renderPositionWorkspace(symbol, workspace);
@@ -7696,7 +7771,8 @@
         optionalApi(`/stocks/${encoded}/event-timeline`),
         isAShare ? optionalApi(`/a-share/${encoded}/information`) : Promise.resolve(null),
         optionalApi(`/v1/stocks/${encoded}/action-plans`),
-        optionalApi(`/v1/stocks/${encoded}/trade-reviews`)
+        optionalApi(`/v1/stocks/${encoded}/trade-reviews`),
+        loadPendingReviewDrafts()
       ]);
       if (state.deepStockOverviewSymbol !== symbol) return;
       if (actionPlansPayload !== null) state.stockActionPlans[symbol] = listPayloadItems(actionPlansPayload);

@@ -34,7 +34,7 @@ def test_demo_connects_action_plans_and_trade_reviews() -> None:
         "renderTradeReviewWorkspace(currentSymbol, reviews)",
         '["saved", "partially_executed"].includes(item.status) && String(item.id) === String(preferredPlanId)',
         '["saved", "partially_executed"].includes(item.status) && item.action_type === type.value',
-        'headers: {"Idempotency-Key": `action-plan-',
+        'headers: {"Idempotency-Key": actionPlanIdempotencyKey}',
         'JSON.stringify({base_version: tradeReviewVersion(review)?.version_no || 0})',
         "系统只检查用户条件，不生成建议",
         "价格结果和逻辑结果分开呈现",
@@ -68,3 +68,117 @@ def test_demo_uses_only_supported_plan_and_review_statuses() -> None:
     assert "awaiting_review" not in page
     assert "ai_draft" not in page
     assert "can_generate" not in page
+
+
+def _function_section(page: str, start: str, end: str) -> str:
+    start_index = page.index(start)
+    return page[start_index : page.index(end, start_index)]
+
+
+def test_demo_reuses_one_idempotency_key_per_created_form() -> None:
+    page = DEMO_HTML.read_text(encoding="utf-8")
+    cases = (
+        (
+            "function showPositionOpeningForm",
+            "function showPositionOperationForm",
+            'const openingIdempotencyKey = positionIdempotencyKey("opening");',
+            'headers: {"Idempotency-Key": openingIdempotencyKey}',
+        ),
+        (
+            "function showPositionOperationForm",
+            "function showPositionAdjustmentForm",
+            'const operationIdempotencyKey = positionIdempotencyKey("operation");',
+            'headers: {"Idempotency-Key": operationIdempotencyKey}',
+        ),
+        (
+            "function showPositionAdjustmentForm",
+            "function showPositionRevisionForm",
+            'const adjustmentIdempotencyKey = positionIdempotencyKey("adjustment");',
+            'headers: {"Idempotency-Key": adjustmentIdempotencyKey}',
+        ),
+        (
+            "function showPositionRevisionForm",
+            "function renderPositionWorkspace",
+            'const revisionIdempotencyKey = positionIdempotencyKey("revision");',
+            'headers: {"Idempotency-Key": revisionIdempotencyKey}',
+        ),
+        (
+            "function showActionPlanForm",
+            "async function transitionActionPlan",
+            'const actionPlanIdempotencyKey = plan ? null : positionIdempotencyKey("action-plan");',
+            'headers: {"Idempotency-Key": actionPlanIdempotencyKey}',
+        ),
+    )
+
+    for start, end, declaration, header in cases:
+        section = _function_section(page, start, end)
+        assert section.count(declaration) == 1
+        assert section.count(header) == 1
+        assert section.index(declaration) < section.index(
+            'form.addEventListener("submit"'
+        )
+        assert section.index('form.addEventListener("submit"') < section.index(
+            header
+        )
+
+
+def test_demo_uses_local_date_for_opening_position() -> None:
+    page = DEMO_HTML.read_text(encoding="utf-8")
+    section = _function_section(
+        page, "function showPositionOpeningForm", "function showPositionOperationForm"
+    )
+
+    assert "function localDateValue(date = new Date())" in page
+    assert "asOf.value = localDateValue();" in section
+    assert "asOf.value = new Date().toISOString().slice(0, 10)" not in section
+
+
+def test_demo_agent_task_entry_requests_live_verification_and_draft_only() -> None:
+    page = DEMO_HTML.read_text(encoding="utf-8")
+    section = _function_section(
+        page, "function renderStockSpaceTasks", "function renderStockSpaceHistory"
+    )
+
+    for fragment in (
+        "请立即核验",
+        "当前可用的实时数据、资料库和证据链",
+        "反方证据、数据时间和失效条件",
+        "生成观察任务草稿供我确认",
+        "正式任务必须等我点击确认后才写入",
+        "continueDeepStockConversation(agentTaskPrompt)",
+        "确认前不会创建个人任务。",
+    ):
+        assert fragment in page
+    assert 'ask.addEventListener("click", () => { void api(' not in section
+
+
+def test_demo_explains_trade_review_trigger_and_horizon() -> None:
+    page = DEMO_HTML.read_text(encoding="utf-8")
+    section = _function_section(
+        page, "function showPositionOperationForm", "function showPositionAdjustmentForm"
+    )
+
+    assert "只有减仓或卖出会创建交易复盘" in section
+    assert "需等待 3 个后续交易日数据" in section
+    assert "买入和加仓不会创建复盘" in section
+
+
+def test_demo_restores_pending_review_drafts_before_offering_generation() -> None:
+    page = DEMO_HTML.read_text(encoding="utf-8")
+
+    for fragment in (
+        "pendingReviewDrafts: {}",
+        "pendingReviewDraftsLoaded: false",
+        'api("/v1/ai-writebacks?status=pending_confirmation&limit=300")',
+        'candidate.candidate_type === "review_draft"',
+        "candidate?.payload?.review_id",
+        "function appendPendingReviewDraftCandidate(host, review, refreshCallback)",
+        "appendAIWritebackCandidate(host, candidate, {",
+        "loadPendingReviewDrafts()",
+        'review.status === "ready" && !pendingCandidate && state.pendingReviewDraftsLoaded',
+        'reviewStatus === "ready" && !pendingCandidate && state.pendingReviewDraftsLoaded',
+        "appendPendingReviewDraftCandidate(container, review",
+        "appendPendingReviewDraftCandidate(card, review",
+        "正在核对已有草稿…",
+    ):
+        assert fragment in page
