@@ -199,7 +199,7 @@ class DeepStockEntryContext(BaseModel):
     profile_key: str | None = Field(default=None, max_length=60)
     as_of_date: str | None = Field(default=None, max_length=32)
     candidate_status: str | None = Field(default=None, max_length=40)
-    matched_reasons: list[str] = Field(default_factory=list, max_length=8)
+    matched_reasons: list[str] = Field(default_factory=list, max_length=12)
     missing_fields: list[str] = Field(default_factory=list, max_length=8)
 
 
@@ -766,6 +766,65 @@ def _build_visible_evidence_sources(
         )
 
     if packet.get("type") == "stock_screen":
+        history_packet = packet.get("history") or {}
+        benchmark_name = str(
+            (history_packet.get("benchmark") or {}).get("name") or "沪深300"
+        )
+        signal_labels = {
+            "triggered": "已触发人工复核",
+            "qualified": "已进入候选",
+        }
+        for item in (history_packet.get("items") or [])[:4]:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(
+                item.get("internal_symbol") or item.get("symbol") or ""
+            ).strip()
+            name = str(item.get("name") or symbol or "历史样本").strip()
+            signal_date = str(item.get("signal_date") or "").strip()
+            summary_parts = [
+                signal_labels.get(
+                    str(item.get("signal_type") or ""),
+                    "历史规则事件",
+                )
+            ]
+            horizons = (item.get("performance") or {}).get("horizons") or {}
+            for day in ("5", "10", "20"):
+                outcome = horizons.get(day) or {}
+                if outcome.get("status") != "available":
+                    summary_parts.append(f"{day}日观察尚未完整")
+                    continue
+                stock_return = _public_evidence_number(
+                    outcome.get("stock_return_pct"), signed=True
+                )
+                benchmark_return = _public_evidence_number(
+                    outcome.get("benchmark_return_pct"), signed=True
+                )
+                excess_return = _public_evidence_number(
+                    outcome.get("excess_return_pct"), signed=True
+                )
+                if (
+                    stock_return is None
+                    or benchmark_return is None
+                    or excess_return is None
+                ):
+                    summary_parts.append(f"{day}日观察数据不完整")
+                    continue
+                summary_parts.append(
+                    f"{day}日个股 {stock_return}% / {benchmark_name} "
+                    f"{benchmark_return}% / 超额 {excess_return}%"
+                )
+            title = f"{name}（{symbol}）"
+            if signal_date:
+                title += f"｜{signal_date}信号"
+            add(
+                "历史回放",
+                title,
+                "；".join(summary_parts),
+                as_of=signal_date or item.get("replay_as_of_date"),
+                source="李总策略点时历史回放与沪深300复权日线",
+            )
+
         screen_date = (packet.get("data_meta") or {}).get("latest_completed_trade_date")
         for item in (packet.get("items") or [])[:6]:
             reasons = "；".join(
@@ -3469,7 +3528,7 @@ def create_app(
         )
         if (
             symbol is None
-            and not explicit_market_query
+            and (not explicit_market_query or li_zong_query)
             and prior_intent
             in {
                 "stock_research",
@@ -6567,14 +6626,14 @@ def _market_key_from_history(history: list[dict[str, Any]]) -> str | None:
 
 def _is_contextual_followup(message: str) -> bool:
     folded = re.sub(r"\s+", "", message).casefold()
-    if not folded or len(folded) > 80:
+    if not folded:
         return False
-    context_terms = (
-        "那",
-        "那么",
-        "它",
-        "这个",
-        "这些",
+    strong_context_terms = (
+        "同一个",
+        "同一件",
+        "这一次",
+        "这次",
+        "再次",
         "上述",
         "刚才",
         "前面",
@@ -6587,6 +6646,19 @@ def _is_contextual_followup(message: str) -> bool:
         "重答",
         "刚刚的回答",
         "前一个回答",
+        "接着",
+        "继续",
+    )
+    if any(term in folded for term in strong_context_terms):
+        return True
+    if len(folded) > 80:
+        return False
+    context_terms = (
+        "那",
+        "那么",
+        "它",
+        "这个",
+        "这些",
         "接下来",
         "主要风险",
         "最大风险",
@@ -6618,7 +6690,6 @@ def _is_contextual_followup(message: str) -> bool:
         "还缺什么证据",
         "需要补什么证据",
         "还有呢",
-        "继续",
         "再比较",
         "继续比较",
         "重点比较",

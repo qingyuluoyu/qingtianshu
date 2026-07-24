@@ -209,6 +209,32 @@ def test_screening_candidate_entry_is_saved_without_completing_research_stage(ap
     assert other.get("/me/deep-stock/000063").status_code == 404
 
 
+def test_li_zong_history_entry_preserves_all_nine_candidate_rule_reasons(app):
+    client = TestClient(app)
+    _create_user(client, "Li Zong History Entry User")
+    reasons = [f"候选规则 {index}" for index in range(1, 10)]
+
+    response = client.post(
+        "/me/deep-stock",
+        json={
+            "symbol": "600961.SS",
+            "entry_context": {
+                "source_kind": "li_zong_strategy",
+                "source_label": "李总策略历史回放",
+                "display_name": "株冶集团",
+                "profile_key": "li_zong_history_v2",
+                "as_of_date": "2026-07-01",
+                "candidate_status": "historical_triggered",
+                "matched_reasons": reasons,
+                "missing_fields": [],
+            },
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["research_entry"]["matched_reasons"] == reasons
+
+
 def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
     client = TestClient(app)
     user = _create_user(client, "Deep Workflow User")

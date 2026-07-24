@@ -116,6 +116,58 @@ def test_visible_evidence_sources_include_structured_stock_evidence():
     assert sources[-1]["url"] == "https://example.invalid/news"
 
 
+def test_visible_evidence_sources_expose_li_zong_history_event_and_benchmark():
+    sources = _build_visible_evidence_sources(
+        {
+            "type": "stock_screen",
+            "profile": {"key": "li_zong"},
+            "history": {
+                "benchmark": {"symbol": "000300.SH", "name": "沪深300"},
+                "items": [
+                    {
+                        "name": "株冶集团",
+                        "internal_symbol": "600961.SS",
+                        "signal_date": "2026-07-01",
+                        "signal_type": "triggered",
+                        "performance": {
+                            "horizons": {
+                                "5": {
+                                    "status": "available",
+                                    "stock_return_pct": -25.3012,
+                                    "benchmark_return_pct": -4.1049,
+                                    "excess_return_pct": -21.1963,
+                                },
+                                "10": {
+                                    "status": "available",
+                                    "stock_return_pct": -29.86,
+                                    "benchmark_return_pct": -3.47,
+                                    "excess_return_pct": -26.39,
+                                },
+                                "20": {"status": "pending"},
+                            }
+                        },
+                    }
+                ],
+            },
+        }
+    )
+
+    assert sources == [
+        {
+            "kind": "历史回放",
+            "title": "株冶集团（600961.SS）｜2026-07-01信号",
+            "summary": (
+                "已触发人工复核；"
+                "5日个股 -25.30% / 沪深300 -4.10% / 超额 -21.20%；"
+                "10日个股 -29.86% / 沪深300 -3.47% / 超额 -26.39%；"
+                "20日观察尚未完整"
+            ),
+            "as_of": "2026-07-01",
+            "source": "李总策略点时历史回放与沪深300复权日线",
+        }
+    ]
+
+
 def test_stock_market_context_rejects_multi_session_gap_as_one_day_index_return():
     context = _build_stock_market_context(
         "中兴通讯今天为什么上涨",

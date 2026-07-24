@@ -323,7 +323,7 @@ class DeepStockResearchService:
         source_label = clean_text(entry_context.get("source_label"), 80)
         if source_label is None:
             source_label = "研究候选筛选"
-        matched_reasons = clean_items(entry_context.get("matched_reasons"), 8)
+        matched_reasons = clean_items(entry_context.get("matched_reasons"), 12)
         missing_fields = clean_items(entry_context.get("missing_fields"), 8)
         return {
             "source_kind": source_kind,

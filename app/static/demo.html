@@ -3001,7 +3001,10 @@
       let payload;
       try { payload = await response.json(); } catch { payload = {}; }
       if (!response.ok) {
-        const error = new Error(payload.detail || `请求失败：${response.status}`);
+        const detail = Array.isArray(payload.detail)
+          ? payload.detail.map(item => item?.msg || item?.message || "请求参数未通过校验").join("；")
+          : payload.detail;
+        const error = new Error(typeof detail === "string" ? detail : `请求失败：${response.status}`);
         error.status = response.status;
         error.payload = payload;
         throw error;
@@ -3324,7 +3327,14 @@
         lines.push(`  实际值：${strategyShortValue(rule.actual_value)}；阈值：${strategyShortValue(rule.threshold)}；来源：${rule.source || "待确认"}`);
       });
       lines.push("", "## 回放边界", "- 只使用信号日及以前日线、当日历史市值和当时已公告财务及股东数据。", "- 收益从信号日收盘计算，未计交易成本、涨跌停可成交性和实际成交滑点。", "- 单个历史样本不代表未来结果，也不用于计算胜率式荐股评价。");
-      openReader(`${item.name || item.internal_symbol}｜历史回放`, lines.join("\n"), `${item.signal_date} · 对照沪深300`);
+      const agentQuestion = `请基于李总策略的真实历史回放，复盘${item.name || item.internal_symbol}（${item.internal_symbol}）在${item.signal_date}的信号。针对性说明当时为什么满足规则、信号后5/10/20个交易日相对沪深300的走势、反方证据、样本边界，以及它对当前研究有什么和没有什么启示。不要把历史样本写成未来预测。`;
+      openReader(
+        `${item.name || item.internal_symbol}｜历史回放`,
+        lines.join("\n"),
+        `${item.signal_date} · 对照沪深300`,
+        "",
+        {agentQuestion}
+      );
     }
 
     function renderLiZongHistory(payload) {
@@ -3740,7 +3750,7 @@
         state.deepStock = session;
         await loadConversations(false);
         await loadDeepStock({force: true});
-        await continueDeepStockConversation(question);
+        await continueDeepStockConversation(question, session);
         button.textContent = "已进入研究对话";
       } catch (error) {
         button.disabled = false;
@@ -3901,7 +3911,13 @@
 
     function openReader(title, body, meta = "", sourceUrl = "") {
       const options = arguments[4] || {};
-      state.readerContext = {title: title || "研究内容", meta, body: body || "", changeEvent: options.changeEvent || null};
+      state.readerContext = {
+        title: title || "研究内容",
+        meta,
+        body: body || "",
+        changeEvent: options.changeEvent || null,
+        agentQuestion: options.agentQuestion || null
+      };
       state.readerReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       $("readerTitle").textContent = title || "研究内容";
       $("readerMeta").textContent = meta;
@@ -8066,9 +8082,10 @@
       return true;
     }
 
-    async function continueDeepStockConversation(prefillQuestion = null) {
-      const session = state.deepStock || await startDeepStockSession();
+    async function continueDeepStockConversation(prefillQuestion = null, targetSession = null) {
+      const session = targetSession || state.deepStock || await startDeepStockSession();
       if (!session?.conversation_id) return;
+      state.deepStock = session;
       if (state.workspacePage !== "deep_stock" || $("deepStockSymbol").value !== session.symbol) {
         await openDeepStockSymbol(session.symbol, "ai", {historyMode: "none"});
       } else {
@@ -9128,7 +9145,10 @@
     $("readerContinue").addEventListener("click", () => {
       const context = state.readerContext;
       closeReader();
-      prepareAgentQuestion(`请结合当前资料继续研究“${context?.title || "这项内容"}”，说明它与当前判断的关系、反方证据和下一步需要核验什么。`);
+      prepareAgentQuestion(
+        context?.agentQuestion
+          || `请结合当前资料继续研究“${context?.title || "这项内容"}”，说明它与当前判断的关系、反方证据和下一步需要核验什么。`
+      );
     });
     $("readerBackdrop").addEventListener("click", event => {
       if (event.target === $("readerBackdrop")) closeReader();

@@ -308,3 +308,85 @@ def test_demo_contract_contains_history_replay_and_agent_entry(app, client):
     assert 'id="liZongFunnel"' in page.text
     assert "/v1/stock-strategies/li-zong/history?limit=30" in page.text
     assert "让 Agent 复盘" in page.text
+    assert "{agentQuestion}" in page.text
+    assert "context?.agentQuestion" in page.text
+    assert "请基于李总策略的真实历史回放" in page.text
+    assert "continueDeepStockConversation(question, session)" in page.text
+    assert "targetSession || state.deepStock || await startDeepStockSession()" in page.text
+
+
+def test_history_replay_agent_question_reuses_the_exact_event_evidence(
+    app, client, monkeypatch
+):
+    assert client.post("/users", json={"name": "History Agent User"}).status_code == 201
+    event = {
+        "symbol": "000001.SZ",
+        "internal_symbol": "000001.SZ",
+        "name": "平安银行",
+        "signal_date": "2026-05-01",
+        "signal_type": "qualified",
+        "rule_results": [{"rule_id": "LZ-C-01", "status": "passed"}],
+        "performance": {
+            "horizons": {
+                "5": {
+                    "status": "available",
+                    "stock_return_pct": 3.2,
+                    "benchmark_return_pct": 1.1,
+                    "excess_return_pct": 2.1,
+                }
+            }
+        },
+    }
+    history_calls = []
+
+    def history_packet(**kwargs):
+        history_calls.append(kwargs)
+        return {
+            "status": "ready",
+            "items": [event],
+            "coverage": {"completed_symbols": 1, "expected_symbols": 1},
+            "boundary": "历史回放边界",
+        }
+
+    monkeypatch.setattr(app.state.li_zong_history, "history_packet", history_packet)
+    monkeypatch.setattr(app.state.li_zong_strategy, "get_candidate", lambda _: None)
+
+    response = client.post(
+        "/me/chat",
+        json={
+            "message": (
+                "请基于李总策略的真实历史回放，复盘平安银行（000001.SZ）"
+                "在2026-05-01的信号及后续相对沪深300走势。"
+            ),
+            "execute_agent": False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["intent"] == "stock_screen"
+    assert payload["evidence"]["history"]["items"] == [event]
+    assert history_calls == [{"symbol": "000001.SZ", "limit": 12}]
+
+    followup = client.post(
+        "/me/chat",
+        json={
+            "message": (
+                "请再次用同一个2026-05-01历史事件回答，但这次只需用三句话概括"
+                "5/10/20日相对沪深300走势、最重要的反方证据和不可外推边界，"
+                "并保留本轮历史回放引用。"
+            ),
+            "conversation_id": payload["conversation_id"],
+            "execute_agent": False,
+        },
+    )
+
+    assert followup.status_code == 200, followup.text
+    followup_payload = followup.json()
+    assert followup_payload["intent"] == "stock_screen"
+    assert followup_payload["evidence"]["requested_symbol"] == "000001.SZ"
+    assert followup_payload["evidence"]["history"]["items"] == [event]
+    assert history_calls == [
+        {"symbol": "000001.SZ", "limit": 12},
+        {"symbol": "000001.SZ", "limit": 12},
+    ]
