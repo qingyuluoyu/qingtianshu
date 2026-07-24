@@ -299,6 +299,8 @@ def test_today_overview_prioritizes_risk_and_keeps_traceable_boundaries():
     assert (
         packet["priority_items"]["items"][0]["rank_reason"] == "高风险研究条件已经触发"
     )
+    assert packet["priority_items"]["items"][1]["category"] == "user_task"
+    assert "用户已保存任务" in packet["priority_items"]["ranking_method"]
     assert [item["symbol"] for item in packet["market"]["indices"]] == list(
         TodayOverviewService.INDEX_SYMBOLS
     )

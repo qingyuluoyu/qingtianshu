@@ -828,6 +828,34 @@ def test_li_zong_normalization_repairs_trigger_before_candidate_wording():
     assert normalized.count("不是进入候选的附加条件") == 1
 
 
+def test_li_zong_normalization_does_not_publish_raw_trigger_shape_before_candidate():
+    evidence = {
+        "type": "stock_screen",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "symbol_check",
+        "items": [
+            {
+                "status": "not_qualified",
+                "candidate_qualified": False,
+                "triggered_rule_ids": [],
+            }
+        ],
+    }
+    answer = (
+        "当日收盘涨停触发，但候选规则尚未全部通过，"
+        "所以当前不会进入人工复核。"
+    )
+
+    normalized = AgentService._normalize_li_zong_candidate_trigger_boundary(
+        answer,
+        evidence,
+    )
+
+    assert "当日收盘涨停触发" not in normalized
+    assert "当日收盘涨停形态条件匹配" in normalized
+    assert "不形成触发事件" in normalized
+
+
 def test_li_zong_multi_symbol_preview_hides_internal_status_and_cleans_punctuation():
     evidence = {
         "type": "stock_screen",

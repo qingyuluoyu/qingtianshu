@@ -102,6 +102,11 @@ class StockWorkspaceService:
             if formal_workspace is not None
             else None
         )
+        thesis_history = (
+            self.database.list_thesis_versions(user_id, str(formal_workspace["id"]))
+            if formal_workspace is not None
+            else []
+        )
         session = self.deep_stock.get(user_id, canonical)
         report = self.database.latest_research_report(canonical)
         evidence = dict((report or {}).get("evidence") or {})
@@ -254,6 +259,7 @@ class StockWorkspaceService:
             "action_plans": action_plans,
             "trade_reviews": trade_reviews,
             "thesis": thesis,
+            "thesis_history": thesis_history,
             "important_changes": important_changes,
             "pending_actions": pending_actions,
             "observation_tasks": observation_tasks,
@@ -295,6 +301,8 @@ class StockWorkspaceService:
                 "position_snapshot_count": len(position.get("snapshots") or []),
                 "action_plan_count": len(action_plans.get("items") or []),
                 "trade_review_count": len(trade_reviews.get("items") or []),
+                "thesis_version_count": len(thesis_history),
+                "observation_task_count": len(observation_tasks.get("items") or []),
             },
             "completeness": {
                 "has_stock_space": formal_workspace is not None,
@@ -343,6 +351,8 @@ class StockWorkspaceService:
             "name": workspace["name"],
             "important_changes": workspace["important_changes"],
             "recent_research": workspace["recent_research"],
+            "thesis_history": workspace["thesis_history"],
+            "observation_tasks": workspace["observation_tasks"],
             "position": workspace["position_snapshot"],
             "trade_reviews": workspace["trade_reviews"],
             "history_summary": workspace["history_summary"],

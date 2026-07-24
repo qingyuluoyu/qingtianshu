@@ -302,6 +302,11 @@ def test_workspace_aggregates_private_context_and_public_evidence(app):
     )
     assert payload["latest_report"]["body"] in {"研究正文", "研究正文（刷新）"}
     assert payload["data_meta"]["private_context_user_isolated"] is True
+    assert payload["thesis_history"][0]["reason_text"] == (
+        "关注算力业务、利润质量和经营现金流是否同步改善"
+    )
+    assert payload["history_summary"]["thesis_version_count"] == 1
+    assert payload["history_summary"]["observation_task_count"] == 0
 
     evidence_response = client.get("/v1/stocks/000063/workspace/evidence")
     assert evidence_response.status_code == 200
@@ -317,6 +322,8 @@ def test_workspace_aggregates_private_context_and_public_evidence(app):
         "stock_workspace_timeline_v1"
     )
     assert len(timeline_response.json()["important_changes"]) == 1
+    assert len(timeline_response.json()["thesis_history"]) == 1
+    assert timeline_response.json()["observation_tasks"]["items"] == []
 
     actions_response = client.get("/v1/stocks/000063/workspace/actions")
     assert actions_response.status_code == 200

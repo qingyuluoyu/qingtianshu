@@ -51,6 +51,7 @@ class StructuredAIService:
         "shareholder_structure",
         "analyst_expectations",
         "event_timeline",
+        "stock_screen",
     }
     THESIS_WRITEBACK_TERMS = (
         "形成判断草稿",
@@ -275,6 +276,7 @@ class StructuredAIService:
                 run_id=str(run["id"]),
                 conversation_id=conversation_id,
                 symbol=symbol,
+                message=message,
                 evidence=evidence,
                 next_evidence_tasks=next_evidence_tasks,
             )
@@ -993,19 +995,26 @@ class StructuredAIService:
         run_id: str,
         conversation_id: str | None,
         symbol: str,
+        message: str,
         evidence: dict[str, Any],
         next_evidence_tasks: list[dict[str, Any]],
     ) -> dict[str, Any] | None:
         canonical = normalize_symbol(symbol)
         workspace = self.database.get_stock_workspace(user_id, canonical)
+        explicit_task = self._extract_user_observation_task(message)
         if (
             workspace is None
             or workspace.get("relation_type") == "ended"
-            or not next_evidence_tasks
+            or (not next_evidence_tasks and not explicit_task)
         ):
             return None
         descriptions = self._unique_text(
-            [item.get("description") for item in next_evidence_tasks], limit=6
+            (
+                [explicit_task]
+                if explicit_task
+                else [item.get("description") for item in next_evidence_tasks]
+            ),
+            limit=6,
         )
         if not descriptions:
             return None
@@ -1302,6 +1311,26 @@ class StructuredAIService:
     def _wants_action_plan_writeback(cls, message: str) -> bool:
         text = " ".join(str(message or "").split())
         return cls._contains_non_negated_term(text, cls.ACTION_PLAN_WRITEBACK_TERMS)
+
+    @classmethod
+    def _extract_user_observation_task(cls, message: str) -> str | None:
+        text = " ".join(str(message or "").split())
+        patterns = (
+            r"(?:把|将)\s*[“\"](?P<task>[^”\"]{4,500})[”\"]"
+            r"\s*(?:保存|创建|生成)(?:为)?(?:观察|核验)任务",
+            r"(?:观察|核验)任务\s*[:：]\s*(?P<task>[^。；]{4,500})",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            task = str(match.group("task") or "").strip(" ，,；;。")
+            if task and not any(
+                negation in text[max(0, match.start() - 8) : match.start()]
+                for negation in cls.WRITEBACK_NEGATIONS
+            ):
+                return task[:500]
+        return None
 
     @staticmethod
     def _extract_user_plan_action(message: str) -> str:

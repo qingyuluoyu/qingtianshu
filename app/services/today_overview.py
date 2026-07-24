@@ -18,9 +18,9 @@ class TodayOverviewService:
     INDEX_SYMBOLS = ("000001.SS", "399001.SZ", "399006.SZ", "000688.SS")
     _CATEGORY_RANK = {
         "risk_review": 0,
-        "change_event": 1,
-        "trade_review": 2,
-        "due_task": 3,
+        "user_task": 1,
+        "change_event": 2,
+        "trade_review": 3,
         "draft_confirmation": 4,
         "evidence_gap": 5,
         "research_task": 6,
@@ -146,7 +146,7 @@ class TodayOverviewService:
                 "items": priority_items,
                 "total_visible": len(priority_items),
                 "ranking_method": (
-                    "先按高风险、已验收变化、到期任务、判断草稿确认、证据缺口排序，"
+                    "先按高风险、用户已保存任务、已验收变化、判断草稿确认、证据缺口排序，"
                     "同类再按用户优先级和更新时间排序；最多展示5项。"
                 ),
                 "empty_message": (
@@ -291,11 +291,7 @@ class TodayOverviewService:
             due_at = cls._parse_time(task.get("due_at"))
             overdue = bool(due_at and due_at < now)
             category = (
-                "risk_review"
-                if task.get("priority") == "high"
-                else "due_task"
-                if due_at
-                else "research_task"
+                "risk_review" if task.get("priority") == "high" else "user_task"
             )
             reason = (
                 "高优先级用户任务"

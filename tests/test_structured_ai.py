@@ -319,7 +319,10 @@ def test_observation_task_writeback_requires_confirmation_and_is_idempotent(app)
     owner = TestClient(app)
     owner_user = _create_user(owner, "Structured AI Observation Owner")
     _add_stock(owner, "关注利润、现金流和订单兑现")
-    message = "分析中兴通讯并把下一步保存为核验任务，供我确认。"
+    message = (
+        "分析中兴通讯并把“继续核验经营现金流与订单兑现”"
+        "保存为核验任务，供我确认。"
+    )
     run = _run(app, owner_user["id"], "completed", message, _evidence())
     result = app.state.structured_ai.build_and_persist(
         user_id=owner_user["id"],
@@ -336,6 +339,7 @@ def test_observation_task_writeback_requires_confirmation_and_is_idempotent(app)
     assert candidate["candidate_type"] == "observation_task"
     assert candidate["status"] == "pending_confirmation"
     assert candidate["payload"]["title"].startswith("中兴通讯")
+    assert "继续核验经营现金流与订单兑现" in candidate["payload"]["description"]
     assert "经营现金流" in candidate["payload"]["description"]
     assert owner.get("/v1/observation-tasks").json()["items"] == []
 
@@ -378,6 +382,74 @@ def test_observation_task_candidate_is_not_created_for_preview_run(app):
         symbol="000063.SZ",
     )
     assert result["candidate_writebacks"] == []
+
+
+def test_li_zong_stock_screen_can_create_confirmable_observation_task(app):
+    owner = TestClient(app)
+    owner_user = _create_user(owner, "Structured AI Li Zong Owner")
+    _add_stock(owner, "仅作为8/9研究观察")
+    evidence = {
+        "type": "stock_screen",
+        "generated_at": "2026-07-24T00:00:00+00:00",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "symbol_check",
+        "display_name": "中兴通讯",
+        "strategy": {
+            "version": {
+                "rules": [
+                    {"rule_id": "LZ-F-01", "label": "总市值严格大于150亿元"},
+                    {"rule_id": "LZ-C-04", "label": "近十日无5%阴线"},
+                ]
+            }
+        },
+        "items": [
+            {
+                "name": "中兴通讯",
+                "internal_symbol": "000063.SZ",
+                "as_of_date": "2026-07-23",
+                "status": "not_qualified",
+                "rule_results": [
+                    {
+                        "rule_id": "LZ-F-01",
+                        "status": "passed",
+                        "evidence_date": "2026-07-23",
+                    },
+                    {
+                        "rule_id": "LZ-C-04",
+                        "status": "failed",
+                        "evidence_date": "2026-07-23",
+                    },
+                ],
+            }
+        ],
+        "data_meta": {"latest_completed_trade_date": "2026-07-23"},
+    }
+    message = (
+        "请核验李总策略8/9观察结果，并把“继续跟踪5%阴线是否滑出”"
+        "保存为核验任务。"
+    )
+    run = _run(app, owner_user["id"], "completed", message, evidence)
+
+    result = app.state.structured_ai.build_and_persist(
+        user_id=owner_user["id"],
+        run=run,
+        evidence=evidence,
+        answer=run["answer"],
+        message=message,
+        conversation_id=None,
+        symbol="000063.SZ",
+    )
+
+    assert result is not None
+    assert result["status"] == "complete"
+    assert result["confirmed_facts"]
+    assert result["counter_evidence_and_risks"]
+    assert len(result["candidate_writebacks"]) == 1
+    candidate = result["candidate_writebacks"][0]
+    assert candidate["candidate_type"] == "observation_task"
+    assert "继续跟踪5%阴线是否滑出" in candidate["payload"]["description"]
+    assert "重新核验" not in candidate["payload"]["description"]
+    assert owner.get("/v1/observation-tasks").json()["items"] == []
 
 
 def test_database_migrates_existing_thesis_only_writeback_schema(tmp_path: Path):

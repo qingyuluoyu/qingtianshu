@@ -3077,6 +3077,9 @@ candidate_qualified 只取决于9条候选规则是否在同一数据日全部�
 通过后决定是否进入重点关注和人工复核，不是进入候选的附加条件。解释观察池股票的失效条件时，
 不得写成“未通过规则转为通过后，还需满足触发规则才能进入候选”；应明确只有9条候选规则共同决定
 候选资格，触发规则只决定候选形成后的人工复核层级。
+候选规则尚未全部通过时，即使某条触发形态规则的原始条件显示为 passed，也只能写“触发形态条件
+匹配，但不形成触发事件”，不得写“当日已触发”“触发规则已触发”或把它列入当前触发；正式触发
+只允许引用 candidate_qualified=true 后发布的 triggered_rule_ids。
 
 selection_mode=symbol_comparison 时，必须逐只回答 requested_symbols 中的股票，不能退化为只说明全市场
 覆盖率。每只股票至少说明当前中文状态、明确未通过规则或数据不完整规则及其 limitations；若某只股票
@@ -7409,6 +7412,25 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 "",
                 normalized,
                 count=1,
+            )
+        items = list(evidence.get("items") or [])
+        candidate_qualified = bool(items and items[0].get("candidate_qualified"))
+        if (
+            evidence.get("selection_mode") == "symbol_check"
+            and items
+            and not candidate_qualified
+        ):
+            trigger_shape = (
+                r"(当日收盘涨停|首次涨停(?:后)?次日缩量微跌|"
+                r"10日均线上穿20日均线)"
+            )
+            normalized = re.sub(
+                rf"{trigger_shape}(?:条件)?(?:已)?触发(?:了)?",
+                (
+                    r"\1形态条件匹配，但候选规则尚未全部通过，"
+                    r"因此不形成触发事件"
+                ),
+                normalized,
             )
         return normalized
 

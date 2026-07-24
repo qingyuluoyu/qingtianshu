@@ -693,6 +693,14 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'api("/v1/stock-workspaces")' in page.text
     assert "function renderTodayOverview(data)" in page.text
     assert '$("todayOverviewGrid").hidden = !insightsVisible' in page.text
+    priority_open = page.text[
+        page.text.index("async function openPriorityItem(item)") :
+        page.text.index("function renderNotificationCenter(priority)")
+    ]
+    assert (
+        'action.type === "open_stock_tasks" ? "tasks" : "overview"'
+        in priority_open
+    )
     open_stock = page.text[page.text.index("async function openDeepStockSymbol(symbol") :]
     assert "state.pendingDeepStockSymbol = symbol" in open_stock
     assert open_stock.index("select.value = symbol") < open_stock.index(

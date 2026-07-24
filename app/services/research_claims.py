@@ -70,6 +70,14 @@ SOURCE_PROFILES: dict[str, dict[str, Any]] = {
         "coverage_confidence": "medium",
         "limitations": ["历史同类样本只用于校准当前规则，不构成未来收益概率。"],
     },
+    "deterministic_li_zong_rules": {
+        "evidence_type": "system_calculation",
+        "source_name": "李总策略确定性规则快照",
+        "coverage_confidence": "high",
+        "limitations": [
+            "规则快照只说明指定数据日是否满足确定性条件，不表示未来涨跌概率或买卖建议。"
+        ],
+    },
     "research_frame": {
         "evidence_type": "system_record",
         "source_name": "研究证据覆盖检查",
@@ -286,6 +294,66 @@ def _specialized_debate(evidence: Mapping[str, Any]) -> dict[str, list[dict[str,
             add(bear_case, item, source=source)
         for item in evidence.get("review_points") or []:
             add(risk_committee, f"仍需核验：{item}", source=source, action=str(item))
+    elif (
+        evidence_type == "stock_screen"
+        and (evidence.get("profile") or {}).get("key") == "li_zong"
+    ):
+        source = "deterministic_li_zong_rules"
+        definitions = {
+            str(rule.get("rule_id")): str(rule.get("label") or rule.get("rule_id"))
+            for rule in (
+                ((evidence.get("strategy") or {}).get("version") or {}).get("rules")
+                or []
+            )
+            if rule.get("rule_id")
+        }
+        for item in evidence.get("items") or []:
+            name = str(
+                item.get("name")
+                or item.get("internal_symbol")
+                or item.get("symbol")
+                or "该股票"
+            )
+            for rule in item.get("rule_results") or []:
+                rule_id = str(rule.get("rule_id") or "")
+                label = definitions.get(rule_id, rule_id or "未命名规则")
+                status = str(rule.get("status") or "data_incomplete")
+                evidence_date = str(
+                    rule.get("evidence_date")
+                    or item.get("as_of_date")
+                    or ((evidence.get("data_meta") or {}).get(
+                        "latest_completed_trade_date"
+                    ))
+                    or "数据时间待确认"
+                )
+                statement = f"{name}的“{label}”规则"
+                summary = (
+                    f"{statement}在 {evidence_date} 的确定性核验状态为"
+                    f"{'通过' if status == 'passed' else '未通过' if status == 'failed' else '数据不完整'}。"
+                )
+                packet = {
+                    "statement": statement,
+                    "evidence": summary,
+                    "source": source,
+                    "action": (
+                        None
+                        if status == "passed"
+                        else f"重新核验{name}的“{label}”规则及其最新证据日期。"
+                    ),
+                }
+                if status == "passed":
+                    bull_case.append(packet)
+                elif status == "failed":
+                    bear_case.append(packet)
+                else:
+                    limitations = "；".join(
+                        str(value)
+                        for value in rule.get("limitations") or []
+                        if str(value).strip()
+                    )
+                    if limitations:
+                        packet["evidence"] = f"{summary}{limitations}"
+                    risk_committee.append(packet)
 
     return {
         "bull_case": bull_case,
@@ -367,6 +435,15 @@ def _source_metadata(
                 "retrieved_at": fundamentals.get("generated_at") or generated_at,
                 "data_time": report_period,
                 "report_period": report_period,
+            }
+        )
+    elif source_key == "deterministic_li_zong_rules":
+        data_meta = evidence.get("data_meta") or {}
+        data_time = data_meta.get("latest_completed_trade_date")
+        metadata.update(
+            {
+                "data_time": data_time,
+                "trade_date": data_time,
             }
         )
     elif source_key in {

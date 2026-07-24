@@ -1191,6 +1191,7 @@
     .today-item-title { min-width: 0; overflow: hidden; color: #2b3c55; font-size: 12px; font-weight: 740; text-overflow: ellipsis; white-space: nowrap; }
     .today-item-badge { align-self: start; padding: 3px 6px; border-radius: 999px; color: #356dcc; background: #edf3ff; font-size: 9px; }
     .today-item-badge.risk_review { color: #bf444c; background: #fff0f1; }
+    .today-item-badge.user_task { color: #3267c9; background: #edf4ff; }
     .today-item-badge.draft_confirmation { color: #8062c4; background: #f3efff; }
     .today-item-badge.evidence_gap { color: #956b1d; background: #fff7e6; }
     .today-item-detail { grid-column: 1 / -1; overflow: hidden; color: #718096; font-size: 10px; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }
@@ -4831,8 +4832,10 @@
         return;
       }
       if (item?.symbol) {
-        await openDeepStockSymbol(item.symbol);
-        if (action.type === "open_stock_tasks") activateStockSpaceTab("tasks");
+        await openDeepStockSymbol(
+          item.symbol,
+          action.type === "open_stock_tasks" ? "tasks" : "overview"
+        );
         return;
       }
       activateWorkspace("agent");
@@ -7154,6 +7157,51 @@
         actions.appendChild(read); report.append(meta, actions);
       }
       grid.append(conversation, report);
+      const thesisHistory = workspace?.thesis_history || [];
+      if (thesisHistory.length) {
+        const statusLabels = {active: "当前生效", superseded: "历史版本", invalidated: "已失效", rejected: "未采纳", pending_confirmation: "待确认", draft: "草稿"};
+        const card = document.createElement("article"); card.className = "stock-history-card";
+        const cardTitle = document.createElement("div"); cardTitle.className = "stock-history-title"; cardTitle.textContent = "用户判断版本";
+        const cardCopy = document.createElement("div"); cardCopy.className = "stock-history-copy"; cardCopy.textContent = `已保存 ${thesisHistory.length} 个版本；新判断不会静默覆盖旧版本。`;
+        card.append(cardTitle, cardCopy);
+        for (const item of thesisHistory.slice(0, 5)) {
+          const row = document.createElement("div"); row.className = "stock-coverage-history-item";
+          const meta = document.createElement("div"); meta.className = "stock-coverage-history-time"; meta.textContent = `版本 ${item.version_no || 1} · ${statusLabels[item.status] || item.status || "已保存"} · ${readableTime(item.confirmed_at || item.created_at)}`;
+          const detail = document.createElement("div"); detail.className = "stock-coverage-history-change"; detail.textContent = item.reason_text || "未填写判断正文。";
+          row.append(meta, detail); card.appendChild(row);
+        }
+        grid.appendChild(card);
+      }
+      const observationTasks = workspace?.observation_tasks?.items || [];
+      if (observationTasks.length) {
+        const card = document.createElement("article"); card.className = "stock-history-card";
+        const cardTitle = document.createElement("div"); cardTitle.className = "stock-history-title"; cardTitle.textContent = "观察任务轨迹";
+        const activeCount = workspace?.observation_tasks?.summary?.active || 0;
+        const cardCopy = document.createElement("div"); cardCopy.className = "stock-history-copy"; cardCopy.textContent = `共 ${observationTasks.length} 项，其中 ${activeCount} 项进行中；这里只呈现已由用户保存的任务。`;
+        card.append(cardTitle, cardCopy);
+        for (const task of observationTasks.slice(0, 5)) {
+          const row = document.createElement("div"); row.className = "stock-coverage-history-item";
+          const latestEvent = task.history?.[0] || {};
+          const meta = document.createElement("div"); meta.className = "stock-coverage-history-time"; meta.textContent = `${task.status_label || "观察任务"} · 版本 ${task.version || 1} · ${readableTime(latestEvent.created_at || task.updated_at || task.created_at)}`;
+          const detail = document.createElement("div"); detail.className = "stock-coverage-history-change"; detail.textContent = task.description || task.title || "继续核验相关事实。";
+          row.append(meta, detail); card.appendChild(row);
+        }
+        grid.appendChild(card);
+      }
+      const importantChanges = workspace?.important_changes || [];
+      if (importantChanges.length) {
+        const card = document.createElement("article"); card.className = "stock-history-card";
+        const cardTitle = document.createElement("div"); cardTitle.className = "stock-history-title"; cardTitle.textContent = "重要变化记录";
+        const cardCopy = document.createElement("div"); cardCopy.className = "stock-history-copy"; cardCopy.textContent = "变化只作为重新核验判断的证据，不会自动改写用户结论。";
+        card.append(cardTitle, cardCopy);
+        for (const changeItem of importantChanges.slice(0, 3)) {
+          const row = document.createElement("div"); row.className = "stock-coverage-history-item";
+          const meta = document.createElement("div"); meta.className = "stock-coverage-history-time"; meta.textContent = `${changeItem.source_label || "确定性变化"} · ${readableTime(changeItem.data_as_of || changeItem.created_at)}`;
+          const detail = document.createElement("div"); detail.className = "stock-coverage-history-change"; detail.textContent = changeItem.summary || changeItem.title || "已有新证据，等待复核。";
+          row.append(meta, detail); card.appendChild(row);
+        }
+        grid.appendChild(card);
+      }
       const position = workspace?.position_snapshot || null;
       if (position?.available && position.current) {
         const positionCard = document.createElement("article"); positionCard.className = "stock-history-card";
