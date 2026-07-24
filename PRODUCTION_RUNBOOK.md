@@ -29,6 +29,20 @@ curl -H "X-Qingshu-Admin-Token: $QINGSHU_ADMIN_API_TOKEN" \
 - 成功/取消任务默认保留 7 天、失败任务保留 30 天；调整保留期前先评估审计需求和
   PostgreSQL 容量。
 - 业务库后台成功审计和数据健康快照默认保留 30 天，失败审计保留 90 天。
+- 核对业务库和运维库连接池的 `pool_available`、`requests_waiting`；持续等待说明
+  应先排查慢查询和连接泄漏，再评估提高池上限。
+
+服务器或容器内可直接运行同口径自检：
+
+```bash
+python scripts/check_operations.py \
+  --require-postgres \
+  --minimum-active-workers 1 \
+  --max-queue-lag-seconds 600 \
+  --max-failure-rate-24h 0.2
+```
+
+输出 `status=degraded` 时退出码为 1，便于 Docker、systemd 或云监控直接采集。
 
 建议生产告警阈值：
 
@@ -39,6 +53,7 @@ curl -H "X-Qingshu-Admin-Token: $QINGSHU_ADMIN_API_TOKEN" \
 | 24 小时失败率 | 5% | 20% |
 | 过期运行租约 | ≥1 | ≥3 |
 | 最近备份年龄 | 26 小时 | 48 小时 |
+| 数据库连接等待 | 持续 30 秒 | 持续 5 分钟 |
 
 ## 3. 队列故障处理
 
@@ -90,10 +105,17 @@ python scripts/postgres_restore.py \
 
 1. 发布前完成全量 pytest、Ruff、编译和 Compose 配置解析。
 2. 发布前创建数据库备份，并执行一次最近备份的临时库恢复演练。
-3. 先部署 staging，确认迁移、Worker 心跳、队列延迟和用户会话。
+3. 用 `staging.env.example` 创建 `.env.staging`，通过独立 Compose project 部署；
+   确认迁移、Worker 心跳、队列延迟、备份和用户会话。
 4. 生产发布期间只启动一个 Worker，健康稳定后再扩容。
 5. 回滚应用代码不能回滚或删除已应用 Schema；不兼容 Schema 变更必须采用
    expand/contract 两阶段迁移。
+
+Web 与 Worker 的 Schema 初始化已有 PostgreSQL advisory lock；仍建议先启动 Web
+完成迁移，再逐步扩容 Worker，以缩小发布故障面。
+
+Staging 默认映射到 `127.0.0.1:18000`，卷名带 `qingshu-staging` project 前缀。
+停止时不要使用 `down -v`，否则会删除 staging 的恢复证据。
 
 ## 6. 当前生产边界
 

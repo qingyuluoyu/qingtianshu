@@ -925,6 +925,9 @@ uv run pytest
 - 新增管理员专用 `GET /admin/operations/health`，聚合业务库/运维库 Schema、完整
   队列指标、Worker 列表和备份新鲜度；继续要求有效用户会话与管理员 Token，不在
   用户网页展示。
+- 新增 `scripts/check_operations.py`，统一检查 PostgreSQL 要求、两个 Schema、
+  活跃 Worker 数、队列延迟、过期租约、24 小时失败率和备份新鲜度；失败返回非零
+  退出码。Worker 容器健康检查改用该真实运行条件，不再只验证数据库能连接。
 - 新增 `scripts/postgres_backup.py`：使用 `pg_dump` custom format 原子写入，
   密码只经子进程环境传递，不进入命令行；生成 SHA-256 manifest、`latest.json`，
   支持保留天数、最少份数、周期运行与备份过期健康检查。
@@ -935,13 +938,22 @@ uv run pytest
 - Docker 镜像加入 PostgreSQL client；Compose 新增 `qingshu-backup` 服务和独立
   `qingshu-backups` volume。备份服务启动即备份，默认每 24 小时运行、保留 14 天
   且至少 7 份；Web 只读挂载备份卷用于管理员健康检查。
+- 业务库与运维库初始化分别增加 PostgreSQL 事务级 advisory lock。Web 和多个
+  Worker 同时启动时，Schema DDL 串行执行；专项测试用三个独立连接池并发初始化，
+  验证锁覆盖整个迁移事务。
+- Compose Web 端口改为 `QINGSHU_HTTP_PORT` 可配置，并新增
+  `staging.env.example`。Staging 使用独立 Compose project、18000 端口和独立
+  PostgreSQL/工作区/备份卷，避免验收数据污染生产。
+- PostgreSQL 连接池从每进程硬编码业务 20 + 运维 10，调整为可配置的保守默认值
+  业务 8 + 运维 4；运维报告返回连接池统计。按 Web + 两个 Worker 估算，默认连接
+  上限由 90 降至 36，给 PostgreSQL 管理连接和备份恢复留出余量。
 - 使用全新本机 PostgreSQL 17 实例完成真实演练：备份 199,618 bytes，manifest
   checksum 一致；恢复到随机临时库后识别 74 张表，业务 Schema v1、运维 Schema
   v3，恢复用户 1 条、任务 2 条、周期计划 2 条，演练状态 `passed`，临时库已删除。
-- SQLite 持久化队列与备份工具专项 19 项通过；真实 PostgreSQL Worker/队列专项
-  4 项通过。全量收集 616 项，常规环境 `610 passed, 6 skipped`；Ruff、compileall、
-  diff 检查和 Compose YAML 解析通过。6 项跳过为需要独立 PostgreSQL 或浏览器运行
-  条件的集成检查，PostgreSQL 队列专项已单独真实执行。
+- SQLite 持久化队列与备份工具专项通过；真实 PostgreSQL 业务库/Worker/队列专项
+  7 项通过。全量收集 621 项，常规环境 `614 passed, 7 skipped`；Ruff、compileall、
+  diff 检查和 Compose YAML 解析通过。7 项跳过均需独立 PostgreSQL，已在本机
+  PostgreSQL 17 上单独真实执行。
 
 当前边界：数据库结构和任务状态已有自动备份与真实恢复演练；用户工作区文件仍需
 对象存储或共享卷快照。当前没有接入外部告警平台，管理员健康接口已提供告警所需

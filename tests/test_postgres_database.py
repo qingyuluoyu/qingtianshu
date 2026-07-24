@@ -22,6 +22,9 @@ def test_postgres_domain_database_core_round_trip(tmp_path: Path):
         url,
     )
     database.initialize()
+    assert database.pool_status()["pool_max"] == int(
+        os.getenv("QINGSHU_DB_POOL_MAX_SIZE", "8")
+    )
     suffix = str(uuid4())[:8]
     try:
         user = database.create_user(f"postgres-{suffix}")

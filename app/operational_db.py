@@ -81,6 +81,14 @@ class OperationalDatabase:
         else:
             self._ensure_postgres_pool()
         with self._transaction(immediate=True) as connection:
+            if self.backend == "postgresql":
+                connection.execute(
+                    """
+                    SELECT pg_advisory_xact_lock(
+                        hashtext('qingshu_operational_schema_migration')
+                    )
+                    """
+                )
             self._apply_migrations(connection)
         self._initialized = True
 
@@ -103,10 +111,17 @@ class OperationalDatabase:
         url = self.database_url.replace("postgresql+psycopg://", "postgresql://", 1)
         if url.startswith("postgres://"):
             url = "postgresql://" + url.removeprefix("postgres://")
+        min_size = max(
+            1, int(os.getenv("QINGSHU_OPERATIONAL_DB_POOL_MIN_SIZE", "1"))
+        )
+        max_size = max(
+            min_size,
+            int(os.getenv("QINGSHU_OPERATIONAL_DB_POOL_MAX_SIZE", "4")),
+        )
         self._pool = ConnectionPool(
             conninfo=url,
-            min_size=1,
-            max_size=10,
+            min_size=min_size,
+            max_size=max_size,
             kwargs={"autocommit": False, "row_factory": dict_row},
             open=True,
         )
@@ -1765,6 +1780,11 @@ class OperationalDatabase:
                     "dead_local_worker_recoveries_total", 0
                 ),
             },
+            "connection_pool": (
+                dict(self._pool.get_stats())
+                if self.backend == "postgresql" and self._pool is not None
+                else {"backend": "sqlite"}
+            ),
             "enabled_schedules": int(schedule["count"] or 0),
             "next_run_at": (
                 _as_datetime(schedule["next_run_at"]).isoformat()

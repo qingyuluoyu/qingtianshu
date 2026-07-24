@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Iterable
 
@@ -206,10 +207,14 @@ def create_postgres_pool(database_url: str) -> Any:
     url = database_url.replace("postgresql+psycopg://", "postgresql://", 1)
     if url.startswith("postgres://"):
         url = "postgresql://" + url.removeprefix("postgres://")
+    min_size = max(1, int(os.getenv("QINGSHU_DB_POOL_MIN_SIZE", "1")))
+    max_size = max(
+        min_size, int(os.getenv("QINGSHU_DB_POOL_MAX_SIZE", "8"))
+    )
     pool = ConnectionPool(
         conninfo=url,
-        min_size=1,
-        max_size=20,
+        min_size=min_size,
+        max_size=max_size,
         kwargs={"autocommit": False, "row_factory": dict_row},
         open=True,
     )

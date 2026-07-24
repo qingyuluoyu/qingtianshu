@@ -17,10 +17,14 @@ services:
   qingshu-agent:
     build: .
     ports:
-      - "8000:8000"
+      - "${QINGSHU_HTTP_BIND:-0.0.0.0}:${QINGSHU_HTTP_PORT:-8000}:8000"
     environment: &qingshu-environment
       QINGSHU_DATA_DIR: /data
       QINGSHU_DATABASE_URL: "postgresql://qingshu:${POSTGRES_PASSWORD:-qingshu-local-only}@postgres:5432/qingshu"
+      QINGSHU_DB_POOL_MIN_SIZE: "${QINGSHU_DB_POOL_MIN_SIZE:-1}"
+      QINGSHU_DB_POOL_MAX_SIZE: "${QINGSHU_DB_POOL_MAX_SIZE:-8}"
+      QINGSHU_OPERATIONAL_DB_POOL_MIN_SIZE: "${QINGSHU_OPERATIONAL_DB_POOL_MIN_SIZE:-1}"
+      QINGSHU_OPERATIONAL_DB_POOL_MAX_SIZE: "${QINGSHU_OPERATIONAL_DB_POOL_MAX_SIZE:-4}"
       BACKGROUND_JOBS_ENABLED: "true"
       BACKGROUND_WORKER_MODE: "external"
       JOB_WORKER_CONCURRENCY: "${JOB_WORKER_CONCURRENCY:-2}"
@@ -84,8 +88,15 @@ services:
         [
           "CMD",
           "python",
-          "-c",
-          "from app.config import Settings; from app.operational_db import OperationalDatabase; assert OperationalDatabase(Settings.from_env().operational_database_url).health()['status'] == 'ok'",
+          "scripts/check_operations.py",
+          "--require-postgres",
+          "--minimum-active-workers",
+          "1",
+          "--max-queue-lag-seconds",
+          "600",
+          "--max-failure-rate-24h",
+          "0.2",
+          "--skip-backup",
         ]
       interval: 30s
       timeout: 10s

@@ -296,6 +296,34 @@ Compose 会启动四个服务：
 - `qingshu-backup`：启动后立即创建一次 PostgreSQL 自定义格式备份，之后默认每天
   备份；备份保留 14 天且至少保留最近 7 份，并用独立持久卷保存。
 
+Web 和多个 Worker 首次同时启动时，业务库与运维库分别使用 PostgreSQL 事务级
+advisory lock 串行执行 Schema 初始化，避免并发 `CREATE/ALTER` 竞态。
+
+### Staging 验证
+
+仓库提供不含真实凭据的 `staging.env.example`。复制后替换密码和管理员 Token；
+`COMPOSE_PROJECT_NAME=qingshu-staging` 会让数据库、工作区和备份卷与生产完全隔离：
+
+```bash
+cp staging.env.example .env.staging
+docker compose --env-file .env.staging up --build -d
+
+curl http://127.0.0.1:18000/health
+docker compose --env-file .env.staging exec qingshu-worker \
+  python scripts/check_operations.py \
+  --require-postgres \
+  --minimum-active-workers 1 \
+  --skip-backup
+
+docker compose --env-file .env.staging exec qingshu-backup \
+  python scripts/postgres_backup.py \
+  --output-dir /backups \
+  --check-max-age-seconds 93600
+```
+
+停止 staging 使用 `docker compose --env-file .env.staging down`；不要加 `-v`，
+除非明确要销毁 staging 数据和备份。
+
 用户工作区文件仍保存在 `qingshu-data` volume；生产多机部署应再迁移到共享文件系统或对象存储。容器默认使用无需模型费用的确定性 preview；生产 Hermes Provider 应通过云端密钥管理接入。
 
 本地直接启动时，不设置 `QINGSHU_DATABASE_URL` 会继续使用 SQLite，并以
@@ -491,6 +519,10 @@ Worker 产生的市场更新、文章发布和数据健康事件会先写入数�
 进程统一轮询并推送 `/events` SSE；因此 Web/Worker 分进程后仍能实时更新页面，
 不会依赖某个进程内存中的临时订阅者。事件默认保留 48 小时并由数据健康任务清理。
 
+PostgreSQL 连接池默认每进程业务库最多 8 条、运维库最多 4 条，避免 Web 加多个
+Worker 时迅速耗尽服务器连接。可通过 `QINGSHU_DB_POOL_*` 和
+`QINGSHU_OPERATIONAL_DB_POOL_*` 调整；管理员运维报告会返回两类池的当前统计。
+
 `scripts/publish_market_pulse.py` 只是开发人员单独验证文章逻辑时使用；系统只有在证据质量达标、距离上一篇至少四小时、市场结构指纹变化且未超过 24 小时三篇上限时才真正生成文章。
 
 ```bash
@@ -511,6 +543,18 @@ Worker；两种模式使用相同的数据库任务合同。
 - `POST /admin/job-queue/{job_id}/retry`：重试失败/取消任务；
 - `POST /admin/job-queue/{job_id}/cancel`：取消尚未执行的任务。
 
+部署探针无需登录网页，可在服务器内直接检查同一组生产条件并以退出码表示结果：
+
+```bash
+uv run python scripts/check_operations.py \
+  --require-postgres \
+  --minimum-active-workers 1 \
+  --max-queue-lag-seconds 600 \
+  --max-failure-rate-24h 0.2
+```
+
+Worker 容器健康检查使用该脚本的无备份模式；备份容器单独检查最新备份年龄。
+
 ## 测试
 
 单元和 API 测试全部使用模拟行情，不依赖公网：
@@ -520,8 +564,8 @@ uv run pytest
 uv run ruff check .
 ```
 
-当前分支收集 `616` 项：常规环境 `610 passed, 6 skipped`；其中 PostgreSQL
-Worker/队列专项已在本机 PostgreSQL 17 上单独运行 `4 passed`。后续测试数量以
+当前分支收集 `621` 项：常规环境 `614 passed, 7 skipped`；其中 PostgreSQL
+业务库/Worker/队列专项已在本机 PostgreSQL 17 上单独运行 `7 passed`。后续测试数量以
 `pytest --collect-only` 输出为准，主分支合并前必须同时通过全量测试与 Ruff。
 
 双视口只读浏览器验收：

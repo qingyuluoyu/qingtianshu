@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import os
+import time
 
 import pytest
 
@@ -30,6 +31,9 @@ def postgres_store():
 
 
 def test_postgres_skip_locked_claims_once(postgres_store: OperationalDatabase):
+    assert postgres_store.health()["connection_pool"]["pool_max"] == int(
+        os.getenv("QINGSHU_OPERATIONAL_DB_POOL_MAX_SIZE", "4")
+    )
     postgres_store.enqueue("refresh")
 
     def claim(worker_id: str):
@@ -134,3 +138,27 @@ def test_postgres_worker_registry_and_queue_metrics(
         )
     removed = postgres_store.prune_terminal_jobs(failed_retention_hours=1)
     assert removed["failed"] == 1
+
+
+def test_postgres_schema_initialization_uses_cross_process_advisory_lock(
+    postgres_store: OperationalDatabase,
+):
+    class SlowStore(OperationalDatabase):
+        def _apply_migrations(self, connection):
+            connection.execute("SELECT pg_sleep(0.1)")
+            return super()._apply_migrations(connection)
+
+    def initialize(_: int) -> int:
+        store = SlowStore(postgres_store.database_url)
+        try:
+            store.initialize()
+            return store.health()["schema_version"]
+        finally:
+            store.close()
+
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        versions = list(executor.map(initialize, range(3)))
+    elapsed = time.monotonic() - started
+    assert versions == [3, 3, 3]
+    assert elapsed >= 0.25

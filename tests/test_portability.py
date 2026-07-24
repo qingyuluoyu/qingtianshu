@@ -14,6 +14,7 @@ from app.cli import build_parser
 
 PORTABLE_FILES = (
     ".env.example",
+    "staging.env.example",
     "README.md",
     "TUSHARE使用说明.md",
     "VERIFICATION.md",

@@ -53,6 +53,14 @@ class Database:
             self.path.parent.mkdir(parents=True, exist_ok=True)
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
+            if self.backend == "postgresql":
+                connection.execute(
+                    """
+                    SELECT pg_advisory_xact_lock(
+                        hashtext('qingshu_domain_schema_migration')
+                    )
+                    """
+                )
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS users (
@@ -1490,6 +1498,11 @@ class Database:
             "backend": self.backend,
             "schema_version": int(row["version"] or 0),
         }
+
+    def pool_status(self) -> dict[str, Any]:
+        if self.backend != "postgresql" or self._postgres_pool is None:
+            return {"backend": "sqlite"}
+        return dict(self._postgres_pool.get_stats())
 
     @staticmethod
     def _ensure_column(
