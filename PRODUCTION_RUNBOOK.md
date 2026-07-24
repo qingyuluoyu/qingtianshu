@@ -20,7 +20,7 @@ curl -H "X-Qingshu-Admin-Token: $QINGSHU_ADMIN_API_TOKEN" \
 
 最低检查项：
 
-- 业务 Schema 为 v1，运维 Schema 为 v3；
+- 业务 Schema 为 v1，运维 Schema 为 v4；
 - 至少一个 Worker 为 `active`，最近心跳不超过 45 秒；
 - `queue.expired_running = 0`；
 - `queue.oldest_ready_age_seconds < 120`；
@@ -60,12 +60,14 @@ HTTP `/health` 用于 liveness，`/ready` 用于 readiness；负载均衡只应�
 ## 3. 队列故障处理
 
 1. 先查看 `/admin/operations/health` 和 `/admin/job-queue?status=failed`。
-2. Worker 离线时先恢复 Worker，不要直接批量重试。
-3. 确认上游数据源、数据库和磁盘正常后，对单个失败任务调用
+2. 单一数据源持续故障时，用 `/admin/job-schedules/{name}/pause` 暂停后续周期入队；
+   该操作不会杀死已经运行的任务，并会跨 Worker 重启保留。
+3. Worker 离线时先恢复 Worker，不要直接批量重试。
+4. 确认上游数据源、数据库和磁盘正常后，对单个失败任务调用
    `POST /admin/job-queue/{job_id}/retry`。
-4. 不确定任务是否幂等时禁止手工复制任务。系统是 at-least-once 语义，任务函数
+5. 不确定任务是否幂等时禁止手工复制任务。系统是 at-least-once 语义，任务函数
    必须允许重复执行。
-5. 租约过期任务会自动重新入队；达到最大次数后才进入失败归档。
+6. 租约过期任务会自动重新入队；达到最大次数后才进入失败归档。
 
 ## 4. 备份与恢复
 
@@ -116,6 +118,10 @@ python scripts/postgres_restore.py \
 5. 回滚应用代码不能回滚或删除已应用 Schema；不兼容 Schema 变更必须采用
    expand/contract 两阶段迁移。
 
+SQLite 首次迁往 PostgreSQL 时必须同时指定源和目标工作区根目录。迁移工具会重写
+数据库里的绝对路径，但不会复制文件；发布前需独立同步工作区，并抽样核对用户上传、
+Run 目录和确认记忆文件。
+
 Web 与 Worker 的 Schema 初始化已有 PostgreSQL advisory lock；仍建议先启动 Web
 完成迁移，再逐步扩容 Worker，以缩小发布故障面。
 
@@ -126,5 +132,7 @@ Staging 默认映射到 `127.0.0.1:18000`，卷名带 `qingshu-staging` project 
 
 - 工作区文件尚未迁往对象存储，数据库备份不覆盖这些文件；
 - 尚未接入 Prometheus 或云告警，当前以管理员健康接口作为采集源；
-- 尚未建立独立 staging Compose 和自动化发布流水线；
+- 已提供隔离的 staging 配置模板，但尚未在真实服务器完成 staging 部署演练；
+- 当前 GitHub OAuth 凭据没有 `workflow` scope，CI Workflow 尚未提交；合并前仍需
+  人工核对本地全量测试、PostgreSQL 专项和镜像构建结果。
 - 外部行情、公告和模型 Provider 仍需分别配置凭据、限流与 SLA 监控。

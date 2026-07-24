@@ -85,6 +85,12 @@ def test_postgres_schedule_and_failure_archive(
     postgres_store: OperationalDatabase,
 ):
     postgres_store.register_schedule("market", "market_refresh", 30)
+    paused = postgres_store.pause_schedule("market")
+    assert paused is not None and paused["manually_paused"] is True
+    postgres_store.register_schedule("market", "market_refresh", 30)
+    assert postgres_store.enqueue_due_schedules() == 0
+    resumed = postgres_store.resume_schedule("market")
+    assert resumed is not None and resumed["enabled"] is True
     assert postgres_store.enqueue_due_schedules() == 1
     claim = postgres_store.claim("worker-a", lease_seconds=30)
     assert claim is not None
@@ -120,7 +126,7 @@ def test_postgres_worker_registry_and_queue_metrics(
         "postgres-worker", succeeded=False
     )
     health = postgres_store.health()
-    assert health["schema_version"] == 3
+    assert health["schema_version"] == 4
     assert health["workers"]["active"] == 1
     assert health["queue"]["failed_24h"] == 1
     worker = postgres_store.list_workers()[0]
@@ -160,5 +166,5 @@ def test_postgres_schema_initialization_uses_cross_process_advisory_lock(
     with ThreadPoolExecutor(max_workers=3) as executor:
         versions = list(executor.map(initialize, range(3)))
     elapsed = time.monotonic() - started
-    assert versions == [3, 3, 3]
+    assert versions == [4, 4, 4]
     assert elapsed >= 0.25

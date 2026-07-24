@@ -404,13 +404,24 @@ uv run python scripts/postgres_restore.py \
 ```bash
 uv run python scripts/migrate_sqlite_to_postgres.py \
   --source ./data/qingshu.db \
+  --source-workspace-root ./data/workspaces \
+  --workspace-root /data/workspaces \
   --database-url "$QINGSHU_DATABASE_URL" \
   --dry-run
 
 uv run python scripts/migrate_sqlite_to_postgres.py \
   --source ./data/qingshu.db \
+  --source-workspace-root ./data/workspaces \
+  --workspace-root /data/workspaces \
   --database-url "$QINGSHU_DATABASE_URL"
 ```
+
+提供 `--source-workspace-root` 后，`users`、`user_uploads` 和 `runs` 中的
+`workspace_path` 会按相对目录安全重写到目标根目录；任何路径落在源根目录之外都会
+终止迁移。工具只改数据库引用，不复制文件，切换前还必须把源工作区目录完整同步到
+目标共享卷，并在目标容器内核对抽样文件。源库存在工作区路径时，未提供
+`--source-workspace-root` 会直接停止；只有确认源路径在目标环境仍有效时，才能显式
+使用 `--preserve-workspace-paths`。
 
 ## 最短 Demo 流程
 
@@ -541,6 +552,9 @@ Worker；两种模式使用相同的数据库任务合同。
 `X-Qingshu-Admin-Token`：
 
 - `GET /admin/job-queue`：查看队列健康和任务；
+- `GET /admin/job-schedules`：查看周期计划、配置启用状态和人工暂停状态；
+- `POST /admin/job-schedules/{name}/pause`：停止该计划后续入队，不中断已运行任务；
+- `POST /admin/job-schedules/{name}/resume`：清除人工暂停；仅在配置允许时恢复执行；
 - `GET /admin/operations/health`：查看数据库 Schema、队列延迟与失败率、Worker
   心跳和最近备份状态；
 - `POST /admin/job-queue/enqueue`：手工幂等入队已注册任务；
@@ -570,7 +584,7 @@ uv run pytest
 uv run ruff check .
 ```
 
-当前分支收集 `623` 项：常规环境 `616 passed, 7 skipped`；其中 PostgreSQL
+当前分支收集 `626` 项：常规环境 `619 passed, 7 skipped`；其中 PostgreSQL
 业务库/Worker/队列专项已在本机 PostgreSQL 17 上单独运行 `7 passed`。后续测试数量以
 `pytest --collect-only` 输出为准，主分支合并前必须同时通过全量测试与 Ruff。
 

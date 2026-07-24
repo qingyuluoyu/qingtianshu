@@ -52,7 +52,7 @@ class OperationalDatabase:
     local development or PostgreSQL in production.
     """
 
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = 4
 
     def __init__(self, database_url: str):
         self.database_url = str(database_url or "").strip()
@@ -199,6 +199,9 @@ class OperationalDatabase:
                     priority INTEGER NOT NULL DEFAULT 0,
                     max_attempts INTEGER NOT NULL,
                     enabled INTEGER NOT NULL DEFAULT 1,
+                    configured_enabled INTEGER NOT NULL DEFAULT 1,
+                    manually_paused INTEGER NOT NULL DEFAULT 0,
+                    paused_at TEXT,
                     next_run_at TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -250,6 +253,33 @@ class OperationalDatabase:
                     ON persistent_workers(status, last_heartbeat_at);
                 """
             )
+            schedule_columns = {
+                str(row["name"])
+                for row in connection.execute(
+                    "PRAGMA table_info(persistent_schedules)"
+                ).fetchall()
+            }
+            if "manually_paused" not in schedule_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE persistent_schedules
+                    ADD COLUMN manually_paused INTEGER NOT NULL DEFAULT 0
+                    """
+                )
+            if "configured_enabled" not in schedule_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE persistent_schedules
+                    ADD COLUMN configured_enabled INTEGER NOT NULL DEFAULT 1
+                    """
+                )
+            if "paused_at" not in schedule_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE persistent_schedules
+                    ADD COLUMN paused_at TEXT
+                    """
+                )
             connection.execute(
                 """
                 INSERT OR IGNORE INTO qingshu_schema_migrations(version, applied_at)
@@ -306,10 +336,31 @@ class OperationalDatabase:
                 priority INTEGER NOT NULL DEFAULT 0,
                 max_attempts INTEGER NOT NULL,
                 enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                configured_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                manually_paused BOOLEAN NOT NULL DEFAULT FALSE,
+                paused_at TIMESTAMPTZ,
                 next_run_at TIMESTAMPTZ NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL
             )
+            """
+        )
+        connection.execute(
+            """
+            ALTER TABLE persistent_schedules
+            ADD COLUMN IF NOT EXISTS configured_enabled BOOLEAN NOT NULL DEFAULT TRUE
+            """
+        )
+        connection.execute(
+            """
+            ALTER TABLE persistent_schedules
+            ADD COLUMN IF NOT EXISTS manually_paused BOOLEAN NOT NULL DEFAULT FALSE
+            """
+        )
+        connection.execute(
+            """
+            ALTER TABLE persistent_schedules
+            ADD COLUMN IF NOT EXISTS paused_at TIMESTAMPTZ
             """
         )
         connection.execute(
@@ -823,9 +874,9 @@ class OperationalDatabase:
                     """
                     INSERT INTO persistent_schedules(
                         name, queue_name, job_name, payload_json, interval_seconds,
-                        priority, max_attempts, enabled, next_run_at,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        priority, max_attempts, enabled, configured_enabled,
+                        next_run_at, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(name) DO UPDATE SET
                         queue_name = excluded.queue_name,
                         job_name = excluded.job_name,
@@ -833,7 +884,11 @@ class OperationalDatabase:
                         interval_seconds = excluded.interval_seconds,
                         priority = excluded.priority,
                         max_attempts = excluded.max_attempts,
-                        enabled = excluded.enabled,
+                        configured_enabled = excluded.configured_enabled,
+                        enabled = CASE
+                            WHEN persistent_schedules.manually_paused = 1 THEN 0
+                            ELSE excluded.enabled
+                        END,
                         updated_at = excluded.updated_at
                     """,
                     (
@@ -845,6 +900,7 @@ class OperationalDatabase:
                         int(priority),
                         int(max_attempts),
                         int(enabled),
+                        int(enabled),
                         next_run.isoformat(),
                         now.isoformat(),
                         now.isoformat(),
@@ -855,10 +911,10 @@ class OperationalDatabase:
                 """
                 INSERT INTO persistent_schedules(
                     name, queue_name, job_name, payload_json, interval_seconds,
-                    priority, max_attempts, enabled, next_run_at,
-                    created_at, updated_at
+                    priority, max_attempts, enabled, configured_enabled,
+                    next_run_at, created_at, updated_at
                 ) VALUES (
-                    %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 ON CONFLICT(name) DO UPDATE SET
                     queue_name = EXCLUDED.queue_name,
@@ -867,7 +923,11 @@ class OperationalDatabase:
                     interval_seconds = EXCLUDED.interval_seconds,
                     priority = EXCLUDED.priority,
                     max_attempts = EXCLUDED.max_attempts,
-                    enabled = EXCLUDED.enabled,
+                    configured_enabled = EXCLUDED.configured_enabled,
+                    enabled = CASE
+                        WHEN persistent_schedules.manually_paused THEN FALSE
+                        ELSE EXCLUDED.enabled
+                    END,
                     updated_at = EXCLUDED.updated_at
                 """,
                 (
@@ -879,11 +939,98 @@ class OperationalDatabase:
                     int(priority),
                     int(max_attempts),
                     enabled,
+                    enabled,
                     next_run,
                     now,
                     now,
                 ),
             )
+
+    def list_schedules(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        self.initialize()
+        with self._transaction() as connection:
+            placeholder = "?" if self.backend == "sqlite" else "%s"
+            rows = connection.execute(
+                f"""
+                SELECT * FROM persistent_schedules
+                ORDER BY name
+                LIMIT {placeholder}
+                """,
+                (max(1, min(500, int(limit))),),
+            ).fetchall()
+        return [self._schedule_row(row) for row in rows]
+
+    def pause_schedule(self, name: str) -> dict[str, Any] | None:
+        self.initialize()
+        now = _utc_now()
+        with self._transaction(immediate=True) as connection:
+            if self.backend == "sqlite":
+                connection.execute(
+                    """
+                    UPDATE persistent_schedules
+                    SET enabled = 0,
+                        manually_paused = 1,
+                        paused_at = ?,
+                        updated_at = ?
+                    WHERE name = ?
+                    """,
+                    (now.isoformat(), now.isoformat(), name),
+                )
+                row = connection.execute(
+                    "SELECT * FROM persistent_schedules WHERE name = ?",
+                    (name,),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    UPDATE persistent_schedules
+                    SET enabled = FALSE,
+                        manually_paused = TRUE,
+                        paused_at = %s,
+                        updated_at = %s
+                    WHERE name = %s
+                    RETURNING *
+                    """,
+                    (now, now, name),
+                ).fetchone()
+        return self._schedule_row(row) if row is not None else None
+
+    def resume_schedule(self, name: str) -> dict[str, Any] | None:
+        self.initialize()
+        now = _utc_now()
+        with self._transaction(immediate=True) as connection:
+            if self.backend == "sqlite":
+                connection.execute(
+                    """
+                    UPDATE persistent_schedules
+                    SET enabled = configured_enabled,
+                        manually_paused = 0,
+                        paused_at = NULL,
+                        next_run_at = ?,
+                        updated_at = ?
+                    WHERE name = ?
+                    """,
+                    (now.isoformat(), now.isoformat(), name),
+                )
+                row = connection.execute(
+                    "SELECT * FROM persistent_schedules WHERE name = ?",
+                    (name,),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    UPDATE persistent_schedules
+                    SET enabled = configured_enabled,
+                        manually_paused = FALSE,
+                        paused_at = NULL,
+                        next_run_at = %s,
+                        updated_at = %s
+                    WHERE name = %s
+                    RETURNING *
+                    """,
+                    (now, now, name),
+                ).fetchone()
+        return self._schedule_row(row) if row is not None else None
 
     def enqueue_due_schedules(self, *, limit: int = 100) -> int:
         self.initialize()
@@ -1621,7 +1768,12 @@ class OperationalDatabase:
                 schedule = connection.execute(
                     """
                     SELECT COUNT(*) AS count,
-                           MIN(next_run_at) AS next_run_at
+                           MIN(next_run_at) AS next_run_at,
+                           (
+                               SELECT COUNT(*)
+                               FROM persistent_schedules
+                               WHERE manually_paused = 1
+                           ) AS manually_paused
                     FROM persistent_schedules
                     WHERE enabled = 1
                     """
@@ -1682,7 +1834,12 @@ class OperationalDatabase:
                 schedule = connection.execute(
                     """
                     SELECT COUNT(*) AS count,
-                           MIN(next_run_at) AS next_run_at
+                           MIN(next_run_at) AS next_run_at,
+                           (
+                               SELECT COUNT(*)
+                               FROM persistent_schedules
+                               WHERE manually_paused = TRUE
+                           ) AS manually_paused
                     FROM persistent_schedules
                     WHERE enabled = TRUE
                     """
@@ -1786,6 +1943,9 @@ class OperationalDatabase:
                 else {"backend": "sqlite"}
             ),
             "enabled_schedules": int(schedule["count"] or 0),
+            "manually_paused_schedules": int(
+                schedule["manually_paused"] or 0
+            ),
             "next_run_at": (
                 _as_datetime(schedule["next_run_at"]).isoformat()
                 if schedule["next_run_at"]
@@ -1830,6 +1990,22 @@ class OperationalDatabase:
             "last_heartbeat_at",
             "stopped_at",
         ):
+            value = item.get(key)
+            if isinstance(value, datetime):
+                item[key] = value.isoformat()
+        return item
+
+    @staticmethod
+    def _schedule_row(row: Any) -> dict[str, Any]:
+        item = dict(row)
+        payload = item.pop("payload_json", {})
+        item["payload"] = (
+            json.loads(payload) if isinstance(payload, str) else payload
+        )
+        item["enabled"] = bool(item.get("enabled"))
+        item["configured_enabled"] = bool(item.get("configured_enabled"))
+        item["manually_paused"] = bool(item.get("manually_paused"))
+        for key in ("next_run_at", "created_at", "updated_at", "paused_at"):
             value = item.get(key)
             if isinstance(value, datetime):
                 item[key] = value.isoformat()

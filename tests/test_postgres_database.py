@@ -9,7 +9,47 @@ import pytest
 
 from app.db import Database
 from app.operational_db import OperationalDatabase
-from scripts.migrate_sqlite_to_postgres import migrate
+from scripts.migrate_sqlite_to_postgres import (
+    _rewrite_workspace_path,
+    migrate,
+    parser as migration_parser,
+)
+
+
+def test_workspace_path_rewrite_is_relative_and_rejects_foreign_paths(
+    tmp_path: Path,
+):
+    source_root = tmp_path / "source-workspaces"
+    target_root = tmp_path / "target-workspaces"
+    source_path = source_root / "user-1" / "runs" / "run-1"
+    assert _rewrite_workspace_path(
+        source_path,
+        source_root,
+        target_root,
+    ) == str(target_root / "user-1" / "runs" / "run-1")
+    with pytest.raises(RuntimeError, match="outside source root"):
+        _rewrite_workspace_path(
+            tmp_path / "different-root" / "user-1",
+            source_root,
+            target_root,
+        )
+
+
+def test_workspace_migration_mode_must_be_unambiguous():
+    parsed = migration_parser().parse_args(
+        ["--source", "source.db", "--preserve-workspace-paths"]
+    )
+    assert parsed.preserve_workspace_paths is True
+    with pytest.raises(SystemExit):
+        migration_parser().parse_args(
+            [
+                "--source",
+                "source.db",
+                "--source-workspace-root",
+                "source-workspaces",
+                "--preserve-workspace-paths",
+            ]
+        )
 
 
 def test_postgres_domain_database_core_round_trip(tmp_path: Path):
@@ -109,6 +149,13 @@ def test_sqlite_to_postgres_migration_preserves_domain_and_queue_rows(
             "美股",
             "验证迁移",
         )
+        run = source.create_run(
+            user["id"],
+            "stock_research",
+            "economy",
+            {"symbol": "NVDA"},
+            Path(user["workspace_path"]) / "runs" / "migration-run",
+        )
         queued = source_operations.enqueue(
             "market_intraday_refresh",
             idempotency_key="migration-job-20260724",
@@ -122,8 +169,10 @@ def test_sqlite_to_postgres_migration_preserves_domain_and_queue_rows(
             source_path,
             schema_url,
             tmp_path / "target-workspaces",
+            source_workspace_root=tmp_path / "source-workspaces",
         )
         assert report["copied_rows"] > 0
+        assert report["workspace_path_rewrites"] >= 2
 
         target = Database(
             tmp_path / "unused.db",
@@ -135,6 +184,15 @@ def test_sqlite_to_postgres_migration_preserves_domain_and_queue_rows(
         target_operations.initialize()
         try:
             assert target.list_watchlist(user["id"])[0]["symbol"] == "NVDA"
+            migrated_user = target.get_user(user["id"])
+            assert migrated_user is not None
+            assert Path(migrated_user["workspace_path"]).is_relative_to(
+                tmp_path / "target-workspaces"
+            )
+            migrated_run = target.get_run(run["id"], user["id"])
+            assert Path(migrated_run["workspace_path"]).is_relative_to(
+                tmp_path / "target-workspaces"
+            )
             jobs = target_operations.list_jobs()
             assert [item["id"] for item in jobs] == [queued["id"]]
         finally:

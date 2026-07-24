@@ -1543,6 +1543,39 @@ def create_app(
             raise HTTPException(status_code=409, detail="仅等待中的任务可取消")
         return {"status": "cancelled", "job_id": str(job_id)}
 
+    @app.get("/admin/job-schedules")
+    def job_schedule_list(
+        request: Request,
+        limit: int = Query(default=100, ge=1, le=500),
+    ) -> dict[str, Any]:
+        require_admin_api(request)
+        return {
+            "queue": background.job_store.health(
+                worker_stale_seconds=settings.job_worker_stale_seconds
+            ),
+            "schedules": background.job_store.list_schedules(limit=limit),
+        }
+
+    @app.post("/admin/job-schedules/{schedule_name}/pause")
+    def job_schedule_pause(
+        schedule_name: str, request: Request
+    ) -> dict[str, Any]:
+        require_admin_api(request)
+        schedule = background.job_store.pause_schedule(schedule_name)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="周期任务不存在")
+        return schedule
+
+    @app.post("/admin/job-schedules/{schedule_name}/resume")
+    def job_schedule_resume(
+        schedule_name: str, request: Request
+    ) -> dict[str, Any]:
+        require_admin_api(request)
+        schedule = background.job_store.resume_schedule(schedule_name)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="周期任务不存在")
+        return schedule
+
     @app.get("/system/data-health")
     def data_health_status() -> dict[str, Any]:
         return data_health.latest(generate_if_missing=True)  # type: ignore[return-value]

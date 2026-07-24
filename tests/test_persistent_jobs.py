@@ -36,7 +36,7 @@ def test_enqueue_is_idempotent_and_survives_reopen(tmp_path: Path):
     jobs = reopened.list_jobs()
     assert len(jobs) == 1
     assert jobs[0]["id"] == first["id"]
-    assert reopened.health()["schema_version"] == 3
+    assert reopened.health()["schema_version"] == 4
 
 
 def test_two_workers_cannot_claim_the_same_job(tmp_path: Path):
@@ -296,6 +296,30 @@ def test_persistent_schedule_coalesces_overlapping_runs(tmp_path: Path):
     assert store.health()["counts"]["queued"] == 1
 
 
+def test_manual_schedule_pause_survives_registration_and_resume(tmp_path: Path):
+    store = store_for(tmp_path)
+    store.register_schedule("market", "market_refresh", 30)
+    paused = store.pause_schedule("market")
+    assert paused is not None
+    assert paused["enabled"] is False
+    assert paused["manually_paused"] is True
+    assert store.enqueue_due_schedules() == 0
+
+    store.register_schedule("market", "market_refresh", 30, enabled=True)
+    persisted = store.list_schedules()[0]
+    assert persisted["configured_enabled"] is True
+    assert persisted["enabled"] is False
+    assert persisted["manually_paused"] is True
+    assert store.health()["manually_paused_schedules"] == 1
+
+    resumed = store.resume_schedule("market")
+    assert resumed is not None
+    assert resumed["enabled"] is True
+    assert resumed["manually_paused"] is False
+    assert resumed["paused_at"] is None
+    assert store.enqueue_due_schedules() == 1
+
+
 def test_cancel_only_accepts_queued_jobs(tmp_path: Path):
     store = store_for(tmp_path)
     queued = store.enqueue("queued")
@@ -360,16 +384,40 @@ def test_admin_api_can_enqueue_inspect_and_cancel_jobs(client):
     assert retried.status_code == 202
     operations = client.get("/admin/operations/health", headers=headers)
     assert operations.status_code == 200
-    assert operations.json()["queue"]["schema_version"] == 3
+    assert operations.json()["queue"]["schema_version"] == 4
     assert operations.json()["backups"]["status"] == "not_applicable"
+    schedules = client.get("/admin/job-schedules", headers=headers)
+    assert schedules.status_code == 200
+    assert any(
+        item["name"] == "data_quality_audit"
+        for item in schedules.json()["schedules"]
+    )
+    paused = client.post(
+        "/admin/job-schedules/data_quality_audit/pause",
+        headers=headers,
+    )
+    assert paused.status_code == 200
+    assert paused.json()["manually_paused"] is True
+    resumed = client.post(
+        "/admin/job-schedules/data_quality_audit/resume",
+        headers=headers,
+    )
+    assert resumed.status_code == 200
+    assert resumed.json()["manually_paused"] is False
+    assert (
+        client.post("/admin/job-schedules/missing/pause", headers=headers).status_code
+        == 404
+    )
 
 
 def test_job_admin_api_requires_session_and_admin_token(client):
     assert client.get("/admin/job-queue").status_code == 401
     assert client.get("/admin/operations/health").status_code == 401
+    assert client.get("/admin/job-schedules").status_code == 401
     assert client.post("/users", json={"name": "not-admin"}).status_code == 201
     assert client.get("/admin/job-queue").status_code == 403
     assert client.get("/admin/operations/health").status_code == 403
+    assert client.get("/admin/job-schedules").status_code == 403
 
 
 def test_background_service_executes_registered_job_through_persistent_queue(client):

@@ -887,6 +887,10 @@ uv run pytest
 - 管理 API 仅在有效用户会话和 `X-Qingshu-Admin-Token` 同时存在时开放，支持查看、手工幂等入队、取消和重试，不在用户网页展示。
 - Docker Compose 更新为 PostgreSQL + Web + Worker 三服务，Web 不执行后台任务，Worker 与 Web 共用 PostgreSQL 和工作区卷。
 - 新增只读源库迁移工具 `scripts/migrate_sqlite_to_postgres.py`。真实将仓库 52MB SQLite 样本的 67 张表迁移到 PostgreSQL：45 张非空表、18,107 行，逐表行数一致；迁移后应用 `/health=ok`、数据健康 `healthy`，可继续创建用户。
+- 迁移工具新增 `--source-workspace-root`。提供后会把用户、上传和 Run 的绝对
+  `workspace_path` 按相对目录重写到目标 `--workspace-root`；路径越界立即失败。
+  源库存在路径时必须显式选择重写或 `--preserve-workspace-paths`，不再静默保留。
+  文件复制仍保持显式步骤，避免只迁数据库后留下旧机器绝对路径。
 - SQLite 队列/后台专项 12 项通过；真实 PostgreSQL 专项 5 项通过，覆盖多 Worker 单次抢占、重启后租约恢复、周期计划、失败重试、跨进程事件、业务核心读写和 SQLite→PostgreSQL 迁移。
 - 常规全量回归为 `601 passed, 5 skipped`；5 项跳过均为需要
   `QINGSHU_TEST_POSTGRES_URL` 的 PostgreSQL 集成测试，并已在本机真实
@@ -915,6 +919,9 @@ uv run pytest
 - 运维库升级到 Schema v3，新增持久化 Worker 注册表和运维计数器。每个 Worker
   线程保存主机、进程、队列、启动时间、最近心跳、当前任务与累计领取/成功/失败数；
   正常退出标记 `stopped`，心跳超时标记 `offline`，历史离线记录保留 7 天。
+- 运维库随后升级到 Schema v4，周期计划新增配置启用、人工暂停和暂停时间。管理员
+  可列出、暂停和恢复计划；Worker 重新注册计划时不会覆盖人工暂停，恢复时仍服从
+  当前配置是否允许执行。
 - 队列健康新增 ready/delayed/retrying、最老 ready 任务延迟、过期运行租约、
   最近 24 小时成功/失败数和失败率，以及租约恢复、死亡本机 Worker 恢复累计数。
   ready 任务没有活跃 Worker、存在过期租约或排队延迟超阈值时不再误报 `ok`。
@@ -951,11 +958,11 @@ uv run pytest
 - PostgreSQL 连接池从每进程硬编码业务 20 + 运维 10，调整为可配置的保守默认值
   业务 8 + 运维 4；运维报告返回连接池统计。按 Web + 两个 Worker 估算，默认连接
   上限由 90 降至 36，给 PostgreSQL 管理连接和备份恢复留出余量。
-- 使用全新本机 PostgreSQL 17 实例完成真实演练：备份 199,618 bytes，manifest
-  checksum 一致；恢复到随机临时库后识别 74 张表，业务 Schema v1、运维 Schema
-  v3，恢复用户 1 条、任务 2 条、周期计划 2 条，演练状态 `passed`，临时库已删除。
+- 使用本机 PostgreSQL 17 完成最新真实演练：备份 202,254 bytes，归档解析与
+  manifest checksum 一致；恢复到随机临时库后识别 74 张表，业务 Schema v1、
+  运维 Schema v4，演练状态 `passed`，临时库已删除。
 - SQLite 持久化队列与备份工具专项通过；真实 PostgreSQL 业务库/Worker/队列专项
-  7 项通过。全量收集 623 项，常规环境 `616 passed, 7 skipped`；Ruff、compileall、
+  7 项通过。全量收集 626 项，常规环境 `619 passed, 7 skipped`；Ruff、compileall、
   diff 检查和 Compose YAML 解析通过。7 项跳过均需独立 PostgreSQL，已在本机
   PostgreSQL 17 上单独真实执行。
 
