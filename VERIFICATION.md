@@ -909,3 +909,37 @@ uv run pytest
 - 最终服务进程 PID `35960`；`/health=ok`、`hermes_enabled=true`、数据健康 `54/54`，通用后台与李总策略 Worker 均运行。
 
 当前边界：现有后台报告多数处于 `degraded/partial`，页面按实际状态展示，不能宣传为完整 Agent 报告；服务器报告是公共证据快照，用户私有判断和任务不会写入公共报告。当前下一工作包是阶段 0 权威口径统一，并审计/封口包含真实操作与复盘的完整 R1 E2E。结构化市场复盘后置到 R2；单证据模块独立重试进入后续“选股与个股分析可信度”阶段。
+
+## 2026-07-24 PostgreSQL 备份恢复与队列生产可观测性
+
+- 运维库升级到 Schema v3，新增持久化 Worker 注册表和运维计数器。每个 Worker
+  线程保存主机、进程、队列、启动时间、最近心跳、当前任务与累计领取/成功/失败数；
+  正常退出标记 `stopped`，心跳超时标记 `offline`，历史离线记录保留 7 天。
+- 队列健康新增 ready/delayed/retrying、最老 ready 任务延迟、过期运行租约、
+  最近 24 小时成功/失败数和失败率，以及租约恢复、死亡本机 Worker 恢复累计数。
+  ready 任务没有活跃 Worker、存在过期租约或排队延迟超阈值时不再误报 `ok`。
+- 新增管理员专用 `GET /admin/operations/health`，聚合业务库/运维库 Schema、完整
+  队列指标、Worker 列表和备份新鲜度；继续要求有效用户会话与管理员 Token，不在
+  用户网页展示。
+- 新增 `scripts/postgres_backup.py`：使用 `pg_dump` custom format 原子写入，
+  密码只经子进程环境传递，不进入命令行；生成 SHA-256 manifest、`latest.json`，
+  支持保留天数、最少份数、周期运行与备份过期健康检查。
+- 新增显式确认恢复 `scripts/postgres_restore.py` 和非破坏性日常演练
+  `scripts/postgres_restore_drill.py`。演练在同一服务器创建随机临时库，校验
+  checksum，执行 `pg_restore`，核对核心业务/队列表、两个 Schema 版本和关键
+  行数，最后强制清理临时库。
+- Docker 镜像加入 PostgreSQL client；Compose 新增 `qingshu-backup` 服务和独立
+  `qingshu-backups` volume。备份服务启动即备份，默认每 24 小时运行、保留 14 天
+  且至少 7 份；Web 只读挂载备份卷用于管理员健康检查。
+- 使用全新本机 PostgreSQL 17 实例完成真实演练：备份 199,618 bytes，manifest
+  checksum 一致；恢复到随机临时库后识别 74 张表，业务 Schema v1、运维 Schema
+  v3，恢复用户 1 条、任务 2 条、周期计划 2 条，演练状态 `passed`，临时库已删除。
+- SQLite 持久化队列与备份工具专项 19 项通过；真实 PostgreSQL Worker/队列专项
+  4 项通过。全量收集 614 项，常规环境 `608 passed, 6 skipped`；Ruff、compileall、
+  diff 检查和 Compose YAML 解析通过。6 项跳过为需要独立 PostgreSQL 或浏览器运行
+  条件的集成检查，PostgreSQL 队列专项已单独真实执行。
+
+当前边界：数据库结构和任务状态已有自动备份与真实恢复演练；用户工作区文件仍需
+对象存储或共享卷快照。当前没有接入外部告警平台，管理员健康接口已提供告警所需
+数据，下一步部署时可由 Prometheus/云监控采集并设置延迟、失败率、Worker 离线和
+备份过期阈值。

@@ -52,7 +52,7 @@ class OperationalDatabase:
     local development or PostgreSQL in production.
     """
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(self, database_url: str):
         self.database_url = str(database_url or "").strip()
@@ -196,6 +196,29 @@ class OperationalDatabase:
                     created_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS persistent_workers (
+                    worker_id TEXT PRIMARY KEY,
+                    hostname TEXT NOT NULL,
+                    process_id INTEGER NOT NULL,
+                    queue_name TEXT NOT NULL,
+                    status TEXT NOT NULL
+                        CHECK(status IN ('active', 'offline', 'stopped')),
+                    current_job_id TEXT,
+                    started_at TEXT NOT NULL,
+                    last_heartbeat_at TEXT NOT NULL,
+                    stopped_at TEXT,
+                    jobs_claimed INTEGER NOT NULL DEFAULT 0,
+                    jobs_succeeded INTEGER NOT NULL DEFAULT 0,
+                    jobs_failed INTEGER NOT NULL DEFAULT 0,
+                    metadata_json TEXT NOT NULL DEFAULT '{}'
+                );
+
+                CREATE TABLE IF NOT EXISTS operational_counters (
+                    name TEXT PRIMARY KEY,
+                    value INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_persistent_jobs_claim
                     ON persistent_jobs(
                         queue_name, status, available_at, priority DESC, created_at
@@ -208,6 +231,8 @@ class OperationalDatabase:
                     ON persistent_schedules(enabled, next_run_at);
                 CREATE INDEX IF NOT EXISTS idx_persistent_events_created
                     ON persistent_events(created_at);
+                CREATE INDEX IF NOT EXISTS idx_persistent_workers_health
+                    ON persistent_workers(status, last_heartbeat_at);
                 """
             )
             connection.execute(
@@ -284,6 +309,35 @@ class OperationalDatabase:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS persistent_workers (
+                worker_id TEXT PRIMARY KEY,
+                hostname TEXT NOT NULL,
+                process_id INTEGER NOT NULL,
+                queue_name TEXT NOT NULL,
+                status TEXT NOT NULL
+                    CHECK(status IN ('active', 'offline', 'stopped')),
+                current_job_id TEXT,
+                started_at TIMESTAMPTZ NOT NULL,
+                last_heartbeat_at TIMESTAMPTZ NOT NULL,
+                stopped_at TIMESTAMPTZ,
+                jobs_claimed BIGINT NOT NULL DEFAULT 0,
+                jobs_succeeded BIGINT NOT NULL DEFAULT 0,
+                jobs_failed BIGINT NOT NULL DEFAULT 0,
+                metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS operational_counters (
+                name TEXT PRIMARY KEY,
+                value BIGINT NOT NULL DEFAULT 0,
+                updated_at TIMESTAMPTZ NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_persistent_jobs_claim
             ON persistent_jobs(
                 queue_name, status, available_at, priority DESC, created_at
@@ -316,12 +370,305 @@ class OperationalDatabase:
         )
         connection.execute(
             """
+            CREATE INDEX IF NOT EXISTS idx_persistent_workers_health
+            ON persistent_workers(status, last_heartbeat_at)
+            """
+        )
+        connection.execute(
+            """
             INSERT INTO qingshu_schema_migrations(version, applied_at)
             VALUES (%s, %s)
             ON CONFLICT(version) DO NOTHING
             """,
             (self.SCHEMA_VERSION, _utc_now()),
         )
+
+    def register_worker(
+        self,
+        worker_id: str,
+        *,
+        queue_name: str = "default",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.initialize()
+        now = _utc_now()
+        encoded = _json(metadata or {})
+        hostname = socket.gethostname()
+        process_id = os.getpid()
+        with self._transaction(immediate=True) as connection:
+            if self.backend == "sqlite":
+                connection.execute(
+                    """
+                    INSERT INTO persistent_workers(
+                        worker_id, hostname, process_id, queue_name, status,
+                        current_job_id, started_at, last_heartbeat_at,
+                        stopped_at, metadata_json
+                    ) VALUES (?, ?, ?, ?, 'active', NULL, ?, ?, NULL, ?)
+                    ON CONFLICT(worker_id) DO UPDATE SET
+                        hostname = excluded.hostname,
+                        process_id = excluded.process_id,
+                        queue_name = excluded.queue_name,
+                        status = 'active',
+                        current_job_id = NULL,
+                        started_at = excluded.started_at,
+                        last_heartbeat_at = excluded.last_heartbeat_at,
+                        stopped_at = NULL,
+                        metadata_json = excluded.metadata_json
+                    """,
+                    (
+                        worker_id,
+                        hostname,
+                        process_id,
+                        queue_name,
+                        now.isoformat(),
+                        now.isoformat(),
+                        encoded,
+                    ),
+                )
+                row = connection.execute(
+                    "SELECT * FROM persistent_workers WHERE worker_id = ?",
+                    (worker_id,),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    """
+                    INSERT INTO persistent_workers(
+                        worker_id, hostname, process_id, queue_name, status,
+                        current_job_id, started_at, last_heartbeat_at,
+                        stopped_at, metadata_json
+                    ) VALUES (
+                        %s, %s, %s, %s, 'active', NULL, %s, %s, NULL, %s::jsonb
+                    )
+                    ON CONFLICT(worker_id) DO UPDATE SET
+                        hostname = EXCLUDED.hostname,
+                        process_id = EXCLUDED.process_id,
+                        queue_name = EXCLUDED.queue_name,
+                        status = 'active',
+                        current_job_id = NULL,
+                        started_at = EXCLUDED.started_at,
+                        last_heartbeat_at = EXCLUDED.last_heartbeat_at,
+                        stopped_at = NULL,
+                        metadata_json = EXCLUDED.metadata_json
+                    RETURNING *
+                    """,
+                    (
+                        worker_id,
+                        hostname,
+                        process_id,
+                        queue_name,
+                        now,
+                        now,
+                        encoded,
+                    ),
+                ).fetchone()
+        return self._worker_row(row)
+
+    def heartbeat_worker(
+        self, worker_id: str, *, current_job_id: str | None = None
+    ) -> bool:
+        self.initialize()
+        now = _utc_now()
+        with self._transaction(immediate=True) as connection:
+            if self.backend == "sqlite":
+                cursor = connection.execute(
+                    """
+                    UPDATE persistent_workers
+                    SET status = 'active',
+                        current_job_id = ?,
+                        last_heartbeat_at = ?,
+                        stopped_at = NULL
+                    WHERE worker_id = ?
+                    """,
+                    (current_job_id, now.isoformat(), worker_id),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE persistent_workers
+                    SET status = 'active',
+                        current_job_id = %s,
+                        last_heartbeat_at = %s,
+                        stopped_at = NULL
+                    WHERE worker_id = %s
+                    """,
+                    (current_job_id, now, worker_id),
+                )
+        return cursor.rowcount == 1
+
+    def mark_worker_job_started(self, worker_id: str, job_id: str) -> bool:
+        self.initialize()
+        now = _utc_now()
+        with self._transaction(immediate=True) as connection:
+            if self.backend == "sqlite":
+                cursor = connection.execute(
+                    """
+                    UPDATE persistent_workers
+                    SET status = 'active',
+                        current_job_id = ?,
+                        jobs_claimed = jobs_claimed + 1,
+                        last_heartbeat_at = ?
+                    WHERE worker_id = ?
+                    """,
+                    (job_id, now.isoformat(), worker_id),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE persistent_workers
+                    SET status = 'active',
+                        current_job_id = %s,
+                        jobs_claimed = jobs_claimed + 1,
+                        last_heartbeat_at = %s
+                    WHERE worker_id = %s
+                    """,
+                    (job_id, now, worker_id),
+                )
+        return cursor.rowcount == 1
+
+    def mark_worker_job_finished(self, worker_id: str, *, succeeded: bool) -> bool:
+        self.initialize()
+        now = _utc_now()
+        counter = "jobs_succeeded" if succeeded else "jobs_failed"
+        with self._transaction(immediate=True) as connection:
+            placeholder = "?" if self.backend == "sqlite" else "%s"
+            cursor = connection.execute(
+                f"""
+                UPDATE persistent_workers
+                SET current_job_id = NULL,
+                    {counter} = {counter} + 1,
+                    last_heartbeat_at = {placeholder}
+                WHERE worker_id = {placeholder}
+                """,
+                (
+                    now.isoformat() if self.backend == "sqlite" else now,
+                    worker_id,
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def stop_worker(self, worker_id: str) -> bool:
+        self.initialize()
+        now = _utc_now()
+        with self._transaction(immediate=True) as connection:
+            if self.backend == "sqlite":
+                cursor = connection.execute(
+                    """
+                    UPDATE persistent_workers
+                    SET status = 'stopped',
+                        current_job_id = NULL,
+                        last_heartbeat_at = ?,
+                        stopped_at = ?
+                    WHERE worker_id = ?
+                    """,
+                    (now.isoformat(), now.isoformat(), worker_id),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE persistent_workers
+                    SET status = 'stopped',
+                        current_job_id = NULL,
+                        last_heartbeat_at = %s,
+                        stopped_at = %s
+                    WHERE worker_id = %s
+                    """,
+                    (now, now, worker_id),
+                )
+        return cursor.rowcount == 1
+
+    def reconcile_stale_workers(self, *, stale_after_seconds: int = 60) -> int:
+        self.initialize()
+        now = _utc_now()
+        cutoff = now - timedelta(seconds=max(1, stale_after_seconds))
+        with self._transaction(immediate=True) as connection:
+            if self.backend == "sqlite":
+                cursor = connection.execute(
+                    """
+                    UPDATE persistent_workers
+                    SET status = 'offline', current_job_id = NULL
+                    WHERE status = 'active' AND last_heartbeat_at < ?
+                    """,
+                    (cutoff.isoformat(),),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE persistent_workers
+                    SET status = 'offline', current_job_id = NULL
+                    WHERE status = 'active' AND last_heartbeat_at < %s
+                    """,
+                    (cutoff,),
+                )
+        return int(cursor.rowcount)
+
+    def list_workers(
+        self, *, stale_after_seconds: int = 60, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        self.reconcile_stale_workers(stale_after_seconds=stale_after_seconds)
+        with self._transaction() as connection:
+            placeholder = "?" if self.backend == "sqlite" else "%s"
+            rows = connection.execute(
+                f"""
+                SELECT * FROM persistent_workers
+                ORDER BY last_heartbeat_at DESC
+                LIMIT {placeholder}
+                """,
+                (max(1, min(500, int(limit))),),
+            ).fetchall()
+        return [self._worker_row(row) for row in rows]
+
+    def prune_workers(self, *, retention_hours: int = 168) -> int:
+        self.initialize()
+        cutoff = _utc_now() - timedelta(hours=max(1, retention_hours))
+        with self._transaction(immediate=True) as connection:
+            if self.backend == "sqlite":
+                cursor = connection.execute(
+                    """
+                    DELETE FROM persistent_workers
+                    WHERE status IN ('offline', 'stopped')
+                        AND last_heartbeat_at < ?
+                    """,
+                    (cutoff.isoformat(),),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    DELETE FROM persistent_workers
+                    WHERE status IN ('offline', 'stopped')
+                        AND last_heartbeat_at < %s
+                    """,
+                    (cutoff,),
+                )
+        return int(cursor.rowcount)
+
+    def increment_counter(self, name: str, amount: int = 1) -> None:
+        if not amount:
+            return
+        self.initialize()
+        now = _utc_now()
+        with self._transaction(immediate=True) as connection:
+            if self.backend == "sqlite":
+                connection.execute(
+                    """
+                    INSERT INTO operational_counters(name, value, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(name) DO UPDATE SET
+                        value = value + excluded.value,
+                        updated_at = excluded.updated_at
+                    """,
+                    (name, int(amount), now.isoformat()),
+                )
+            else:
+                connection.execute(
+                    """
+                    INSERT INTO operational_counters(name, value, updated_at)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT(name) DO UPDATE SET
+                        value = operational_counters.value + EXCLUDED.value,
+                        updated_at = EXCLUDED.updated_at
+                    """,
+                    (name, int(amount), now),
+                )
 
     def enqueue(
         self,
@@ -688,6 +1035,9 @@ class OperationalDatabase:
                     """,
                     (now, now, now),
                 ).rowcount
+        recovered = int(queued) + int(failed)
+        if recovered:
+            self.increment_counter("lease_recoveries_total", recovered)
         return {"requeued": int(queued), "failed": int(failed)}
 
     def recover_dead_local_workers(self) -> dict[str, int]:
@@ -732,7 +1082,11 @@ class OperationalDatabase:
                         """,
                         (expired, _utc_now(), owner),
                     )
-        return self.recover_expired_leases()
+        recovered = self.recover_expired_leases()
+        total = recovered["requeued"] + recovered["failed"]
+        if total:
+            self.increment_counter("dead_local_worker_recoveries_total", total)
+        return recovered
 
     def publish_event(self, event: dict[str, Any]) -> dict[str, Any]:
         self.initialize()
@@ -1200,9 +1554,11 @@ class OperationalDatabase:
                 ).fetchall()
         return [self._job_row(row) for row in rows]
 
-    def health(self) -> dict[str, Any]:
+    def health(self, *, worker_stale_seconds: int = 60) -> dict[str, Any]:
         self.initialize()
+        self.reconcile_stale_workers(stale_after_seconds=worker_stale_seconds)
         now = _utc_now()
+        recent_cutoff = now - timedelta(hours=24)
         with self._transaction() as connection:
             if self.backend == "sqlite":
                 rows = connection.execute(
@@ -1223,6 +1579,48 @@ class OperationalDatabase:
                 migration = connection.execute(
                     "SELECT MAX(version) AS version FROM qingshu_schema_migrations"
                 ).fetchone()
+                queue_metrics = connection.execute(
+                    """
+                    SELECT
+                        SUM(CASE WHEN status = 'queued'
+                            AND available_at <= ? THEN 1 ELSE 0 END) AS ready,
+                        SUM(CASE WHEN status = 'queued'
+                            AND available_at > ? THEN 1 ELSE 0 END) AS delayed,
+                        SUM(CASE WHEN status = 'queued'
+                            AND attempts > 0 THEN 1 ELSE 0 END) AS retrying,
+                        MIN(CASE WHEN status = 'queued'
+                            AND available_at <= ? THEN available_at END
+                        ) AS oldest_ready_at,
+                        SUM(CASE WHEN status = 'running'
+                            AND lease_expires_at < ? THEN 1 ELSE 0 END
+                        ) AS expired_running,
+                        SUM(CASE WHEN status = 'succeeded'
+                            AND finished_at >= ? THEN 1 ELSE 0 END
+                        ) AS succeeded_24h,
+                        SUM(CASE WHEN status = 'failed'
+                            AND finished_at >= ? THEN 1 ELSE 0 END
+                        ) AS failed_24h
+                    FROM persistent_jobs
+                    """,
+                    (
+                        now.isoformat(),
+                        now.isoformat(),
+                        now.isoformat(),
+                        now.isoformat(),
+                        recent_cutoff.isoformat(),
+                        recent_cutoff.isoformat(),
+                    ),
+                ).fetchone()
+                workers = connection.execute(
+                    """
+                    SELECT status, COUNT(*) AS count
+                    FROM persistent_workers
+                    GROUP BY status
+                    """
+                ).fetchall()
+                counters = connection.execute(
+                    "SELECT name, value FROM operational_counters"
+                ).fetchall()
             else:
                 rows = connection.execute(
                     """
@@ -1242,13 +1640,96 @@ class OperationalDatabase:
                 migration = connection.execute(
                     "SELECT MAX(version) AS version FROM qingshu_schema_migrations"
                 ).fetchone()
+                queue_metrics = connection.execute(
+                    """
+                    SELECT
+                        COUNT(*) FILTER (
+                            WHERE status = 'queued' AND available_at <= %s
+                        ) AS ready,
+                        COUNT(*) FILTER (
+                            WHERE status = 'queued' AND available_at > %s
+                        ) AS delayed,
+                        COUNT(*) FILTER (
+                            WHERE status = 'queued' AND attempts > 0
+                        ) AS retrying,
+                        MIN(available_at) FILTER (
+                            WHERE status = 'queued' AND available_at <= %s
+                        ) AS oldest_ready_at,
+                        COUNT(*) FILTER (
+                            WHERE status = 'running' AND lease_expires_at < %s
+                        ) AS expired_running,
+                        COUNT(*) FILTER (
+                            WHERE status = 'succeeded' AND finished_at >= %s
+                        ) AS succeeded_24h,
+                        COUNT(*) FILTER (
+                            WHERE status = 'failed' AND finished_at >= %s
+                        ) AS failed_24h
+                    FROM persistent_jobs
+                    """,
+                    (now, now, now, now, recent_cutoff, recent_cutoff),
+                ).fetchone()
+                workers = connection.execute(
+                    """
+                    SELECT status, COUNT(*) AS count
+                    FROM persistent_workers
+                    GROUP BY status
+                    """
+                ).fetchall()
+                counters = connection.execute(
+                    "SELECT name, value FROM operational_counters"
+                ).fetchall()
         counts = {status: 0 for status in (*ACTIVE_JOB_STATUSES, *TERMINAL_JOB_STATUSES)}
         counts.update({str(row["status"]): int(row["count"]) for row in rows})
+        worker_counts = {"active": 0, "offline": 0, "stopped": 0}
+        worker_counts.update(
+            {str(row["status"]): int(row["count"]) for row in workers}
+        )
+        counter_values = {str(row["name"]): int(row["value"]) for row in counters}
+        oldest_ready = _as_datetime(queue_metrics["oldest_ready_at"])
+        recent_succeeded = int(queue_metrics["succeeded_24h"] or 0)
+        recent_failed = int(queue_metrics["failed_24h"] or 0)
+        recent_terminal = recent_succeeded + recent_failed
+        lag_seconds = (
+            max(0.0, (now - oldest_ready).total_seconds()) if oldest_ready else 0.0
+        )
+        queue_status = "ok"
+        if int(queue_metrics["expired_running"] or 0) > 0 or recent_failed > 0:
+            queue_status = "attention"
+        if int(queue_metrics["ready"] or 0) > 0 and worker_counts["active"] == 0:
+            queue_status = "degraded"
+        if lag_seconds > max(60, worker_stale_seconds * 2):
+            queue_status = "degraded"
         return {
-            "status": "ok",
+            "status": queue_status,
             "backend": self.backend,
             "schema_version": int(migration["version"] or 0),
             "counts": counts,
+            "queue": {
+                "ready": int(queue_metrics["ready"] or 0),
+                "delayed": int(queue_metrics["delayed"] or 0),
+                "retrying": int(queue_metrics["retrying"] or 0),
+                "oldest_ready_at": oldest_ready.isoformat()
+                if oldest_ready
+                else None,
+                "oldest_ready_age_seconds": round(lag_seconds, 3),
+                "expired_running": int(queue_metrics["expired_running"] or 0),
+                "succeeded_24h": recent_succeeded,
+                "failed_24h": recent_failed,
+                "failure_rate_24h": round(
+                    recent_failed / recent_terminal, 6
+                )
+                if recent_terminal
+                else 0.0,
+            },
+            "workers": worker_counts,
+            "counters": {
+                "lease_recoveries_total": counter_values.get(
+                    "lease_recoveries_total", 0
+                ),
+                "dead_local_worker_recoveries_total": counter_values.get(
+                    "dead_local_worker_recoveries_total", 0
+                ),
+            },
             "enabled_schedules": int(schedule["count"] or 0),
             "next_run_at": (
                 _as_datetime(schedule["next_run_at"]).isoformat()
@@ -1276,6 +1757,23 @@ class OperationalDatabase:
             "updated_at",
             "started_at",
             "finished_at",
+        ):
+            value = item.get(key)
+            if isinstance(value, datetime):
+                item[key] = value.isoformat()
+        return item
+
+    @staticmethod
+    def _worker_row(row: Any) -> dict[str, Any]:
+        item = dict(row)
+        metadata = item.pop("metadata_json", {})
+        item["metadata"] = (
+            json.loads(metadata) if isinstance(metadata, str) else metadata
+        )
+        for key in (
+            "started_at",
+            "last_heartbeat_at",
+            "stopped_at",
         ):
             value = item.get(key)
             if isinstance(value, datetime):

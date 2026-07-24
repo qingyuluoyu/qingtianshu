@@ -5,6 +5,7 @@ import os
 from queue import Empty, Full, Queue
 import socket
 import threading
+import time
 from typing import Any, Callable, Iterator
 from uuid import uuid4
 
@@ -200,6 +201,8 @@ class BackgroundScheduler:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._threads: list[threading.Thread] = []
+        self._registered_worker_ids: set[str] = set()
+        self._registered_worker_lock = threading.Lock()
         self.worker_id = (
             f"{socket.gethostname()}-{os.getpid()}-{str(uuid4()).split('-')[0]}"
         )
@@ -207,6 +210,7 @@ class BackgroundScheduler:
         self.job_store.initialize()
         self.broker.attach_store(self.job_store)
         self.job_store.prune_events(retention_hours=48)
+        self.job_store.prune_workers(retention_hours=168)
         self.job_store.recover_dead_local_workers()
         self._register_schedules()
         self.database.repair_background_job_runs_from_queue()
@@ -266,25 +270,32 @@ class BackgroundScheduler:
         self._register_schedules()
         self.job_store.enqueue_due_schedules()
         resolved_worker = worker_id or self.worker_id
-        claimed = self.job_store.claim(
-            resolved_worker,
-            queue_name="background",
-            lease_seconds=self.settings.job_lease_seconds,
-        )
-        if claimed is None:
-            return False
-        function = self._job_functions().get(claimed.job_name)
-        if function is None:
-            self.job_store.fail(
-                claimed.id,
+        self._register_worker(resolved_worker)
+        try:
+            claimed = self.job_store.claim(
                 resolved_worker,
-                f"unregistered_job:{claimed.job_name}",
-                retry_base_seconds=self.settings.job_retry_base_seconds,
-                retry_max_seconds=self.settings.job_retry_max_seconds,
+                queue_name="background",
+                lease_seconds=self.settings.job_lease_seconds,
             )
+            if claimed is None:
+                return False
+            function = self._job_functions().get(claimed.job_name)
+            if function is None:
+                self.job_store.fail(
+                    claimed.id,
+                    resolved_worker,
+                    f"unregistered_job:{claimed.job_name}",
+                    retry_base_seconds=self.settings.job_retry_base_seconds,
+                    retry_max_seconds=self.settings.job_retry_max_seconds,
+                )
+                self.job_store.mark_worker_job_finished(
+                    resolved_worker, succeeded=False
+                )
+                return True
+            self._execute_claimed_job(claimed, function, resolved_worker)
             return True
-        self._execute_claimed_job(claimed, function, resolved_worker)
-        return True
+        finally:
+            self._stop_worker(resolved_worker)
 
     def enqueue(
         self,
@@ -317,19 +328,27 @@ class BackgroundScheduler:
                 thread.join(timeout=10)
         self._threads = []
         self._thread = None
+        with self._registered_worker_lock:
+            worker_ids = list(self._registered_worker_ids)
+        for worker_id in worker_ids:
+            self._stop_worker(worker_id)
 
     @property
     def is_running(self) -> bool:
         return any(thread.is_alive() for thread in self._threads)
 
     def status(self) -> dict[str, Any]:
-        queue_health = self.job_store.health()
+        queue_health = self.job_store.health(
+            worker_stale_seconds=self.settings.job_worker_stale_seconds
+        )
+        active_workers = int(queue_health["workers"]["active"])
         return {
             "enabled": self.settings.background_jobs_enabled,
-            "running": self.is_running,
+            "running": self.is_running or active_workers > 0,
             "worker_mode": self.settings.background_worker_mode,
             "worker_id": self.worker_id if self.is_running else None,
             "worker_concurrency": self.settings.job_worker_concurrency,
+            "active_worker_count": active_workers,
             "persistent_queue": queue_health,
             "market_refresh_seconds": self.settings.background_market_refresh_seconds,
             "article_check_seconds": self.settings.background_article_check_seconds,
@@ -354,7 +373,9 @@ class BackgroundScheduler:
             "article_uses_hermes": self.settings.background_use_hermes
             and self.settings.hermes_enabled,
             "li_zong_strategy_enabled": bool(self._li_zong_enabled),
-            "li_zong_worker_running": bool(self.is_running and self._li_zong_enabled),
+            "li_zong_worker_running": bool(
+                (self.is_running or active_workers > 0) and self._li_zong_enabled
+            ),
             "li_zong_refresh_seconds": self.settings.li_zong_refresh_seconds,
             "latest_jobs": self.database.latest_background_jobs(),
         }
@@ -477,29 +498,61 @@ class BackgroundScheduler:
 
     def _worker_loop(self, worker_id: str) -> None:
         functions = self._job_functions()
-        while not self._stop.is_set():
-            self.job_store.recover_dead_local_workers()
-            self.job_store.enqueue_due_schedules()
-            self.database.repair_background_job_runs_from_queue()
-            claimed = self.job_store.claim(
-                worker_id,
-                queue_name="background",
-                lease_seconds=self.settings.job_lease_seconds,
-            )
-            if claimed is None:
-                self._stop.wait(timeout=self.settings.job_queue_poll_seconds)
-                continue
-            function = functions.get(claimed.job_name)
-            if function is None:
-                self.job_store.fail(
-                    claimed.id,
+        self._register_worker(worker_id)
+        last_worker_heartbeat = 0.0
+        try:
+            while not self._stop.is_set():
+                current_monotonic = time.monotonic()
+                if (
+                    current_monotonic - last_worker_heartbeat
+                    >= self.settings.job_worker_heartbeat_seconds
+                ):
+                    self.job_store.heartbeat_worker(worker_id)
+                    last_worker_heartbeat = current_monotonic
+                self.job_store.recover_dead_local_workers()
+                self.job_store.enqueue_due_schedules()
+                self.database.repair_background_job_runs_from_queue()
+                claimed = self.job_store.claim(
                     worker_id,
-                    f"unregistered_job:{claimed.job_name}",
-                    retry_base_seconds=self.settings.job_retry_base_seconds,
-                    retry_max_seconds=self.settings.job_retry_max_seconds,
+                    queue_name="background",
+                    lease_seconds=self.settings.job_lease_seconds,
                 )
-                continue
-            self._execute_claimed_job(claimed, function, worker_id)
+                if claimed is None:
+                    self._stop.wait(timeout=self.settings.job_queue_poll_seconds)
+                    continue
+                function = functions.get(claimed.job_name)
+                if function is None:
+                    self.job_store.fail(
+                        claimed.id,
+                        worker_id,
+                        f"unregistered_job:{claimed.job_name}",
+                        retry_base_seconds=self.settings.job_retry_base_seconds,
+                        retry_max_seconds=self.settings.job_retry_max_seconds,
+                    )
+                    self.job_store.mark_worker_job_finished(
+                        worker_id, succeeded=False
+                    )
+                    continue
+                self._execute_claimed_job(claimed, function, worker_id)
+        finally:
+            self._stop_worker(worker_id)
+
+    def _register_worker(self, worker_id: str) -> None:
+        self.job_store.register_worker(
+            worker_id,
+            queue_name="background",
+            metadata={
+                "mode": self.settings.background_worker_mode,
+                "concurrency": self.settings.job_worker_concurrency,
+            },
+        )
+        with self._registered_worker_lock:
+            self._registered_worker_ids.add(worker_id)
+
+    def _stop_worker(self, worker_id: str) -> None:
+        self.job_store.stop_worker(worker_id)
+        with self._registered_worker_lock:
+            self._registered_worker_ids.discard(worker_id)
 
     def _execute_claimed_job(
         self,
@@ -513,9 +566,13 @@ class BackgroundScheduler:
             worker_id=worker_id,
         )
         heartbeat_stop = threading.Event()
+        self.job_store.mark_worker_job_started(worker_id, claimed.id)
 
         def keep_lease_alive() -> None:
-            interval = max(1.0, self.settings.job_lease_seconds / 3)
+            interval = min(
+                max(1.0, self.settings.job_lease_seconds / 3),
+                float(self.settings.job_worker_heartbeat_seconds),
+            )
             while not heartbeat_stop.wait(timeout=interval):
                 if not self.job_store.heartbeat(
                     claimed.id,
@@ -523,6 +580,9 @@ class BackgroundScheduler:
                     lease_seconds=self.settings.job_lease_seconds,
                 ):
                     return
+                self.job_store.heartbeat_worker(
+                    worker_id, current_job_id=claimed.id
+                )
 
         heartbeat = threading.Thread(
             target=keep_lease_alive,
@@ -535,6 +595,7 @@ class BackgroundScheduler:
             self.database.finish_background_job(run_id, "completed", summary=summary)
             if not self.job_store.complete(claimed.id, worker_id, summary):
                 raise RuntimeError("job_lease_lost_before_completion")
+            self.job_store.mark_worker_job_finished(worker_id, succeeded=True)
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
             self.database.finish_background_job(run_id, "failed", error=error)
@@ -545,6 +606,7 @@ class BackgroundScheduler:
                 retry_base_seconds=self.settings.job_retry_base_seconds,
                 retry_max_seconds=self.settings.job_retry_max_seconds,
             )
+            self.job_store.mark_worker_job_finished(worker_id, succeeded=False)
         finally:
             heartbeat_stop.set()
             heartbeat.join(timeout=2)

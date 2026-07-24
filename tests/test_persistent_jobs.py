@@ -36,7 +36,7 @@ def test_enqueue_is_idempotent_and_survives_reopen(tmp_path: Path):
     jobs = reopened.list_jobs()
     assert len(jobs) == 1
     assert jobs[0]["id"] == first["id"]
-    assert reopened.health()["schema_version"] == 2
+    assert reopened.health()["schema_version"] == 3
 
 
 def test_two_workers_cannot_claim_the_same_job(tmp_path: Path):
@@ -92,6 +92,58 @@ def test_dead_local_worker_is_recovered_without_waiting_for_lease(tmp_path: Path
     reclaimed = store.claim("replacement-worker", lease_seconds=30)
     assert reclaimed is not None
     assert reclaimed.id == claimed.id
+    assert store.health()["counters"]["lease_recoveries_total"] == 1
+    assert store.health()["counters"]["dead_local_worker_recoveries_total"] == 1
+
+
+def test_worker_registry_tracks_heartbeat_jobs_and_stale_processes(tmp_path: Path):
+    store = store_for(tmp_path)
+    worker = store.register_worker(
+        "worker-observable",
+        queue_name="background",
+        metadata={"mode": "external"},
+    )
+    assert worker["status"] == "active"
+    assert worker["metadata"]["mode"] == "external"
+    assert store.mark_worker_job_started("worker-observable", "job-1") is True
+    assert store.mark_worker_job_finished(
+        "worker-observable", succeeded=True
+    ) is True
+    current = store.list_workers()[0]
+    assert current["jobs_claimed"] == 1
+    assert current["jobs_succeeded"] == 1
+    assert current["current_job_id"] is None
+
+    stale = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    with sqlite3.connect(store.sqlite_path) as connection:
+        connection.execute(
+            """
+            UPDATE persistent_workers
+            SET last_heartbeat_at = ?
+            WHERE worker_id = 'worker-observable'
+            """,
+            (stale,),
+        )
+    assert store.reconcile_stale_workers(stale_after_seconds=30) == 1
+    assert store.list_workers()[0]["status"] == "offline"
+
+
+def test_queue_health_exposes_delay_retry_and_recent_failure_metrics(tmp_path: Path):
+    store = store_for(tmp_path)
+    store.register_worker("worker-health")
+    first = store.enqueue("refresh", max_attempts=1)
+    claim = store.claim("worker-health", lease_seconds=30)
+    assert claim is not None
+    store.fail(first["id"], "worker-health", "permanent")
+    store.enqueue(
+        "later",
+        available_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    health = store.health()
+    assert health["queue"]["failed_24h"] == 1
+    assert health["queue"]["failure_rate_24h"] == 1.0
+    assert health["queue"]["delayed"] == 1
+    assert health["workers"]["active"] == 1
 
 
 def test_failure_uses_backoff_then_archives_after_max_attempts(tmp_path: Path):
@@ -219,12 +271,18 @@ def test_admin_api_can_enqueue_inspect_and_cancel_jobs(client):
         f"/admin/job-queue/{job['id']}/retry", headers=headers
     )
     assert retried.status_code == 202
+    operations = client.get("/admin/operations/health", headers=headers)
+    assert operations.status_code == 200
+    assert operations.json()["queue"]["schema_version"] == 3
+    assert operations.json()["backups"]["status"] == "not_applicable"
 
 
 def test_job_admin_api_requires_session_and_admin_token(client):
     assert client.get("/admin/job-queue").status_code == 401
+    assert client.get("/admin/operations/health").status_code == 401
     assert client.post("/users", json={"name": "not-admin"}).status_code == 201
     assert client.get("/admin/job-queue").status_code == 403
+    assert client.get("/admin/operations/health").status_code == 403
 
 
 def test_background_service_executes_registered_job_through_persistent_queue(client):

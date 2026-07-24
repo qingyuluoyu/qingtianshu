@@ -21,6 +21,8 @@ def postgres_store():
     with psycopg.connect(url) as connection:
         connection.execute("DELETE FROM persistent_jobs")
         connection.execute("DELETE FROM persistent_schedules")
+        connection.execute("DELETE FROM persistent_workers")
+        connection.execute("DELETE FROM operational_counters")
     try:
         yield store
     finally:
@@ -85,3 +87,39 @@ def test_postgres_schedule_and_failure_archive(
     failed = postgres_store.fail(claim.id, "worker-a", "provider down")
     assert failed is not None
     assert failed["status"] == "queued"
+
+
+def test_postgres_worker_registry_and_queue_metrics(
+    postgres_store: OperationalDatabase,
+):
+    postgres_store.register_worker(
+        "postgres-worker",
+        queue_name="background",
+        metadata={"deployment": "integration"},
+    )
+    job = postgres_store.enqueue(
+        "refresh",
+        queue_name="background",
+        max_attempts=1,
+    )
+    claim = postgres_store.claim(
+        "postgres-worker",
+        queue_name="background",
+        lease_seconds=30,
+    )
+    assert claim is not None
+    assert postgres_store.mark_worker_job_started(
+        "postgres-worker", job["id"]
+    )
+    postgres_store.fail(claim.id, "postgres-worker", "test failure")
+    assert postgres_store.mark_worker_job_finished(
+        "postgres-worker", succeeded=False
+    )
+    health = postgres_store.health()
+    assert health["schema_version"] == 3
+    assert health["workers"]["active"] == 1
+    assert health["queue"]["failed_24h"] == 1
+    worker = postgres_store.list_workers()[0]
+    assert worker["metadata"]["deployment"] == "integration"
+    assert worker["jobs_claimed"] == 1
+    assert worker["jobs_failed"] == 1

@@ -28,6 +28,10 @@ services:
       JOB_MAX_ATTEMPTS: "${JOB_MAX_ATTEMPTS:-3}"
       JOB_RETRY_BASE_SECONDS: "${JOB_RETRY_BASE_SECONDS:-10}"
       JOB_RETRY_MAX_SECONDS: "${JOB_RETRY_MAX_SECONDS:-600}"
+      JOB_WORKER_HEARTBEAT_SECONDS: "${JOB_WORKER_HEARTBEAT_SECONDS:-10}"
+      JOB_WORKER_STALE_SECONDS: "${JOB_WORKER_STALE_SECONDS:-45}"
+      QINGSHU_BACKUP_DIR: /backups
+      QINGSHU_BACKUP_MAX_AGE_SECONDS: "${QINGSHU_BACKUP_MAX_AGE_SECONDS:-93600}"
       BACKGROUND_MARKET_REFRESH_SECONDS: "30"
       BACKGROUND_ARTICLE_CHECK_SECONDS: "1800"
       BACKGROUND_INFO_REFRESH_SECONDS: "600"
@@ -42,6 +46,7 @@ services:
       QINGSHU_ADMIN_API_TOKEN: "${QINGSHU_ADMIN_API_TOKEN:-}"
     volumes:
       - qingshu-data:/data
+      - qingshu-backups:/backups:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,6 +85,45 @@ services:
       timeout: 10s
       retries: 3
 
+  qingshu-backup:
+    build: .
+    command:
+      [
+        "python",
+        "scripts/postgres_backup.py",
+        "--output-dir",
+        "/backups",
+        "--interval-seconds",
+        "${QINGSHU_BACKUP_INTERVAL_SECONDS:-86400}",
+        "--retention-days",
+        "${QINGSHU_BACKUP_RETENTION_DAYS:-14}",
+        "--minimum-retained",
+        "${QINGSHU_BACKUP_MINIMUM_RETAINED:-7}",
+      ]
+    environment: *qingshu-environment
+    volumes:
+      - qingshu-backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "scripts/postgres_backup.py",
+          "--output-dir",
+          "/backups",
+          "--check-max-age-seconds",
+          "${QINGSHU_BACKUP_MAX_AGE_SECONDS:-93600}",
+        ]
+      interval: 5m
+      timeout: 15s
+      retries: 3
+      start_period: 2m
+
 volumes:
   qingshu-data:
   qingshu-postgres:
+  qingshu-backups:

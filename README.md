@@ -287,12 +287,14 @@ export QINGSHU_ADMIN_API_TOKEN='<use-another-long-random-value>'
 docker compose up --build -d
 ```
 
-Compose 会启动三个服务：
+Compose 会启动四个服务：
 
 - `postgres`：保存用户、会话、自选股、研究对话、证据、分析结果、周期计划、任务租约和重试状态；
 - `qingshu-agent`：只提供 Web/API，不在 Web 进程中执行后台刷新；
 - `qingshu-worker`：从 PostgreSQL 原子抢占任务并执行，可用
   `docker compose up --scale qingshu-worker=2` 扩展 Worker。
+- `qingshu-backup`：启动后立即创建一次 PostgreSQL 自定义格式备份，之后默认每天
+  备份；备份保留 14 天且至少保留最近 7 份，并用独立持久卷保存。
 
 用户工作区文件仍保存在 `qingshu-data` volume；生产多机部署应再迁移到共享文件系统或对象存储。容器默认使用无需模型费用的确定性 preview；生产 Hermes Provider 应通过云端密钥管理接入。
 
@@ -310,6 +312,53 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 # 独立 Worker
 uv run qingshu-worker
 ```
+
+生产 Worker 会写入持久化注册表。运维端可看到进程、队列、最近心跳、当前任务、
+累计领取/成功/失败数；心跳过期会标记为离线。队列指标同时提供 ready/delayed、
+重试中任务、最老待执行任务延迟、过期租约、最近 24 小时成功/失败与失败率，以及
+租约恢复累计次数。
+
+### PostgreSQL 备份与恢复
+
+Compose 默认参数可通过以下环境变量调整：
+
+```bash
+export QINGSHU_BACKUP_INTERVAL_SECONDS=86400
+export QINGSHU_BACKUP_RETENTION_DAYS=14
+export QINGSHU_BACKUP_MINIMUM_RETAINED=7
+export QINGSHU_BACKUP_MAX_AGE_SECONDS=93600
+```
+
+本机或独立备份主机也可直接运行：
+
+```bash
+uv run python scripts/postgres_backup.py \
+  --database-url "$QINGSHU_DATABASE_URL" \
+  --output-dir ./backups
+
+uv run python scripts/postgres_backup.py \
+  --output-dir ./backups \
+  --check-max-age-seconds 93600
+```
+
+恢复是破坏性操作，必须逐字确认目标数据库名。日常演练优先使用临时数据库恢复
+脚本，它会校验备份 SHA-256、恢复核心业务表和队列表、检查两个 Schema 版本与
+关键行数，然后自动删除临时库：
+
+```bash
+uv run python scripts/postgres_restore_drill.py \
+  ./backups/qingshu-YYYYMMDDTHHMMSSZ-xxxxxxxx.dump \
+  --database-url "$QINGSHU_DATABASE_URL"
+
+uv run python scripts/postgres_restore.py \
+  ./backups/qingshu-YYYYMMDDTHHMMSSZ-xxxxxxxx.dump \
+  --database-url "$QINGSHU_DATABASE_URL" \
+  --confirm-database qingshu \
+  --clean
+```
+
+执行恢复演练的数据库用户需要 `CREATEDB` 权限。数据库备份不包含用户工作区文件；
+多机生产部署仍应把工作区迁往对象存储，或为共享文件卷建立独立快照与恢复策略。
 
 已有 SQLite 数据迁移前，应先备份数据库和用户工作区。迁移工具只读源 SQLite，
 要求目标业务表为空，逐表复制后核对行数：
@@ -450,6 +499,8 @@ Worker；两种模式使用相同的数据库任务合同。
 `X-Qingshu-Admin-Token`：
 
 - `GET /admin/job-queue`：查看队列健康和任务；
+- `GET /admin/operations/health`：查看数据库 Schema、队列延迟与失败率、Worker
+  心跳和最近备份状态；
 - `POST /admin/job-queue/enqueue`：手工幂等入队已注册任务；
 - `POST /admin/job-queue/{job_id}/retry`：重试失败/取消任务；
 - `POST /admin/job-queue/{job_id}/cancel`：取消尚未执行的任务。
@@ -463,7 +514,9 @@ uv run pytest
 uv run ruff check .
 ```
 
-当前分支为 `589 passed`；后续完整测试数量以 `pytest --collect-only` 输出为准，主分支合并前必须同时通过全量测试与 Ruff。
+当前分支收集 `614` 项：常规环境 `608 passed, 6 skipped`；其中 PostgreSQL
+Worker/队列专项已在本机 PostgreSQL 17 上单独运行 `4 passed`。后续测试数量以
+`pytest --collect-only` 输出为准，主分支合并前必须同时通过全量测试与 Ruff。
 
 双视口只读浏览器验收：
 

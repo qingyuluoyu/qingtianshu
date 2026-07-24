@@ -110,6 +110,10 @@ class Settings:
     job_retry_base_seconds: int = 10
     job_retry_max_seconds: int = 600
     job_worker_concurrency: int = 1
+    job_worker_heartbeat_seconds: int = 10
+    job_worker_stale_seconds: int = 45
+    backup_dir: Path = Path("./backups")
+    backup_max_age_seconds: int = 93600
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -222,6 +226,18 @@ class Settings:
             job_worker_concurrency=max(
                 1, int(os.getenv("JOB_WORKER_CONCURRENCY", "1"))
             ),
+            job_worker_heartbeat_seconds=max(
+                1, int(os.getenv("JOB_WORKER_HEARTBEAT_SECONDS", "10"))
+            ),
+            job_worker_stale_seconds=max(
+                5, int(os.getenv("JOB_WORKER_STALE_SECONDS", "45"))
+            ),
+            backup_dir=_path_from_env(
+                "QINGSHU_BACKUP_DIR", data_dir / "backups"
+            ),
+            backup_max_age_seconds=max(
+                60, int(os.getenv("QINGSHU_BACKUP_MAX_AGE_SECONDS", "93600"))
+            ),
         )
 
     @property
@@ -234,3 +250,4 @@ class Settings:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self.backup_dir.mkdir(parents=True, exist_ok=True)

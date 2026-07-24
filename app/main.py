@@ -25,6 +25,7 @@ from app.catalog import (
 )
 from app.config import PROJECT_ROOT, Settings
 from app.db import Database
+from app.postgres_maintenance import backup_status
 from app.providers.market import (
     CSIIndustryIndexProvider,
     EastmoneySectorProvider,
@@ -1477,6 +1478,40 @@ def create_app(
         return {
             "queue": background.job_store.health(),
             "jobs": background.list_jobs(status=status, limit=limit),
+        }
+
+    @app.get("/admin/operations/health")
+    def operations_health(request: Request) -> dict[str, Any]:
+        require_admin_api(request)
+        queue = background.job_store.health(
+            worker_stale_seconds=settings.job_worker_stale_seconds
+        )
+        backups = (
+            backup_status(
+                settings.backup_dir,
+                max_age_seconds=settings.backup_max_age_seconds,
+            )
+            if database.backend == "postgresql"
+            else {"status": "not_applicable", "backend": "sqlite"}
+        )
+        overall = queue["status"]
+        if database.backend == "postgresql" and backups["status"] != "ok":
+            overall = "degraded"
+        return {
+            "status": overall,
+            "checked_at": utc_now(),
+            "storage": {
+                "domain_database": database.schema_status(),
+                "operational_database": {
+                    "backend": queue["backend"],
+                    "schema_version": queue["schema_version"],
+                },
+            },
+            "queue": queue,
+            "workers": background.job_store.list_workers(
+                stale_after_seconds=settings.job_worker_stale_seconds
+            ),
+            "backups": backups,
         }
 
     @app.post("/admin/job-queue/enqueue", status_code=202)
