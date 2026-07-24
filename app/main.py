@@ -1430,6 +1430,25 @@ def create_app(
             "background_jobs": queue_status,
         }
 
+    @app.get("/ready", include_in_schema=False)
+    def readiness(response: Response) -> dict[str, Any]:
+        report = build_operations_report(
+            database,
+            background.job_store,
+            settings,
+            require_postgres=settings.background_worker_mode == "external",
+            minimum_active_workers=(
+                1
+                if settings.background_jobs_enabled
+                and settings.background_worker_mode != "disabled"
+                else 0
+            ),
+            check_backup=False,
+        )
+        if report["status"] != "ok":
+            response.status_code = 503
+        return report
+
     @app.get("/events", include_in_schema=False)
     def events() -> StreamingResponse:
         return StreamingResponse(
@@ -1487,6 +1506,7 @@ def create_app(
             database,
             background.job_store,
             settings,
+            require_postgres=settings.background_worker_mode == "external",
             minimum_active_workers=(
                 1
                 if settings.background_jobs_enabled

@@ -928,9 +928,13 @@ uv run pytest
 - 新增 `scripts/check_operations.py`，统一检查 PostgreSQL 要求、两个 Schema、
   活跃 Worker 数、队列延迟、过期租约、24 小时失败率和备份新鲜度；失败返回非零
   退出码。Worker 容器健康检查改用该真实运行条件，不再只验证数据库能连接。
+- 新增 `/ready` 就绪探针：需要后台任务时若没有活跃 Worker，或 Schema、队列超过
+  生产阈值，返回 HTTP 503；`/health` 继续只承担 Web liveness。Compose Web 健康
+  检查已切到 `/ready`。
 - 新增 `scripts/postgres_backup.py`：使用 `pg_dump` custom format 原子写入，
   密码只经子进程环境传递，不进入命令行；生成 SHA-256 manifest、`latest.json`，
-  支持保留天数、最少份数、周期运行与备份过期健康检查。
+  支持保留天数、最少份数、周期运行与备份过期健康检查。归档发布前必须通过
+  `pg_restore --list` 解析，损坏文件会删除且不会覆盖最近成功备份。
 - 新增显式确认恢复 `scripts/postgres_restore.py` 和非破坏性日常演练
   `scripts/postgres_restore_drill.py`。演练在同一服务器创建随机临时库，校验
   checksum，执行 `pg_restore`，核对核心业务/队列表、两个 Schema 版本和关键
@@ -951,7 +955,7 @@ uv run pytest
   checksum 一致；恢复到随机临时库后识别 74 张表，业务 Schema v1、运维 Schema
   v3，恢复用户 1 条、任务 2 条、周期计划 2 条，演练状态 `passed`，临时库已删除。
 - SQLite 持久化队列与备份工具专项通过；真实 PostgreSQL 业务库/Worker/队列专项
-  7 项通过。全量收集 621 项，常规环境 `614 passed, 7 skipped`；Ruff、compileall、
+  7 项通过。全量收集 623 项，常规环境 `616 passed, 7 skipped`；Ruff、compileall、
   diff 检查和 Compose YAML 解析通过。7 项跳过均需独立 PostgreSQL，已在本机
   PostgreSQL 17 上单独真实执行。
 

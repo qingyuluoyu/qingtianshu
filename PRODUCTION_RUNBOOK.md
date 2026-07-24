@@ -43,6 +43,8 @@ python scripts/check_operations.py \
 ```
 
 输出 `status=degraded` 时退出码为 1，便于 Docker、systemd 或云监控直接采集。
+HTTP `/health` 用于 liveness，`/ready` 用于 readiness；负载均衡只应使用
+`/ready`，不要用 `/health` 代替完整就绪检查。
 
 建议生产告警阈值：
 
@@ -74,6 +76,9 @@ python scripts/postgres_backup.py \
   --database-url "$QINGSHU_DATABASE_URL" \
   --output-dir "$QINGSHU_BACKUP_DIR"
 ```
+
+成功 manifest 必须同时包含 `archive_verified=true` 和 SHA-256；只有文件存在但
+归档无法被 `pg_restore --list` 解析时，不能算成功备份。
 
 每周至少执行一次临时库恢复演练：
 

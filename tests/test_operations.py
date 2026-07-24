@@ -34,3 +34,19 @@ def test_operations_report_passes_with_registered_worker_in_local_mode(client):
     assert report["failures"] == []
     assert report["backups"]["status"] == "not_applicable"
     assert report["workers"][0]["worker_id"] == "operations-probe"
+
+
+def test_readiness_distinguishes_live_web_from_missing_required_worker(client):
+    assert client.get("/health").status_code == 200
+    assert client.get("/ready").status_code == 200
+    settings = client.app.state.settings
+    object.__setattr__(settings, "background_jobs_enabled", True)
+    object.__setattr__(settings, "background_worker_mode", "external")
+    try:
+        response = client.get("/ready")
+        assert response.status_code == 503
+        assert "active_worker_count_below_minimum" in response.json()["failures"]
+        assert client.get("/health").status_code == 200
+    finally:
+        object.__setattr__(settings, "background_jobs_enabled", False)
+        object.__setattr__(settings, "background_worker_mode", "disabled")

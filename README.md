@@ -375,6 +375,10 @@ uv run python scripts/postgres_backup.py \
   --check-max-age-seconds 93600
 ```
 
+备份只有在 `pg_dump` 成功、文件非空且 `pg_restore --list` 能解析归档后才会原子
+发布并更新 `latest.json`；manifest 同时保存 SHA-256，损坏的临时归档不会成为
+“最近成功备份”。
+
 恢复是破坏性操作，必须逐字确认目标数据库名。日常演练优先使用临时数据库恢复
 脚本，它会校验备份 SHA-256、恢复核心业务表和队列表、检查两个 Schema 版本与
 关键行数，然后自动删除临时库：
@@ -554,6 +558,8 @@ uv run python scripts/check_operations.py \
 ```
 
 Worker 容器健康检查使用该脚本的无备份模式；备份容器单独检查最新备份年龄。
+Web 的 `/health` 只表示进程存活，`/ready` 才检查 Schema、队列和所需 Worker；
+Compose Web 健康检查使用 `/ready`，后台不可运行时会返回 HTTP 503。
 
 ## 测试
 
@@ -564,7 +570,7 @@ uv run pytest
 uv run ruff check .
 ```
 
-当前分支收集 `621` 项：常规环境 `614 passed, 7 skipped`；其中 PostgreSQL
+当前分支收集 `623` 项：常规环境 `616 passed, 7 skipped`；其中 PostgreSQL
 业务库/Worker/队列专项已在本机 PostgreSQL 17 上单独运行 `7 passed`。后续测试数量以
 `pytest --collect-only` 输出为准，主分支合并前必须同时通过全量测试与 Ruff。
 

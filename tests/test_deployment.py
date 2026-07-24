@@ -17,6 +17,7 @@ def test_compose_declares_separate_web_worker_backup_and_postgres_services():
         assert service in compose
     assert "scripts/check_operations.py" in compose
     assert "scripts/postgres_backup.py" in compose
+    assert "http://127.0.0.1:8000/ready" in compose
     assert "qingshu-backups:/backups" in compose
     assert "${QINGSHU_HTTP_BIND:-0.0.0.0}" in compose
     assert "${QINGSHU_HTTP_PORT:-8000}" in compose

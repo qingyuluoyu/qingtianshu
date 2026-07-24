@@ -34,12 +34,15 @@ def test_create_backup_is_atomic_and_keeps_password_out_of_command(
         "app.postgres_maintenance.shutil.which", lambda name: f"/usr/bin/{name}"
     )
     captured: dict[str, object] = {}
+    commands: list[list[str]] = []
 
     def runner(command, **kwargs):
+        commands.append(command)
         captured["command"] = command
-        captured["env"] = kwargs["env"]
-        output = Path(command[command.index("--file") + 1])
-        output.write_bytes(b"valid-custom-backup")
+        if "--file" in command:
+            captured["env"] = kwargs["env"]
+            output = Path(command[command.index("--file") + 1])
+            output.write_bytes(b"valid-custom-backup")
         return subprocess.CompletedProcess(command, 0, "", "")
 
     report = create_backup(
@@ -49,12 +52,14 @@ def test_create_backup_is_atomic_and_keeps_password_out_of_command(
         runner=runner,
     )
     assert report["status"] == "complete"
+    assert report["archive_verified"] is True
     assert report["size_bytes"] > 0
     assert Path(report["backup_path"]).is_file()
     assert (tmp_path / "latest.json").is_file()
     assert not list(tmp_path.glob("*.partial"))
-    assert "secret-value" not in " ".join(captured["command"])
+    assert all("secret-value" not in " ".join(command) for command in commands)
     assert captured["env"]["PGPASSWORD"] == "secret-value"
+    assert any("--list" in command for command in commands)
     assert backup_status(tmp_path, max_age_seconds=10**9)["status"] == "ok"
 
 
@@ -70,6 +75,29 @@ def test_backup_status_detects_stale_or_missing_files(tmp_path: Path):
         encoding="utf-8",
     )
     assert backup_status(tmp_path, max_age_seconds=60)["status"] == "stale"
+
+
+def test_unreadable_archive_is_not_published(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        "app.postgres_maintenance.shutil.which", lambda name: f"/usr/bin/{name}"
+    )
+
+    def runner(command, **kwargs):
+        if "--file" in command:
+            Path(command[command.index("--file") + 1]).write_bytes(b"corrupt")
+            return subprocess.CompletedProcess(command, 0, "", "")
+        raise subprocess.CalledProcessError(1, command, stderr="invalid archive")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        create_backup(
+            "postgresql://user:secret@db/qingshu",
+            tmp_path,
+            runner=runner,
+        )
+    assert not list(tmp_path.glob("*.dump"))
+    assert not (tmp_path / "latest.json").exists()
 
 
 def test_retention_keeps_minimum_newest_backups(tmp_path: Path):

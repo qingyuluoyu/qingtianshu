@@ -159,8 +159,15 @@ def create_backup(
         with temporary.open("rb") as created:
             os.fsync(created.fileno())
         os.replace(temporary, backup)
+        runner(
+            [_executable("pg_restore"), "--list", str(backup)],
+            check=True,
+            text=True,
+            capture_output=True,
+        )
     except Exception:
         temporary.unlink(missing_ok=True)
+        backup.unlink(missing_ok=True)
         raise
     manifest = {
         "status": "complete",
@@ -169,6 +176,7 @@ def create_backup(
         "server": f"{target.host}:{target.port}",
         "backup_file": backup.name,
         "format": "postgresql_custom",
+        "archive_verified": True,
         "size_bytes": backup.stat().st_size,
         "sha256": _sha256(backup),
     }
