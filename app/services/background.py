@@ -1137,6 +1137,27 @@ class BackgroundScheduler:
     def _refresh_data_health(self) -> dict[str, Any]:
         snapshot = self.data_health.audit()
         pruned_events = self.job_store.prune_events(retention_hours=48)
+        pruned_workers = self.job_store.prune_workers(retention_hours=168)
+        pruned_jobs = self.job_store.prune_terminal_jobs(
+            succeeded_retention_hours=(
+                self.settings.job_succeeded_retention_hours
+            ),
+            failed_retention_hours=self.settings.job_failed_retention_hours,
+            cancelled_retention_hours=(
+                self.settings.job_cancelled_retention_hours
+            ),
+        )
+        pruned_domain_history = self.database.prune_background_history(
+            completed_retention_hours=(
+                self.settings.background_run_completed_retention_hours
+            ),
+            failed_retention_hours=(
+                self.settings.background_run_failed_retention_hours
+            ),
+            data_health_retention_hours=(
+                self.settings.data_health_retention_hours
+            ),
+        )
         public = self.data_health.public_summary(snapshot)
         self.broker.publish(
             {
@@ -1148,5 +1169,8 @@ class BackgroundScheduler:
         return {
             "status": snapshot["status"],
             "events_pruned": pruned_events,
+            "workers_pruned": pruned_workers,
+            "terminal_jobs_pruned": pruned_jobs,
+            "domain_history_pruned": pruned_domain_history,
             **snapshot["summary"],
         }

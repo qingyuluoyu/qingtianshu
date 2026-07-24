@@ -26,6 +26,9 @@ curl -H "X-Qingshu-Admin-Token: $QINGSHU_ADMIN_API_TOKEN" \
 - `queue.oldest_ready_age_seconds < 120`；
 - `queue.failure_rate_24h < 0.05`，并逐条解释失败任务；
 - 最近备份 `status = ok` 且不超过 26 小时。
+- 成功/取消任务默认保留 7 天、失败任务保留 30 天；调整保留期前先评估审计需求和
+  PostgreSQL 容量。
+- 业务库后台成功审计和数据健康快照默认保留 30 天，失败审计保留 90 天。
 
 建议生产告警阈值：
 

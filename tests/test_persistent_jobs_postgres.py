@@ -123,3 +123,14 @@ def test_postgres_worker_registry_and_queue_metrics(
     assert worker["metadata"]["deployment"] == "integration"
     assert worker["jobs_claimed"] == 1
     assert worker["jobs_failed"] == 1
+
+    import psycopg
+
+    old = datetime.now(timezone.utc) - timedelta(days=60)
+    with psycopg.connect(postgres_store.database_url) as connection:
+        connection.execute(
+            "UPDATE persistent_jobs SET finished_at = %s WHERE id = %s",
+            (old, job["id"]),
+        )
+    removed = postgres_store.prune_terminal_jobs(failed_retention_hours=1)
+    assert removed["failed"] == 1

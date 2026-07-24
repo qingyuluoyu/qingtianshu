@@ -918,6 +918,10 @@ uv run pytest
 - 队列健康新增 ready/delayed/retrying、最老 ready 任务延迟、过期运行租约、
   最近 24 小时成功/失败数和失败率，以及租约恢复、死亡本机 Worker 恢复累计数。
   ready 任务没有活跃 Worker、存在过期租约或排队延迟超阈值时不再误报 `ok`。
+- 数据健康任务同步执行终态队列保留：成功/取消默认保留 7 天，失败归档保留 30 天；
+  清理只匹配带完成时间的终态任务，不删除 queued/running，防止高频计划长期运行
+  后队列表无限增长。业务库后台成功审计和数据健康快照保留 30 天，失败审计保留
+  90 天，running 审计不清理。
 - 新增管理员专用 `GET /admin/operations/health`，聚合业务库/运维库 Schema、完整
   队列指标、Worker 列表和备份新鲜度；继续要求有效用户会话与管理员 Token，不在
   用户网页展示。
@@ -935,7 +939,7 @@ uv run pytest
   checksum 一致；恢复到随机临时库后识别 74 张表，业务 Schema v1、运维 Schema
   v3，恢复用户 1 条、任务 2 条、周期计划 2 条，演练状态 `passed`，临时库已删除。
 - SQLite 持久化队列与备份工具专项 19 项通过；真实 PostgreSQL Worker/队列专项
-  4 项通过。全量收集 614 项，常规环境 `608 passed, 6 skipped`；Ruff、compileall、
+  4 项通过。全量收集 616 项，常规环境 `610 passed, 6 skipped`；Ruff、compileall、
   diff 检查和 Compose YAML 解析通过。6 项跳过为需要独立 PostgreSQL 或浏览器运行
   条件的集成检查，PostgreSQL 队列专项已单独真实执行。
 

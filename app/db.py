@@ -3304,6 +3304,55 @@ class Database:
             )
         return int(cursor.rowcount)
 
+    def prune_background_history(
+        self,
+        *,
+        completed_retention_hours: int = 720,
+        failed_retention_hours: int = 2160,
+        data_health_retention_hours: int = 720,
+    ) -> dict[str, int]:
+        now = datetime.now(timezone.utc)
+        completed_cutoff = (
+            now - timedelta(hours=max(1, completed_retention_hours))
+        ).isoformat()
+        failed_cutoff = (
+            now - timedelta(hours=max(1, failed_retention_hours))
+        ).isoformat()
+        health_cutoff = (
+            now - timedelta(hours=max(1, data_health_retention_hours))
+        ).isoformat()
+        with self.connect() as connection:
+            completed = connection.execute(
+                """
+                DELETE FROM background_job_runs
+                WHERE status = 'completed'
+                    AND finished_at IS NOT NULL
+                    AND finished_at < ?
+                """,
+                (completed_cutoff,),
+            )
+            failed = connection.execute(
+                """
+                DELETE FROM background_job_runs
+                WHERE status = 'failed'
+                    AND finished_at IS NOT NULL
+                    AND finished_at < ?
+                """,
+                (failed_cutoff,),
+            )
+            health = connection.execute(
+                """
+                DELETE FROM data_health_snapshots
+                WHERE created_at < ?
+                """,
+                (health_cutoff,),
+            )
+        return {
+            "completed_background_runs": int(completed.rowcount),
+            "failed_background_runs": int(failed.rowcount),
+            "data_health_snapshots": int(health.rowcount),
+        }
+
     def latest_background_jobs(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(

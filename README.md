@@ -318,6 +318,12 @@ uv run qingshu-worker
 重试中任务、最老待执行任务延迟、过期租约、最近 24 小时成功/失败与失败率，以及
 租约恢复累计次数。
 
+数据健康任务会清理终态队列历史，避免分钟级任务无限增长：成功和取消任务默认保留
+7 天，失败归档默认保留 30 天，等待和运行任务永不被保留策略删除。可通过
+`JOB_SUCCEEDED_RETENTION_HOURS`、`JOB_FAILED_RETENTION_HOURS` 和
+`JOB_CANCELLED_RETENTION_HOURS` 调整。业务库中的后台成功审计和数据健康快照默认
+保留 30 天，失败审计保留 90 天；运行中的审计永不清理。
+
 ### PostgreSQL 备份与恢复
 
 Compose 默认参数可通过以下环境变量调整：
@@ -514,7 +520,7 @@ uv run pytest
 uv run ruff check .
 ```
 
-当前分支收集 `614` 项：常规环境 `608 passed, 6 skipped`；其中 PostgreSQL
+当前分支收集 `616` 项：常规环境 `610 passed, 6 skipped`；其中 PostgreSQL
 Worker/队列专项已在本机 PostgreSQL 17 上单独运行 `4 passed`。后续测试数量以
 `pytest --collect-only` 输出为准，主分支合并前必须同时通过全量测试与 Ruff。
 

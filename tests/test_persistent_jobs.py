@@ -146,6 +146,93 @@ def test_queue_health_exposes_delay_retry_and_recent_failure_metrics(tmp_path: P
     assert health["workers"]["active"] == 1
 
 
+def test_terminal_job_retention_prunes_by_status_without_touching_active_jobs(
+    tmp_path: Path,
+):
+    store = store_for(tmp_path)
+    succeeded = store.enqueue("succeeded")
+    claimed = store.claim("worker-a", lease_seconds=30)
+    assert claimed is not None
+    assert store.complete(claimed.id, "worker-a", {"ok": True})
+
+    failed = store.enqueue("failed", max_attempts=1)
+    claimed = store.claim("worker-a", lease_seconds=30)
+    assert claimed is not None
+    store.fail(claimed.id, "worker-a", "failed")
+
+    cancelled = store.enqueue("cancelled")
+    assert store.cancel(cancelled["id"])
+    active = store.enqueue("active")
+    old = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
+    with sqlite3.connect(store.sqlite_path) as connection:
+        connection.execute(
+            """
+            UPDATE persistent_jobs
+            SET finished_at = ?, updated_at = ?
+            WHERE id IN (?, ?, ?)
+            """,
+            (
+                old,
+                old,
+                succeeded["id"],
+                failed["id"],
+                cancelled["id"],
+            ),
+        )
+    removed = store.prune_terminal_jobs(
+        succeeded_retention_hours=1,
+        failed_retention_hours=1,
+        cancelled_retention_hours=1,
+    )
+    assert removed == {"succeeded": 1, "failed": 1, "cancelled": 1}
+    assert [item["id"] for item in store.list_jobs()] == [active["id"]]
+
+
+def test_domain_background_history_retention_preserves_running_audit(client):
+    database = client.app.state.database
+    completed = database.start_background_job("old-completed")
+    database.finish_background_job(completed, "completed", summary={"ok": True})
+    failed = database.start_background_job("old-failed")
+    database.finish_background_job(failed, "failed", error="old")
+    running = database.start_background_job("still-running")
+    snapshot = database.save_data_health_snapshot(
+        {
+            "status": "healthy",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "summary": {"total": 1},
+        }
+    )
+    old = (datetime.now(timezone.utc) - timedelta(days=120)).isoformat()
+    with database.connect() as connection:
+        connection.execute(
+            """
+            UPDATE background_job_runs
+            SET finished_at = ?, started_at = ?
+            WHERE id IN (?, ?)
+            """,
+            (old, old, completed, failed),
+        )
+        connection.execute(
+            "UPDATE data_health_snapshots SET created_at = ? WHERE id = ?",
+            (old, snapshot["id"]),
+        )
+    removed = database.prune_background_history(
+        completed_retention_hours=1,
+        failed_retention_hours=1,
+        data_health_retention_hours=1,
+    )
+    assert removed == {
+        "completed_background_runs": 1,
+        "failed_background_runs": 1,
+        "data_health_snapshots": 1,
+    }
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT status FROM background_job_runs WHERE id = ?", (running,)
+        ).fetchone()
+    assert row["status"] == "running"
+
+
 def test_failure_uses_backoff_then_archives_after_max_attempts(tmp_path: Path):
     store = store_for(tmp_path)
     job = store.enqueue("refresh", max_attempts=2)

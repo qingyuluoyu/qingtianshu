@@ -641,6 +641,41 @@ class OperationalDatabase:
                 )
         return int(cursor.rowcount)
 
+    def prune_terminal_jobs(
+        self,
+        *,
+        succeeded_retention_hours: int = 168,
+        failed_retention_hours: int = 720,
+        cancelled_retention_hours: int = 168,
+    ) -> dict[str, int]:
+        self.initialize()
+        now = _utc_now()
+        cutoffs = {
+            "succeeded": now
+            - timedelta(hours=max(1, succeeded_retention_hours)),
+            "failed": now - timedelta(hours=max(1, failed_retention_hours)),
+            "cancelled": now
+            - timedelta(hours=max(1, cancelled_retention_hours)),
+        }
+        removed = {status: 0 for status in cutoffs}
+        with self._transaction(immediate=True) as connection:
+            placeholder = "?" if self.backend == "sqlite" else "%s"
+            for status, cutoff in cutoffs.items():
+                cursor = connection.execute(
+                    f"""
+                    DELETE FROM persistent_jobs
+                    WHERE status = {placeholder}
+                        AND finished_at IS NOT NULL
+                        AND finished_at < {placeholder}
+                    """,
+                    (
+                        status,
+                        cutoff.isoformat() if self.backend == "sqlite" else cutoff,
+                    ),
+                )
+                removed[status] = int(cursor.rowcount)
+        return removed
+
     def increment_counter(self, name: str, amount: int = 1) -> None:
         if not amount:
             return

@@ -114,6 +114,12 @@ class Settings:
     job_worker_stale_seconds: int = 45
     backup_dir: Path = Path("./backups")
     backup_max_age_seconds: int = 93600
+    job_succeeded_retention_hours: int = 168
+    job_failed_retention_hours: int = 720
+    job_cancelled_retention_hours: int = 168
+    background_run_completed_retention_hours: int = 720
+    background_run_failed_retention_hours: int = 2160
+    data_health_retention_hours: int = 720
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -237,6 +243,34 @@ class Settings:
             ),
             backup_max_age_seconds=max(
                 60, int(os.getenv("QINGSHU_BACKUP_MAX_AGE_SECONDS", "93600"))
+            ),
+            job_succeeded_retention_hours=max(
+                1, int(os.getenv("JOB_SUCCEEDED_RETENTION_HOURS", "168"))
+            ),
+            job_failed_retention_hours=max(
+                1, int(os.getenv("JOB_FAILED_RETENTION_HOURS", "720"))
+            ),
+            job_cancelled_retention_hours=max(
+                1, int(os.getenv("JOB_CANCELLED_RETENTION_HOURS", "168"))
+            ),
+            background_run_completed_retention_hours=max(
+                1,
+                int(
+                    os.getenv(
+                        "BACKGROUND_RUN_COMPLETED_RETENTION_HOURS", "720"
+                    )
+                ),
+            ),
+            background_run_failed_retention_hours=max(
+                1,
+                int(
+                    os.getenv(
+                        "BACKGROUND_RUN_FAILED_RETENTION_HOURS", "2160"
+                    )
+                ),
+            ),
+            data_health_retention_hours=max(
+                1, int(os.getenv("DATA_HEALTH_RETENTION_HOURS", "720"))
             ),
         )
 
