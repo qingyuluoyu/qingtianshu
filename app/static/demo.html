@@ -212,6 +212,8 @@
     .li-zong-card-meta { margin-top: 3px; color: #7b899c; font-size: 10px; }
     .li-zong-badge { padding: 5px 8px; border-radius: 999px; color: #356dcc; background: #edf4ff; font-size: 9px; font-weight: 760; }
     .li-zong-badge.triggered { color: #9a5e17; background: #fff2dc; }
+    .li-zong-badge.near_8_of_9 { color: #3c6b55; background: #eaf7ef; }
+    .li-zong-badge.watch_6_7_of_9 { color: #5f6478; background: #eff1f6; }
     .li-zong-badge.data_incomplete { color: #8a6b2b; background: #fff7df; }
     .li-zong-badge.invalidated { color: #8b5560; background: #faedf0; }
     .li-zong-metrics { display: grid; grid-template-columns: repeat(8,minmax(74px,1fr)); gap: 6px; margin-top: 11px; }
@@ -2168,6 +2170,8 @@
             <div class="li-zong-tabs" role="tablist" aria-label="李总策略结果分类">
               <button class="li-zong-tab active" type="button" data-li-zong-filter="qualified">候选</button>
               <button class="li-zong-tab" type="button" data-li-zong-filter="triggered">今日触发</button>
+              <button class="li-zong-tab" type="button" data-li-zong-filter="near_8_of_9">接近满足 8/9</button>
+              <button class="li-zong-tab" type="button" data-li-zong-filter="watch_6_7_of_9">研究观察 6–7/9</button>
               <button class="li-zong-tab" type="button" data-li-zong-filter="data_incomplete">数据不完整</button>
               <button class="li-zong-tab" type="button" data-li-zong-filter="invalidated">已失效</button>
               <button class="li-zong-tab" type="button" data-li-zong-filter="not_qualified">未满足</button>
@@ -2624,6 +2628,7 @@
       stockScreenerLoading: false,
       liZongStrategy: null,
       liZongHistory: null,
+      liZongObservationCounts: {},
       liZongLoading: false,
       liZongLoadToken: 0,
       liZongFilter: "qualified",
@@ -3230,6 +3235,8 @@
       return {
         qualified: "候选待观察",
         triggered: "今日触发",
+        near_8_of_9: "接近满足 8/9",
+        watch_6_7_of_9: "研究观察 6–7/9",
         data_incomplete: "数据待补",
         invalidated: "规则已失效",
         not_qualified: "未满足"
@@ -3266,10 +3273,19 @@
     }
 
     function showLiZongDetail(item) {
+      const observationBand = item.observation_band || null;
       const lines = [
         `# ${item.name || item.internal_symbol}｜李总策略逐规则证据`,
         `策略版本：${item.strategy_version || "—"}；参数版本：${item.parameter_version || "—"}；数据交易日：${item.as_of_date || "待确认"}`,
         "",
+        ...(observationBand
+          ? [
+              `观察分层：${liZongStatusLabel(observationBand)}；已通过 ${item.candidate_rule_pass_count || 0}/${item.candidate_rule_total || 9} 条候选规则。`,
+              `明确未通过：${(item.failed_candidate_rule_ids || []).map(liZongRuleLabel).join("、") || "待确认"}。`,
+              "该分层只用于研究排序，不是候选或触发标的，严格规则没有放宽。",
+              ""
+            ]
+          : []),
         "## 规则核验"
       ];
       (item.rule_results || []).forEach(rule => {
@@ -3283,7 +3299,7 @@
         lines.push("", "## 当前边界", ...item.limitations.map(value => `- ${value}`));
       }
       lines.push("", `- ${item.boundary || "仅用于研究候选和人工复核。"}`);
-      openReader(`${item.name || item.internal_symbol}｜李总策略证据`, lines.join("\n"), `${liZongStatusLabel(item.status)} · ${item.as_of_date || "数据时间待确认"}`);
+      openReader(`${item.name || item.internal_symbol}｜李总策略证据`, lines.join("\n"), `${liZongStatusLabel(observationBand || item.status)} · ${item.as_of_date || "数据时间待确认"}`);
     }
 
     function createLiZongHistoryChart(path) {
@@ -3418,6 +3434,7 @@
         return;
       }
       state.liZongStrategy = payload;
+      if (payload?.observation_counts) state.liZongObservationCounts = payload.observation_counts;
       state.liZongRenderedFilter = state.liZongFilter;
       $("liZongPanel").hidden = false;
       $("liZongStats").hidden = !universe && !items.length;
@@ -3447,11 +3464,20 @@
         : "当前可核验结果";
       document.querySelectorAll("[data-li-zong-filter]").forEach(button => button.classList.toggle("active", button.dataset.liZongFilter === state.liZongFilter));
 
-      const filtered = items.filter(item => item.status === state.liZongFilter);
+      const observationFilter = ["near_8_of_9", "watch_6_7_of_9"].includes(state.liZongFilter);
+      const filtered = items.filter(item => observationFilter
+        ? item.observation_band === state.liZongFilter
+        : item.status === state.liZongFilter);
+      if (observationFilter) {
+        const observationTotal = Number(state.liZongObservationCounts?.[state.liZongFilter] || 0);
+        $("liZongState").textContent = `展示 ${filtered.length}/${observationTotal} 只研究观察`;
+      }
       const container = $("liZongResults"); container.innerHTML = "";
       if (!filtered.length) {
         const empty = document.createElement("div"); empty.className = "screener-empty";
-        empty.textContent = state.liZongFilter === "qualified" && Number(counts.qualified || 0) + Number(counts.triggered || 0) === 0
+        empty.textContent = observationFilter
+          ? `${liZongStatusLabel(state.liZongFilter)}当前为空。这里只统计已完整核验9条候选规则且无数据缺口的股票，不会放宽规则补足数量。`
+          : state.liZongFilter === "qualified" && Number(counts.qualified || 0) + Number(counts.triggered || 0) === 0
           ? "当前没有股票同时满足全部严格规则。下方展示同一规则的历史真实命中及后续相对大盘走势。"
           : `${liZongStatusLabel(state.liZongFilter)}列表当前为空。可以切换其他分类，或使用下方通用筛选。`;
         container.appendChild(empty);
@@ -3459,6 +3485,7 @@
         return;
       }
       filtered.forEach(item => {
+        const observationBand = item.observation_band || null;
         const summary = item.summary || {};
         const card = document.createElement("article"); card.className = "li-zong-card";
         const head = document.createElement("div"); head.className = "li-zong-card-head";
@@ -3466,10 +3493,16 @@
         const name = document.createElement("div"); name.className = "li-zong-card-name"; name.textContent = item.name || item.internal_symbol;
         const metaNode = document.createElement("div"); metaNode.className = "li-zong-card-meta"; metaNode.textContent = `${item.symbol || item.internal_symbol} · ${item.as_of_date || "数据时间待确认"} · ${item.parameter_version || "默认参数"}`;
         identity.append(name, metaNode);
-        const badge = document.createElement("span"); badge.className = `li-zong-badge ${item.status || ""}`; badge.textContent = liZongStatusLabel(item.status);
+        const badge = document.createElement("span"); badge.className = `li-zong-badge ${observationBand || item.status || ""}`; badge.textContent = liZongStatusLabel(observationBand || item.status);
         head.append(identity, badge); card.appendChild(head);
 
         const metricRows = [
+          ...(observationBand
+            ? [
+                ["候选规则", `${item.candidate_rule_pass_count || 0}/${item.candidate_rule_total || 9}（非候选）`],
+                ["明确未通过", (item.failed_candidate_rule_ids || []).map(liZongRuleLabel).join("、") || "待确认"]
+              ]
+            : []),
           ["总市值", summary.market_cap_yi == null ? "—" : `${numeric(summary.market_cap_yi)}亿`],
           ["五年ROE最低", summary.roe_min_pct == null ? "—" : `${numeric(summary.roe_min_pct)}%`],
           ["机构股东", summary.non_natural_holder_count == null ? "—" : `${summary.non_natural_holder_count}名`],
@@ -3489,26 +3522,35 @@
           node.append(labelNode, valueNode); metrics.appendChild(node);
         });
         card.appendChild(metrics);
+        if (observationBand) {
+          const observationBoundary = document.createElement("div"); observationBoundary.className = "li-zong-limitations";
+          observationBoundary.textContent = "这是完整规则核验后的研究观察分层，不是候选、触发或买卖建议；严格9条候选规则和3条触发规则保持不变。";
+          card.appendChild(observationBoundary);
+        }
         if (item.limitations?.length) {
           const limitations = document.createElement("div"); limitations.className = "li-zong-limitations";
           limitations.textContent = item.limitations.slice(0, 2).join("；"); card.appendChild(limitations);
         }
         const entryContext = {
           source_kind: "li_zong_strategy",
-          source_label: "李总策略",
+          source_label: observationBand ? "李总策略接近满足观察池" : "李总策略",
           display_name: item.name,
           profile_key: item.parameter_version || item.strategy_version,
           as_of_date: item.as_of_date,
-          candidate_status: item.status,
+          candidate_status: observationBand || item.status,
           matched_reasons: (item.rule_results || []).filter(rule => rule.status === "passed").map(rule => liZongRuleLabel(rule.rule_id)),
-          missing_fields: item.limitations || []
+          missing_fields: observationBand
+            ? (item.failed_candidate_rule_ids || []).map(liZongRuleLabel)
+            : item.limitations || []
         };
         const actions = document.createElement("div"); actions.className = "li-zong-actions";
         const detail = document.createElement("button"); detail.type = "button"; detail.className = "btn"; detail.textContent = "查看逐规则证据"; detail.addEventListener("click", () => showLiZongDetail(item));
-        const follow = document.createElement("button"); follow.type = "button"; follow.className = "btn"; follow.textContent = item.status === "triggered" ? "加入重点关注" : "加入关注"; follow.addEventListener("click", () => { void addScreenCandidateToWatchlist(item, follow, "李总策略"); });
-        const research = document.createElement("button"); research.type = "button"; research.className = "btn primary"; research.textContent = "保存线索并研究";
+        const follow = document.createElement("button"); follow.type = "button"; follow.className = "btn"; follow.textContent = observationBand ? "加入研究观察" : item.status === "triggered" ? "加入重点关注" : "加入关注"; follow.addEventListener("click", () => { void addScreenCandidateToWatchlist(item, follow, observationBand ? "李总策略研究观察" : "李总策略"); });
+        const research = document.createElement("button"); research.type = "button"; research.className = "btn primary"; research.textContent = observationBand ? "保存观察线索并研究" : "保存线索并研究";
         research.addEventListener("click", () => { void enterScreenCandidateResearch(item, research, entryContext); });
-        const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn"; ask.textContent = "让 Agent 核验"; ask.addEventListener("click", () => { void researchCandidateWithAgent(item, ask, entryContext, `请核验${item.name}（${item.internal_symbol}）的李总策略结果。逐条说明基本面、股性、量价和触发规则的证据时间、反方证据、数据缺口、失效条件与下一步需要核验什么；不要输出买卖指令。`); });
+        const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn"; ask.textContent = "让 Agent 核验"; ask.addEventListener("click", () => { void researchCandidateWithAgent(item, ask, entryContext, observationBand
+          ? `请核验${item.name}（${item.internal_symbol}）当前李总策略${liZongStatusLabel(observationBand)}的结果。它只通过${item.candidate_rule_pass_count || 0}/9条候选规则，明确未通过${(item.failed_candidate_rule_ids || []).map(liZongRuleLabel).join("、") || "待确认规则"}，不是候选。请说明通过规则的证据、未通过规则、反方证据、数据时间、失效条件与下一步核验；明确候选资格只由9条候选规则决定，3条触发规则只决定候选后的人工复核层级；不要把观察池写成荐股或买卖指令。`
+          : `请核验${item.name}（${item.internal_symbol}）的李总策略结果。逐条说明基本面、股性、量价和触发规则的证据时间、反方证据、数据缺口、失效条件与下一步需要核验什么；不要输出买卖指令。`); });
         actions.append(detail, follow, research, ask); card.appendChild(actions); container.appendChild(card);
       });
       if (state.liZongHistory) renderLiZongHistory(state.liZongHistory);
@@ -3516,13 +3558,16 @@
 
     async function loadLiZongStrategy() {
       const filter = state.liZongFilter || "qualified";
+      const observationFilter = ["near_8_of_9", "watch_6_7_of_9"].includes(filter);
       const loadToken = ++state.liZongLoadToken;
       const hadPublishedResult = Boolean(state.liZongStrategy);
       state.liZongLoading = true;
       if (!hadPublishedResult) $("liZongPanel").hidden = true;
       try {
         const [candidateResult, historyResult] = await Promise.allSettled([
-          api(`/v1/stock-strategies/li-zong/candidates?status=${encodeURIComponent(filter)}&limit=200`),
+          api(observationFilter
+            ? `/v1/stock-strategies/li-zong/observation-pool?band=${encodeURIComponent(filter)}&limit=30`
+            : `/v1/stock-strategies/li-zong/candidates?status=${encodeURIComponent(filter)}&limit=200`),
           filter === "qualified"
             ? api("/v1/stock-strategies/li-zong/history?limit=30")
             : Promise.resolve(state.liZongHistory)

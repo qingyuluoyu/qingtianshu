@@ -1321,6 +1321,120 @@ class LiZongStrategyService:
         )
         return [*triggered, *qualified]
 
+    def observation_pool_packet(
+        self,
+        *,
+        band: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """Derive non-candidate research pools without changing strict rules."""
+
+        allowed_bands = {"near_8_of_9", "watch_6_7_of_9"}
+        if band is not None and band not in allowed_bands:
+            raise ValueError("unsupported observation band")
+        size = max(1, min(int(limit), 1000))
+        coverage = self.coverage_packet()
+        states = self.database.latest_strategy_candidate_states(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=LiZongParameters().parameter_version,
+        )
+        as_of_date = str(coverage.get("as_of_date") or "")
+        if not as_of_date:
+            as_of_date = max(
+                (
+                    str(state.get("as_of_date") or "")
+                    for state in states.values()
+                    if state.get("as_of_date")
+                ),
+                default="",
+            )
+        observations: list[dict[str, Any]] = []
+        complete_rule_states = 0
+        counts = {
+            "near_8_of_9": 0,
+            "watch_6_7_of_9": 0,
+        }
+        for state_symbol, state in states.items():
+            if as_of_date and str(state.get("as_of_date") or "") != as_of_date:
+                continue
+            result = state.get("result") or {}
+            rules = {
+                str(item.get("rule_id")): item
+                for item in result.get("rule_results") or []
+                if item.get("rule_id") in CANDIDATE_RULE_IDS
+            }
+            if (
+                self._evaluation_depth(result) != "full_rules"
+                or set(rules) != set(CANDIDATE_RULE_IDS)
+                or any(
+                    str(item.get("status") or "") not in {"passed", "failed"}
+                    for item in rules.values()
+                )
+            ):
+                continue
+            complete_rule_states += 1
+            passed_rule_ids = [
+                rule_id
+                for rule_id in CANDIDATE_RULE_IDS
+                if str(rules[rule_id].get("status") or "") == "passed"
+            ]
+            failed_rule_ids = [
+                rule_id
+                for rule_id in CANDIDATE_RULE_IDS
+                if str(rules[rule_id].get("status") or "") == "failed"
+            ]
+            passed_count = len(passed_rule_ids)
+            observation_band = (
+                "near_8_of_9"
+                if passed_count == 8
+                else "watch_6_7_of_9"
+                if passed_count in {6, 7}
+                else None
+            )
+            if observation_band is None:
+                continue
+            counts[observation_band] += 1
+            enriched = self._with_stock_basic(state)
+            enriched.setdefault("symbol", state_symbol)
+            enriched["observation_band"] = observation_band
+            enriched["candidate_rule_pass_count"] = passed_count
+            enriched["candidate_rule_total"] = len(CANDIDATE_RULE_IDS)
+            enriched["passed_candidate_rule_ids"] = passed_rule_ids
+            enriched["failed_candidate_rule_ids"] = failed_rule_ids
+            observations.append(enriched)
+        observations.sort(
+            key=lambda item: (
+                -int(item.get("candidate_rule_pass_count") or 0),
+                str(item.get("symbol") or ""),
+            )
+        )
+        visible = [
+            item
+            for item in observations
+            if band is None or item.get("observation_band") == band
+        ][:size]
+        return {
+            "strategy_id": STRATEGY_ID,
+            "strategy_version": STRATEGY_VERSION,
+            "status": (
+                "ready"
+                if observations or coverage.get("status") == "stable" or states
+                else "preparing"
+            ),
+            "as_of_date": as_of_date or None,
+            "band": band,
+            "items": visible,
+            "counts": counts,
+            "complete_rule_states": complete_rule_states,
+            "coverage": coverage,
+            "boundary": (
+                "观察池只从当期已完成全部9条候选规则、且不存在数据缺口的股票"
+                "派生：8/9为接近满足，6至7/9为研究观察。它们都不是候选，"
+                "不会进入触发池；李总策略9条候选规则和3条触发规则没有放宽。"
+            ),
+        }
+
     def funnel_packet(self) -> dict[str, Any]:
         """Explain how the current full-market intersection narrows by rule."""
 

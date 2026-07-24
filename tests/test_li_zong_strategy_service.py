@@ -460,6 +460,64 @@ def test_new_failed_data_version_invalidates_previous_qualified_snapshot(app):
     assert service.get_candidate("000063")["status"] == "invalidated"
 
 
+def test_observation_pool_derives_8_of_9_and_6_to_7_without_relaxing_candidates(
+    app,
+):
+    near_packet = _snapshot_packet(
+        symbol="000063.SZ",
+        data_version="near-8-v1",
+        market_cap_yi=100.0,
+    )
+    watch_packet = _snapshot_packet(
+        symbol="000001.SZ",
+        data_version="watch-7-v1",
+        market_cap_yi=100.0,
+        stock_name="平安银行",
+        industry="银行",
+    )
+    watch_packet["snapshot"]["datasets"]["fina_indicator"]["rows"][0]["roe"] = 5.0
+    incomplete_packet = _with_transient_issue(
+        _snapshot_packet(
+            symbol="300308.SZ",
+            data_version="incomplete-near-v1",
+            market_cap_yi=100.0,
+            stock_name="中际旭创",
+            industry="通信设备",
+        ),
+        dataset="fina_indicator",
+    )
+    service = LiZongStrategyService(
+        app.state.database,
+        SnapshotStub(
+            {
+                "000063.SZ": near_packet,
+                "000001.SZ": watch_packet,
+                "300308.SZ": incomplete_packet,
+            }
+        ),
+    )
+
+    service.run_symbols(["000063.SZ", "000001.SZ", "300308.SZ"])
+    packet = service.observation_pool_packet()
+
+    assert service.list_actionable_candidates() == []
+    assert packet["counts"] == {
+        "near_8_of_9": 1,
+        "watch_6_7_of_9": 1,
+    }
+    assert [item["symbol"] for item in packet["items"]] == [
+        "000063.SZ",
+        "000001.SZ",
+    ]
+    near, watch = packet["items"]
+    assert near["candidate_rule_pass_count"] == 8
+    assert near["failed_candidate_rule_ids"] == ["LZ-F-01"]
+    assert watch["candidate_rule_pass_count"] == 7
+    assert watch["failed_candidate_rule_ids"] == ["LZ-F-01", "LZ-F-02"]
+    assert "不是候选" in packet["boundary"]
+    assert "300308.SZ" not in {item["symbol"] for item in packet["items"]}
+
+
 def test_missing_dataset_is_always_data_incomplete_even_with_known_failed_rule(app):
     packet = _snapshot_packet(market_cap_yi=100.0, data_version="partial-v1")
     packet["status"] = "incomplete"
@@ -1417,6 +1475,70 @@ def test_empty_li_zong_filter_is_ready_after_stable_universe_publish(
     assert response.json()["counts"]["qualified"] == 0
 
 
+def test_li_zong_observation_pool_api_keeps_bands_separate_from_candidates(
+    app, client
+):
+    assert client.post(
+        "/users", json={"name": "Li Zong Observation Pool User"}
+    ).status_code == 201
+    near_packet = _snapshot_packet(
+        symbol="000063.SZ",
+        data_version="near-api-v1",
+        market_cap_yi=100.0,
+    )
+    watch_packet = _snapshot_packet(
+        symbol="000001.SZ",
+        data_version="watch-api-v1",
+        market_cap_yi=100.0,
+        stock_name="平安银行",
+        industry="银行",
+    )
+    watch_packet["snapshot"]["datasets"]["fina_indicator"]["rows"][0]["roe"] = 5.0
+    app.state.li_zong_strategy.snapshot_service = SnapshotStub(
+        {"000063.SZ": near_packet, "000001.SZ": watch_packet}
+    )
+    app.state.li_zong_strategy.run_symbols(["000063.SZ", "000001.SZ"])
+
+    near = client.get(
+        "/v1/stock-strategies/li-zong/observation-pool"
+        "?band=near_8_of_9&limit=20"
+    )
+    strict = client.get(
+        "/v1/stock-strategies/li-zong/candidates?status=qualified&limit=20"
+    )
+
+    assert near.status_code == 200, near.text
+    payload = near.json()
+    assert payload["status"] == "ready"
+    assert payload["observation_counts"] == {
+        "near_8_of_9": 1,
+        "watch_6_7_of_9": 1,
+    }
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["internal_symbol"] == "000063.SZ"
+    assert payload["items"][0]["observation_band"] == "near_8_of_9"
+    assert payload["items"][0]["candidate_rule_pass_count"] == 8
+    assert payload["items"][0]["is_strict_candidate"] is False
+    assert strict.status_code == 200
+    assert strict.json()["items"] == []
+
+
+def test_demo_exposes_strictly_separate_li_zong_observation_pool(app, client):
+    page = client.get("/demo")
+
+    assert page.status_code == 200
+    assert 'data-li-zong-filter="near_8_of_9"' in page.text
+    assert 'data-li-zong-filter="watch_6_7_of_9"' in page.text
+    assert (
+        "/v1/stock-strategies/li-zong/observation-pool?band="
+        in page.text
+    )
+    assert "limit=30" in page.text
+    assert "只研究观察" in page.text
+    assert "完整规则核验后的研究观察分层，不是候选" in page.text
+    assert "严格9条候选规则和3条触发规则保持不变" in page.text
+
+
 def test_trigger_enters_stock_workspace_and_agent_uses_strategy_evidence(app, client):
     assert client.post("/users", json={"name": "Strategy Workspace User"}).status_code == 201
     app.state.li_zong_strategy.snapshot_service = SnapshotStub(
@@ -1508,6 +1630,24 @@ def test_agent_li_zong_pool_excludes_failed_stocks_and_followup_keeps_context(
     assert followup_payload["evidence"]["requested_symbol"] == "000001.SZ"
     assert followup_payload["evidence"]["items"][0]["status"] == "not_qualified"
     assert "不是当前候选" in followup_payload["answer"]
+
+    trigger_boundary = client.post(
+        "/me/chat",
+        json={
+            "conversation_id": rejected_payload["conversation_id"],
+            "message": (
+                "如果未通过规则以后转为通过，是否还需要满足盘后触发规则"
+                "才能进入候选？"
+            ),
+            "execute_agent": False,
+        },
+    )
+    assert trigger_boundary.status_code == 200
+    boundary_payload = trigger_boundary.json()
+    assert boundary_payload["intent"] == "stock_screen"
+    assert boundary_payload["evidence"]["profile"]["key"] == "li_zong"
+    assert boundary_payload["evidence"]["selection_mode"] == "symbol_check"
+    assert boundary_payload["evidence"]["requested_symbol"] == "000001.SZ"
 
 
 def test_agent_li_zong_resolves_multiple_universe_company_names(app, client):

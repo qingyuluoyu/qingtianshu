@@ -784,6 +784,50 @@ def test_li_zong_multi_symbol_normalization_hides_provider_quota_error():
     assert "kimi.com" not in normalized
 
 
+def test_li_zong_normalization_repairs_candidate_trigger_conflation():
+    evidence = {
+        "type": "stock_screen",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "symbol_check",
+    }
+    answer = (
+        "若近十日窗口内不再包含两根5%阴线，该规则可能转为通过，"
+        "但能否重新进入候选还需同时满足盘后触发等条件。"
+    )
+
+    normalized = AgentService._normalize_li_zong_candidate_trigger_boundary(
+        answer,
+        evidence,
+    )
+
+    assert "还需同时满足盘后触发" not in normalized
+    assert "9条候选规则在同一数据日全部通过" in normalized
+    assert "触发规则只决定候选形成后的人工复核层级" in normalized
+    assert "不是进入候选的附加条件" in normalized
+
+
+def test_li_zong_normalization_repairs_trigger_before_candidate_wording():
+    evidence = {
+        "type": "stock_screen",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "symbol_check",
+    }
+    answer = (
+        "是的。即使该规则转为通过，仍需同时满足盘后触发条件，"
+        "才能被标记为候选。盘后触发是复核启动的必要前提。"
+    )
+
+    normalized = AgentService._normalize_li_zong_candidate_trigger_boundary(
+        answer,
+        evidence,
+    )
+
+    assert not normalized.startswith("是的")
+    assert "仍需同时满足盘后触发" not in normalized
+    assert "盘后触发是复核启动的必要前提" not in normalized
+    assert normalized.count("不是进入候选的附加条件") == 1
+
+
 def test_li_zong_multi_symbol_preview_hides_internal_status_and_cleans_punctuation():
     evidence = {
         "type": "stock_screen",

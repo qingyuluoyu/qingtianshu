@@ -3073,6 +3073,10 @@ selection_mode=symbol_check 时，必须直接回答该股票是 triggered、qua
 data_incomplete 还是 invalidated。not_qualified 不是候选，data_incomplete 不能判断通过，invalidated
 表示此前状态已被新数据推翻。优先列出明确未通过规则、数据不完整规则、反方证据和下一步核验；
 不得因为部分规则通过就把股票写成候选。规则实际值、阈值、证据日期和报告期只能引用证据包。
+candidate_qualified 只取决于9条候选规则是否在同一数据日全部通过；3条盘后触发规则只在候选已经
+通过后决定是否进入重点关注和人工复核，不是进入候选的附加条件。解释观察池股票的失效条件时，
+不得写成“未通过规则转为通过后，还需满足触发规则才能进入候选”；应明确只有9条候选规则共同决定
+候选资格，触发规则只决定候选形成后的人工复核层级。
 
 selection_mode=symbol_comparison 时，必须逐只回答 requested_symbols 中的股票，不能退化为只说明全市场
 覆盖率。每只股票至少说明当前中文状态、明确未通过规则或数据不完整规则及其 limitations；若某只股票
@@ -3278,6 +3282,10 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
                 answer = _normalize_relative_event_dates(answer)
                 answer = self._normalize_li_zong_scope_answer(answer, prompt_evidence)
                 answer = self._normalize_li_zong_symbol_answer(answer, prompt_evidence)
+                answer = self._normalize_li_zong_candidate_trigger_boundary(
+                    answer,
+                    prompt_evidence,
+                )
                 if intent == "stock_research":
                     answer = _normalize_stock_research_number_precision(answer)
                 output_guard = self._validate_model_output(
@@ -7347,6 +7355,62 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         ):
             return preview
         return f"{preview}\n\n{cleaned}" if cleaned else preview
+
+    @staticmethod
+    def _normalize_li_zong_candidate_trigger_boundary(
+        answer: str,
+        evidence: dict[str, Any],
+    ) -> str:
+        """Repair the specific false dependency between qualification and triggers."""
+        if (evidence.get("profile") or {}).get("key") != "li_zong":
+            return answer
+        cleaned = str(answer or "")
+        replacement = (
+            "若9条候选规则在同一数据日全部通过，才会进入候选；"
+            "3条盘后触发规则只决定候选形成后的人工复核层级，"
+            "不是进入候选的附加条件。"
+        )
+        necessity = r"(?:还需|仍需|必须|同时满足|必要条件|必要前提|取决于|只有)"
+        candidate = r"(?:进入|成为|形成|标记为|判定)[^。\n]{0,24}候选"
+        false_patterns = (
+            re.compile(rf"{candidate}[^。\n]{{0,100}}{necessity}[^。\n]{{0,50}}触发"),
+            re.compile(
+                rf"{necessity}[^。\n]{{0,60}}触发[^。\n]{{0,80}}"
+                rf"(?:才|才能|方可)[^。\n]{{0,30}}{candidate}"
+            ),
+            re.compile(r"盘后触发[^。\n]{0,30}(?:必要条件|必要前提)"),
+        )
+        sentences = re.split(r"(?<=[。！？])", cleaned)
+        repaired: list[str] = []
+        inserted = False
+        conflation_found = False
+        for sentence in sentences:
+            has_false_dependency = any(
+                pattern.search(sentence) for pattern in false_patterns
+            )
+            explicitly_separates = bool(
+                re.search(
+                    r"触发[^。\n]{0,36}(?:不是|不属于|无需|不需要)"
+                    r"[^。\n]{0,36}(?:候选|资格|附加条件)",
+                    sentence,
+                )
+            )
+            if has_false_dependency and not explicitly_separates:
+                conflation_found = True
+                if not inserted:
+                    repaired.append(replacement)
+                    inserted = True
+                continue
+            repaired.append(sentence)
+        normalized = "".join(repaired)
+        if conflation_found:
+            normalized = re.sub(
+                r"^\s*(?:是的|需要|仍然需要)[。！]\s*",
+                "",
+                normalized,
+                count=1,
+            )
+        return normalized
 
     @staticmethod
     def _render_li_zong_preview(evidence: dict[str, Any]) -> str:

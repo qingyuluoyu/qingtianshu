@@ -495,6 +495,31 @@ def _public_li_zong_candidate(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _public_li_zong_observation(item: dict[str, Any]) -> dict[str, Any]:
+    public = _public_li_zong_candidate(item)
+    public.update(
+        {
+            "observation_band": item.get("observation_band"),
+            "candidate_rule_pass_count": int(
+                item.get("candidate_rule_pass_count") or 0
+            ),
+            "candidate_rule_total": int(item.get("candidate_rule_total") or 9),
+            "passed_candidate_rule_ids": list(
+                item.get("passed_candidate_rule_ids") or []
+            ),
+            "failed_candidate_rule_ids": list(
+                item.get("failed_candidate_rule_ids") or []
+            ),
+            "is_strict_candidate": False,
+        }
+    )
+    public["boundary"] = (
+        "该股票只属于接近满足研究观察池，不是李总策略候选或触发标的；"
+        "严格9条候选规则和3条触发规则没有放宽。"
+    )
+    return public
+
+
 def _build_visible_evidence_sources(
     evidence: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
@@ -1827,6 +1852,63 @@ def create_app(
         public = _public_li_zong_candidate(item)
         public["trigger_events"] = item.get("trigger_events") or []
         return public
+
+    @app.get("/v1/stock-strategies/li-zong/observation-pool")
+    def list_li_zong_observation_pool(
+        request: Request,
+        band: Literal["near_8_of_9", "watch_6_7_of_9"] | None = None,
+        limit: int = Query(default=200, ge=1, le=1000),
+    ) -> dict[str, Any]:
+        require_session_user(request)
+        try:
+            packet = li_zong_strategy.observation_pool_packet(
+                band=band,
+                limit=limit,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        coverage = packet.get("coverage") or {}
+        return {
+            "strategy": li_zong_strategy.get_definition(),
+            "status": packet.get("status"),
+            "items": [
+                _public_li_zong_observation(item)
+                for item in packet.get("items") or []
+            ],
+            "counts": coverage.get("counts") or {},
+            "observation_counts": packet.get("counts") or {},
+            "data_meta": {
+                "universe_status": coverage.get("status"),
+                "latest_as_of_date": packet.get("as_of_date"),
+                "evaluated_symbols": coverage.get("evaluated_symbols") or 0,
+                "universe_count": coverage.get("universe_count") or 0,
+                "deep_check_eligible_count": (
+                    coverage.get("deep_check_eligible_count") or 0
+                ),
+                "deep_processed_symbols": (
+                    coverage.get("deep_processed_symbols") or 0
+                ),
+                "deep_remaining_symbols": (
+                    coverage.get("deep_remaining_symbols") or 0
+                ),
+                "deep_processing_ratio": (
+                    coverage.get("deep_processing_ratio") or 0
+                ),
+                "deep_decisive_symbols": (
+                    coverage.get("deep_decisive_symbols") or 0
+                ),
+                "complete_observation_rule_states": (
+                    packet.get("complete_rule_states") or 0
+                ),
+                "full_market_coverage": bool(
+                    coverage.get("full_market_coverage")
+                ),
+                "deep_check_complete": bool(
+                    coverage.get("deep_check_complete")
+                ),
+            },
+            "boundary": packet.get("boundary"),
+        }
 
     @app.get("/v1/stock-strategies/li-zong/history")
     def list_li_zong_history(
@@ -3500,7 +3582,10 @@ def create_app(
         li_zong_query = explicit_li_zong_query or (
             prior_intent == "stock_screen"
             and prior_screen_profile == "li_zong"
-            and contextual_followup
+            and (
+                contextual_followup
+                or _is_li_zong_strategy_followup(message)
+            )
         )
         peer_comparison_query = _is_peer_comparison_query(message)
         stock_comparison_query = (
@@ -3544,6 +3629,7 @@ def create_app(
             }
             and (
                 contextual_followup
+                or li_zong_query
                 or earnings_quality_query
                 or financial_driver_query
                 or business_structure_query
@@ -5332,6 +5418,30 @@ def _is_stock_screen_query(message: str) -> bool:
         re.search(
             r"(?:找|挑|筛|选)(?:一些|几只|一批)?[^。；，,]{0,12}(?:股票|公司)", folded
         )
+    )
+
+
+def _is_li_zong_strategy_followup(message: str) -> bool:
+    """Recognize strategy-specific follow-ups even without the words '李总策略'."""
+    folded = re.sub(r"\s+", "", message).casefold()
+    candidate_terms = ("候选", "观察池", "8/9", "6/9", "7/9", "九条", "9条")
+    rule_terms = (
+        "触发",
+        "规则",
+        "通过",
+        "未通过",
+        "盘后",
+        "复核",
+        "涨停",
+        "阴线",
+        "新高",
+        "倍量",
+        "roe",
+        "市值",
+        "股东",
+    )
+    return any(term in folded for term in candidate_terms) and any(
+        term in folded for term in rule_terms
     )
 
 
