@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import calendar
-from datetime import date, datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta, timezone
 import json
 import math
 import threading
@@ -57,33 +58,219 @@ class IndustryComparisonService:
         self,
         tushare_client: Any | None,
         *,
+        database: Any | None = None,
         cache_seconds: int = 3_600,
         batch_cache_seconds: int = 21_600,
+        stale_seconds: int = 604_800,
+        background_refresh: bool = False,
     ) -> None:
         self.client = tushare_client
+        self.database = database
         self.cache_seconds = max(300, int(cache_seconds))
         self.batch_cache_seconds = max(self.cache_seconds, int(batch_cache_seconds))
+        self.stale_seconds = max(self.cache_seconds, int(stale_seconds))
+        self.background_refresh = background_refresh
         self._lock = threading.RLock()
+        self._build_lock = threading.Lock()
         self._packet_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._frame_cache: dict[str, tuple[float, pd.DataFrame]] = {}
+        self._refreshing: set[str] = set()
+        self._executor = (
+            ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="qingshu-industry-refresh",
+            )
+            if background_refresh
+            else None
+        )
 
     def get_packet(self, symbol: str, *, force: bool = False) -> dict[str, Any]:
         canonical = _canonical_a_share(symbol)
         now = time.monotonic()
-        with self._lock:
-            cached = self._packet_cache.get(canonical)
-            if cached and cached[0] > now and not force:
-                return _deep_copy(cached[1])
+        if not force:
+            with self._lock:
+                cached = self._packet_cache.get(canonical)
+                if cached and cached[0] > now:
+                    return self._with_cache_state(
+                        cached[1],
+                        state="fresh",
+                    )
+
+            persistent = self._persistent_cache(canonical)
+            if persistent is not None and self._packet_is_fresh(persistent):
+                with self._lock:
+                    self._packet_cache[canonical] = (
+                        time.monotonic() + self.cache_seconds,
+                        persistent,
+                    )
+                return self._with_cache_state(
+                    persistent,
+                    state="fresh",
+                )
+
+        stale = persistent if not force else None
+        if stale is None:
+            stale = self._persistent_cache(
+                canonical,
+                allow_stale=True,
+            )
+        if stale is not None and self._stale_is_usable(stale):
+            if self.background_refresh:
+                self._schedule_refresh(canonical)
+                return self._with_cache_state(
+                    stale,
+                    state="stale",
+                    refreshing=True,
+                )
+            if not force:
+                return self._with_cache_state(stale, state="stale")
+
+        if self.background_refresh:
+            self._schedule_refresh(canonical)
+            return self._warming_packet(canonical)
+
+        return self._refresh_packet(canonical)
+
+    def prewarm(self, symbols: Iterable[str]) -> None:
+        if not self.background_refresh:
+            return
+        for symbol in dict.fromkeys(symbols):
+            try:
+                canonical = _canonical_a_share(symbol)
+            except ValueError:
+                continue
+            if self._persistent_cache(canonical) is None:
+                self._schedule_refresh(canonical)
+
+    def refresh_packet(self, symbol: str) -> dict[str, Any]:
+        """Refresh one public comparison snapshot from the Worker."""
+        return self._refresh_packet(_canonical_a_share(symbol))
+
+    def close(self) -> None:
+        if self._executor is not None:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _refresh_packet(self, canonical: str) -> dict[str, Any]:
         if self.client is None:
             raise ValueError("Tushare 数据接口尚未配置")
+        with self._build_lock:
+            packet = self._build_packet(canonical)
+            with self._lock:
+                self._packet_cache[canonical] = (
+                    time.monotonic() + self.cache_seconds,
+                    packet,
+                )
+            if self.database is not None:
+                self.database.put_cache(
+                    self._cache_key(canonical),
+                    packet,
+                    self.stale_seconds,
+                )
+            return self._with_cache_state(packet, state="refreshed")
 
-        packet = self._build_packet(canonical)
+    def _schedule_refresh(self, canonical: str) -> None:
+        if self._executor is None:
+            return
         with self._lock:
-            self._packet_cache[canonical] = (
-                time.monotonic() + self.cache_seconds,
-                packet,
+            if canonical in self._refreshing:
+                return
+            self._refreshing.add(canonical)
+        self._executor.submit(self._refresh_job, canonical)
+
+    def _refresh_job(self, canonical: str) -> None:
+        try:
+            self._refresh_packet(canonical)
+        except Exception:
+            pass
+        finally:
+            with self._lock:
+                self._refreshing.discard(canonical)
+
+    def _persistent_cache(
+        self,
+        canonical: str,
+        *,
+        allow_stale: bool = False,
+    ) -> dict[str, Any] | None:
+        if self.database is None:
+            return None
+        return self.database.get_cache(
+            self._cache_key(canonical),
+            allow_stale=allow_stale,
+        )
+
+    def _cache_key(self, canonical: str) -> str:
+        return f"industry-comparison:{self.METHOD}:{canonical}"
+
+    def _stale_is_usable(self, packet: dict[str, Any]) -> bool:
+        age = self._packet_age_seconds(packet)
+        return age is not None and age <= self.stale_seconds
+
+    def _packet_is_fresh(self, packet: dict[str, Any]) -> bool:
+        age = self._packet_age_seconds(packet)
+        return age is not None and age <= self.cache_seconds
+
+    @staticmethod
+    def _packet_age_seconds(packet: dict[str, Any]) -> float | None:
+        generated_at = packet.get("generatedAt") or packet.get("fetched_at")
+        if not generated_at:
+            return None
+        try:
+            generated = datetime.fromisoformat(
+                str(generated_at).replace("Z", "+00:00")
             )
-        return _deep_copy(packet)
+            if generated.tzinfo is None:
+                generated = generated.replace(tzinfo=timezone.utc)
+            age = datetime.now(timezone.utc) - generated.astimezone(timezone.utc)
+            return max(0.0, age.total_seconds())
+        except (TypeError, ValueError):
+            return None
+
+    def _with_cache_state(
+        self,
+        packet: dict[str, Any],
+        *,
+        state: str,
+        refreshing: bool = False,
+    ) -> dict[str, Any]:
+        result = _deep_copy(packet)
+        result["cache"] = {
+            "state": state,
+            "refreshing": refreshing,
+        }
+        return result
+
+    def _warming_packet(self, canonical: str) -> dict[str, Any]:
+        return {
+            "symbol": _to_tushare_symbol(canonical),
+            "internalSymbol": canonical,
+            "name": canonical,
+            "status": "warming",
+            "industry": {},
+            "reportPeriod": None,
+            "valuationTradeDate": None,
+            "generatedAt": utc_now(),
+            "coverage": {
+                "industryMembers": 0,
+                "financialMembersAtAnchor": 0,
+                "valuationMembers": 0,
+                "availableFactors": 0,
+                "totalFactors": 5,
+            },
+            "radar": {
+                "labels": [],
+                "subject": [],
+                "industryMedian": [],
+            },
+            "topMetricComparison": {"series": []},
+            "factors": [],
+            "warnings": ["行业对比数据正在后台准备，请稍后刷新。"],
+            "sources": [],
+            "cache": {
+                "state": "warming",
+                "refreshing": True,
+            },
+        }
 
     def _build_packet(self, canonical: str) -> dict[str, Any]:
         subject_code = _to_tushare_symbol(canonical)

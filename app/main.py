@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import datetime
+from decimal import Decimal
 from io import BytesIO
 import hashlib
 import re
@@ -11,9 +12,18 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from PIL import Image, ImageOps, UnidentifiedImageError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from starlette.middleware.gzip import GZipMiddleware
 
@@ -49,6 +59,11 @@ from app.providers.us_fundamentals import USEquityFundamentalsProvider
 from app.providers.tushare import TushareClient, TushareProviderError
 from app.services.agent import AgentService
 from app.services.agent_stream import AgentStreamBroker
+from app.services.ai_research import (
+    AIResearchConflict,
+    AIResearchNotFound,
+    AIResearchService,
+)
 from app.services.analysis import MarketAnalysisService
 from app.services.article import MarketPulseArticleService
 from app.services.background import BackgroundScheduler, EventBroker
@@ -70,6 +85,8 @@ from app.services.stock_domain import (
 )
 from app.services.stock_workspace import StockWorkspaceService
 from app.services.stock_dashboard import StockDashboardService
+from app.services.stock_intelligence import StockIntelligenceService
+from app.services.profile_summary import ProfileSummaryService
 from app.services.industry_comparison import IndustryComparisonService
 from app.services.tushare_snapshots import TushareSnapshotService
 from app.services.today_dashboard import TodayDashboardService
@@ -92,6 +109,19 @@ from app.services.live_market import (
 )
 from app.services.knowledge import KnowledgeService
 from app.services.market_news import MarketNewsService
+from app.services.market_review import MarketReviewService
+from app.services.trade_review import TradeReviewService
+from app.services.portfolio_ledger import (
+    IdempotencyConflict,
+    InvalidTrade,
+    PortfolioLedger,
+    PositionNotFound,
+    VersionConflict,
+)
+from app.services.redis_client import create_redis_client
+from app.services.data_refresh_queue import DataRefreshQueue
+from app.services.research_dispatcher import ResearchDispatcher
+from app.services.research_queue import ResearchQueue
 from app.services.research_reports import (
     ResearchReportService,
     StockResearchEvidenceService,
@@ -100,6 +130,7 @@ from app.services.research_claims import build_research_claim_ledger
 from app.services.research_priority import ResearchPriorityService
 from app.services.research_actions import ResearchActionService
 from app.services.research_outcomes import ResearchOutcomeService
+from app.services.stock_snapshot_refresh import StockSnapshotRefreshService
 from app.utils import utc_now
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -151,6 +182,14 @@ class UserCreate(BaseModel):
     name: str = Field(min_length=1, max_length=80)
 
 
+class PhoneContactUpdate(BaseModel):
+    phone: str = Field(min_length=6, max_length=32)
+
+
+class PaymentOrderDraftCreate(BaseModel):
+    product_code: str = Field(min_length=2, max_length=48, pattern=r"^[a-z0-9_:-]+$")
+
+
 class LegacySessionClaim(BaseModel):
     user_id: str = Field(min_length=36, max_length=36)
 
@@ -161,6 +200,63 @@ class WatchlistUpsert(BaseModel):
     market: str | None = Field(default=None, max_length=40)
     thesis: str | None = Field(default=None, max_length=1000)
     focus_status: Literal["holding", "watching", "researching", "cleared"] | None = None
+    psychological_price: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=4)
+    purchase_price: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=4)
+    holding_quantity: int | None = Field(default=None, ge=0, le=2_000_000_000)
+    sell_price: Decimal | None = Field(default=None, ge=0, max_digits=18, decimal_places=4)
+
+
+class WatchlistItemCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(min_length=1, max_length=24)
+    name: str | None = Field(default=None, max_length=80)
+    priority: Literal["high", "normal", "low"] = "normal"
+    reason: str = Field(min_length=1, max_length=1000)
+    catalyst_condition: str | None = Field(default=None, max_length=1000)
+    invalidation_condition: str | None = Field(default=None, max_length=1000)
+    tracking_frequency: str = Field(default="weekly", min_length=1, max_length=40)
+    tracking_status: Literal["active", "paused"] = "active"
+
+
+class WatchlistItemPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    priority: Literal["high", "normal", "low"] | None = None
+    reason: str | None = Field(default=None, min_length=1, max_length=1000)
+    catalyst_condition: str | None = Field(default=None, max_length=1000)
+    invalidation_condition: str | None = Field(default=None, max_length=1000)
+    tracking_frequency: str | None = Field(default=None, min_length=1, max_length=40)
+    tracking_status: Literal["active", "paused"] | None = None
+
+
+class PositionCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    symbol: str = Field(min_length=1, max_length=24)
+    name: str | None = Field(default=None, max_length=80)
+    account_type: Literal["simulated", "live"]
+    quantity: Decimal = Field(gt=0, max_digits=24, decimal_places=6)
+    price: Decimal = Field(gt=0, max_digits=24, decimal_places=6)
+    fee: Decimal = Field(default=Decimal("0"), ge=0, max_digits=24, decimal_places=6)
+    executed_at: str = Field(min_length=10, max_length=64)
+    current_price: Decimal | None = Field(
+        default=None, gt=0, max_digits=24, decimal_places=6
+    )
+    data_as_of: str | None = Field(default=None, max_length=64)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+
+
+class TradeCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    side: Literal["buy", "sell"]
+    quantity: Decimal = Field(gt=0, max_digits=24, decimal_places=6)
+    price: Decimal = Field(gt=0, max_digits=24, decimal_places=6)
+    fee: Decimal = Field(default=Decimal("0"), ge=0, max_digits=24, decimal_places=6)
+    executed_at: str = Field(min_length=10, max_length=64)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+    base_version: int = Field(ge=1)
 
 
 class MemoryCandidateCreate(BaseModel):
@@ -195,6 +291,23 @@ class ConversationCreate(BaseModel):
 class ConversationPatch(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=160)
     quality_scope: Literal["user", "evaluation"] | None = None
+
+
+class AIResearchTarget(BaseModel):
+    symbol: str = Field(min_length=1, max_length=24)
+    name: str | None = Field(default=None, max_length=80)
+
+
+class AIResearchCreate(BaseModel):
+    question: str = Field(min_length=1, max_length=4000)
+    targets: list[AIResearchTarget] = Field(min_length=1, max_length=5)
+    conversation_id: str | None = Field(default=None, max_length=36)
+
+
+class FiveDimensionResearchCreate(BaseModel):
+    symbol: str = Field(min_length=1, max_length=24)
+    name: str | None = Field(default=None, max_length=80)
+    focus: str = Field(default="", max_length=2000)
 
 
 class DeepStockStart(BaseModel):
@@ -657,11 +770,35 @@ def create_app(
     breadth_provider: Any | None = None,
     industry_index_provider: Any | None = None,
     tushare_client: Any | None = None,
+    official_market_provider: Any | None = None,
+    market_announcement_provider: Any | None = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.ensure_directories()
     database = Database(settings.database_path, settings.workspace_root)
     database.initialize()
+    redis_runtime = create_redis_client(settings)
+    research_queue = (
+        ResearchQueue(database, redis_runtime.client)
+        if redis_runtime.is_available
+        else None
+    )
+    data_refresh_queue = (
+        DataRefreshQueue(database, redis_runtime.client)
+        if redis_runtime.is_available
+        else None
+    )
+    research_dispatcher = (
+        ResearchDispatcher(
+            database,
+            research_queue,
+            max_concurrent_per_user=settings.research_max_concurrent_per_user,
+            task_timeout_seconds=settings.research_task_timeout_seconds,
+            task_budget_usd=settings.research_task_budget_usd,
+        )
+        if research_queue is not None
+        else None
+    )
     knowledge = KnowledgeService(database, PROJECT_ROOT / "app" / "knowledge" / "common")
     knowledge.seed_common_documents()
     supplied_market_provider = market_provider
@@ -776,6 +913,7 @@ def create_app(
     research_reports = ResearchReportService(
         database, research_evidence, agent, settings
     )
+    ai_research = AIResearchService(database, research_evidence, settings)
     research_tracking = research_reports.tracking
     research_priority = ResearchPriorityService(database)
     research_actions = ResearchActionService(database, research_priority)
@@ -823,17 +961,49 @@ def create_app(
         or live_market_provider,
         tushare_client=resolved_tushare_client,
         cache_seconds=settings.sector_cache_seconds,
+        background_refresh=settings.background_jobs_enabled,
     )
+    market_review = MarketReviewService(
+        database,
+        today_dashboard,
+        settings,
+        tushare_client=resolved_tushare_client,
+        official_provider=official_market_provider,
+        announcement_provider=market_announcement_provider,
+    )
+    trade_review = TradeReviewService(database)
+    portfolio_ledger = PortfolioLedger(database)
     stock_dashboard = StockDashboardService(
         market_provider=live_market_provider,
         fundamentals_service=fundamentals,
         tushare_client=resolved_tushare_client,
         catalog_ttl_seconds=max(3600, settings.market_cache_seconds * 10),
     )
+    profile_summary = ProfileSummaryService(database)
     industry_comparison = IndustryComparisonService(
         resolved_tushare_client,
-        cache_seconds=max(900, settings.market_cache_seconds * 10),
-        batch_cache_seconds=max(21_600, settings.market_cache_seconds * 60),
+        database=database,
+        cache_seconds=max(21_600, settings.market_cache_seconds * 10),
+        batch_cache_seconds=max(86_400, settings.market_cache_seconds * 60),
+        background_refresh=settings.background_jobs_enabled,
+    )
+    stock_snapshot_refresh = StockSnapshotRefreshService(
+        database,
+        stock_dashboard,
+        market_provider=live_market_provider,
+        industry_comparison=industry_comparison,
+    )
+
+    def stock_intelligence_industry(symbol: str) -> str | None:
+        comparison = industry_comparison.get_packet(symbol)
+        industry = comparison.get("industry") or {}
+        return industry.get("name") or industry.get("l1Name")
+
+    stock_intelligence = StockIntelligenceService(
+        database,
+        stock_dashboard.profile,
+        settings,
+        industry_resolver=stock_intelligence_industry,
     )
     li_zong_strategy = LiZongStrategyService(database, tushare_snapshots)
     stock_workspace = StockWorkspaceService(
@@ -865,6 +1035,7 @@ def create_app(
         research_reports,
         research_outcomes,
         market_news,
+        market_review,
         evidence_tasks,
         data_health,
         event_broker,
@@ -876,9 +1047,20 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         background.start()
+        stock_dashboard.prewarm_catalog()
+        today_dashboard.prewarm()
+        industry_comparison.prewarm(
+            (
+                "300750.SZ",
+                *settings.default_a_share_symbols,
+                *database.list_distinct_watchlist_symbols(),
+            )
+        )
         try:
             yield
         finally:
+            industry_comparison.close()
+            today_dashboard.close()
             background.stop()
 
     app = FastAPI(
@@ -908,6 +1090,11 @@ def create_app(
     app.state.outlook_calibration = outlook_calibration
     app.state.research_evidence = research_evidence
     app.state.research_reports = research_reports
+    app.state.ai_research = ai_research
+    app.state.redis = redis_runtime
+    app.state.research_queue = research_queue
+    app.state.data_refresh_queue = data_refresh_queue
+    app.state.research_dispatcher = research_dispatcher
     app.state.research_tracking = research_tracking
     app.state.research_priority = research_priority
     app.state.research_actions = research_actions
@@ -916,6 +1103,9 @@ def create_app(
     app.state.data_health = data_health
     app.state.knowledge = knowledge
     app.state.market_news = market_news
+    app.state.market_review = market_review
+    app.state.trade_review = trade_review
+    app.state.portfolio_ledger = portfolio_ledger
     app.state.evidence_tasks = evidence_tasks
     app.state.conversation_quality = conversation_quality
     app.state.deep_stock = deep_stock
@@ -925,6 +1115,9 @@ def create_app(
     app.state.tushare_snapshots = tushare_snapshots
     app.state.today_dashboard = today_dashboard
     app.state.stock_dashboard = stock_dashboard
+    app.state.stock_snapshot_refresh = stock_snapshot_refresh
+    app.state.stock_intelligence = stock_intelligence
+    app.state.profile_summary = profile_summary
     app.state.industry_comparison = industry_comparison
     app.state.li_zong_strategy = li_zong_strategy
     app.state.event_broker = event_broker
@@ -951,6 +1144,32 @@ def create_app(
             "name": user["name"],
             "created_at": user["created_at"],
             "session_expires_at": user.get("session_expires_at"),
+        }
+
+    def normalize_contact_phone(value: str) -> str:
+        compact = re.sub(r"[\s()-]", "", value)
+        if re.fullmatch(r"1[3-9]\d{9}", compact):
+            return f"+86{compact}"
+        if re.fullmatch(r"\+[1-9]\d{7,14}", compact):
+            return compact
+        raise ValueError("invalid_phone")
+
+    def masked_phone(value: str | None) -> str | None:
+        if not value:
+            return None
+        if value.startswith("+86") and len(value) == 14:
+            return f"+86 {value[3:6]}****{value[-4:]}"
+        return f"{value[:4]}****{value[-4:]}"
+
+    def public_payment_order(order: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": order["id"],
+            "provider": order["provider"],
+            "product_code": order["product_code"],
+            "status": order["status"],
+            "payment_enabled": bool(order["payment_enabled"]),
+            "phone_masked": masked_phone(order.get("phone_e164")),
+            "created_at": order["created_at"],
         }
 
     def public_upload(upload: dict[str, Any]) -> dict[str, Any]:
@@ -1012,6 +1231,24 @@ def create_app(
             raise HTTPException(status_code=401, detail="需要有效个人会话")
         return user
 
+    def portfolio_response(value: Any) -> Any:
+        if isinstance(value, Decimal):
+            return f"{value:.2f}"
+        if isinstance(value, dict):
+            return {key: portfolio_response(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [portfolio_response(item) for item in value]
+        return value
+
+    def raise_portfolio_http_error(exc: Exception) -> None:
+        if isinstance(exc, PositionNotFound):
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if isinstance(exc, (VersionConflict, IdempotencyConflict)):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if isinstance(exc, InvalidTrade):
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        raise exc
+
     def watchlist_brief_with_profiles(user_id: str) -> dict[str, Any]:
         packet = analysis.watchlist_brief(user_id)
         for item in packet.get("items", []):
@@ -1047,10 +1284,6 @@ def create_app(
     def demo_page(request: Request) -> Response:
         return static_file_response(STATIC_DIR / "high-fidelity-demo.html", request, "text/html; charset=utf-8", PAGE_HEADERS)
 
-    @app.get("/old-demo", include_in_schema=False)
-    def old_demo_page(request: Request) -> Response:
-        return static_file_response(STATIC_DIR / "demo.html", request, "text/html; charset=utf-8", PAGE_HEADERS)
-
     @app.get("/new-demo", include_in_schema=False)
     def new_demo_page(request: Request) -> Response:
         return static_file_response(STATIC_DIR / "high-fidelity-demo.html", request, "text/html; charset=utf-8", PAGE_HEADERS)
@@ -1070,6 +1303,34 @@ def create_app(
             "data_health": data_health.public_summary(data_health.latest()),
             "background_jobs": background.status(),
         }
+
+    @app.get("/ready")
+    def readiness(response: Response) -> dict[str, Any]:
+        checks = {"database": False, "schema": False, "redis": False}
+        try:
+            with database.connect() as connection:
+                connection.execute("SELECT 1").fetchone()
+                checks["database"] = True
+                migration = connection.execute(
+                    """
+                    SELECT 1 FROM schema_migrations
+                    WHERE migration_id = '0007_research_task_observability'
+                    """
+                ).fetchone()
+                checks["schema"] = migration is not None
+        except Exception:
+            pass
+        if not redis_runtime.is_available:
+            checks["redis"] = not settings.production_mode
+        else:
+            try:
+                checks["redis"] = bool(redis_runtime.client.ping())
+            except Exception:
+                checks["redis"] = False
+        ready = all(checks.values())
+        if not ready:
+            response.status_code = 503
+        return {"status": "ready" if ready else "not_ready", "checks": checks}
 
     @app.get("/events", include_in_schema=False)
     def events() -> StreamingResponse:
@@ -1156,6 +1417,39 @@ def create_app(
     @app.get("/me")
     def get_me(request: Request) -> dict[str, Any]:
         return public_user(require_session_user(request))
+
+    @app.put("/me/contact-phone")
+    def update_contact_phone(
+        payload: PhoneContactUpdate, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            phone_e164 = normalize_contact_phone(payload.phone)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid phone number") from exc
+        try:
+            updated = database.set_user_phone(user["id"], phone_e164)
+        except Exception as exc:
+            if "UNIQUE constraint failed" in str(exc):
+                raise HTTPException(
+                    status_code=409, detail="phone is already bound to another account"
+                ) from exc
+            raise
+        return {
+            "phone_masked": masked_phone(updated.get("phone_e164")),
+            "verification_status": updated["phone_verification_status"],
+        }
+
+    @app.post("/me/payment-orders/draft", status_code=201)
+    def create_payment_order_draft(
+        payload: PaymentOrderDraftCreate, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            order = database.create_payment_order_draft(user["id"], payload.product_code)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="phone contact is required") from exc
+        return public_payment_order(order)
 
     @app.post("/me/uploads/images", status_code=201)
     async def upload_my_image(
@@ -1276,6 +1570,331 @@ def create_app(
         if not database.archive_conversation(user["id"], conversation_id):
             raise HTTPException(status_code=404, detail="研究对话不存在")
         return Response(status_code=204)
+
+    @app.get("/me/ai-research/runs/current")
+    def get_current_ai_research(
+        request: Request,
+        conversation_id: str | None = Query(default=None, max_length=36),
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        if conversation_id:
+            conversation = database.get_conversation(user["id"], conversation_id)
+            if conversation is None or conversation.get("status") != "active":
+                raise HTTPException(status_code=404, detail="研究对话不存在")
+        item = ai_research.latest(
+            user["id"], conversation_id, workflow="lao_li_diagnosis_v1"
+        )
+        return {"item": ai_research.public(item) if item else None}
+
+    @app.post("/me/ai-research/runs", status_code=202)
+    def create_ai_research_run(
+        payload: AIResearchCreate,
+        background_tasks: BackgroundTasks,
+        request: Request,
+        response: Response,
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        if payload.conversation_id:
+            conversation = database.get_conversation(
+                user["id"], payload.conversation_id
+            )
+            if conversation is None or conversation.get("status") != "active":
+                raise HTTPException(status_code=404, detail="研究对话不存在")
+        else:
+            conversation = database.create_conversation(
+                user["id"], _conversation_title(payload.question)
+            )
+
+        targets: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for item in payload.targets:
+            try:
+                symbol = normalize_symbol(item.symbol)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="证券代码格式无效") from exc
+            if symbol in seen:
+                continue
+            if not symbol.endswith((".SS", ".SZ", ".BJ")):
+                raise HTTPException(
+                    status_code=422,
+                    detail="清数智算首版仅支持中国 A 股证券",
+                )
+            seen.add(symbol)
+            configured = RESEARCH_TARGETS.get(symbol) or {}
+            targets.append(
+                {
+                    "symbol": symbol,
+                    "name": (item.name or configured.get("name") or symbol).strip(),
+                }
+            )
+        if not targets:
+            raise HTTPException(status_code=422, detail="请先指定股票")
+
+        dispatcher = getattr(request.app.state, "research_dispatcher", None)
+        if dispatcher is not None:
+            idempotency_key = request.headers.get("idempotency-key", "").strip()
+            if len(idempotency_key) < 16 or len(idempotency_key) > 128:
+                raise HTTPException(
+                    status_code=428,
+                    detail="异步研究请求必须提供 16-128 字符的 Idempotency-Key",
+                )
+            request_id = request.headers.get("x-request-id", "").strip() or str(uuid4())
+            trace_id = request.headers.get("x-trace-id", "").strip() or request_id
+            try:
+                run = dispatcher.submit(
+                    user_id=user["id"],
+                    conversation_id=conversation["id"],
+                    targets=targets,
+                    question=payload.question,
+                    idempotency_key=idempotency_key,
+                    request_id=request_id[:128],
+                trace_id=trace_id[:128],
+                workflow="lao_li_diagnosis_v1",
+            )
+            except ValueError as exc:
+                if str(exc) == "idempotency_key_reused":
+                    raise HTTPException(
+                        status_code=409, detail="幂等键已用于不同研究请求"
+                    ) from exc
+                if str(exc) == "research_concurrency_limit":
+                    raise HTTPException(
+                        status_code=429, detail="当前用户进行中的研究任务已达上限"
+                    ) from exc
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            database.add_conversation_message(
+                user_id=user["id"],
+                conversation_id=conversation["id"],
+                role="user",
+                content=payload.question.strip(),
+                metadata={
+                    "kind": "ai_research_question",
+                    "ai_research_run_id": run["run_id"],
+                    "targets": targets,
+                },
+            )
+            response.headers["Idempotency-Key"] = idempotency_key
+            response.headers["X-Request-ID"] = request_id[:128]
+            response.headers["X-Trace-ID"] = trace_id[:128]
+            return ai_research.public(run)
+
+        try:
+            run = ai_research.create(
+                user_id=user["id"],
+                conversation_id=conversation["id"],
+                targets=targets,
+                question=payload.question,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail="证据快照建立失败，请稍后重试"
+            ) from exc
+
+        database.add_conversation_message(
+            user_id=user["id"],
+            conversation_id=conversation["id"],
+            role="user",
+            content=payload.question.strip(),
+            metadata={
+                "kind": "ai_research_question",
+                "ai_research_run_id": run["run_id"],
+                "targets": targets,
+            },
+        )
+        background_tasks.add_task(
+            ai_research.execute_main, user["id"], run["run_id"]
+        )
+        return ai_research.public(run)
+
+    @app.get("/me/ai-research/five-dimension-runs/current")
+    def get_current_five_dimension_research(
+        request: Request,
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        item = ai_research.latest(
+            user["id"], workflow="five_dimension_v7"
+        )
+        return {"item": ai_research.public(item) if item else None}
+
+    @app.post("/me/ai-research/five-dimension-runs", status_code=202)
+    def create_five_dimension_research_run(
+        payload: FiveDimensionResearchCreate,
+        background_tasks: BackgroundTasks,
+        request: Request,
+        response: Response,
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            symbol = normalize_symbol(payload.symbol)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail="证券代码格式无效"
+            ) from exc
+        if not symbol.endswith((".SS", ".SZ", ".BJ")):
+            raise HTTPException(
+                status_code=422,
+                detail="清数智算首版仅支持中国 A 股证券",
+            )
+        configured = RESEARCH_TARGETS.get(symbol) or {}
+        name = (payload.name or configured.get("name") or symbol).strip()
+        focus = payload.focus.strip()
+        question = focus or "请完成该股票的通用五维分析"
+        try:
+            skill_metadata = (
+                ai_research.five_dimension_skill_loader.public_metadata()
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503, detail="五维分析 Skill 资产不可用"
+            ) from exc
+        conversation = database.create_conversation(
+            user["id"], f"五维分析 · {name}"
+        )
+        targets = [{"symbol": symbol, "name": name}]
+        dispatcher = getattr(request.app.state, "research_dispatcher", None)
+        if dispatcher is not None:
+            idempotency_key = request.headers.get(
+                "idempotency-key", ""
+            ).strip()
+            if len(idempotency_key) < 16 or len(idempotency_key) > 128:
+                raise HTTPException(
+                    status_code=428,
+                    detail="异步研究请求必须提供 16-128 字符的 Idempotency-Key",
+                )
+            request_id = (
+                request.headers.get("x-request-id", "").strip() or str(uuid4())
+            )
+            trace_id = (
+                request.headers.get("x-trace-id", "").strip() or request_id
+            )
+            try:
+                run = dispatcher.submit(
+                    user_id=user["id"],
+                    conversation_id=conversation["id"],
+                    targets=targets,
+                    question=question,
+                    idempotency_key=idempotency_key,
+                    request_id=request_id[:128],
+                    trace_id=trace_id[:128],
+                    workflow="five_dimension_v7",
+                    snapshot={
+                        "workflow": "five_dimension_v7",
+                        "skill_bundle": skill_metadata,
+                    },
+                )
+            except ValueError as exc:
+                if str(exc) == "idempotency_key_reused":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="幂等键已用于不同研究请求",
+                    ) from exc
+                if str(exc) == "research_concurrency_limit":
+                    raise HTTPException(
+                        status_code=429,
+                        detail="当前用户进行中的研究任务已达上限",
+                    ) from exc
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            response.headers["Idempotency-Key"] = idempotency_key
+            response.headers["X-Request-ID"] = request_id[:128]
+            response.headers["X-Trace-ID"] = trace_id[:128]
+            return ai_research.public(run)
+
+        run = ai_research.create(
+            user_id=user["id"],
+            conversation_id=conversation["id"],
+            targets=targets,
+            question=question,
+            workflow="five_dimension_v7",
+        )
+        background_tasks.add_task(
+            ai_research.execute_five_dimension_run,
+            user["id"],
+            run["run_id"],
+        )
+        return ai_research.public(run)
+
+    @app.get("/me/ai-research/runs/{run_id}")
+    def get_ai_research_run(run_id: str, request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return ai_research.public(ai_research.get(user["id"], run_id))
+        except AIResearchNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/me/ai-research/runs/{run_id}/cancel", status_code=202)
+    def cancel_ai_research_run(run_id: str, request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        current = database.get_ai_research_run(user["id"], run_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="研究任务不存在")
+        if current.get("execution_status") in {
+            "completed",
+            "failed",
+            "cancelled",
+            "expired",
+        }:
+            raise HTTPException(status_code=409, detail="研究任务已结束")
+        cancelled = database.request_ai_research_cancellation(user["id"], run_id)
+        if cancelled is None:
+            raise HTTPException(status_code=404, detail="研究任务不存在")
+        return ai_research.public(cancelled)
+
+    @app.post("/me/ai-research/runs/{run_id}/retry", status_code=202)
+    def retry_ai_research_run(
+        run_id: str,
+        background_tasks: BackgroundTasks,
+        request: Request,
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            run = ai_research.prepare_main_retry(user["id"], run_id)
+        except AIResearchNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AIResearchConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        background_tasks.add_task(ai_research.execute_main, user["id"], run_id)
+        return ai_research.public(run)
+
+    @app.post(
+        "/me/ai-research/runs/{run_id}/dimensions/{dimension}",
+        status_code=202,
+    )
+    def start_ai_research_dimension(
+        run_id: str,
+        dimension: str,
+        background_tasks: BackgroundTasks,
+        request: Request,
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            run = ai_research.prepare_dimension(user["id"], run_id, dimension)
+        except AIResearchNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except AIResearchConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        background_tasks.add_task(
+            ai_research.execute_dimension, user["id"], run_id, dimension
+        )
+        return ai_research.public(run)
+
+    @app.post("/me/ai-research/runs/{run_id}/detail", status_code=202)
+    def start_ai_research_detail(
+        run_id: str,
+        background_tasks: BackgroundTasks,
+        request: Request,
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            run = ai_research.prepare_detail(user["id"], run_id)
+        except AIResearchNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except AIResearchConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        background_tasks.add_task(ai_research.execute_detail, user["id"], run_id)
+        return ai_research.public(run)
 
     @app.get("/stock-screener/profiles")
     def list_stock_screener_profiles() -> dict[str, Any]:
@@ -1853,10 +2472,29 @@ def create_app(
                 detail="股票目录暂不可用",
             ) from exc
 
+    @app.get("/api/v1/me/profile-summary")
+    def high_fidelity_profile_summary(request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        return {
+            **profile_summary.get(user["id"]),
+            "account": {
+                "id": user["id"],
+                "name": user["name"],
+                "workspace_isolated": True,
+                "phone_masked": masked_phone(user.get("phone_e164")),
+                "phone_verification_status": user.get("phone_verification_status"),
+            },
+        }
+
     @app.get("/api/v1/stocks/{symbol}/score-card")
-    def high_fidelity_stock_score_card(symbol: str) -> dict[str, Any]:
+    def high_fidelity_stock_score_card(
+        symbol: str,
+        refresh: bool = Query(default=False),
+    ) -> dict[str, Any]:
         try:
-            return stock_dashboard.score_card(symbol)
+            return stock_snapshot_refresh.read_score_card(
+                symbol, refresh=refresh
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
@@ -1871,7 +2509,9 @@ def create_app(
         refresh: bool = Query(default=False),
     ) -> dict[str, Any]:
         try:
-            return industry_comparison.get_packet(symbol, force=refresh)
+            return stock_snapshot_refresh.read_industry_comparison(
+                symbol, refresh=refresh
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
@@ -1880,19 +2520,45 @@ def create_app(
                 detail="行业五维对比数据暂不可用",
             ) from exc
 
+    @app.get("/api/v1/stocks/news")
+    def high_fidelity_stock_external_searches(
+        symbol: str = Query(min_length=6, max_length=16),
+    ) -> dict[str, Any]:
+        try:
+            return stock_intelligence.external_searches(symbol)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/api/v1/stocks/curated-insights")
+    def high_fidelity_stock_curated_insights(
+        symbol: str = Query(min_length=6, max_length=16),
+        refresh: bool = Query(default=False),
+    ) -> dict[str, Any]:
+        try:
+            return stock_intelligence.curated_insights(symbol, force=refresh)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="行业AI精选暂不可用",
+            ) from exc
+
     @app.get("/api/v1/market/kline")
     def high_fidelity_stock_kline(
         symbol: str = Query(min_length=6, max_length=16),
         period: Literal["1m", "1d", "1w", "1M", "1Y"] = "1d",
         limit: int = Query(default=80, ge=1, le=240),
         adjust: Literal["qfq", "none"] = "qfq",
+        refresh: bool = Query(default=False),
     ) -> dict[str, Any]:
         try:
-            return stock_dashboard.kline(
+            return stock_snapshot_refresh.read_kline(
                 symbol,
                 period=period,
                 limit=limit,
                 adjust=adjust,
+                refresh=refresh,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1918,6 +2584,30 @@ def create_app(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=503, detail="指数行情暂不可用") from exc
+
+    @app.get("/api/v1/dashboard/today")
+    def high_fidelity_today_dashboard() -> dict[str, Any]:
+        try:
+            return today_dashboard.dashboard()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="今日市场聚合数据暂不可用",
+            ) from exc
+
+    @app.get("/api/v1/reviews/market")
+    def high_fidelity_market_review(
+        refresh: bool = Query(default=False),
+    ) -> dict[str, Any]:
+        try:
+            if refresh:
+                return market_review.refresh_candidates()
+            return market_review.latest()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="市场复盘数据暂不可用",
+            ) from exc
 
     @app.get("/api/v1/market/overview")
     def high_fidelity_market_overview() -> dict[str, Any]:
@@ -1965,7 +2655,7 @@ def create_app(
     @app.get("/api/v1/market/sector-fund-flow")
     def high_fidelity_sector_fund_flow(
         limit: int = Query(default=10, ge=2, le=20),
-    ) -> list[dict[str, Any]]:
+    ) -> dict[str, Any]:
         try:
             return today_dashboard.sector_fund_flow(limit=limit)
         except Exception as exc:
@@ -2066,6 +2756,140 @@ def create_app(
     ) -> dict[str, Any]:
         return {"items": database.list_news(limit=limit, categories=("announcement", "news"))}
 
+    @app.get("/api/v1/me/watchlist")
+    def list_my_watchlist_v2(request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        return {"items": database.list_watchlist_items_v2(user["id"])}
+
+    @app.post("/api/v1/me/watchlist", status_code=201)
+    def upsert_my_watchlist_v2(
+        payload: WatchlistItemCreate, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            symbol = normalize_symbol(payload.symbol)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not re.fullmatch(r"\d{6}\.(?:SS|SZ|BJ)", symbol):
+            raise HTTPException(status_code=422, detail="仅支持中国 A 股证券")
+        return database.upsert_watchlist_item_v2(
+            user_id=user["id"],
+            symbol=symbol,
+            name=payload.name,
+            priority=payload.priority,
+            reason=payload.reason,
+            catalyst_condition=payload.catalyst_condition,
+            invalidation_condition=payload.invalidation_condition,
+            tracking_frequency=payload.tracking_frequency,
+            tracking_status=payload.tracking_status,
+        )
+
+    @app.patch("/api/v1/me/watchlist/{symbol}")
+    def patch_my_watchlist_v2(
+        symbol: str, payload: WatchlistItemPatch, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            canonical = normalize_symbol(symbol)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        current = database.get_watchlist_item_v2(user["id"], canonical)
+        if current is None:
+            raise HTTPException(status_code=404, detail="关注记录不存在")
+        patch = payload.model_dump(exclude_unset=True)
+        return database.upsert_watchlist_item_v2(
+            user_id=user["id"],
+            symbol=canonical,
+            name=current.get("name"),
+            priority=patch.get("priority", current["priority"]),
+            reason=patch.get("reason", current["reason"]),
+            catalyst_condition=patch.get(
+                "catalyst_condition", current.get("catalyst_condition")
+            ),
+            invalidation_condition=patch.get(
+                "invalidation_condition", current.get("invalidation_condition")
+            ),
+            tracking_frequency=patch.get(
+                "tracking_frequency", current["tracking_frequency"]
+            ),
+            tracking_status=patch.get(
+                "tracking_status", current["tracking_status"]
+            ),
+        )
+
+    @app.delete("/api/v1/me/watchlist/{symbol}", status_code=204)
+    def delete_my_watchlist_v2(symbol: str, request: Request) -> Response:
+        user = require_session_user(request)
+        try:
+            canonical = normalize_symbol(symbol)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not database.delete_watchlist_item_v2(user["id"], canonical):
+            raise HTTPException(status_code=404, detail="关注记录不存在")
+        return Response(status_code=204)
+
+    @app.get("/api/v1/me/positions")
+    def list_my_positions_v1(request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        return {"items": portfolio_ledger.list_positions(user["id"])}
+
+    @app.post("/api/v1/me/positions", status_code=201)
+    def create_my_position_v1(
+        payload: PositionCreate, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            result = portfolio_ledger.create_position(
+                user_id=user["id"],
+                symbol=payload.symbol,
+                name=payload.name,
+                account_type=payload.account_type,
+                quantity=payload.quantity,
+                price=payload.price,
+                fee=payload.fee,
+                executed_at=payload.executed_at,
+                current_price=payload.current_price,
+                data_as_of=payload.data_as_of,
+                idempotency_key=payload.idempotency_key,
+            )
+        except (PositionNotFound, VersionConflict, IdempotencyConflict, InvalidTrade) as exc:
+            raise_portfolio_http_error(exc)
+        return result
+
+    @app.get("/api/v1/me/positions/{position_id}")
+    def get_my_position_v1(position_id: str, request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        position = database.get_position(user["id"], position_id)
+        if position is None:
+            raise HTTPException(status_code=404, detail="持仓不存在")
+        return position
+
+    @app.post("/api/v1/me/positions/{position_id}/trades", status_code=201)
+    def create_my_position_trade_v1(
+        position_id: str, payload: TradeCreate, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            result = portfolio_ledger.record_trade(
+                user_id=user["id"],
+                position_id=position_id,
+                side=payload.side,
+                quantity=payload.quantity,
+                price=payload.price,
+                fee=payload.fee,
+                executed_at=payload.executed_at,
+                idempotency_key=payload.idempotency_key,
+                base_version=payload.base_version,
+            )
+        except (PositionNotFound, VersionConflict, IdempotencyConflict, InvalidTrade) as exc:
+            raise_portfolio_http_error(exc)
+        return result
+
+    @app.get("/api/v1/me/trade-reviews")
+    def get_my_trade_reviews_v1(request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        return portfolio_response(trade_review.summary(user["id"]))
+
     @app.get("/users/{user_id}/watchlist")
     def list_watchlist(user_id: str, request: Request) -> dict[str, Any]:
         require_user(request, user_id)
@@ -2087,6 +2911,10 @@ def create_app(
             market=payload.market,
             thesis=payload.thesis,
             focus_status=payload.focus_status,
+            psychological_price=payload.psychological_price,
+            purchase_price=payload.purchase_price,
+            holding_quantity=payload.holding_quantity,
+            sell_price=payload.sell_price,
         )
 
     @app.get("/users/{user_id}/watchlist/brief")
@@ -2115,6 +2943,10 @@ def create_app(
             market=payload.market,
             thesis=payload.thesis,
             focus_status=payload.focus_status,
+            psychological_price=payload.psychological_price,
+            purchase_price=payload.purchase_price,
+            holding_quantity=payload.holding_quantity,
+            sell_price=payload.sell_price,
         )
 
     @app.delete("/me/watchlist/{symbol}", status_code=204)
@@ -2485,6 +3317,11 @@ def create_app(
                 "days": days,
             },
         }
+
+    @app.get("/me/trade-reviews")
+    def get_my_trade_reviews(request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        return portfolio_response(trade_review.summary(user["id"]))
 
     @app.get("/me/run-reviews/{run_id}")
     def get_my_run_review(run_id: str, request: Request) -> dict[str, Any]:

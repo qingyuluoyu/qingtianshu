@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from app.config import PROJECT_ROOT, Settings
 from app.db import Database
+from app.services.project_skill import ProjectSkillLoader
 from app.utils import write_json
 
 
@@ -2591,6 +2592,7 @@ class AgentService:
     def __init__(self, database: Database, settings: Settings):
         self.database = database
         self.settings = settings
+        self.project_skill = ProjectSkillLoader(settings)
 
     def run(
         self,
@@ -2671,6 +2673,18 @@ class AgentService:
             *extra_skills,
         ]
         skill_text = "\n\n".join(self._load_skill(name) for name in skill_names)
+        project_skill = self.project_skill.load()
+        if project_skill is not None:
+            skill_text += (
+                "\n\n# 默认项目研究 Skill："
+                + project_skill.name
+                + "\n\n"
+                "以下 Skill 是本研究助手的默认研究纪律，无需用户说出“老李视角”"
+                "或其他触发词。分析 A 股个股或板块时完整执行其中的研究链路、"
+                "证据边界和输出要求；处理非 A 股或非诊股问题时只借鉴其证据、"
+                "不确定性和风险控制原则，不要生搬 A 股阈值或强套诊股模板。\n\n"
+                + project_skill.instructions
+            )
         memories = self.database.list_memories(user["id"], status="confirmed")
         prompt_evidence = self._evidence_for_prompt(evidence)
         prompt_knowledge_context = self._evidence_for_prompt(knowledge_context or {})
@@ -6303,38 +6317,27 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         usage_path = run_dir / "usage.json"
 
         if image_path:
-            image = Path(image_path).expanduser().resolve()
-            try:
-                image.relative_to(user_workspace.resolve())
-            except ValueError as exc:
-                raise ValueError("图片必须位于当前用户的专属工作区中") from exc
-            command = [
-                str(self.settings.hermes_bin),
-                "chat",
-                "-q",
-                prompt,
-                "--image",
-                str(image),
-                "-Q",
-                "--safe-mode",
-                "--max-turns",
-                "1",
-                "--source",
-                "tool",
-            ]
+            raise RuntimeError(
+                "图像研究已禁用：当前 Hermes CLI 没有已验证的安全提示词传递通道"
+            )
         else:
+            python_bin = self.settings.hermes_bin.parent / "python"
+            bridge = PROJECT_ROOT / "scripts" / "hermes_stream_bridge.py"
+            prompt_path = run_dir / "prompt.md"
+            if not prompt_path.exists():
+                prompt_path.write_text(prompt, encoding="utf-8")
+            if not python_bin.exists() or not bridge.exists():
+                raise FileNotFoundError("Hermes bridge runtime is unavailable")
             command = [
-                str(self.settings.hermes_bin),
-                "-z",
-                prompt,
-                "--usage-file",
-                str(usage_path),
-                "--safe-mode",
+                str(python_bin),
+                str(bridge),
+                "--prompt-file",
+                str(prompt_path),
             ]
         if provider:
             command.extend(["--provider", provider])
         if model:
-            command.extend(["-m", model])
+            command.extend(["-m" if image_path else "--model", model])
 
         result = subprocess.run(
             command,
@@ -6346,15 +6349,24 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
         )
         if result.returncode != 0:
             raise RuntimeError(f"Hermes 退出码 {result.returncode}")
-        raw_answer = result.stdout.strip()
-        answer = (
-            self._extract_chat_answer(raw_answer) if image_path else raw_answer
-        )
+        usage = None
+        if image_path:
+            answer = self._extract_chat_answer(result.stdout.strip())
+        else:
+            answer = ""
+            for line in reversed(result.stdout.splitlines()):
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") == "final":
+                    answer = str(event.get("answer") or "").strip()
+                    usage = dict(event.get("usage") or {})
+                    break
         if not answer:
             raise RuntimeError("Hermes 未返回文本")
 
-        usage = None
-        if usage_path.exists():
+        if image_path and usage_path.exists():
             try:
                 usage = json.loads(usage_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):

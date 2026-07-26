@@ -63,7 +63,27 @@ class GoogleNewsMarketProvider:
         config = MARKET_NEWS_QUERIES.get(market_key)
         if config is None:
             raise ProviderError("不支持的市场资讯范围")
-        params = {"q": config["query"], **config["locale"]}
+        packet = self.search(
+            config["query"],
+            label=config["label"],
+            limit=limit,
+            locale=config["locale"],
+            marker=f"__MARKET_{market_key.upper()}__",
+        )
+        packet["market_key"] = market_key
+        return packet
+
+    def search(
+        self,
+        query: str,
+        *,
+        label: str = "联网资讯",
+        limit: int = 12,
+        locale: dict[str, str] | None = None,
+        marker: str = "__WEB_SEARCH__",
+    ) -> dict[str, Any]:
+        locale = locale or {"hl": "zh-CN", "gl": "CN", "ceid": "CN:zh-Hans"}
+        params = {"q": str(query).strip()[:380], **locale}
         url = f"{self.endpoint}?{urlencode(params)}"
         try:
             response = requests.get(
@@ -91,12 +111,12 @@ class GoogleNewsMarketProvider:
             except (TypeError, ValueError):
                 published_at = None
             item_id = hashlib.sha256(
-                f"{market_key}|{link}".encode("utf-8")
+                f"{marker}|{link}".encode("utf-8")
             ).hexdigest()
             items.append(
                 {
                     "id": item_id,
-                    "symbol": f"__MARKET_{market_key.upper()}__",
+                    "symbol": marker,
                     "category": "market_news",
                     "title": re.sub(r"\s+", " ", title)[:500],
                     "summary": None,
@@ -110,8 +130,9 @@ class GoogleNewsMarketProvider:
         if not items:
             raise ProviderError("市场驱动资讯暂无有效条目")
         return {
-            "market_key": market_key,
-            "market_label": config["label"],
+            "market_key": marker,
+            "market_label": label,
+            "query": str(query).strip()[:380],
             "items": items,
             "fetched_at": utc_now(),
         }

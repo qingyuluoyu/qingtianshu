@@ -1,0 +1,8 @@
+{
+  "name": "A股任意股票技术面深度研究 Skill",
+  "version": "7.0.0",
+  "dimension": "technical",
+  "standalone": true,
+  "scope": "all A-share listed companies",
+  "output": "dimension_report.json"
+}

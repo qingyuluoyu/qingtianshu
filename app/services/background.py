@@ -5,6 +5,8 @@ from queue import Empty, Full, Queue
 import threading
 import time
 from typing import Any, Callable, Iterator
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from app.config import Settings
 from app.db import Database
@@ -26,12 +28,37 @@ from app.services.data_health import DataHealthService
 from app.services.live_market import LiveMarketService
 from app.services.analysis import MarketAnalysisService
 from app.services.market_news import MarketNewsService
+from app.services.market_review import MarketReviewService
 from app.services.research_reports import ResearchReportService
 from app.services.research_outcomes import ResearchOutcomeService
 from app.services.tushare_snapshots import TushareSnapshotService
 from app.services.li_zong_strategy_service import LiZongStrategyService
 from app.catalog import normalize_symbol
 from app.utils import utc_now
+
+
+SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
+
+
+def is_china_pre_market_refresh_due(
+    now: datetime,
+    last_started_at: datetime | None,
+    *,
+    hour: int,
+    minute: int,
+) -> bool:
+    """Return whether today's shared A-share warmup is still required.
+
+    The schedule intentionally uses a weekday gate only. The market provider remains
+    authoritative for exchange closures and will retain its last valid snapshot when
+    a holiday produces no new quote.
+    """
+    china_now = now.astimezone(SHANGHAI_TIMEZONE)
+    if china_now.weekday() >= 5 or (china_now.hour, china_now.minute) < (hour, minute):
+        return False
+    if last_started_at is None:
+        return True
+    return last_started_at.astimezone(SHANGHAI_TIMEZONE).date() < china_now.date()
 
 
 class EventBroker:
@@ -91,6 +118,7 @@ class BackgroundScheduler:
         research_reports: ResearchReportService,
         research_outcomes: ResearchOutcomeService,
         market_news: MarketNewsService,
+        market_review: MarketReviewService,
         evidence_tasks: EvidenceTaskService,
         data_health: DataHealthService,
         broker: EventBroker,
@@ -117,6 +145,7 @@ class BackgroundScheduler:
         self.research_reports = research_reports
         self.research_outcomes = research_outcomes
         self.market_news = market_news
+        self.market_review = market_review
         self.evidence_tasks = evidence_tasks
         self.data_health = data_health
         self.broker = broker
@@ -125,6 +154,7 @@ class BackgroundScheduler:
         self.li_zong_strategy = li_zong_strategy
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._market_review_thread: threading.Thread | None = None
 
     def start(self) -> None:
         if not self.settings.background_jobs_enabled or self.is_running:
@@ -136,11 +166,19 @@ class BackgroundScheduler:
             daemon=True,
         )
         self._thread.start()
+        self._market_review_thread = threading.Thread(
+            target=self._market_review_loop,
+            name="qingshu-market-review-scheduler",
+            daemon=True,
+        )
+        self._market_review_thread.start()
 
     def stop(self) -> None:
         self._stop.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=10)
+        if self._market_review_thread and self._market_review_thread.is_alive():
+            self._market_review_thread.join(timeout=10)
 
     @property
     def is_running(self) -> bool:
@@ -150,6 +188,10 @@ class BackgroundScheduler:
         return {
             "enabled": self.settings.background_jobs_enabled,
             "running": self.is_running,
+            "market_review_running": bool(
+                self._market_review_thread
+                and self._market_review_thread.is_alive()
+            ),
             "market_refresh_seconds": self.settings.background_market_refresh_seconds,
             "article_check_seconds": self.settings.background_article_check_seconds,
             "a_share_info_refresh_seconds": self.settings.background_info_refresh_seconds,
@@ -165,6 +207,15 @@ class BackgroundScheduler:
             "research_refresh_seconds": self.settings.background_research_refresh_seconds,
             "research_outcome_refresh_seconds": self.settings.background_research_refresh_seconds,
             "market_news_refresh_seconds": self.settings.background_market_news_refresh_seconds,
+            "market_review_refresh_seconds": self.settings.background_market_review_refresh_seconds,
+            "pre_market_refresh": {
+                "timezone": "Asia/Shanghai",
+                "time": (
+                    f"{self.settings.background_pre_market_refresh_hour:02d}:"
+                    f"{self.settings.background_pre_market_refresh_minute:02d}"
+                ),
+                "job_name": "china_pre_market_warmup",
+            },
             "evidence_task_refresh_seconds": self.settings.background_research_refresh_seconds,
             "calibration_refresh_seconds": self.settings.background_calibration_refresh_seconds,
             "data_quality_seconds": self.settings.background_data_quality_seconds,
@@ -207,6 +258,19 @@ class BackgroundScheduler:
         )
         while not self._stop.is_set():
             now = time.monotonic()
+            latest_warmup = self.database.latest_background_job(
+                "china_pre_market_warmup"
+            )
+            last_started_at = self._parse_job_time(
+                (latest_warmup or {}).get("started_at")
+            )
+            if is_china_pre_market_refresh_due(
+                datetime.now(tz=ZoneInfo("UTC")),
+                last_started_at,
+                hour=self.settings.background_pre_market_refresh_hour,
+                minute=self.settings.background_pre_market_refresh_minute,
+            ):
+                self._run_job("china_pre_market_warmup", self._refresh_pre_market_data)
             if now >= next_market:
                 self._run_job("market_intraday_refresh", self._refresh_markets)
                 next_market = time.monotonic() + max(
@@ -362,6 +426,19 @@ class BackgroundScheduler:
             )
             self._stop.wait(timeout=max(0.5, min(5.0, next_due - time.monotonic())))
 
+    def _market_review_loop(self) -> None:
+        while not self._stop.is_set():
+            self._run_job(
+                "market_review_candidates_refresh",
+                self._refresh_market_review,
+            )
+            self._stop.wait(
+                timeout=max(
+                    300,
+                    self.settings.background_market_review_refresh_seconds,
+                )
+            )
+
     def _run_job(self, job_name: str, function: Callable[[], dict[str, Any]]) -> None:
         job_id = self.database.start_background_job(job_name)
         try:
@@ -373,6 +450,46 @@ class BackgroundScheduler:
                 "failed",
                 error=f"{type(exc).__name__}: {exc}",
             )
+
+    @staticmethod
+    def _parse_job_time(value: Any) -> datetime | None:
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+
+    def _refresh_pre_market_data(self) -> dict[str, Any]:
+        """Warm shared datasets before the China cash session; never touches user data."""
+        refreshes: tuple[tuple[str, Callable[[], dict[str, Any]]], ...] = (
+            ("markets", self._refresh_markets),
+            ("market_news", self._refresh_market_news),
+            ("a_share_information", self._refresh_a_share_information),
+            ("a_share_filings", self._refresh_a_share_filings),
+            ("a_share_fundamentals", self._refresh_a_share_fundamentals),
+            ("business_structure", self._refresh_business_structure),
+            ("shareholders", self._refresh_shareholders),
+            ("analyst_expectations", self._refresh_analyst_expectations),
+            ("peer_valuations", self._refresh_peer_valuations),
+            ("earnings_quality", self._refresh_earnings_quality),
+            ("financial_drivers", self._refresh_financial_drivers),
+            ("research_reports", self._refresh_research_reports),
+        )
+        result: dict[str, Any] = {"timezone": "Asia/Shanghai", "jobs": {}}
+        for name, refresh in refreshes:
+            try:
+                result["jobs"][name] = {"status": "completed", "summary": refresh()}
+            except Exception as exc:
+                result["jobs"][name] = {
+                    "status": "failed",
+                    "error_type": type(exc).__name__,
+                }
+        result["completed"] = sum(
+            item["status"] == "completed" for item in result["jobs"].values()
+        )
+        result["requested"] = len(refreshes)
+        return result
 
     def _refresh_markets(self) -> dict[str, Any]:
         result = self.live_markets.snapshot()
@@ -864,6 +981,35 @@ class BackgroundScheduler:
             "completed": completed,
             "markets": [packet.get("market_key") for packet in packets],
             "items": sum(len(packet.get("items") or []) for packet in packets),
+        }
+
+    def _refresh_market_review(self) -> dict[str, Any]:
+        candidate = self.market_review.refresh_candidates()
+        formal = self.market_review.create_formal_if_due()
+        counts = {
+            section: len((candidate.get("conclusions") or {}).get(section) or [])
+            for section in (
+                "core_events",
+                "highlights",
+                "risks",
+                "watch_directions",
+            )
+        }
+        self.broker.publish(
+            {
+                "type": "market_review_updated",
+                "time": candidate.get("generated_at") or utc_now(),
+                "period_start": candidate.get("period_start"),
+                "period_end": candidate.get("period_end"),
+                "formal": formal is not None,
+                "counts": counts,
+            }
+        )
+        return {
+            "period_start": candidate.get("period_start"),
+            "period_end": candidate.get("period_end"),
+            "formal_created": formal is not None,
+            "counts": counts,
         }
 
     def _process_evidence_tasks(self) -> dict[str, Any]:

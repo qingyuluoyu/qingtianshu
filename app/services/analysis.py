@@ -1155,6 +1155,37 @@ class MarketAnalysisService:
                 "status": "unavailable",
             }
 
+    def sector_history(
+        self,
+        code: str,
+        days: int = 5,
+        *,
+        allow_remote: bool = True,
+    ) -> dict[str, Any]:
+        provider = self.sector_provider
+        if not hasattr(provider, "fetch_sector_history"):
+            return {
+                "code": code,
+                "status": "unavailable",
+                "source": "Sector history provider not configured",
+                "points": [],
+                "warnings": ["当前板块数据源不提供历史日线。"],
+            }
+        try:
+            return provider.fetch_sector_history(
+                code,
+                days=days,
+                allow_remote=allow_remote,
+            )
+        except ProviderError as exc:
+            return {
+                "code": code,
+                "status": "unavailable",
+                "source": "Eastmoney sector daily history",
+                "points": [],
+                "warnings": [str(exc)],
+            }
+
     def industry_snapshot(
         self, industry_name: str, market_date: str | None = None
     ) -> dict[str, Any]:

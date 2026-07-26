@@ -177,7 +177,7 @@ def test_business_structure_api_and_chat_routing(client, app):
         / "runs"
         / payload["run_id"]
         / "prompt.md"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "# Business Structure" in prompt
     assert "2025-06-30" in prompt
 

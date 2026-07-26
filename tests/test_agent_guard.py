@@ -4,6 +4,9 @@ from dataclasses import replace
 from io import StringIO
 import json
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 import app.services.agent as agent_module
 from app.db import Database
@@ -4940,6 +4943,88 @@ def test_research_action_prompt_keeps_top_actions_per_status():
     assert sum(item["status"] == "triggered" for item in selected) == 3
     assert sum(item["status"] == "pending_data" for item in selected) == 2
     assert sum(item["status"] == "watching" for item in selected) == 1
+
+
+def test_oneshot_hermes_uses_prompt_file_without_exposing_prompt_on_command_line(
+    tmp_path: Path, settings, monkeypatch
+):
+    bin_dir = tmp_path / "hermes" / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    hermes_bin = bin_dir / "hermes"
+    python_bin = bin_dir / "python"
+    hermes_bin.touch()
+    python_bin.touch()
+    guarded_settings = replace(
+        settings,
+        database_path=tmp_path / "oneshot-protocol.db",
+        workspace_root=tmp_path / "oneshot-protocol-workspaces",
+        hermes_bin=hermes_bin,
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database.initialize()
+    service = AgentService(database, guarded_settings)
+    run_dir = tmp_path / "run-oneshot"
+    run_dir.mkdir()
+    prompt = "仅应保存在文件中的私有研究提示词"
+    (run_dir / "prompt.md").write_text(prompt, encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(
+                '{"type":"delta","text":"忽略此增量"}\n'
+                '{"type":"final","answer":"受控最终回答","usage":{"model":"fake"}}\n'
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr("app.services.agent.subprocess.run", fake_run)
+
+    answer, usage = service._execute_hermes(
+        prompt=prompt,
+        model_tier="economy",
+        run_dir=run_dir,
+        user_workspace=tmp_path,
+        image_path=None,
+    )
+
+    command = captured["command"]
+    assert prompt not in command
+    assert "--prompt-file" in command
+    assert str(run_dir / "prompt.md") in command
+    assert "-z" not in command
+    assert answer == "受控最终回答"
+    assert usage == {"model": "fake"}
+
+
+def test_hermes_rejects_image_research_without_a_safe_prompt_channel(
+    tmp_path: Path, settings
+):
+    bin_dir = tmp_path / "hermes" / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    hermes_bin = bin_dir / "hermes"
+    hermes_bin.touch()
+    guarded_settings = replace(settings, hermes_bin=hermes_bin, hermes_enabled=True)
+    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database.initialize()
+    service = AgentService(database, guarded_settings)
+    run_dir = tmp_path / "image-run"
+    run_dir.mkdir()
+    image = tmp_path / "uploaded.png"
+    image.touch()
+
+    with pytest.raises(RuntimeError, match="图像研究已禁用"):
+        service._execute_hermes(
+            prompt="不得进入命令行的私有研究提示词",
+            model_tier="economy",
+            run_dir=run_dir,
+            user_workspace=tmp_path,
+            image_path=str(image),
+        )
 
 
 def test_streaming_bridge_publishes_only_guarded_cumulative_sentences(

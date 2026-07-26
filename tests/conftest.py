@@ -12,6 +12,15 @@ from app.main import create_app
 
 
 class FakeMarketProvider:
+    def read_cached_history(
+        self,
+        symbol: str,
+        range_name: str = "1y",
+        interval: str = "1d",
+        **_kwargs,
+    ) -> dict[str, Any]:
+        return self.fetch_history(symbol, range_name, interval)
+
     def fetch_history(
         self, symbol: str, range_name: str = "1y", interval: str = "1d"
     ) -> dict[str, Any]:

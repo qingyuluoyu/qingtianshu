@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from app.db import Database
+from app.providers import tushare as tushare_module
 from app.providers.market import (
     CSIIndustryIndexProvider,
     EastmoneyGlobalIndexProvider,
@@ -17,6 +20,60 @@ from app.providers.market import (
     TencentChinaIndexProvider,
     YahooMarketProvider,
 )
+from app.providers.llm_gateway import LLMGatewayClient
+from app.providers.tushare import TushareClient, TushareProviderError
+
+
+def test_llm_gateway_does_not_expose_reasoning_content_as_user_answer():
+    payload = {
+        "choices": [
+            {"message": {"reasoning_content": "internal chain of thought"}}
+        ]
+    }
+
+    assert LLMGatewayClient._extract_answer(payload) == ""
+
+
+def test_llm_gateway_disables_deepseek_thinking_for_fast_visible_answer(
+    settings, monkeypatch
+):
+    configured = replace(
+        settings,
+        llm_gateway_enabled=True,
+        llm_gateway_api_key="test-only",
+        llm_gateway_model="deepseek-v4-pro",
+    )
+    captured = {}
+
+    class Response:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def json():
+            return {
+                "id": "response-1",
+                "choices": [
+                    {
+                        "message": {"content": "连接正常"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+
+    def fake_post(url, *, headers, json, timeout):
+        captured.update({"url": url, "json": json, "timeout": timeout})
+        return Response()
+
+    monkeypatch.setattr("app.providers.llm_gateway.requests.post", fake_post)
+
+    answer, _ = LLMGatewayClient(configured).complete(
+        prompt="测试",
+        max_tokens=20,
+    )
+
+    assert answer == "连接正常"
+    assert captured["json"]["thinking"] == {"type": "disabled"}
 from app.providers.market_news import GoogleNewsMarketProvider
 from app.services.market_news import _rank_for_focus
 
@@ -81,6 +138,43 @@ def test_yahoo_provider_parses_and_caches(tmp_path: Path):
     stored = database.get_market_bars("000001.SS", "1d", limit=10)
     assert len(stored) == 2
     assert stored[-1]["adjusted_close"] == 12
+
+
+def test_yahoo_cached_history_never_calls_remote(tmp_path: Path):
+    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database.initialize()
+    database.put_cache(
+        "yahoo:300750.SZ:1d:1m",
+        {
+            "symbol": "300750.SZ",
+            "timezone": "Asia/Shanghai",
+            "regular_market_timestamp": "2026-07-24T07:00:00+00:00",
+            "market_timestamp": "2026-07-24T07:00:00+00:00",
+            "fetched_at": "2026-07-24T07:01:00+00:00",
+            "points": [
+                {
+                    "timestamp": "2026-07-24T07:00:00+00:00",
+                    "open": 260.0,
+                    "high": 263.0,
+                    "low": 259.0,
+                    "close": 262.0,
+                    "volume": 100,
+                }
+            ],
+        },
+        1,
+    )
+
+    def forbidden_remote(*_args, **_kwargs):
+        raise AssertionError("cached-only read called the remote provider")
+
+    provider = YahooMarketProvider(database, http_get=forbidden_remote)
+    packet = provider.read_cached_history(
+        "300750.SZ", range_name="1d", interval="1m", allow_stale=True
+    )
+
+    assert packet is not None
+    assert packet["points"][-1]["close"] == 262.0
 
 
 def test_yahoo_provider_returns_explicit_stale_cache_on_failure(tmp_path: Path):
@@ -311,14 +405,101 @@ def test_eastmoney_provider_parses_sector_fields(tmp_path: Path):
             ],
         }
     }
+    calls = []
+
+    def http_get(*args, **kwargs):
+        calls.append(kwargs)
+        return FakeResponse(payload)
+
     provider = EastmoneySectorProvider(
         database,
-        http_get=lambda *args, **kwargs: FakeResponse(payload),
+        http_get=http_get,
     )
     result = provider.fetch_hot_sectors(limit=5)
+    second = provider.fetch_hot_sectors(limit=100)
     assert result["coverage"]["total_available"] == 496
     assert result["sectors"][0]["name"] == "算力"
     assert result["sectors"][0]["main_net_inflow"] == 90000000
+    assert second["cache_hit"] is True
+    assert len(calls) == 1
+    assert calls[0]["params"]["pz"] == 100
+
+
+def test_eastmoney_sector_history_uses_real_daily_closes_and_cache(tmp_path: Path):
+    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database.initialize()
+    payload = {
+        "data": {
+            "klines": [
+                "2026-07-20,100,101,102,99,1,2,3,4,5,6",
+                "2026-07-21,101,103,104,100,1,2,3,4,5,6",
+                "2026-07-22,103,102,105,101,1,2,3,4,5,6",
+                "2026-07-23,102,106,107,101,1,2,3,4,5,6",
+                "2026-07-24,106,108,109,105,1,2,3,4,5,6",
+            ]
+        }
+    }
+    calls = []
+
+    def http_get(*args, **kwargs):
+        calls.append(kwargs)
+        return FakeResponse(payload)
+
+    provider = EastmoneySectorProvider(database, http_get=http_get)
+
+    first = provider.fetch_sector_history("BK0001", days=5)
+    second = provider.fetch_sector_history("BK0001", days=5)
+
+    assert [item["market_date"] for item in first["points"]] == [
+        "2026-07-20",
+        "2026-07-21",
+        "2026-07-22",
+        "2026-07-23",
+        "2026-07-24",
+    ]
+    assert [item["close"] for item in first["points"]] == [
+        101.0,
+        103.0,
+        102.0,
+        106.0,
+        108.0,
+    ]
+    assert first["status"] == "available"
+    assert first["source"] == "Eastmoney sector daily history"
+    assert second["cache_hit"] is True
+    assert len(calls) == 1
+    assert calls[0]["params"]["secid"] == "90.BK0001"
+    assert calls[0]["timeout"] == 6
+
+
+def test_tushare_client_passes_timeout_and_opens_circuit(monkeypatch):
+    calls = {"pro_api": [], "daily": 0}
+
+    class FakePro:
+        def daily(self, **params):
+            calls["daily"] += 1
+            raise RuntimeError("upstream unavailable")
+
+    class FakeTushare:
+        @staticmethod
+        def set_token(token):
+            return None
+
+        @staticmethod
+        def pro_api(token, timeout=30):
+            calls["pro_api"].append((token, timeout))
+            return FakePro()
+
+    monkeypatch.setattr(tushare_module, "ts", FakeTushare())
+    client = TushareClient("secret", timeout_seconds=7)
+
+    assert calls["pro_api"] == [("secret", 7)]
+    for _ in range(3):
+        with pytest.raises(TushareProviderError):
+            client.query("daily")
+    with pytest.raises(TushareProviderError, match="熔断"):
+        client.query("daily")
+    assert calls["daily"] == 3
 
 
 def test_csi_industry_provider_builds_official_constituents_and_history(

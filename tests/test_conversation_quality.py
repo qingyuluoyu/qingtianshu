@@ -174,7 +174,9 @@ def test_conversation_quality_persists_snapshot_and_workspace_json(settings):
     assert snapshot is not None
     assert snapshot["payload"]["method"] == payload["method"]
     assert output_path.is_file()
-    assert '"deterministic_conversation_quality_review_v3"' in output_path.read_text()
+    assert '"deterministic_conversation_quality_review_v3"' in output_path.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_conversation_quality_excludes_explicit_evaluation_scope(settings):

@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "A-share dimension research report",
+  "type": "object",
+  "required": [
+    "meta",
+    "company_routing",
+    "data_quality",
+    "research_thesis",
+    "blocks",
+    "conclusion",
+    "sources",
+    "limitations"
+  ],
+  "properties": {
+    "meta": {
+      "type": "object"
+    },
+    "company_routing": {
+      "type": "object"
+    },
+    "data_quality": {
+      "type": "object"
+    },
+    "research_thesis": {
+      "type": "object"
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "charts": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "conclusion": {
+      "type": "object"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

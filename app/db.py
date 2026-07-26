@@ -14,6 +14,8 @@ from app.utils import json_dumps, utc_now, write_json
 
 class Database:
     SYSTEM_EDITOR_ID = "system-market-editor"
+    SCHEMA_BASELINE_MIGRATION = "0001_schema_baseline"
+    MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
     def __init__(self, path: Path, workspace_root: Path):
         self.path = Path(path)
@@ -30,6 +32,14 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    migration_id TEXT PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                )
+                """
+            )
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS users (
@@ -71,6 +81,10 @@ class Database:
                     thesis TEXT,
                     focus_status TEXT NOT NULL DEFAULT 'watching'
                         CHECK(focus_status IN ('holding', 'watching', 'researching', 'cleared')),
+                    psychological_price TEXT,
+                    purchase_price TEXT,
+                    holding_quantity INTEGER,
+                    sell_price TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY (user_id, symbol)
@@ -951,7 +965,38 @@ class Database:
                 "TEXT NOT NULL DEFAULT 'watching' "
                 "CHECK(focus_status IN ('holding', 'watching', 'researching', 'cleared'))",
             )
+            self._ensure_column(connection, "watchlist", "psychological_price", "TEXT")
+            self._ensure_column(connection, "watchlist", "purchase_price", "TEXT")
+            self._ensure_column(connection, "watchlist", "holding_quantity", "INTEGER")
+            self._ensure_column(connection, "watchlist", "sell_price", "TEXT")
             self._backfill_stock_domains(connection)
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO schema_migrations(migration_id, applied_at)
+                VALUES (?, ?)
+                """,
+                (self.SCHEMA_BASELINE_MIGRATION, utc_now()),
+            )
+            self._apply_pending_migrations(connection)
+            self._backfill_watchlist_items_v2(connection)
+
+    def _apply_pending_migrations(self, connection: sqlite3.Connection) -> None:
+        """Apply forward-only SQL migrations after the legacy baseline schema exists."""
+        applied = {
+            str(row["migration_id"])
+            for row in connection.execute(
+                "SELECT migration_id FROM schema_migrations"
+            ).fetchall()
+        }
+        for path in sorted(self.MIGRATIONS_DIR.glob("*.sql")):
+            migration_id = path.stem
+            if migration_id in applied:
+                continue
+            connection.executescript(path.read_text(encoding="utf-8"))
+            connection.execute(
+                "INSERT INTO schema_migrations(migration_id, applied_at) VALUES (?, ?)",
+                (migration_id, utc_now()),
+            )
 
     @staticmethod
     def _ensure_column(
@@ -1006,6 +1051,64 @@ class Database:
                 source="watchlist_migration",
                 observed_at=str(row["updated_at"] or row["created_at"]),
             )
+
+    @staticmethod
+    def _is_a_share_symbol(symbol: str) -> bool:
+        value = str(symbol or "").upper()
+        return (
+            len(value) == 9
+            and value[:6].isdigit()
+            and value[6:] in {".SS", ".SZ", ".BJ"}
+        )
+
+    def _backfill_watchlist_items_v2(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        rows = connection.execute(
+            "SELECT * FROM watchlist ORDER BY created_at ASC"
+        ).fetchall()
+        for row in rows:
+            self._upsert_watchlist_item_from_legacy(connection, row)
+
+    def _upsert_watchlist_item_from_legacy(
+        self, connection: sqlite3.Connection, row: sqlite3.Row
+    ) -> None:
+        symbol = str(row["symbol"])
+        if not self._is_a_share_symbol(symbol):
+            return
+        reason = str(row["thesis"] or "").strip() or "历史关注记录，待补充关注理由"
+        observed_at = str(row["updated_at"] or row["created_at"] or utc_now())
+        existing = connection.execute(
+            """
+            SELECT id FROM watchlist_items
+            WHERE user_id = ? AND symbol = ?
+            """,
+            (row["user_id"], symbol),
+        ).fetchone()
+        item_id = str(existing["id"]) if existing is not None else str(uuid4())
+        connection.execute(
+            """
+            INSERT INTO watchlist_items(
+                id, user_id, symbol, name, priority, reason,
+                catalyst_condition, invalidation_condition,
+                tracking_frequency, tracking_status, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, 'normal', ?, NULL, NULL, 'weekly',
+                      'active', ?, ?)
+            ON CONFLICT(user_id, symbol) DO UPDATE SET
+                name = COALESCE(excluded.name, watchlist_items.name),
+                reason = excluded.reason,
+                updated_at = excluded.updated_at
+            """,
+            (
+                item_id,
+                row["user_id"],
+                symbol,
+                row["name"],
+                reason,
+                observed_at,
+                observed_at,
+            ),
+        )
 
     def _sync_stock_domain_from_watchlist(
         self,
@@ -1184,6 +1287,42 @@ class Database:
         with self.connect() as connection:
             return self._row(connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
 
+    def set_user_phone(self, user_id: str, phone_e164: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE users
+                SET phone_e164 = ?, phone_verification_status = 'unverified',
+                    phone_verified_at = NULL
+                WHERE id = ?
+                """,
+                (phone_e164, user_id),
+            )
+        return self.get_user(user_id)  # type: ignore[return-value]
+
+    def create_payment_order_draft(
+        self, user_id: str, product_code: str
+    ) -> dict[str, Any]:
+        user = self.get_user(user_id)
+        if not user or not user.get("phone_e164"):
+            raise ValueError("phone_required")
+        order_id = str(uuid4())
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO payment_orders(
+                    id, user_id, provider, product_code, phone_e164, status,
+                    payment_enabled, created_at, updated_at
+                ) VALUES (?, ?, 'alipay', ?, ?, 'draft', 0, ?, ?)
+                """,
+                (order_id, user_id, product_code, user["phone_e164"], now, now),
+            )
+            row = connection.execute(
+                "SELECT * FROM payment_orders WHERE id = ?", (order_id,)
+            ).fetchone()
+        return self._row(row)  # type: ignore[return-value]
+
     @staticmethod
     def _session_token_hash(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -1323,6 +1462,10 @@ class Database:
         market: str | None,
         thesis: str | None,
         focus_status: str | None = None,
+        psychological_price: Any | None = None,
+        purchase_price: Any | None = None,
+        holding_quantity: int | None = None,
+        sell_price: Any | None = None,
     ) -> dict[str, Any]:
         now = utc_now()
         with self.connect() as connection:
@@ -1330,14 +1473,19 @@ class Database:
                 """
                 INSERT INTO watchlist(
                     user_id, symbol, name, market, thesis, focus_status,
+                    psychological_price, purchase_price, holding_quantity, sell_price,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, COALESCE(?, 'watching'), ?, ?)
+                VALUES (?, ?, ?, ?, ?, COALESCE(?, 'watching'), ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(user_id, symbol) DO UPDATE SET
                     name = excluded.name,
                     market = excluded.market,
                     thesis = COALESCE(excluded.thesis, watchlist.thesis),
                     focus_status = COALESCE(?, watchlist.focus_status),
+                    psychological_price = COALESCE(excluded.psychological_price, watchlist.psychological_price),
+                    purchase_price = COALESCE(excluded.purchase_price, watchlist.purchase_price),
+                    holding_quantity = COALESCE(excluded.holding_quantity, watchlist.holding_quantity),
+                    sell_price = COALESCE(excluded.sell_price, watchlist.sell_price),
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -1347,6 +1495,10 @@ class Database:
                     market,
                     thesis,
                     focus_status,
+                    str(psychological_price) if psychological_price is not None else None,
+                    str(purchase_price) if purchase_price is not None else None,
+                    holding_quantity,
+                    str(sell_price) if sell_price is not None else None,
                     now,
                     now,
                     focus_status,
@@ -1355,6 +1507,7 @@ class Database:
             row = connection.execute(
                 "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?", (user_id, symbol)
             ).fetchone()
+            self._upsert_watchlist_item_from_legacy(connection, row)
             self._sync_stock_domain_from_watchlist(
                 connection,
                 user_id=user_id,
@@ -1375,6 +1528,215 @@ class Database:
                 "SELECT * FROM watchlist WHERE user_id = ? ORDER BY updated_at DESC", (user_id,)
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def upsert_watchlist_item_v2(
+        self,
+        *,
+        user_id: str,
+        symbol: str,
+        name: str | None,
+        priority: str,
+        reason: str,
+        catalyst_condition: str | None,
+        invalidation_condition: str | None,
+        tracking_frequency: str,
+        tracking_status: str,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT id FROM watchlist_items
+                WHERE user_id = ? AND symbol = ?
+                """,
+                (user_id, symbol),
+            ).fetchone()
+            item_id = str(existing["id"]) if existing is not None else str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO watchlist_items(
+                    id, user_id, symbol, name, priority, reason,
+                    catalyst_condition, invalidation_condition,
+                    tracking_frequency, tracking_status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, symbol) DO UPDATE SET
+                    name = excluded.name,
+                    priority = excluded.priority,
+                    reason = excluded.reason,
+                    catalyst_condition = excluded.catalyst_condition,
+                    invalidation_condition = excluded.invalidation_condition,
+                    tracking_frequency = excluded.tracking_frequency,
+                    tracking_status = excluded.tracking_status,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    item_id,
+                    user_id,
+                    symbol,
+                    name,
+                    priority,
+                    reason,
+                    catalyst_condition,
+                    invalidation_condition,
+                    tracking_frequency,
+                    tracking_status,
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO watchlist(
+                    user_id, symbol, name, market, thesis, focus_status,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, 'A股', ?, 'watching', ?, ?)
+                ON CONFLICT(user_id, symbol) DO UPDATE SET
+                    name = excluded.name,
+                    market = 'A股',
+                    thesis = excluded.thesis,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, symbol, name, reason, now, now),
+            )
+            self._sync_stock_domain_from_watchlist(
+                connection,
+                user_id=user_id,
+                symbol=symbol,
+                name=name,
+                market="A股",
+                thesis=reason,
+                source="watchlist_v2_confirmed",
+                observed_at=now,
+            )
+        self._sync_watchlist_file(user_id)
+        item = self.get_watchlist_item_v2(user_id, symbol)
+        if item is None:
+            raise RuntimeError("关注记录保存失败")
+        return item
+
+    def get_watchlist_item_v2(
+        self, user_id: str, symbol: str
+    ) -> dict[str, Any] | None:
+        items = self.list_watchlist_items_v2(user_id, symbol=symbol)
+        return items[0] if items else None
+
+    def list_watchlist_items_v2(
+        self, user_id: str, *, symbol: str | None = None
+    ) -> list[dict[str, Any]]:
+        where = "wi.user_id = ?"
+        params: list[Any] = [user_id]
+        if symbol is not None:
+            where += " AND wi.symbol = ?"
+            params.append(symbol)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT wi.*,
+                    COALESCE((
+                        SELECT rc.research_status
+                        FROM research_cases rc
+                        WHERE rc.user_id = wi.user_id AND rc.symbol = wi.symbol
+                        ORDER BY rc.updated_at DESC LIMIT 1
+                    ), 'none') AS research_status,
+                    CASE
+                        WHEN EXISTS(
+                            SELECT 1 FROM positions p
+                            WHERE p.user_id = wi.user_id
+                              AND p.symbol = wi.symbol AND p.status = 'open'
+                        ) THEN 'open'
+                        WHEN EXISTS(
+                            SELECT 1 FROM positions p
+                            WHERE p.user_id = wi.user_id AND p.symbol = wi.symbol
+                        ) THEN 'history'
+                        ELSE 'none'
+                    END AS position_status,
+                    legacy.psychological_price AS legacy_psychological_price,
+                    legacy.purchase_price AS legacy_purchase_price,
+                    legacy.holding_quantity AS legacy_holding_quantity,
+                    legacy.sell_price AS legacy_sell_price
+                FROM watchlist_items wi
+                LEFT JOIN watchlist legacy
+                  ON legacy.user_id = wi.user_id AND legacy.symbol = wi.symbol
+                WHERE {where}
+                ORDER BY wi.updated_at DESC
+                """,
+                tuple(params),
+            ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            legacy = {
+                "psychological_price": item.pop("legacy_psychological_price"),
+                "purchase_price": item.pop("legacy_purchase_price"),
+                "holding_quantity": item.pop("legacy_holding_quantity"),
+                "sell_price": item.pop("legacy_sell_price"),
+            }
+            item["legacy_position_hint"] = (
+                legacy if any(value not in (None, "") for value in legacy.values()) else None
+            )
+            items.append(item)
+        return items
+
+    def delete_watchlist_item_v2(self, user_id: str, symbol: str) -> bool:
+        now = utc_now()
+        with self.connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT id FROM watchlist_items
+                WHERE user_id = ? AND symbol = ?
+                """,
+                (user_id, symbol),
+            ).fetchone()
+            if existing is None:
+                return False
+            connection.execute(
+                "DELETE FROM watchlist_items WHERE user_id = ? AND symbol = ?",
+                (user_id, symbol),
+            )
+            connection.execute(
+                "DELETE FROM watchlist WHERE user_id = ? AND symbol = ?",
+                (user_id, symbol),
+            )
+            open_position = connection.execute(
+                """
+                SELECT 1 FROM positions
+                WHERE user_id = ? AND symbol = ? AND status = 'open'
+                LIMIT 1
+                """,
+                (user_id, symbol),
+            ).fetchone()
+            workspace = connection.execute(
+                """
+                SELECT * FROM stock_workspaces
+                WHERE user_id = ? AND symbol = ?
+                """,
+                (user_id, symbol),
+            ).fetchone()
+            if workspace is not None:
+                if open_position is not None:
+                    connection.execute(
+                        """
+                        UPDATE stock_workspaces
+                        SET relation_type = 'holding', tracking_status = 'paused',
+                            workflow_status = 'idle', version = version + 1,
+                            updated_at = ?, ended_at = NULL
+                        WHERE id = ?
+                        """,
+                        (now, workspace["id"]),
+                    )
+                else:
+                    connection.execute(
+                        """
+                        UPDATE stock_workspaces
+                        SET relation_type = 'ended', priority = NULL,
+                            tracking_status = 'paused', workflow_status = 'idle',
+                            version = version + 1, updated_at = ?, ended_at = ?
+                        WHERE id = ?
+                        """,
+                        (now, now, workspace["id"]),
+                    )
+        self._sync_watchlist_file(user_id)
+        return True
 
     def list_distinct_watchlist_symbols(
         self, *, exclude_user_id: str | None = None
@@ -2147,6 +2509,1430 @@ class Database:
             item[key.removesuffix("_json")] = json.loads(raw) if raw else None
         return item
 
+    def create_ai_research_run(
+        self,
+        *,
+        run_id: str,
+        user_id: str,
+        conversation_id: str,
+        targets: list[dict[str, Any]],
+        question: str,
+        snapshot: dict[str, Any],
+        dimensions: dict[str, Any],
+        workflow: str = "lao_li_diagnosis_v1",
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO ai_research_runs(
+                    run_id, user_id, conversation_id, targets_json, question,
+                    status, detail_status, snapshot_json, dimensions_json, workflow,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'running', 'idle', ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    user_id,
+                    conversation_id,
+                    json_dumps(targets),
+                    question.strip(),
+                    json_dumps(snapshot),
+                    json_dumps(dimensions),
+                    workflow,
+                    now,
+                    now,
+                ),
+            )
+        return self.get_ai_research_run(user_id, run_id)  # type: ignore[return-value]
+
+    def create_ai_research_submission(
+        self,
+        *,
+        user_id: str,
+        conversation_id: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+        targets: list[dict[str, Any]],
+        question: str,
+        snapshot: dict[str, Any],
+        dimensions: dict[str, Any],
+        workspace_path: str | Path,
+        max_concurrent_per_user: int | None = None,
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        timeout_seconds: int = 900,
+        budget_limit_usd: float | None = None,
+        workflow: str = "lao_li_diagnosis_v1",
+    ) -> tuple[dict[str, Any], bool]:
+        """Atomically persist a research run, executable task and outbox record."""
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT * FROM ai_research_runs
+                WHERE user_id = ? AND idempotency_key = ?
+                """,
+                (user_id, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                item = self._ai_research_row(existing)
+                if item is None:
+                    raise RuntimeError("research idempotency lookup failed")
+                if item.get("request_fingerprint") != request_fingerprint:
+                    raise ValueError("idempotency_key_reused")
+                task = connection.execute(
+                    "SELECT id FROM research_tasks WHERE run_id = ?",
+                    (item["run_id"],),
+                ).fetchone()
+                if task is None:
+                    raise RuntimeError("research task is missing")
+                item["task_id"] = str(task["id"])
+                return item, True
+
+            if max_concurrent_per_user is not None:
+                active = connection.execute(
+                    """
+                    SELECT COUNT(*) AS count
+                    FROM research_tasks
+                    WHERE user_id = ?
+                      AND status IN ('pending', 'leased', 'retry_wait')
+                    """,
+                    (user_id,),
+                ).fetchone()
+                if int(active["count"]) >= max(1, max_concurrent_per_user):
+                    raise ValueError("research_concurrency_limit")
+
+            run_id = str(uuid4())
+            task_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO runs(
+                    id, user_id, intent, model_tier, status, input_json,
+                    workspace_path, created_at
+                ) VALUES (?, ?, 'ai_research', 'deep', 'running', ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    user_id,
+                    json_dumps(
+                        {
+                            "conversation_id": conversation_id,
+                            "targets": targets,
+                            "question": question.strip(),
+                            "workflow": workflow,
+                        }
+                    ),
+                    str(workspace_path),
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO ai_research_runs(
+                    run_id, user_id, conversation_id, targets_json, question,
+                    status, execution_status, detail_status, snapshot_json,
+                    dimensions_json, idempotency_key, request_fingerprint, workflow,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'running', 'pending', 'idle', ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    user_id,
+                    conversation_id,
+                    json_dumps(targets),
+                    question.strip(),
+                    json_dumps(snapshot),
+                    json_dumps(dimensions),
+                    idempotency_key,
+                    request_fingerprint,
+                    workflow,
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO research_tasks(
+                    id, run_id, user_id, task_kind, status, payload_json,
+                    available_at, request_id, trace_id, timeout_seconds,
+                    budget_limit_usd, created_at, updated_at
+                ) VALUES (?, ?, ?, 'main', 'pending', ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    run_id,
+                    user_id,
+                    json_dumps({"workflow": workflow}),
+                    now,
+                    request_id,
+                    trace_id,
+                    max(1, timeout_seconds),
+                    budget_limit_usd,
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO research_task_outbox(id, task_id, stream_name, created_at)
+                VALUES (?, ?, 'qingshu:research', ?)
+                """,
+                (str(uuid4()), task_id, now),
+            )
+            row = connection.execute(
+                "SELECT * FROM ai_research_runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+        item = self._ai_research_row(row)
+        if item is None:
+            raise RuntimeError("research submission was not persisted")
+        item["task_id"] = task_id
+        return item, False
+
+    def list_pending_research_outbox(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT outbox.id AS outbox_id, outbox.task_id, outbox.stream_name,
+                    outbox.publish_attempt_count, task.status AS task_status
+                FROM research_task_outbox AS outbox
+                JOIN research_tasks AS task ON task.id = outbox.task_id
+                WHERE outbox.published_at IS NULL
+                  AND task.status IN ('pending', 'retry_wait')
+                ORDER BY outbox.created_at ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_research_outbox_published(self, outbox_id: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE research_task_outbox
+                SET published_at = ?, publish_attempt_count = publish_attempt_count + 1,
+                    last_error = NULL
+                WHERE id = ? AND published_at IS NULL
+                """,
+                (utc_now(), outbox_id),
+            )
+
+    def record_research_outbox_failure(self, outbox_id: str, error: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE research_task_outbox
+                SET publish_attempt_count = publish_attempt_count + 1, last_error = ?
+                WHERE id = ? AND published_at IS NULL
+                """,
+                (error[:240], outbox_id),
+            )
+
+    def pending_research_outbox_count(self) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM research_task_outbox WHERE published_at IS NULL"
+            ).fetchone()
+        return int(row["count"])
+
+    def create_data_refresh_task(
+        self,
+        *,
+        kind: str,
+        idempotency_key: str,
+        payload: dict[str, Any],
+        request_id: str | None = None,
+        trace_id: str | None = None,
+        max_attempts: int = 3,
+    ) -> tuple[dict[str, Any], bool]:
+        if kind not in {"stock_quote", "stock_kline", "industry_score"}:
+            raise ValueError("unsupported_data_refresh_kind")
+        key = idempotency_key.strip()
+        if not key:
+            raise ValueError("data_refresh_idempotency_key_required")
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT * FROM data_refresh_tasks
+                WHERE idempotency_key = ?
+                  AND status IN ('pending', 'leased', 'retry_wait')
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (key,),
+            ).fetchone()
+            if existing is not None:
+                return self._data_refresh_task_row(existing), True
+            task_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO data_refresh_tasks(
+                    id, task_kind, idempotency_key, status, payload_json,
+                    max_attempts, available_at, request_id, trace_id,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    task_id,
+                    kind,
+                    key,
+                    json_dumps(payload),
+                    max(1, int(max_attempts)),
+                    now,
+                    request_id,
+                    trace_id,
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO data_refresh_task_outbox(
+                    id, task_id, stream_name, created_at
+                ) VALUES (?, ?, 'qingshu:data-refresh', ?)
+                """,
+                (str(uuid4()), task_id, now),
+            )
+            row = connection.execute(
+                "SELECT * FROM data_refresh_tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+        return self._data_refresh_task_row(row), False
+
+    def get_data_refresh_task(self, task_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM data_refresh_tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+        return self._data_refresh_task_row(row) if row is not None else None
+
+    def list_pending_data_refresh_outbox(
+        self, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT outbox.id AS outbox_id, outbox.task_id,
+                       outbox.stream_name, outbox.publish_attempt_count
+                FROM data_refresh_task_outbox AS outbox
+                JOIN data_refresh_tasks AS task ON task.id = outbox.task_id
+                WHERE outbox.published_at IS NULL
+                  AND task.status IN ('pending', 'retry_wait')
+                  AND task.available_at <= ?
+                ORDER BY outbox.created_at ASC LIMIT ?
+                """,
+                (utc_now(), max(1, min(int(limit), 1000))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_data_refresh_outbox_published(self, outbox_id: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE data_refresh_task_outbox
+                SET published_at = ?,
+                    publish_attempt_count = publish_attempt_count + 1,
+                    last_error = NULL
+                WHERE id = ? AND published_at IS NULL
+                """,
+                (utc_now(), outbox_id),
+            )
+
+    def record_data_refresh_outbox_failure(
+        self, outbox_id: str, error: str
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE data_refresh_task_outbox
+                SET publish_attempt_count = publish_attempt_count + 1,
+                    last_error = ?
+                WHERE id = ? AND published_at IS NULL
+                """,
+                (error[:500], outbox_id),
+            )
+
+    def pending_data_refresh_outbox_count(self) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count FROM data_refresh_task_outbox
+                WHERE published_at IS NULL
+                """
+            ).fetchone()
+        return int(row["count"])
+
+    def claim_data_refresh_task(
+        self, task_id: str, worker_id: str, lease_seconds: int = 300
+    ) -> dict[str, Any] | None:
+        now = datetime.now(timezone.utc)
+        now_text = now.isoformat(timespec="seconds")
+        lease_expires_at = (
+            now + timedelta(seconds=max(1, int(lease_seconds)))
+        ).isoformat(timespec="seconds")
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE data_refresh_tasks
+                SET status = 'leased', lease_owner = ?, lease_expires_at = ?,
+                    attempt_count = attempt_count + 1, updated_at = ?
+                WHERE id = ?
+                  AND status IN ('pending', 'retry_wait')
+                  AND available_at <= ?
+                  AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+                """,
+                (
+                    worker_id,
+                    lease_expires_at,
+                    now_text,
+                    task_id,
+                    now_text,
+                    now_text,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return None
+            row = connection.execute(
+                "SELECT * FROM data_refresh_tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+        return self._data_refresh_task_row(row)
+
+    def finish_data_refresh_task(
+        self,
+        task_id: str,
+        status: str,
+        error_type: str | None = None,
+        error: str | None = None,
+    ) -> bool:
+        if status not in {"completed", "failed"}:
+            raise ValueError("invalid_data_refresh_terminal_status")
+        now = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE data_refresh_tasks
+                SET status = ?, lease_owner = NULL, lease_expires_at = NULL,
+                    last_error_type = ?, last_error = ?, updated_at = ?,
+                    finished_at = ?
+                WHERE id = ? AND status = 'leased'
+                """,
+                (
+                    status,
+                    error_type,
+                    error[:1000] if error else None,
+                    now,
+                    now,
+                    task_id,
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def retry_data_refresh_task(
+        self,
+        task_id: str,
+        error_type: str,
+        error: str,
+        delay_seconds: int,
+    ) -> bool:
+        available_at = (
+            datetime.now(timezone.utc)
+            + timedelta(seconds=max(0, int(delay_seconds)))
+        ).isoformat(timespec="seconds")
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT attempt_count, max_attempts FROM data_refresh_tasks
+                WHERE id = ? AND status = 'leased'
+                """,
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            final = int(row["attempt_count"]) >= int(row["max_attempts"])
+            status = "failed" if final else "retry_wait"
+            connection.execute(
+                """
+                UPDATE data_refresh_tasks
+                SET status = ?, available_at = ?, lease_owner = NULL,
+                    lease_expires_at = NULL, last_error_type = ?,
+                    last_error = ?, updated_at = ?, finished_at = ?
+                WHERE id = ? AND status = 'leased'
+                """,
+                (
+                    status,
+                    available_at,
+                    error_type,
+                    error[:1000],
+                    now,
+                    now if final else None,
+                    task_id,
+                ),
+            )
+            if not final:
+                connection.execute(
+                    """
+                    UPDATE data_refresh_task_outbox
+                    SET published_at = NULL, last_error = NULL
+                    WHERE task_id = ?
+                    """,
+                    (task_id,),
+                )
+        return True
+
+    def reclaim_expired_data_refresh_tasks(self) -> int:
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """
+                SELECT id FROM data_refresh_tasks
+                WHERE status = 'leased' AND lease_expires_at <= ?
+                """,
+                (now,),
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    """
+                    UPDATE data_refresh_tasks
+                    SET status = 'retry_wait', available_at = ?,
+                        lease_owner = NULL, lease_expires_at = NULL,
+                        last_error_type = 'LeaseExpired',
+                        last_error = 'worker lease expired', updated_at = ?
+                    WHERE id = ? AND status = 'leased'
+                    """,
+                    (now, now, row["id"]),
+                )
+                connection.execute(
+                    """
+                    UPDATE data_refresh_task_outbox SET published_at = NULL
+                    WHERE task_id = ?
+                    """,
+                    (row["id"],),
+                )
+        return len(rows)
+
+    @staticmethod
+    def _data_refresh_task_row(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json") or "{}")
+        return item
+
+    def claim_research_task(
+        self, task_id: str, worker_id: str, lease_seconds: int = 300
+    ) -> dict[str, Any] | None:
+        now = datetime.now(timezone.utc)
+        lease_expires_at = (now + timedelta(seconds=lease_seconds)).isoformat(
+            timespec="seconds"
+        )
+        now_text = now.isoformat(timespec="seconds")
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE research_tasks
+                SET status = 'leased', lease_owner = ?, lease_expires_at = ?,
+                    heartbeat_at = ?, attempt_count = attempt_count + 1,
+                    updated_at = ?
+                WHERE id = ? AND status IN ('pending', 'retry_wait')
+                  AND available_at <= ?
+                """,
+                (
+                    worker_id,
+                    lease_expires_at,
+                    now_text,
+                    now_text,
+                    task_id,
+                    now_text,
+                ),
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = connection.execute(
+                "SELECT * FROM research_tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            connection.execute(
+                """
+                UPDATE ai_research_runs
+                SET execution_status = 'running',
+                    attempt_count = ?,
+                    started_at = COALESCE(started_at, ?),
+                    next_attempt_at = NULL,
+                    version = version + 1,
+                    updated_at = ?
+                WHERE run_id = ? AND execution_status IN ('pending', 'retry_wait')
+                """,
+                (
+                    int(row["attempt_count"]),
+                    now_text,
+                    now_text,
+                    str(row["run_id"]),
+                ),
+            )
+        return self._research_task_row(row)
+
+    def finish_research_task(
+        self, task_id: str, status: str, error: str | None = None
+    ) -> bool:
+        if status not in {"completed", "failed", "cancelled", "expired"}:
+            raise ValueError("invalid terminal research task status")
+        now = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE research_tasks
+                SET status = ?, lease_owner = NULL, lease_expires_at = NULL,
+                    last_error = ?, last_error_type = ?, updated_at = ?,
+                    finished_at = ?
+                WHERE id = ? AND status = 'leased'
+                """,
+                (
+                    status,
+                    error[:240] if error else None,
+                    error.split(":", 1)[0][:80] if error else None,
+                    now,
+                    now,
+                    task_id,
+                ),
+            )
+            if cursor.rowcount == 0:
+                return False
+            task = connection.execute(
+                "SELECT run_id FROM research_tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+            legacy_status = status if status in {"completed", "failed"} else None
+            assignments = [
+                "execution_status = ?",
+                "version = version + 1",
+                "updated_at = ?",
+                "finished_at = ?",
+            ]
+            values: list[Any] = [status, now, now]
+            if legacy_status is not None:
+                assignments.extend(("status = ?", "error = ?"))
+                values.extend((legacy_status, error[:240] if error else None))
+            values.append(str(task["run_id"]))
+            connection.execute(
+                f"""
+                UPDATE ai_research_runs
+                SET {", ".join(assignments)}
+                WHERE run_id = ? AND execution_status NOT IN
+                    ('completed', 'failed', 'cancelled', 'expired')
+                """,
+                values,
+            )
+        return True
+
+    def retry_research_task(
+        self, task_id: str, error: str, delay_seconds: int
+    ) -> str | None:
+        now = datetime.now(timezone.utc)
+        now_text = now.isoformat(timespec="seconds")
+        available_at = (now + timedelta(seconds=max(0, delay_seconds))).isoformat(
+            timespec="seconds"
+        )
+        with self.connect() as connection:
+            task = connection.execute(
+                """
+                SELECT run_id, attempt_count, max_attempts
+                FROM research_tasks
+                WHERE id = ? AND status = 'leased'
+                """,
+                (task_id,),
+            ).fetchone()
+            if task is None:
+                return None
+            exhausted = int(task["attempt_count"]) >= int(task["max_attempts"])
+            if exhausted:
+                connection.execute(
+                    """
+                    UPDATE research_tasks
+                    SET status = 'failed', lease_owner = NULL,
+                        lease_expires_at = NULL, last_error = ?,
+                        last_error_type = 'recoverable_exhausted',
+                        updated_at = ?, finished_at = ?
+                    WHERE id = ? AND status = 'leased'
+                    """,
+                    (error[:240], now_text, now_text, task_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE ai_research_runs
+                    SET status = 'failed', execution_status = 'failed',
+                        error = ?, version = version + 1, updated_at = ?,
+                        finished_at = ?
+                    WHERE run_id = ? AND execution_status NOT IN
+                        ('completed', 'failed', 'cancelled', 'expired')
+                    """,
+                    (error[:240], now_text, now_text, str(task["run_id"])),
+                )
+                return "failed"
+            connection.execute(
+                """
+                UPDATE research_tasks
+                SET status = 'retry_wait', lease_owner = NULL,
+                    lease_expires_at = NULL, last_error = ?,
+                    last_error_type = 'recoverable', available_at = ?,
+                    updated_at = ?
+                WHERE id = ? AND status = 'leased'
+                """,
+                (error[:240], available_at, now_text, task_id),
+            )
+            connection.execute(
+                """
+                UPDATE research_task_outbox
+                SET published_at = NULL, last_error = NULL
+                WHERE task_id = ?
+                """,
+                (task_id,),
+            )
+            connection.execute(
+                """
+                UPDATE ai_research_runs
+                SET execution_status = 'retry_wait', next_attempt_at = ?,
+                    error = ?, version = version + 1, updated_at = ?
+                WHERE run_id = ? AND execution_status NOT IN
+                    ('completed', 'failed', 'cancelled', 'expired')
+                """,
+                (available_at, error[:240], now_text, str(task["run_id"])),
+            )
+        return "retry_wait"
+
+    def reclaim_expired_research_tasks(self) -> int:
+        now = utc_now()
+        reclaimed = 0
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, run_id, attempt_count, max_attempts
+                FROM research_tasks
+                WHERE status = 'leased' AND lease_expires_at <= ?
+                """,
+                (now,),
+            ).fetchall()
+            for row in rows:
+                exhausted = int(row["attempt_count"]) >= int(row["max_attempts"])
+                next_status = "failed" if exhausted else "retry_wait"
+                connection.execute(
+                    """
+                    UPDATE research_tasks
+                    SET status = ?, lease_owner = NULL, lease_expires_at = NULL,
+                        last_error = 'worker lease expired', available_at = ?,
+                        updated_at = ?, finished_at = ?
+                    WHERE id = ? AND status = 'leased' AND lease_expires_at <= ?
+                    """,
+                    (
+                        next_status,
+                        now,
+                        now,
+                        now if exhausted else None,
+                        str(row["id"]),
+                        now,
+                    ),
+                )
+                if not exhausted:
+                    connection.execute(
+                        """
+                        UPDATE research_task_outbox
+                        SET published_at = NULL, last_error = NULL
+                        WHERE task_id = ?
+                        """,
+                        (str(row["id"]),),
+                    )
+                connection.execute(
+                    """
+                    UPDATE ai_research_runs
+                    SET execution_status = ?, next_attempt_at = ?,
+                        error = 'worker lease expired', version = version + 1,
+                        updated_at = ?, finished_at = ?
+                    WHERE run_id = ? AND execution_status NOT IN
+                        ('completed', 'failed', 'cancelled', 'expired')
+                    """,
+                    (
+                        next_status,
+                        None if exhausted else now,
+                        now,
+                        now if exhausted else None,
+                        str(row["run_id"]),
+                    ),
+                )
+                reclaimed += 1
+        return reclaimed
+
+    def expire_timed_out_research_tasks(self) -> int:
+        now = utc_now()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, run_id
+                FROM research_tasks
+                WHERE status IN ('pending', 'leased', 'retry_wait')
+                  AND julianday(created_at) + (timeout_seconds / 86400.0)
+                      <= julianday(?)
+                """,
+                (now,),
+            ).fetchall()
+            for row in rows:
+                connection.execute(
+                    """
+                    UPDATE research_tasks
+                    SET status = 'expired', lease_owner = NULL,
+                        lease_expires_at = NULL, last_error = 'task timeout',
+                        last_error_type = 'timeout', updated_at = ?,
+                        finished_at = ?
+                    WHERE id = ? AND status IN ('pending', 'leased', 'retry_wait')
+                    """,
+                    (now, now, str(row["id"])),
+                )
+                connection.execute(
+                    """
+                    UPDATE ai_research_runs
+                    SET execution_status = 'expired', error = 'task timeout',
+                        version = version + 1, updated_at = ?, finished_at = ?
+                    WHERE run_id = ? AND execution_status NOT IN
+                        ('completed', 'failed', 'cancelled', 'expired')
+                    """,
+                    (now, now, str(row["run_id"])),
+                )
+        return len(rows)
+
+    def heartbeat_research_task(
+        self, task_id: str, worker_id: str, lease_seconds: int = 300
+    ) -> bool:
+        now = datetime.now(timezone.utc)
+        now_text = now.isoformat(timespec="seconds")
+        lease_expires_at = (now + timedelta(seconds=lease_seconds)).isoformat(
+            timespec="seconds"
+        )
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE research_tasks
+                SET heartbeat_at = ?, lease_expires_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'leased' AND lease_owner = ?
+                """,
+                (now_text, lease_expires_at, now_text, task_id, worker_id),
+            )
+        return cursor.rowcount == 1
+
+    def request_ai_research_cancellation(
+        self, user_id: str, run_id: str
+    ) -> dict[str, Any] | None:
+        now = utc_now()
+        with self.connect() as connection:
+            run = connection.execute(
+                """
+                SELECT execution_status
+                FROM ai_research_runs
+                WHERE run_id = ? AND user_id = ?
+                """,
+                (run_id, user_id),
+            ).fetchone()
+            if run is None:
+                return None
+            if str(run["execution_status"]) in {
+                "completed",
+                "failed",
+                "cancelled",
+                "expired",
+            }:
+                return self.get_ai_research_run(user_id, run_id)
+            task = connection.execute(
+                "SELECT status FROM research_tasks WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            cancel_immediately = task is not None and str(task["status"]) in {
+                "pending",
+                "retry_wait",
+            }
+            connection.execute(
+                """
+                UPDATE ai_research_runs
+                SET cancel_requested_at = ?,
+                    execution_status = CASE
+                        WHEN ? THEN 'cancelled'
+                        ELSE execution_status
+                    END,
+                    finished_at = CASE WHEN ? THEN ? ELSE finished_at END,
+                    version = version + 1,
+                    updated_at = ?
+                WHERE run_id = ? AND user_id = ?
+                """,
+                (
+                    now,
+                    cancel_immediately,
+                    cancel_immediately,
+                    now,
+                    now,
+                    run_id,
+                    user_id,
+                ),
+            )
+            if cancel_immediately:
+                connection.execute(
+                    """
+                    UPDATE research_tasks
+                    SET status = 'cancelled', updated_at = ?, finished_at = ?
+                    WHERE run_id = ? AND status IN ('pending', 'retry_wait')
+                    """,
+                    (now, now, run_id),
+                )
+        return self.get_ai_research_run(user_id, run_id)
+
+    def is_research_task_cancel_requested(self, task_id: str) -> bool:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT run.cancel_requested_at, run.execution_status
+                FROM research_tasks AS task
+                JOIN ai_research_runs AS run ON run.run_id = task.run_id
+                WHERE task.id = ?
+                """,
+                (task_id,),
+            ).fetchone()
+        return bool(
+            row
+            and (
+                row["cancel_requested_at"] is not None
+                or str(row["execution_status"]) == "cancelled"
+            )
+        )
+
+    def get_research_task(self, task_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM research_tasks WHERE id = ?", (task_id,)
+            ).fetchone()
+        return self._research_task_row(row)
+
+    @staticmethod
+    def _research_task_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json") or "{}")
+        return item
+
+    def transition_ai_research_run(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        expected_version: int,
+        allowed_execution_statuses: tuple[str, ...],
+        execution_status: str,
+    ) -> dict[str, Any] | None:
+        if not allowed_execution_statuses:
+            raise ValueError("allowed_execution_statuses is required")
+        placeholders = ", ".join("?" for _ in allowed_execution_statuses)
+        assignments = [
+            "execution_status = ?",
+            "version = version + 1",
+            "updated_at = ?",
+        ]
+        values: list[Any] = [execution_status, utc_now()]
+        if execution_status in {"completed", "failed"}:
+            assignments.append("status = ?")
+            values.append(execution_status)
+        values.extend(
+            [
+                run_id,
+                user_id,
+                expected_version,
+                *allowed_execution_statuses,
+            ]
+        )
+        with self.connect() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE ai_research_runs SET {", ".join(assignments)}
+                WHERE run_id = ? AND user_id = ? AND version = ?
+                  AND execution_status IN ({placeholders})
+                """,
+                values,
+            )
+        if cursor.rowcount == 0:
+            return None
+        return self.get_ai_research_run(user_id, run_id)
+
+    def get_ai_research_run(
+        self, user_id: str, run_id: str
+    ) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT run.*, task.id AS task_id
+                FROM ai_research_runs AS run
+                LEFT JOIN research_tasks AS task ON task.run_id = run.run_id
+                WHERE run.run_id = ? AND run.user_id = ?
+                """,
+                (run_id, user_id),
+            ).fetchone()
+        return self._ai_research_row(row)
+
+    def latest_ai_research_run(
+        self,
+        user_id: str,
+        conversation_id: str | None = None,
+        workflow: str | None = None,
+    ) -> dict[str, Any] | None:
+        where = "user_id = ?"
+        params: list[Any] = [user_id]
+        if conversation_id:
+            where += " AND conversation_id = ?"
+            params.append(conversation_id)
+        if workflow:
+            where += " AND workflow = ?"
+            params.append(workflow)
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT run.*, task.id AS task_id
+                FROM ai_research_runs AS run
+                LEFT JOIN research_tasks AS task ON task.run_id = run.run_id
+                WHERE {where.replace("user_id", "run.user_id").replace("conversation_id", "run.conversation_id")}
+                ORDER BY run.created_at DESC, run.rowid DESC
+                LIMIT 1
+                """,
+                params,
+            ).fetchone()
+        return self._ai_research_row(row)
+
+    def update_ai_research_run(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        status: str | None = None,
+        detail_status: str | None = None,
+        dimensions: dict[str, Any] | None = None,
+        main_answer: str | None = None,
+        detailed_answer: str | None = None,
+        error: str | None = None,
+        finished: bool = False,
+    ) -> dict[str, Any] | None:
+        assignments = ["updated_at = ?"]
+        values: list[Any] = [utc_now()]
+        for column, value in (
+            ("status", status),
+            ("detail_status", detail_status),
+            ("dimensions_json", json_dumps(dimensions) if dimensions is not None else None),
+            ("main_answer", main_answer),
+            ("detailed_answer", detailed_answer),
+            ("error", error),
+        ):
+            if value is not None:
+                assignments.append(f"{column} = ?")
+                values.append(value)
+        if finished:
+            assignments.append("finished_at = ?")
+            values.append(utc_now())
+        values.extend((run_id, user_id))
+        terminal_guard = (
+            " AND execution_status NOT IN ('cancelled', 'expired')"
+            if status in {"completed", "failed"}
+            else ""
+        )
+        with self.connect() as connection:
+            cursor = connection.execute(
+                f"""
+                UPDATE ai_research_runs SET {", ".join(assignments)}
+                WHERE run_id = ? AND user_id = ?{terminal_guard}
+                """,
+                values,
+            )
+        if cursor.rowcount == 0:
+            return None
+        return self.get_ai_research_run(user_id, run_id)
+
+    def update_ai_research_snapshot(
+        self,
+        *,
+        user_id: str,
+        run_id: str,
+        snapshot: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE ai_research_runs
+                SET snapshot_json = ?, version = version + 1, updated_at = ?
+                WHERE run_id = ? AND user_id = ?
+                  AND execution_status = 'running'
+                  AND snapshot_json = '{}'
+                """,
+                (json_dumps(snapshot), utc_now(), run_id, user_id),
+            )
+        if cursor.rowcount == 0:
+            current = self.get_ai_research_run(user_id, run_id)
+            if current is None or not (current.get("snapshot") or {}).get("items"):
+                return None
+            return current
+        return self.get_ai_research_run(user_id, run_id)
+
+    @staticmethod
+    def _ai_research_row(
+        row: sqlite3.Row | None,
+    ) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["targets"] = json.loads(item.pop("targets_json") or "[]")
+        item["snapshot"] = json.loads(item.pop("snapshot_json") or "{}")
+        item["dimensions"] = json.loads(item.pop("dimensions_json") or "{}")
+        return item
+
+    def create_position(
+        self,
+        *,
+        user_id: str,
+        symbol: str,
+        name: str | None,
+        account_type: str,
+        quantity: str,
+        cost_price: str,
+        current_price: str | None,
+        status: str,
+        data_as_of: str | None,
+    ) -> dict[str, Any]:
+        position_id = str(uuid4())
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO positions(
+                    id, user_id, symbol, name, account_type, status, quantity,
+                    cost_price, current_price, data_as_of, opened_at, created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    position_id,
+                    user_id,
+                    symbol,
+                    name,
+                    account_type,
+                    status,
+                    quantity,
+                    cost_price,
+                    current_price,
+                    data_as_of,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM positions WHERE id = ? AND user_id = ?",
+                (position_id, user_id),
+            ).fetchone()
+        return dict(row)  # type: ignore[arg-type]
+
+    def get_position(
+        self, user_id: str, position_id: str
+    ) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            return self._row(
+                connection.execute(
+                    "SELECT * FROM positions WHERE id = ? AND user_id = ?",
+                    (position_id, user_id),
+                ).fetchone()
+            )
+
+    def get_trade_by_idempotency(
+        self, user_id: str, idempotency_key: str
+    ) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            return self._row(
+                connection.execute(
+                    """
+                    SELECT * FROM trades
+                    WHERE user_id = ? AND idempotency_key = ?
+                    """,
+                    (user_id, idempotency_key),
+                ).fetchone()
+            )
+
+    def create_position_with_initial_trade(
+        self,
+        *,
+        user_id: str,
+        symbol: str,
+        name: str | None,
+        account_type: str,
+        quantity: str,
+        price: str,
+        fee: str,
+        executed_at: str,
+        current_price: str | None,
+        data_as_of: str | None,
+        idempotency_key: str,
+        request_fingerprint: str,
+        method_version: str,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT * FROM trades
+                WHERE user_id = ? AND idempotency_key = ?
+                """,
+                (user_id, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                if existing["request_fingerprint"] != request_fingerprint:
+                    return {"status": "idempotency_conflict"}
+                position = connection.execute(
+                    "SELECT * FROM positions WHERE id = ? AND user_id = ?",
+                    (existing["position_id"], user_id),
+                ).fetchone()
+                return {
+                    "status": "reused",
+                    "position": dict(position),
+                    "trade": dict(existing),
+                }
+
+            position_id = str(uuid4())
+            trade_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO positions(
+                    id, user_id, symbol, name, account_type, status, quantity,
+                    cost_price, current_price, data_as_of, opened_at, created_at,
+                    updated_at, version, method_version
+                ) VALUES (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, 1, ?)
+                """,
+                (
+                    position_id,
+                    user_id,
+                    symbol,
+                    name,
+                    account_type,
+                    quantity,
+                    price,
+                    current_price,
+                    data_as_of,
+                    executed_at,
+                    now,
+                    now,
+                    method_version,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO trades(
+                    id, user_id, position_id, symbol, side, status, executed_at,
+                    price, quantity, fee, realized_pnl, created_at,
+                    idempotency_key, request_fingerprint, position_closed
+                ) VALUES (?, ?, ?, ?, 'buy', 'executed', ?, ?, ?, ?, NULL, ?,
+                          ?, ?, 0)
+                """,
+                (
+                    trade_id,
+                    user_id,
+                    position_id,
+                    symbol,
+                    executed_at,
+                    price,
+                    quantity,
+                    fee,
+                    now,
+                    idempotency_key,
+                    request_fingerprint,
+                ),
+            )
+            position = connection.execute(
+                "SELECT * FROM positions WHERE id = ?", (position_id,)
+            ).fetchone()
+            trade = connection.execute(
+                "SELECT * FROM trades WHERE id = ?", (trade_id,)
+            ).fetchone()
+        return {
+            "status": "created",
+            "position": dict(position),
+            "trade": dict(trade),
+        }
+
+    def append_position_trade_cas(
+        self,
+        *,
+        user_id: str,
+        position_id: str,
+        symbol: str,
+        side: str,
+        quantity: str,
+        price: str,
+        fee: str,
+        realized_pnl: str | None,
+        executed_at: str,
+        idempotency_key: str,
+        request_fingerprint: str,
+        base_version: int,
+        new_quantity: str,
+        new_cost_price: str,
+        position_closed: bool,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT * FROM trades
+                WHERE user_id = ? AND idempotency_key = ?
+                """,
+                (user_id, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                if existing["request_fingerprint"] != request_fingerprint:
+                    return {"status": "idempotency_conflict"}
+                position = connection.execute(
+                    "SELECT * FROM positions WHERE id = ? AND user_id = ?",
+                    (existing["position_id"], user_id),
+                ).fetchone()
+                return {
+                    "status": "reused",
+                    "position": dict(position),
+                    "trade": dict(existing),
+                }
+
+            current = connection.execute(
+                """
+                SELECT * FROM positions
+                WHERE id = ? AND user_id = ?
+                """,
+                (position_id, user_id),
+            ).fetchone()
+            if current is None:
+                return {"status": "not_found"}
+            if int(current["version"]) != int(base_version) or current["status"] != "open":
+                return {"status": "version_conflict"}
+
+            cursor = connection.execute(
+                """
+                UPDATE positions
+                SET quantity = ?, cost_price = ?,
+                    status = ?, closed_at = ?, version = version + 1,
+                    updated_at = ?
+                WHERE id = ? AND user_id = ? AND version = ? AND status = 'open'
+                """,
+                (
+                    new_quantity,
+                    new_cost_price,
+                    "closed" if position_closed else "open",
+                    executed_at if position_closed else None,
+                    now,
+                    position_id,
+                    user_id,
+                    base_version,
+                ),
+            )
+            if cursor.rowcount != 1:
+                return {"status": "version_conflict"}
+
+            trade_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO trades(
+                    id, user_id, position_id, symbol, side, status, executed_at,
+                    price, quantity, fee, realized_pnl, created_at,
+                    idempotency_key, request_fingerprint, position_closed
+                ) VALUES (?, ?, ?, ?, ?, 'executed', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    trade_id,
+                    user_id,
+                    position_id,
+                    symbol,
+                    side,
+                    executed_at,
+                    price,
+                    quantity,
+                    fee,
+                    realized_pnl,
+                    now,
+                    idempotency_key,
+                    request_fingerprint,
+                    1 if position_closed else 0,
+                ),
+            )
+            position = connection.execute(
+                "SELECT * FROM positions WHERE id = ?", (position_id,)
+            ).fetchone()
+            trade = connection.execute(
+                "SELECT * FROM trades WHERE id = ?", (trade_id,)
+            ).fetchone()
+        return {
+            "status": "created",
+            "position": dict(position),
+            "trade": dict(trade),
+        }
+
+    def create_trade(
+        self,
+        *,
+        user_id: str,
+        position_id: str | None,
+        symbol: str,
+        side: str,
+        executed_at: str,
+        price: str,
+        quantity: str,
+        fee: str,
+        realized_pnl: str | None,
+    ) -> dict[str, Any]:
+        trade_id = str(uuid4())
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO trades(
+                    id, user_id, position_id, symbol, side, status, executed_at,
+                    price, quantity, fee, realized_pnl, created_at
+                ) VALUES (?, ?, ?, ?, ?, 'executed', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    trade_id,
+                    user_id,
+                    position_id,
+                    symbol,
+                    side,
+                    executed_at,
+                    price,
+                    quantity,
+                    fee,
+                    realized_pnl,
+                    utc_now(),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM trades WHERE id = ? AND user_id = ?",
+                (trade_id, user_id),
+            ).fetchone()
+        return dict(row)  # type: ignore[arg-type]
+
+    def list_positions(self, user_id: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM positions
+                WHERE user_id = ?
+                ORDER BY updated_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_trades(self, user_id: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM trades
+                WHERE user_id = ? AND status = 'executed'
+                ORDER BY executed_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def list_user_runs(
         self, user_id: str, limit: int = 500
     ) -> list[dict[str, Any]]:
@@ -2168,6 +3954,158 @@ class Database:
                 item[key.removesuffix("_json")] = json.loads(raw) if raw else None
             items.append(item)
         return items
+
+    def get_profile_workbench_snapshot(
+        self, user_id: str, recent_limit: int = 5
+    ) -> dict[str, Any]:
+        limit = max(1, min(int(recent_limit), 10))
+        with self.connect() as connection:
+            counts = connection.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM watchlist
+                        WHERE user_id = ?
+                          AND (symbol LIKE '%.SH' OR symbol LIKE '%.SZ'
+                               OR symbol LIKE '%.BJ')) AS watchlist_count,
+                    (SELECT COUNT(*) FROM ai_research_runs WHERE user_id = ?) AS research_total,
+                    (SELECT COUNT(*) FROM ai_research_runs
+                        WHERE user_id = ? AND execution_status IN
+                            ('pending', 'running', 'retry_wait')) AS research_running,
+                    (SELECT COUNT(*) FROM positions
+                        WHERE user_id = ? AND status = 'open') AS position_count,
+                    (SELECT COUNT(*) FROM trades
+                        WHERE user_id = ? AND status = 'executed') AS trade_count
+                """,
+                (user_id, user_id, user_id, user_id, user_id),
+            ).fetchone()
+            todo_rows = connection.execute(
+                """
+                SELECT run.run_id, run.question, run.targets_json,
+                    run.execution_status, run.updated_at, task.status AS task_status
+                FROM ai_research_runs AS run
+                LEFT JOIN research_tasks AS task ON task.run_id = run.run_id
+                WHERE run.user_id = ?
+                  AND run.execution_status IN
+                      ('pending', 'running', 'retry_wait', 'failed')
+                ORDER BY
+                    CASE run.execution_status
+                        WHEN 'failed' THEN 0
+                        WHEN 'retry_wait' THEN 1
+                        WHEN 'running' THEN 2
+                        ELSE 3
+                    END,
+                    run.updated_at DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+            research_rows = connection.execute(
+                """
+                SELECT run.run_id, run.question, run.targets_json,
+                    run.execution_status, run.updated_at, task.status AS task_status
+                FROM ai_research_runs AS run
+                LEFT JOIN research_tasks AS task ON task.run_id = run.run_id
+                WHERE run.user_id = ?
+                ORDER BY run.updated_at DESC, run.rowid DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+            watchlist_rows = connection.execute(
+                """
+                SELECT symbol, name, thesis, focus_status, updated_at
+                FROM watchlist
+                WHERE user_id = ?
+                  AND (symbol LIKE '%.SH' OR symbol LIKE '%.SZ'
+                       OR symbol LIKE '%.BJ')
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+
+        def research_item(row: sqlite3.Row) -> dict[str, Any]:
+            targets = json.loads(row["targets_json"] or "[]")
+            target = targets[0] if targets else {}
+            return {
+                "run_id": str(row["run_id"]),
+                "symbol": target.get("symbol"),
+                "name": target.get("name"),
+                "question": str(row["question"]),
+                "status": str(row["execution_status"]),
+                "task_status": row["task_status"],
+                "updated_at": str(row["updated_at"]),
+                "href": "#research",
+            }
+
+        todos = []
+        for row in todo_rows:
+            item = research_item(row)
+            failed = item["status"] == "failed"
+            todos.append(
+                {
+                    **item,
+                    "kind": "research_failed" if failed else "research_running",
+                    "title": "研究失败，等待处理" if failed else "研究任务进行中",
+                    "status_label": "需要重试" if failed else "进行中",
+                }
+            )
+        watchlist_count = int(counts["watchlist_count"])
+        research_total = int(counts["research_total"])
+        research_running = int(counts["research_running"])
+        position_count = int(counts["position_count"])
+        trade_count = int(counts["trade_count"])
+        return {
+            "generated_at": utc_now(),
+            "summary": {
+                "pending_count": len(todos),
+                "watchlist_count": watchlist_count,
+                "research_total": research_total,
+                "research_running": research_running,
+                "position_count": position_count,
+                "trade_count": trade_count,
+                "review_pending_count": None,
+            },
+            "todos": todos,
+            "recent_research": [research_item(row) for row in research_rows],
+            "recent_watchlist": [
+                {
+                    "symbol": str(row["symbol"]),
+                    "name": row["name"],
+                    "reason": row["thesis"],
+                    "status": str(row["focus_status"]),
+                    "updated_at": str(row["updated_at"]),
+                    "href": "#watch",
+                }
+                for row in watchlist_rows
+            ],
+            "lifecycle": [
+                {
+                    "key": "watch",
+                    "label": "关注",
+                    "count": watchlist_count,
+                    "href": "#watch",
+                },
+                {
+                    "key": "research",
+                    "label": "研究",
+                    "count": research_total,
+                    "href": "#research",
+                },
+                {
+                    "key": "position",
+                    "label": "持仓",
+                    "count": position_count,
+                    "href": "#review",
+                },
+                {
+                    "key": "review",
+                    "label": "复盘",
+                    "count": trade_count,
+                    "href": "#review",
+                },
+            ],
+        }
 
     def save_conversation_quality_snapshot(
         self,
@@ -2364,6 +4302,28 @@ class Database:
         if not market_date:
             return
         with self.connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT payload_json
+                FROM market_breadth_snapshots
+                WHERE market_date = ?
+                """,
+                (market_date,),
+            ).fetchone()
+            if existing is not None:
+                previous = json.loads(existing["payload_json"])
+                previous_turnover = (previous.get("turnover") or {}).get(
+                    "total_amount_cny"
+                )
+                incoming_turnover = (payload.get("turnover") or {}).get(
+                    "total_amount_cny"
+                )
+                if (
+                    previous_turnover is not None
+                    and incoming_turnover is not None
+                    and float(incoming_turnover) < float(previous_turnover)
+                ):
+                    return
             connection.execute(
                 """
                 INSERT INTO market_breadth_snapshots(
@@ -2560,6 +4520,23 @@ class Database:
             item["summary"] = json.loads(raw_summary) if raw_summary else None
             items.append(item)
         return items
+
+    def latest_background_job(self, job_name: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM background_job_runs
+                WHERE job_name = ?
+                ORDER BY started_at DESC, rowid DESC LIMIT 1
+                """,
+                (job_name,),
+            ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        raw_summary = item.pop("summary_json")
+        item["summary"] = json.loads(raw_summary) if raw_summary else None
+        return item
 
     def save_data_health_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         snapshot_id = str(uuid4())
@@ -3354,6 +5331,177 @@ class Database:
                 parameters,
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def save_market_review_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        snapshot_id = str(snapshot.get("id") or uuid4())
+        generated_at = str(snapshot.get("generated_at") or utc_now())
+        conclusions = snapshot.get("conclusions") or {}
+        rows = []
+        for section in (
+            "core_events",
+            "highlights",
+            "risks",
+            "watch_directions",
+        ):
+            for ordinal, item in enumerate(conclusions.get(section) or [], start=1):
+                rows.append(
+                    (
+                        str(item.get("id") or uuid4()),
+                        snapshot_id,
+                        section,
+                        ordinal,
+                        str(item["text"]),
+                        str(item["source"]),
+                        item.get("published_at"),
+                        str(item["url"]),
+                        json_dumps(item.get("affected_sectors") or []),
+                        json_dumps(item.get("evidence_ids") or []),
+                        generated_at,
+                    )
+                )
+        with self.connect() as connection:
+            existing = connection.execute(
+                """
+                SELECT id FROM market_review_snapshots
+                WHERE period_start = ? AND period_end = ? AND status = ?
+                """,
+                (
+                    snapshot["period_start"],
+                    snapshot["period_end"],
+                    snapshot["status"],
+                ),
+            ).fetchone()
+            if existing is not None:
+                snapshot_id = str(existing["id"])
+                connection.execute(
+                    "DELETE FROM market_review_conclusions WHERE snapshot_id = ?",
+                    (snapshot_id,),
+                )
+                rows = [
+                    (row[0], snapshot_id, *row[2:])
+                    for row in rows
+                ]
+            connection.execute(
+                """
+                INSERT INTO market_review_snapshots(
+                    id, period_start, period_end, status, generation_mode,
+                    source_status_json, metrics_json, generated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(period_start, period_end, status) DO UPDATE SET
+                    generation_mode = excluded.generation_mode,
+                    source_status_json = excluded.source_status_json,
+                    metrics_json = excluded.metrics_json,
+                    generated_at = excluded.generated_at
+                """,
+                (
+                    snapshot_id,
+                    snapshot["period_start"],
+                    snapshot["period_end"],
+                    snapshot["status"],
+                    snapshot.get("generation_mode") or "deterministic_extract",
+                    json_dumps(snapshot.get("source_status") or {}),
+                    json_dumps(snapshot.get("metrics") or {}),
+                    generated_at,
+                ),
+            )
+            resolved = connection.execute(
+                """
+                SELECT id FROM market_review_snapshots
+                WHERE period_start = ? AND period_end = ? AND status = ?
+                """,
+                (
+                    snapshot["period_start"],
+                    snapshot["period_end"],
+                    snapshot["status"],
+                ),
+            ).fetchone()
+            if resolved is None:
+                raise RuntimeError("市场复盘快照主记录保存失败")
+            snapshot_id = str(resolved["id"])
+            rows = [(row[0], snapshot_id, *row[2:]) for row in rows]
+            connection.execute(
+                "DELETE FROM market_review_conclusions WHERE snapshot_id = ?",
+                (snapshot_id,),
+            )
+            if rows:
+                connection.executemany(
+                    """
+                    INSERT INTO market_review_conclusions(
+                        id, snapshot_id, section, ordinal, text, source,
+                        published_at, url, affected_sectors_json,
+                        evidence_ids_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+        saved = self.get_market_review_snapshot(
+            period_start=str(snapshot["period_start"]),
+            period_end=str(snapshot["period_end"]),
+            status=str(snapshot["status"]),
+        )
+        if saved is None:
+            raise RuntimeError("市场复盘快照保存失败")
+        return saved
+
+    def get_market_review_snapshot(
+        self,
+        *,
+        period_start: str | None = None,
+        period_end: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any] | None:
+        clauses = []
+        parameters: list[Any] = []
+        if period_start:
+            clauses.append("period_start = ?")
+            parameters.append(period_start)
+        if period_end:
+            clauses.append("period_end = ?")
+            parameters.append(period_end)
+        if status:
+            clauses.append("status = ?")
+            parameters.append(status)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT * FROM market_review_snapshots{where}
+                ORDER BY period_end DESC,
+                    CASE status WHEN 'formal' THEN 0 ELSE 1 END,
+                    generated_at DESC
+                LIMIT 1
+                """,
+                parameters,
+            ).fetchone()
+            if row is None:
+                return None
+            conclusion_rows = connection.execute(
+                """
+                SELECT * FROM market_review_conclusions
+                WHERE snapshot_id = ?
+                ORDER BY section, ordinal
+                """,
+                (row["id"],),
+            ).fetchall()
+        result = dict(row)
+        result["source_status"] = json.loads(result.pop("source_status_json") or "{}")
+        result["metrics"] = json.loads(result.pop("metrics_json") or "{}")
+        result["conclusions"] = {
+            "core_events": [],
+            "highlights": [],
+            "risks": [],
+            "watch_directions": [],
+        }
+        for conclusion_row in conclusion_rows:
+            item = dict(conclusion_row)
+            item["affected_sectors"] = json.loads(
+                item.pop("affected_sectors_json") or "[]"
+            )
+            item["evidence_ids"] = json.loads(
+                item.pop("evidence_ids_json") or "[]"
+            )
+            result["conclusions"][item["section"]].append(item)
+        return result
 
     def save_sentiment_snapshot(self, snapshot: dict[str, Any]) -> dict[str, Any]:
         snapshot_id = str(uuid4())

@@ -171,7 +171,7 @@ def test_shareholder_api_chat_routing_followup_and_skill(client, app):
         / "runs"
         / payload["run_id"]
         / "prompt.md"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "# Shareholder Structure" in prompt
     assert "股东户数历史" in prompt
     assert "中兴新通讯有限公司" in prompt

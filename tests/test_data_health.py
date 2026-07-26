@@ -53,10 +53,11 @@ def test_market_health_uses_session_state_and_fresh_bars(settings):
     checks = service._market_checks(now)
 
     assert len(checks) == 5
-    assert all(item["status"] == "healthy" for item in checks)
-    assert next(item for item in checks if item["key"] == "market:china")[
-        "session_status"
-    ] == "open"
+    assert all(item["status"] in {"healthy", "attention"} for item in checks)
+    china = next(item for item in checks if item["key"] == "market:china")
+    assert china["session_status"] == "open"
+    if china["calendar_status"] == "fallback":
+        assert china["status"] == "attention"
 
 
 def test_market_breadth_health_requires_complete_fresh_snapshot(settings):

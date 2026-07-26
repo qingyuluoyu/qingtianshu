@@ -34,6 +34,10 @@ class LLMGatewayClient:
             raise LLMGatewayError("LLM gateway is not enabled or missing API key")
 
         base = self.settings.llm_gateway_base_url.rstrip("/")
+        # Claude Code commonly receives the gateway root while this client uses
+        # the OpenAI-compatible chat endpoint exposed under /v1.
+        if base.endswith("/gateway"):
+            base = f"{base}/v1"
         url = f"{base}/chat/completions"
         selected_model = (model or self.settings.llm_gateway_model).strip()
         payload = {
@@ -52,6 +56,14 @@ class LLMGatewayClient:
             "temperature": temperature,
             "max_tokens": int(max_tokens or self.settings.llm_gateway_max_tokens),
         }
+        if "deepseek" in selected_model.casefold():
+            payload["thinking"] = {
+                "type": (
+                    "enabled"
+                    if self.settings.llm_gateway_thinking_enabled
+                    else "disabled"
+                )
+            }
         headers = {
             "Authorization": f"Bearer {self.settings.llm_gateway_api_key}",
             "Content-Type": "application/json",
@@ -77,6 +89,14 @@ class LLMGatewayClient:
 
         answer = self._extract_answer(data)
         if not answer.strip():
+            choices = data.get("choices") or []
+            first = choices[0] if choices and isinstance(choices[0], dict) else {}
+            finish_reason = first.get("finish_reason")
+            message = first.get("message") if isinstance(first.get("message"), dict) else {}
+            if finish_reason == "length" and message.get("reasoning_content"):
+                raise LLMGatewayError(
+                    "gateway reasoning exhausted max_tokens before the final answer"
+                )
             raise LLMGatewayError("gateway returned empty assistant content")
 
         usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
@@ -111,8 +131,4 @@ class LLMGatewayClient:
             joined = "".join(parts).strip()
             if joined:
                 return joined
-        # Some gateways put intermediate chain-of-thought only; still surface if no content.
-        reasoning = message.get("reasoning_content")
-        if isinstance(reasoning, str) and reasoning.strip():
-            return reasoning.strip()
         return str(first.get("text") or "").strip()

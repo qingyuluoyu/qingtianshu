@@ -147,12 +147,12 @@ class DataHealthService:
                 continue
             latest = bars[-1]
             age = _age_seconds(latest.get("timestamp"), now)
-            if session.get("calendar_status") == "fallback":
-                status = "attention"
-                label = f"{market['name']}交易日历已降级"
-            elif session["is_open"] and (age is None or age > (900 if interval == "5m" else 300)):
+            if session["is_open"] and (age is None or age > (900 if interval == "5m" else 300)):
                 status = "critical"
                 label = f"{market['name']}盘中分钟线延迟"
+            elif session.get("calendar_status") == "fallback":
+                status = "attention"
+                label = f"{market['name']}交易日历已降级"
             elif not session["is_open"] and (age is None or age > 7 * 86400):
                 status = "attention"
                 label = f"{market['name']}最近收盘记录较旧"

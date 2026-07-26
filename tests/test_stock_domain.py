@@ -226,3 +226,159 @@ def test_relation_version_history_end_restore_and_user_isolation(app):
         "ended",
         "watching",
     ]
+
+
+def test_watchlist_persists_private_price_and_position_fields(app):
+    client = TestClient(app)
+    _create_user(client, "Private Position")
+
+    response = client.post(
+        "/me/watchlist",
+        json={
+            "symbol": "000063",
+            "name": "中兴通讯",
+            "market": "A股",
+            "thesis": "只记录个人研究参数",
+            "psychological_price": "31.50",
+            "purchase_price": "29.80",
+            "holding_quantity": 1200,
+            "sell_price": "34.20",
+        },
+    )
+
+    assert response.status_code == 200
+    item = response.json()
+    assert item["psychological_price"] == "31.50"
+    assert item["purchase_price"] == "29.80"
+    assert item["holding_quantity"] == 1200
+    assert item["sell_price"] == "34.20"
+
+
+def test_profile_summary_returns_only_current_users_real_assets(app):
+    owner = TestClient(app)
+    other = TestClient(app)
+    _create_user(owner, "Profile Owner")
+    _create_user(other, "Profile Other")
+    _add_stock(owner, "owner thesis")
+    _add_stock(other, "other thesis")
+
+    response = owner.get("/api/v1/me/profile-summary")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["research_assets"]["watchlist_count"] == 1
+    assert payload["research_assets"]["conversation_count"] == 0
+    assert payload["membership"]["status"] == "not_available"
+    assert payload["account"]["id"] == owner.get("/session").json()["id"]
+    assert payload["account"]["workspace_isolated"] is True
+    assert "token" not in str(payload).lower()
+
+
+def test_profile_workbench_aggregates_only_current_users_persisted_assets(app):
+    owner = TestClient(app)
+    other = TestClient(app)
+    owner_public = _create_user(owner, "Workbench Owner")
+    _create_user(other, "Workbench Other")
+    _add_stock(owner, "owner workbench thesis")
+    database = app.state.database
+    database.upsert_watchlist(
+        user_id=owner_public["id"],
+        symbol="NVDA",
+        name="历史非 A 股记录",
+        market="US",
+        thesis="legacy record must not cross the A-share product boundary",
+    )
+    owner_user = database.get_user(owner_public["id"])
+    conversations = [
+        database.create_conversation(owner_public["id"], title)
+        for title in ("queued research", "failed research")
+    ]
+    runs = []
+    for index, conversation in enumerate(conversations):
+        run, _ = database.create_ai_research_submission(
+            user_id=owner_public["id"],
+            conversation_id=conversation["id"],
+            idempotency_key=f"profile-workbench-{index:04d}",
+            request_fingerprint=f"profile-workbench-fingerprint-{index}",
+            targets=[{"symbol": "000063.SZ", "name": "中兴通讯"}],
+            question=f"research question {index}",
+            snapshot={},
+            dimensions={},
+            workspace_path=owner_user["workspace_path"],
+        )
+        runs.append(run)
+    database.claim_research_task(runs[1]["task_id"], "test-worker")
+    database.finish_research_task(
+        runs[1]["task_id"], "failed", "provider temporarily unavailable"
+    )
+    position = database.create_position(
+        user_id=owner_public["id"],
+        symbol="000063.SZ",
+        name="中兴通讯",
+        account_type="simulated",
+        quantity="100",
+        cost_price="30.00",
+        current_price="31.00",
+        status="open",
+        data_as_of="2026-07-25T15:00:00+08:00",
+    )
+    database.create_trade(
+        user_id=owner_public["id"],
+        position_id=position["id"],
+        symbol="000063.SZ",
+        side="buy",
+        executed_at="2026-07-25T10:00:00+08:00",
+        price="30.00",
+        quantity="100",
+        fee="5.00",
+        realized_pnl=None,
+    )
+
+    workbench = owner.get("/api/v1/me/profile-summary").json()["workbench"]
+
+    assert workbench["summary"] == {
+        "pending_count": 2,
+        "watchlist_count": 1,
+        "research_total": 2,
+        "research_running": 1,
+        "position_count": 1,
+        "trade_count": 1,
+        "review_pending_count": None,
+    }
+    assert [item["kind"] for item in workbench["todos"]] == [
+        "research_failed",
+        "research_running",
+    ]
+    assert all(item["href"].startswith("#") for item in workbench["todos"])
+    assert len(workbench["recent_research"]) == 2
+    assert len(workbench["recent_watchlist"]) == 1
+    assert all(item["symbol"] != "NVDA" for item in workbench["recent_watchlist"])
+    assert other.get("/api/v1/me/profile-summary").json()["workbench"][
+        "summary"
+    ]["watchlist_count"] == 0
+
+
+def test_phone_contact_is_private_and_alipay_order_remains_a_non_payment_draft(app):
+    owner = TestClient(app)
+    other = TestClient(app)
+    _create_user(owner, "Phone Owner")
+    _create_user(other, "Phone Other")
+
+    contact = owner.put("/me/contact-phone", json={"phone": "13800138000"})
+    assert contact.status_code == 200
+    assert contact.json()["phone_masked"] == "+86 138****8000"
+    assert contact.json()["verification_status"] == "unverified"
+
+    draft = owner.post(
+        "/me/payment-orders/draft", json={"product_code": "research_pro"}
+    )
+    assert draft.status_code == 201
+    assert draft.json()["provider"] == "alipay"
+    assert draft.json()["status"] == "draft"
+    assert draft.json()["payment_enabled"] is False
+    assert "13800138000" not in str(draft.json())
+
+    own_summary = owner.get("/api/v1/me/profile-summary").json()
+    other_summary = other.get("/api/v1/me/profile-summary").json()
+    assert own_summary["account"]["phone_masked"] == "+86 138****8000"
+    assert other_summary["account"]["phone_masked"] is None

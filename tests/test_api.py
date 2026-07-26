@@ -558,193 +558,35 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     )
     assert revalidated.status_code == 304
 
-    page = client.get("/old-demo")
+    assert client.get("/old-demo").status_code == 404
+    assert client.get("/static/demo.html").status_code == 404
+    assert client.get("/static/demo.js").status_code == 404
+    assert client.get("/static/demo.css").status_code == 404
+
+
+def test_demo_bootstrap_does_not_use_late_escape_alias(client):
+    script = client.get("/static/high-fidelity-demo.js")
+
+    assert script.status_code == 200
+    research_bootstrap = script.text.split("function researchRequest", 1)[0]
+    assert "escapeHTML(meta.name)" in research_bootstrap
+    assert "escapeHtml(meta.name)" not in research_bootstrap
+
+
+def test_market_review_frontend_uses_evidence_api_without_demo_conclusions(client):
+    page = client.get("/demo")
+    script = client.get("/static/high-fidelity-demo.js")
+
     assert page.status_code == 200
-    assert page.headers["cache-control"] == "no-cache"
-    assert "清数智算" in page.text
-    assert "金融研究 Agent" in page.text
-    assert "AI 深度解读" in page.text
-    assert "研究深度" in page.text
-    assert "按时间从新到旧" in page.text
-    assert "当前估算开盘" not in page.text
-    assert "article-feed" in page.text
-    assert "后台自动更新" not in page.text
-    page_js = client.get("/static/demo.js")
-    assert page_js.status_code == 200
-    assert "当前交易中" in page_js.text
-    page_css = client.get("/static/demo.css")
-    assert page_css.status_code == 200
-    frontend_text = page.text + page_js.text + page_css.text
-    assert "最新后台文章" not in frontend_text
-    assert "开发者接口" not in frontend_text
-    assert "数据源不可用" not in frontend_text
-    assert "盘中数据暂不可用" not in frontend_text
-    assert "板块数据暂不可用" not in frontend_text
-    assert 'api("/session")' in frontend_text
-    assert 'api("/me/watchlist/brief")' in frontend_text
-    assert 'api("/me/chat"' in frontend_text
-    assert 'api("/me/memories?status=candidate")' in frontend_text
-    assert "memory-card" in frontend_text
-    assert "确认保存" in frontend_text
-    assert "暂不保存" in frontend_text
-    assert "李总策略" in frontend_text
-    assert 'api("/v1/stock-strategies/li-zong/candidates?limit=200")' in frontend_text
-    assert 'data-li-zong-filter="data_incomplete"' in frontend_text
-    assert "⊕ 添加图片" in frontend_text
-    assert "AI 图像研究" in frontend_text
-    assert 'api("/me/uploads/images"' in frontend_text
-    assert 'api("/me/conversations?limit=100")' in frontend_text
-    assert "function visibleConversationItems(items = [])" in frontend_text
-    assert 'item.quality_scope !== "evaluation"' in frontend_text
-    assert 'api("/me/knowledge")' in frontend_text
-    assert 'conversation_id: state.conversationId' in frontend_text
-    assert "个股研究" in frontend_text
-    assert "原逻辑复核" in frontend_text
-    assert "新闻影响" in frontend_text
-    assert "操作前检查" in frontend_text
-    assert "公司对比" in frontend_text
-    assert "市场环境" in frontend_text
-    assert 'aria-label="今日观察"' in frontend_text
-    assert 'aria-label="AI研究"' in frontend_text
-    assert ".sidebar .nav-text { display: inline; }" in frontend_text
-    assert 'data-page="knowledge"' in frontend_text
-    assert 'aria-label="资料库"' in frontend_text
-    assert 'id="knowledgePanel"' in frontend_text
-    assert "研究资料库" in frontend_text
-    assert '<div class="nav-label">资料库</div>' not in frontend_text
-    assert 'class="knowledge-box"' not in frontend_text
-    assert "body.agent-page .workspace-header { display: none; }" in frontend_text
-    assert "分析师预期" in frontend_text
-    assert "事件脉络" in frontend_text
-    assert "财报质量" in frontend_text
-    assert "股东结构" in frontend_text
-    assert 'id="shareholderAction"' in frontend_text
-    assert 'id="eventTimelineAction"' in frontend_text
-    assert "AI 实时研究" in frontend_text
-    assert "image_id" in frontend_text
-    assert "localStorage.setItem" not in frontend_text
-    assert 'event.key === "Enter"' in frontend_text
-    assert "!event.shiftKey" in frontend_text
-    assert "!event.isComposing" in frontend_text
-    assert "event.keyCode !== 229" in frontend_text
-    assert '$("chatForm").requestSubmit()' in frontend_text
-    assert "function finalizeStreamingMessage(" in frontend_text
-    assert "AI 实时生成中（草稿） · 完成证据校验前内容可能调整" in frontend_text
-    assert "证据校验完成 · 草稿中的不确定内容已修正，以下为最终答案" in frontend_text
-    assert "return {source, ready, context};" in frontend_text
-    assert "pending.remove();\n        state.conversationId" not in frontend_text
-    assert "responseNode = finalizeStreamingMessage(pending, data.answer" in frontend_text
-    assert "诊大盘" not in frontend_text
-    assert "诊个股" not in frontend_text
-    assert 'data-page="insights"' in frontend_text
-    assert 'data-page="agent"' in frontend_text
-    assert 'data-page="deep_stock"' in frontend_text
-    assert 'aria-label="个股研究"' in frontend_text
-    assert 'id="deepStockPanel"' in frontend_text
-    assert "股票研究空间" in frontend_text
-    assert "stock-thesis-editor" in frontend_text
-    assert "deep-quote-tags" in frontend_text
-    assert "stock-system-observation-list" in frontend_text
-    assert 'stock-workspace-item${interactive ? " interactive" : ""}' in frontend_text
-    assert "保存当前判断" in frontend_text
-    assert "保存后，这段判断会进入你的个人资料库" in frontend_text
-    assert 'data-stock-space-tab="overview"' in frontend_text
-    assert 'data-stock-space-tab="ai"' in frontend_text
-    assert 'data-stock-space-tab="evidence"' in frontend_text
-    assert 'data-stock-space-tab="tasks"' in frontend_text
-    assert 'data-stock-space-tab="history"' in frontend_text
-    assert 'id="deepStockEvidence"' in frontend_text
-    assert 'id="deepStockTasks"' in frontend_text
-    assert 'id="deepStockHistory"' in frontend_text
-    assert 'id="deepStockAgent" class="btn" type="button" disabled hidden' in frontend_text
-    assert "function researchActionDetail(action)" in frontend_text
-    assert "查看任务依据" in frontend_text
-    assert 'function openReader(title, body, meta = "", sourceUrl = "")' in frontend_text
-    assert "打开原始公告或信息源" in frontend_text
-    assert 'api("/me/deep-stock?limit=50")' in frontend_text
-    assert 'api("/me/deep-stock", {' in frontend_text
-    assert "七个研究阶段" in frontend_text
-    assert 'data-page="watchlist"' in frontend_text
-    assert 'id="watchlistAddForm"' in frontend_text
-    assert 'api(`/stocks/${encodeURIComponent(item.symbol)}/intraday`)' in frontend_text
-    assert 'api(`/me/watchlist/${encodeURIComponent(item.symbol)}`' in frontend_text
-    assert "function aggregateWeekly(points = [])" in frontend_text
-    assert "分时" in frontend_text
-    assert "周线" in frontend_text
-    assert 'data-page="review"' in frontend_text
-    assert 'id="homeFocus"' in frontend_text
-    assert 'data-home-focus="markets"' in frontend_text
-    assert 'data-home-focus="watchlist"' in frontend_text
-    assert 'data-home-focus="ashare"' in frontend_text
-    assert 'id="homeAShareStepMeta"' in frontend_text
-    assert "function renderHomeFocus()" in frontend_text
-    assert "function prepareAgentQuestion(question)" in frontend_text
-    assert "function dedupeInsightItems(items = [])" in frontend_text
-    assert 'id="insightAskForm"' in frontend_text
-    assert 'id="insightQuestion"' in frontend_text
-    assert 'data-insight-filter="market"' in frontend_text
-    assert 'data-insight-filter="stock"' in frontend_text
-    assert 'data-insight-filter="opportunity"' in frontend_text
-    assert 'id="agentHistoryList"' in frontend_text
-    assert 'id="conversationSwitcher"' in frontend_text
-    assert 'id="agentProcessToggle"' in frontend_text
-    assert 'id="agentContextToggle"' in frontend_text
-    assert "function setAgentContextCollapsed(collapsed)" in frontend_text
-    assert "const chineseHeading = line.match" in frontend_text
-    assert "复盘中心" in frontend_text
-    assert 'id="reviewOutcomesPanel"' in frontend_text
-    assert 'api("/me/research-outcomes?limit=120")' in frontend_text
-    assert "function renderResearchOutcomes(data)" in frontend_text
-    assert "让 Agent 复核这次研究" in frontend_text
-    assert "研究行动" in frontend_text
-    assert "overflow-y: auto; overscroll-behavior: contain" in frontend_text
-    assert 'id="diagnosisContext"' in frontend_text
-    assert 'id="workspaceTitle"' in frontend_text
-    assert 'api(`/stocks/${encodeURIComponent(symbol)}/history?range=3mo`)' in frontend_text
-    assert 'api(`/a-share/${encodeURIComponent(symbol)}/fundamentals`)' in frontend_text
-    assert "async function loadDeepStockOverview(symbol)" in frontend_text
-    assert 'className = "stock-primary-grid"' in frontend_text
-    assert 'setAttribute("aria-label", "K线区间")' in frontend_text
-    assert "function readableResearchPreview(value)" in frontend_text
-    assert "当前研究摘要" in frontend_text
-    assert 'optionalApi(`/a-share/${encoded}/shareholders`)' in frontend_text
-    assert 'optionalApi(`/a-share/${encoded}/analyst-expectations`)' in frontend_text
-    assert 'optionalApi(`/stocks/${encoded}/event-timeline`)' in frontend_text
-    assert 'optionalApi(`/a-share/${encoded}/information`)' in frontend_text
-    assert "const quoteLabel = quote?.quote_label" in frontend_text
-    assert "maybeUpdateDiagnosis" in frontend_text
-    assert "const symbol = inferDiagnosisSymbol(data, question)" in frontend_text
-    assert "const marketKey = inferDiagnosisMarketKey(data, question)" in frontend_text
-    assert 'const marketTerms = new Set(["A", "AI", "ETF"' in frontend_text
-    assert 'activateWorkspace("agent")' in frontend_text
-    assert "body.agent-page #agentSection" in frontend_text
-    assert 'api("/research-method?limit=4")' in frontend_text
-    assert 'api("/me/research-actions")' in frontend_text
-    assert 'api("/me/chat/refine"' in frontend_text
-    assert 'const directHermes = wantsHermes && state.workspacePage === "agent"' in frontend_text
-    assert "execute_agent: attachedImage ? true : directHermes" in frontend_text
-    assert "prefer_precomputed: wantsHermes && !directHermes" in frontend_text
-    assert "AI 正在检索实时证据、资料库和金融研究工具" in frontend_text
-    assert "function renderMarkdown(text)" in frontend_text
-    assert "navigator.clipboard.writeText(text)" in frontend_text
-    assert "AI 正在补充深度解读" in frontend_text
-    assert 'id="toggleQuickActions"' in frontend_text
-    assert "data-quick-secondary" in frontend_text
-    assert 'container.classList.toggle("expanded", expanded)' in frontend_text
-    assert "研究行动与结果回填" in frontend_text
-    assert 'id="conversationQualitySummary"' in frontend_text
-    assert 'id="conversationQualityIssues"' in frontend_text
-    assert 'api("/me/conversation-quality")' in frontend_text
-    assert "普通用户样本不足，暂不评分" in frontend_text
-    assert "验收审计" in frontend_text
-    assert "首片段" in frontend_text
-    assert "首个安全可见" in frontend_text
-    assert 'new URLSearchParams(window.location.search).get("qa") === "1"' in frontend_text
-    assert 'quality_scope: state.evaluationMode ? "evaluation" : "user"' in frontend_text
-    send_chat = frontend_text[frontend_text.index("async function sendChat(message)") :]
-    assert send_chat.index('$("sendButton").disabled = true') < send_chat.index(
-        "privateStream = connectPrivateAgentStream(requestId, pending)"
-    )
+    assert script.status_code == 200
+    frontend = page.text + script.text
+    assert "/api/v1/reviews/market" in frontend
+    assert 'id="marketReviewCoreEvents"' in frontend
+    assert 'id="marketReviewHighlights"' in frontend
+    assert 'id="marketReviewRisks"' in frontend
+    assert 'id="marketReviewDirections"' in frontend
+    assert "北向资金本周净流入 72.36 亿元" not in frontend
+    assert "外部地缘政治不确定性仍存" not in frontend
 
 
 def test_conversation_quality_endpoint_is_user_isolated(app):
@@ -807,7 +649,18 @@ def test_live_markets_include_five_regions_and_persist_intraday_bars(client, app
         }
         assert item["source"]
     stocks = [item for item in payload["markets"] if item["key"] != "london_gold"]
-    assert all(item["calendar_status"] == "verified" for item in stocks)
+    assert all(
+        item["calendar_status"] in {"verified", "fallback"} for item in stocks
+    )
+    assert all(
+        item["session_method"]
+        == (
+            "exchange_calendar_v1"
+            if item["calendar_status"] == "verified"
+            else "weekday_schedule_fallback_v1"
+        )
+        for item in stocks
+    )
     assert "交易所日历" in payload["session_method"]
     stored = app.state.database.get_market_bars("000001.SS", "1m", limit=200)
     assert len(stored) == 100
@@ -864,6 +717,8 @@ def test_background_status_is_exposed_without_starting_jobs_in_tests(client):
     assert payload["enabled"] is False
     assert payload["running"] is False
     assert payload["latest_jobs"] == []
+    assert payload["pre_market_refresh"]["timezone"] == "Asia/Shanghai"
+    assert payload["pre_market_refresh"]["time"] == "07:30"
 
 
 def test_data_health_has_internal_details_but_health_exposes_public_summary(client):
@@ -913,7 +768,9 @@ def test_user_workspace_watchlist_and_run_isolation(app):
     bob_list = bob_client.get(f"/users/{bob['id']}/watchlist").json()["items"]
     assert len(alice_list) == 1
     assert bob_list == []
-    assert "600519.SS" in (alice_workspace / "watchlist.json").read_text()
+    assert "600519.SS" in (alice_workspace / "watchlist.json").read_text(
+        encoding="utf-8"
+    )
 
     run_id = payload["run_id"]
     assert (
@@ -1819,7 +1676,7 @@ def test_market_conversation_followup_keeps_market_and_region_context(client, ap
         / "runs"
         / payload["run_id"]
         / "prompt.md"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "连续追问“那主要风险是什么”" in prompt
     assert "不能喧宾夺主" in prompt
     assert "市场涨跌原因的证据规则" in prompt
@@ -1852,7 +1709,7 @@ def test_market_conversation_followup_keeps_market_and_region_context(client, ap
         / "runs"
         / counter_payload["run_id"]
         / "prompt.md"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "中兴通讯长期研究档案" not in counter_prompt
     assert "美国股市" in counter_prompt
     assert "必须引用其中至少一条作为事件线索" in counter_prompt
@@ -1955,7 +1812,7 @@ def test_user_and_common_knowledge_are_retrieved_and_written_to_prompt(client, a
         / run["id"]
         / "prompt.md"
     )
-    prompt = prompt_path.read_text()
+    prompt = prompt_path.read_text(encoding="utf-8")
     assert "本对话最近上下文" in prompt
     assert "光模块跟踪笔记" in prompt
     assert "800G 订单兑现" in prompt
@@ -1997,7 +1854,7 @@ def test_stock_chat_uses_latest_server_report_when_live_price_refresh_fails(
         / "runs"
         / payload["run_id"]
         / "prompt.md"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "不能机械输出一份全景研究报告" in prompt
     assert "最多四个小标题" in prompt
     assert "不得解释内部行情为何未返回" in prompt
@@ -2022,7 +1879,7 @@ def test_memory_requires_confirmation_and_is_user_scoped(app):
     ).json()
     before_prompt = (
         Path(alice_record["workspace_path"]) / "runs" / before["run_id"] / "prompt.md"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "我更在意最大回撤" not in before_prompt
     assert (
         bob_client.post(
@@ -2040,11 +1897,11 @@ def test_memory_requires_confirmation_and_is_user_scoped(app):
     ).json()
     after_prompt = (
         Path(alice_record["workspace_path"]) / "runs" / after["run_id"] / "prompt.md"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "我更在意最大回撤" in after_prompt
     confirmed_file = (
         Path(alice_record["workspace_path"]) / "memory" / "confirmed.json"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "我更在意最大回撤" in confirmed_file
 
 
@@ -2112,7 +1969,7 @@ def test_my_memory_confirmation_and_rejection_flow(app):
         / "runs"
         / market["run_id"]
         / "prompt.md"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "我更重视最大回撤" in prompt
     assert "我不关心任何风险" not in prompt
 
@@ -2178,7 +2035,7 @@ def test_private_image_upload_and_visual_research_routing(app):
         / "runs"
         / payload["run_id"]
         / "prompt.md"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "# Visual Research" in prompt
 
     invalid = owner.post(

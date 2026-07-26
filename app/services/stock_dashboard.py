@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime
 import threading
 import time
@@ -35,6 +36,17 @@ class StockDashboardService:
         self.catalog_ttl_seconds = max(300, catalog_ttl_seconds)
         self._catalog_lock = threading.Lock()
         self._catalog_cache: tuple[float, list[dict[str, Any]]] | None = None
+        self._kline_cache_lock = threading.Lock()
+        self._kline_cache: dict[
+            tuple[str, str, int, str], tuple[float, dict[str, Any]]
+        ] = {}
+
+    @staticmethod
+    def period_config(period: str) -> dict[str, str]:
+        config = _PERIOD_CONFIG.get(period)
+        if config is None:
+            raise ValueError("不支持的 K 线周期")
+        return dict(config)
 
     def search(self, query: str, *, limit: int = 10) -> list[dict[str, Any]]:
         keyword = query.strip()
@@ -85,9 +97,18 @@ class StockDashboardService:
             "listDate": None,
         }
 
-    def score_card(self, symbol: str) -> dict[str, Any]:
+    def score_card(
+        self, symbol: str, *, allow_remote: bool = True
+    ) -> dict[str, Any]:
         canonical = _canonical_a_share(symbol)
-        fundamentals = self.fundamentals_service.get_packet(canonical)
+        get_cached_fundamentals = getattr(
+            self.fundamentals_service, "get_cached_packet", None
+        )
+        fundamentals = (
+            get_cached_fundamentals(canonical)
+            if not allow_remote and callable(get_cached_fundamentals)
+            else self.fundamentals_service.get_packet(canonical)
+        )
         valuation = dict(fundamentals.get("valuation") or {})
         periods = list(fundamentals.get("financial_periods") or [])
         latest_report = periods[0] if periods else {}
@@ -96,11 +117,23 @@ class StockDashboardService:
         intraday: dict[str, Any] = {}
         intraday_warning = None
         try:
-            intraday = self.market_provider.fetch_history(
-                canonical,
-                range_name="1d",
-                interval="1m",
-            )
+            if allow_remote:
+                intraday = self.market_provider.fetch_history(
+                    canonical,
+                    range_name="1d",
+                    interval="1m",
+                )
+            else:
+                read_cached = getattr(
+                    self.market_provider, "read_cached_history", None
+                )
+                if callable(read_cached):
+                    intraday = read_cached(
+                        canonical,
+                        range_name="1d",
+                        interval="1m",
+                        allow_stale=True,
+                    ) or {}
         except Exception as exc:
             intraday_warning = f"分时行情暂不可用：{type(exc).__name__}"
 
@@ -160,6 +193,8 @@ class StockDashboardService:
             or latest.get("timestamp")
             or valuation.get("market_timestamp")
         )
+        quote_status = "available" if price is not None and market_timestamp else "partial"
+        financial_status = "available" if latest_report.get("report_date") else "unavailable"
         return {
             "symbol": _external_symbol(canonical),
             "internalSymbol": canonical,
@@ -198,6 +233,27 @@ class StockDashboardService:
                 "roeTtmAvailable": False,
             },
             "generatedAt": utc_now(),
+            "cache": {
+                "state": (
+                    "fresh"
+                    if intraday and not intraday.get("is_stale")
+                    else "stale"
+                    if intraday or valuation
+                    else "warming"
+                ),
+                "refreshing": False,
+                "dataAsOf": market_timestamp,
+            },
+            "dataStatus": {
+                "quote": quote_status,
+                "financials": financial_status,
+                "valuation": "available" if valuation else "unavailable",
+            },
+            "officialSearch": {
+                "cninfoQuery": identity["name"],
+                "filingsLabel": "巨潮资讯：按证券名称检索公告与财报",
+                "researchLabel": "研报检索：按证券名称检索",
+            },
             "warnings": list(dict.fromkeys(warnings)),
         }
 
@@ -208,17 +264,77 @@ class StockDashboardService:
         period: str = "1d",
         limit: int = 80,
         adjust: str = "qfq",
+        allow_remote: bool = True,
     ) -> dict[str, Any]:
         canonical = _canonical_a_share(symbol)
         config = _PERIOD_CONFIG.get(period)
         if config is None:
             raise ValueError("不支持的 K 线周期")
         limit = max(1, min(int(limit), 240))
-        packet = self.market_provider.fetch_history(
-            canonical,
-            range_name=config["range"],
-            interval=config["interval"],
-        )
+        cache_key = (canonical, period, limit, adjust)
+        cache_ttl = 8 if period == "1m" else 120
+        now = time.monotonic()
+        stale_packet: dict[str, Any] | None = None
+        with self._kline_cache_lock:
+            cached = self._kline_cache.get(cache_key)
+            if cached is not None:
+                expires_at, cached_packet = cached
+                if expires_at > now:
+                    result = deepcopy(cached_packet)
+                    result["cache"] = {"state": "hit", "ttlSeconds": cache_ttl}
+                    return result
+                if expires_at + cache_ttl * 5 > now:
+                    stale_packet = cached_packet
+        try:
+            if allow_remote:
+                packet = self.market_provider.fetch_history(
+                    canonical,
+                    range_name=config["range"],
+                    interval=config["interval"],
+                )
+            else:
+                read_cached = getattr(
+                    self.market_provider, "read_cached_history", None
+                )
+                packet = (
+                    read_cached(
+                        canonical,
+                        range_name=config["range"],
+                        interval=config["interval"],
+                        allow_stale=True,
+                    )
+                    if callable(read_cached)
+                    else None
+                )
+                if packet is None:
+                    return {
+                        "symbol": _external_symbol(canonical),
+                        "period": period,
+                        "adjustment": adjust,
+                        "source": None,
+                        "marketTimestamp": None,
+                        "fetchedAt": None,
+                        "warnings": [],
+                        "data": [],
+                        "cache": {
+                            "state": "warming",
+                            "ttlSeconds": cache_ttl,
+                        },
+                    }
+        except Exception:
+            if stale_packet is None:
+                raise
+            result = deepcopy(stale_packet)
+            result["warnings"] = list(
+                dict.fromkeys(
+                    [
+                        *list(result.get("warnings") or []),
+                        "K线上游刷新失败，已返回最近一次成功数据。",
+                    ]
+                )
+            )
+            result["cache"] = {"state": "stale", "ttlSeconds": cache_ttl}
+            return result
         points = [
             _adjusted_point(point, use_adjustment=period != "1m" and adjust == "qfq")
             for point in (packet.get("points") or [])
@@ -234,7 +350,7 @@ class StockDashboardService:
             if period != "1m" and adjust == "qfq"
             else "不复权"
         )
-        return {
+        result = {
             "symbol": _external_symbol(canonical),
             "period": period,
             "adjustment": adjustment,
@@ -243,7 +359,23 @@ class StockDashboardService:
             "fetchedAt": packet.get("fetched_at"),
             "warnings": packet.get("warnings") or [],
             "data": points,
+            "cache": {
+                "state": "stale" if packet.get("is_stale") else "fresh",
+                "ttlSeconds": cache_ttl,
+            },
         }
+        with self._kline_cache_lock:
+            if len(self._kline_cache) >= 512:
+                self._kline_cache = {
+                    key: value
+                    for key, value in self._kline_cache.items()
+                    if value[0] > now
+                }
+            self._kline_cache[cache_key] = (
+                time.monotonic() + cache_ttl,
+                deepcopy(result),
+            )
+        return result
 
     def _identity(
         self, canonical: str, *, valuation: dict[str, Any]
@@ -285,17 +417,37 @@ class StockDashboardService:
             now = time.monotonic()
             if self._catalog_cache and self._catalog_cache[0] > now:
                 return self._catalog_cache[1]
+            database = getattr(self.market_provider, "database", None)
+            if database is not None:
+                cached = database.get_cache("stock-catalog:a-share:v1")
+                if cached is not None and isinstance(cached.get("items"), list):
+                    records = list(cached["items"])
+                    self._catalog_cache = (
+                        now + self.catalog_ttl_seconds,
+                        records,
+                    )
+                    return records
             records = self._fetch_stock_catalog()
+            if database is not None and records:
+                database.put_cache(
+                    "stock-catalog:a-share:v1",
+                    {"items": records},
+                    max(86_400, self.catalog_ttl_seconds),
+                )
             self._catalog_cache = (
                 now + self.catalog_ttl_seconds,
                 records,
             )
             return records
 
+    def prewarm_catalog(self) -> None:
+        self._stock_catalog()
+
     def _fetch_stock_catalog(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
-        if self.tushare_client is not None:
-            frame = self.tushare_client.stock_basic(
+        stock_basic = getattr(self.tushare_client, "stock_basic", None)
+        if callable(stock_basic):
+            frame = stock_basic(
                 exchange="",
                 list_status="L",
                 fields=(
@@ -321,11 +473,15 @@ class StockDashboardService:
                         "spelling": row.get("cnspell"),
                     }
                 )
-        if records:
-            records.sort(key=lambda item: str(item.get("symbol") or ""))
-            return records
-
-        seen: set[str] = set()
+        # Always merge the small audited alias catalog. Some compatible
+        # stock-basic providers return a partial universe; name routing for a
+        # known security must not disappear merely because that partial list is
+        # non-empty.
+        seen: set[str] = {
+            str(item.get("internalSymbol") or "")
+            for item in records
+            if item.get("internalSymbol")
+        }
         for name, symbol in SECURITY_NAME_ALIASES.items():
             try:
                 canonical = _canonical_a_share(symbol)
@@ -347,6 +503,7 @@ class StockDashboardService:
                     "spelling": None,
                 }
             )
+        records.sort(key=lambda item: str(item.get("symbol") or ""))
         return records
 
 

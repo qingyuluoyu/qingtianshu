@@ -15,6 +15,7 @@ dependencies = [
   "pillow>=10,<12",
   "python-multipart>=0.0.9",
   "python-dotenv>=1.0",
+  "redis>=5,<6",
   "tushare>=1.4",
 ]
 
@@ -28,3 +29,14 @@ dev = [
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+app = [
+  "skills/a_share_five_dimension_v7/*.md",
+  "skills/a_share_five_dimension_v7/*.json",
+  "skills/a_share_five_dimension_v7/*/*.md",
+  "skills/a_share_five_dimension_v7/*/*.json",
+]

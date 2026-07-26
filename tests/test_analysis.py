@@ -310,7 +310,7 @@ def test_market_brief_excludes_cross_date_indices_and_sectors_from_state():
         "market_key": "china",
     }
     assert brief["date_alignment"]["status"] == "partial_alignment"
-    assert brief["date_alignment"]["aligned_indices"] == 4
+    assert brief["date_alignment"]["aligned_indices"] == 5
     assert brief["date_alignment"]["sector_status"] == "cross_date_excluded"
     assert brief["hot_sectors"]["same_date_as_analysis_target"] is False
     mismatched = next(
@@ -319,7 +319,7 @@ def test_market_brief_excludes_cross_date_indices_and_sectors_from_state():
     assert mismatched["market_date"] == "2026-07-20"
     assert mismatched["analysis_eligibility"] == "cross_date_excluded"
     assert brief["market_state"]["label"] == "偏强"
-    assert brief["market_state"]["aligned_index_count"] == 4
+    assert brief["market_state"]["aligned_index_count"] == 5
     assert brief["market_state"]["whole_market_breadth_available"] is True
 
 
@@ -339,7 +339,7 @@ def test_market_brief_uses_newer_index_session_before_previous_day_breadth():
         "market_key": "china",
     }
     assert brief["date_alignment"]["status"] == "same_market_date"
-    assert brief["date_alignment"]["aligned_indices"] == 5
+    assert brief["date_alignment"]["aligned_indices"] == 6
     assert brief["date_alignment"]["sector_status"] == "same_market_date"
     assert brief["date_alignment"]["breadth_status"] == "cross_date_excluded"
     assert brief["hot_sectors"]["analysis_eligibility"] == "same_market_date"

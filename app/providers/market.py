@@ -8,6 +8,7 @@ import json
 import math
 import re
 from statistics import median, quantiles
+import threading
 from typing import Any, Callable
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
@@ -16,9 +17,12 @@ import requests
 
 try:
     import exchange_calendars as exchange_calendars
-    import pandas as pd
 except ImportError:  # pragma: no cover - runtime dependency with safe fallback
     exchange_calendars = None
+
+try:
+    import pandas as pd
+except ImportError:  # pragma: no cover - optional for spreadsheet source parsing
     pd = None
 
 from app.db import Database
@@ -104,6 +108,26 @@ class YahooMarketProvider:
         self.database = database
         self.ttl_seconds = ttl_seconds
         self.http_get = http_get
+
+    def read_cached_history(
+        self,
+        symbol: str,
+        range_name: str = "1y",
+        interval: str = "1d",
+        *,
+        allow_stale: bool = True,
+    ) -> dict[str, Any] | None:
+        """Read a persisted snapshot without ever calling the upstream."""
+        cache_key = f"yahoo:{symbol}:{range_name}:{interval}"
+        cached = self.database.get_cache(cache_key, allow_stale=allow_stale)
+        if cached is None or "regular_market_timestamp" not in cached:
+            return None
+        cached, removed = self._sanitize_history(
+            cached, symbol=symbol, interval=interval
+        )
+        if removed:
+            self.database.delete_market_bars(symbol, interval, removed)
+        return cached
 
     def fetch_history(
         self,
@@ -502,6 +526,9 @@ class TencentChinaIndexProvider:
 
 class EastmoneySectorProvider:
     URL = "https://push2.eastmoney.com/api/qt/clist/get"
+    HISTORY_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    CACHE_KEY = "eastmoney:sectors:100"
+    UPSTREAM_LIMIT = 100
 
     def __init__(
         self,
@@ -512,46 +539,159 @@ class EastmoneySectorProvider:
         self.database = database
         self.ttl_seconds = ttl_seconds
         self.http_get = http_get
+        self._refresh_lock = threading.Lock()
 
-    def fetch_hot_sectors(self, limit: int = 20) -> dict[str, Any]:
-        limit = max(1, min(limit, 100))
-        cache_key = f"eastmoney:sectors:{limit}"
+    def fetch_sector_history(
+        self,
+        code: str,
+        days: int = 5,
+        *,
+        allow_remote: bool = True,
+    ) -> dict[str, Any]:
+        normalized = str(code or "").strip().upper()
+        if not re.fullmatch(r"BK\d{4}", normalized):
+            raise ProviderError("东方财富板块代码格式无效")
+        days = max(3, min(int(days), 20))
+        cache_key = f"eastmoney:sector-history:{normalized}:{days}"
         cached = self.database.get_cache(cache_key)
         if cached is not None:
-            return cached
-
+            result = deepcopy(cached)
+            result["cache_hit"] = True
+            return result
+        if not allow_remote:
+            return {
+                "code": normalized,
+                "status": "unavailable",
+                "source": "Eastmoney sector daily history",
+                "cache_hit": False,
+                "points": [],
+                "warnings": ["板块历史缓存尚未建立。"],
+            }
         params = {
-            "pn": 1,
-            "pz": limit,
-            "po": 1,
-            "np": 1,
-            "ut": "bd1d9ddb04089700cf9c27f6f7426281",
-            "fltt": 2,
-            "invt": 2,
-            "fid": "f3",
-            "fs": "m:90+t:2+f:!50",
-            "fields": "f12,f14,f2,f3,f6,f62,f104,f105,f106,f124",
+            "secid": f"90.{normalized}",
+            "klt": 101,
+            "fqt": 1,
+            "lmt": days,
+            "end": "20500101",
+            "fields1": "f1,f2,f3,f4,f5,f6",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
         }
         try:
             response = self.http_get(
-                self.URL,
+                self.HISTORY_URL,
                 params=params,
                 headers={
-                    "User-Agent": "Mozilla/5.0 QingshuFinanceAgentDemo/0.1",
-                    "Referer": "https://quote.eastmoney.com/center/boardlist.html",
+                    "User-Agent": "Mozilla/5.0 QingshuFinanceAgent/1.0",
+                    "Referer": "https://quote.eastmoney.com/",
                 },
-                timeout=15,
+                timeout=6,
             )
             response.raise_for_status()
-            result = self._parse(response.json(), limit)
-            self.database.put_cache(cache_key, result, self.ttl_seconds)
+            rows = ((response.json().get("data") or {}).get("klines") or [])
+            points = []
+            for row in rows:
+                fields = str(row).split(",")
+                if (
+                    len(fields) < 3
+                    or not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", fields[0])
+                ):
+                    continue
+                close = _number(fields[2])
+                if close is None:
+                    continue
+                points.append(
+                    {
+                        "market_date": fields[0],
+                        "close": float(close),
+                    }
+                )
+            points = sorted(points, key=lambda item: item["market_date"])[-days:]
+            if len(points) < 3:
+                raise ProviderError("东方财富板块历史少于三个有效交易日")
+            result = {
+                "code": normalized,
+                "status": "available",
+                "source": "Eastmoney sector daily history",
+                "source_url": self.HISTORY_URL,
+                "fetched_at": utc_now(),
+                "cache_hit": False,
+                "points": points,
+                "warnings": [],
+            }
+            self.database.put_cache(cache_key, result, ttl_seconds=21_600)
             return result
         except Exception as exc:
             stale = self.database.get_cache(cache_key, allow_stale=True)
             if stale is not None:
-                stale.setdefault("warnings", []).append(f"东方财富请求失败：{type(exc).__name__}")
-                return stale
-            raise ProviderError(f"东方财富板块数据不可用：{type(exc).__name__}: {exc}") from exc
+                result = deepcopy(stale)
+                result["cache_hit"] = True
+                result.setdefault("warnings", []).append(
+                    f"板块历史刷新失败，沿用缓存：{type(exc).__name__}"
+                )
+                return result
+            if isinstance(exc, ProviderError):
+                raise
+            raise ProviderError(
+                f"东方财富板块历史不可用：{type(exc).__name__}: {exc}"
+            ) from exc
+
+    def fetch_hot_sectors(self, limit: int = 20) -> dict[str, Any]:
+        limit = max(1, min(limit, 100))
+        cached = self.database.get_cache(self.CACHE_KEY)
+        if cached is not None:
+            return self._slice(cached, limit)
+
+        with self._refresh_lock:
+            cached = self.database.get_cache(self.CACHE_KEY)
+            if cached is not None:
+                return self._slice(cached, limit)
+            params = {
+                "pn": 1,
+                "pz": self.UPSTREAM_LIMIT,
+                "po": 1,
+                "np": 1,
+                "ut": "bd1d9ddb04089700cf9c27f6f7426281",
+                "fltt": 2,
+                "invt": 2,
+                "fid": "f3",
+                "fs": "m:90+t:2+f:!50",
+                "fields": "f12,f14,f2,f3,f6,f62,f104,f105,f106,f124",
+            }
+            try:
+                response = self.http_get(
+                    self.URL,
+                    params=params,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 QingshuFinanceAgentDemo/0.1",
+                        "Referer": "https://quote.eastmoney.com/center/boardlist.html",
+                    },
+                    timeout=15,
+                )
+                response.raise_for_status()
+                result = self._parse(response.json(), self.UPSTREAM_LIMIT)
+                self.database.put_cache(self.CACHE_KEY, result, self.ttl_seconds)
+                return self._slice(result, limit)
+            except Exception as exc:
+                stale = self.database.get_cache(
+                    self.CACHE_KEY, allow_stale=True
+                )
+                if stale is not None:
+                    stale.setdefault("warnings", []).append(
+                        f"东方财富请求失败：{type(exc).__name__}"
+                    )
+                    return self._slice(stale, limit)
+                raise ProviderError(
+                    f"东方财富板块数据不可用：{type(exc).__name__}: {exc}"
+                ) from exc
+
+    @staticmethod
+    def _slice(packet: dict[str, Any], limit: int) -> dict[str, Any]:
+        result = deepcopy(packet)
+        result["sectors"] = list(result.get("sectors") or [])[:limit]
+        coverage = dict(result.get("coverage") or {})
+        coverage["returned"] = len(result["sectors"])
+        result["coverage"] = coverage
+        return result
 
     @staticmethod
     def _parse(payload: dict[str, Any], limit: int) -> dict[str, Any]:
@@ -1626,6 +1766,19 @@ class ResilientSectorProvider:
             )
             result["degraded_from"] = "Eastmoney A-share sector ranking"
             return result
+
+    def fetch_sector_history(
+        self,
+        code: str,
+        days: int = 5,
+        *,
+        allow_remote: bool = True,
+    ) -> dict[str, Any]:
+        return self.primary.fetch_sector_history(
+            code,
+            days=days,
+            allow_remote=allow_remote,
+        )
 
 
 class SinaMarketBreadthProvider:

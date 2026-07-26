@@ -1,30 +1,100 @@
+name: qingshu
+
 services:
-  qingshu-agent:
-    build: .
+  redis:
+    image: redis:7.4.2-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build:
+      context: .
+    image: qingshu-app:0.1.0
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    restart: unless-stopped
     ports:
       - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
     environment:
       QINGSHU_DATA_DIR: /data
+      REDIS_URL: redis://redis:6379/0
       BACKGROUND_JOBS_ENABLED: "true"
-      BACKGROUND_MARKET_REFRESH_SECONDS: "30"
-      BACKGROUND_ARTICLE_CHECK_SECONDS: "1800"
-      BACKGROUND_INFO_REFRESH_SECONDS: "600"
-      BACKGROUND_USE_HERMES: "false"
       HERMES_ENABLED: "false"
     volumes:
       - qingshu-data:/data
-    restart: unless-stopped
+    networks:
+      - backend
+      - egress
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=5)",
         ]
-      interval: 30s
-      timeout: 10s
+      interval: 20s
+      timeout: 7s
+      retries: 5
+      start_period: 20s
+
+  worker:
+    image: qingshu-app:0.1.0
+    command: ["python", "-m", "app.research_worker_main"]
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      QINGSHU_DATA_DIR: /data
+      REDIS_URL: redis://redis:6379/0
+      BACKGROUND_JOBS_ENABLED: "false"
+      HERMES_ENABLED: "false"
+    volumes:
+      - qingshu-data:/data
+    networks:
+      - backend
+      - egress
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os,time; p='/tmp/qingshu-worker.heartbeat'; assert os.path.exists(p) and time.time()-os.path.getmtime(p)<15",
+        ]
+      interval: 10s
+      timeout: 3s
       retries: 3
+      start_period: 20s
+
+networks:
+  backend:
+    internal: true
+  egress:
 
 volumes:
   qingshu-data:
+  redis-data:

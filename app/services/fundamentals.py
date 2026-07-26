@@ -167,7 +167,11 @@ class FundamentalsService:
         }
 
     def get_packet(
-        self, symbol: str, refresh_max_age_seconds: int = 600
+        self,
+        symbol: str,
+        refresh_max_age_seconds: int = 600,
+        *,
+        allow_refresh: bool = True,
     ) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
         valuation = self.database.latest_valuation_snapshot(canonical)
@@ -178,7 +182,7 @@ class FundamentalsService:
         supports_details = callable(
             getattr(self.provider, "fetch_statement_details", None)
         )
-        should_refresh = (
+        should_refresh = allow_refresh and (
             valuation is None
             or not periods
             or (supports_details and not statement_details)
@@ -229,6 +233,10 @@ class FundamentalsService:
                 "所有数值先由确定性代码解析和存储，再交给 Agent 解释。",
             ],
         }
+
+    def get_cached_packet(self, symbol: str) -> dict[str, Any]:
+        """Read stored fundamentals without synchronously calling providers."""
+        return self.get_packet(symbol, allow_refresh=False)
 
     def refresh_symbols(self, symbols: list[str]) -> dict[str, Any]:
         results = []

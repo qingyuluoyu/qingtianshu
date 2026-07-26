@@ -187,7 +187,7 @@ def test_api_chat_followup_skill_and_frontend_entry(client, app):
         / "runs"
         / payload["run_id"]
         / "prompt.md"
-    ).read_text()
+    ).read_text(encoding="utf-8")
     assert "# 分析师一致预期与研报跟踪" in prompt
     assert "只有 `revision.available=true` 时才能说一致预期上修或下修" in prompt
 

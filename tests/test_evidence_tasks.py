@@ -169,8 +169,8 @@ def test_chat_creates_evidence_task_and_review_page_renders_lifecycle(
 
     page = client.get("/demo").text
     assert "待补证与后台补齐" in page
-    assert 'api("/me/evidence-tasks?limit=50")' in page
-    assert "function renderEvidenceTasks(data)" in page
-    assert "evidence_tasks_updated" in page
+    script = client.get("/static/high-fidelity-demo.js").text
+    assert "watchRequest('/me/evidence-tasks?limit=50')" in script
+    assert "function renderEvidenceTasks(data)" in script
     status = client.get("/system/background").json()
     assert status["evidence_task_refresh_seconds"] > 0

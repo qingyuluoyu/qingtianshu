@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
+from pathlib import Path
 
 import pandas as pd
 from fastapi.testclient import TestClient
 
+from app.db import Database
 from app.main import create_app
 from app.services.industry_comparison import IndustryComparisonService
 
@@ -286,6 +288,41 @@ def test_anchor_rolls_back_when_latest_cashflow_cannot_support_ttm():
     assert packet["reportPeriod"].replace("-", "") != source.incomplete_period
     assert all(factor["score"] is not None for factor in packet["factors"])
     assert any("自动回退" in warning for warning in packet["warnings"])
+
+
+def test_industry_comparison_packet_survives_service_restart(tmp_path: Path):
+    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database.initialize()
+    first_service = IndustryComparisonService(
+        FakeIndustryTushareClient(),
+        database=database,
+    )
+
+    first = first_service.get_packet("300750.SZ")
+    restarted_service = IndustryComparisonService(None, database=database)
+    restored = restarted_service.get_packet("300750.SZ")
+
+    assert first["industry"]["code"] == "801737.SI"
+    assert restored["industry"]["code"] == "801737.SI"
+    assert restored["cache"]["state"] == "fresh"
+
+    with database.connect() as connection:
+        cache_row = connection.execute(
+            """
+            SELECT fetched_at, expires_at FROM market_cache
+            WHERE cache_key = ?
+            """,
+            (
+                "industry-comparison:"
+                "sw2_five_factor_comparison_v1:300750.SZ",
+            ),
+        ).fetchone()
+    assert cache_row is not None
+    fetched_at = datetime.fromisoformat(cache_row["fetched_at"])
+    expires_at = datetime.fromisoformat(cache_row["expires_at"])
+    if fetched_at.tzinfo is None:
+        fetched_at = fetched_at.replace(tzinfo=timezone.utc)
+    assert (expires_at - fetched_at).total_seconds() >= 604_700
 
 
 def test_industry_comparison_route_returns_real_contract(settings):

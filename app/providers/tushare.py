@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 
 import pandas as pd
@@ -19,6 +21,9 @@ class TushareProviderError(RuntimeError):
 class TushareClient:
     """Small, secret-safe wrapper around the Tushare Pro SDK."""
 
+    CIRCUIT_FAILURE_THRESHOLD = 3
+    CIRCUIT_COOLDOWN_SECONDS = 60
+
     def __init__(
         self,
         token: str,
@@ -32,10 +37,13 @@ class TushareClient:
             raise TushareProviderError("未配置 TUSHARE_TOKEN")
 
         self.api_url = api_url.rstrip("/")
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = max(1, int(timeout_seconds))
+        self._circuit_lock = threading.Lock()
+        self._consecutive_failures = 0
+        self._circuit_open_until = 0.0
         try:
             ts.set_token(token)
-            self.pro = ts.pro_api(token)
+            self.pro = ts.pro_api(token, timeout=self.timeout_seconds)
             # teajoin.com exposes the Tushare Pro protocol at its root URL.
             self.pro._DataApi_token = token
             self.pro._DataApi__http_url = self.api_url
@@ -54,15 +62,22 @@ class TushareClient:
 
     def query(self, api_name: str, **params: Any) -> pd.DataFrame:
         """Call one Tushare endpoint without ever including the token in errors."""
+        with self._circuit_lock:
+            if self._circuit_open_until > time.monotonic():
+                raise TushareProviderError(
+                    "Tushare 数据源暂时熔断，请稍后重试"
+                )
         endpoint = getattr(self.pro, api_name, None)
         if endpoint is None or not callable(endpoint):
             raise TushareProviderError(f"Tushare 不支持接口：{api_name}")
         try:
             result = endpoint(**params)
         except Exception as exc:
+            self._record_failure()
             raise TushareProviderError(
                 f"Tushare 接口 {api_name} 调用失败：{type(exc).__name__}"
             ) from exc
+        self._record_success()
         if isinstance(result, pd.DataFrame):
             return result
         if result is None:
@@ -73,6 +88,19 @@ class TushareClient:
             raise TushareProviderError(
                 f"Tushare 接口 {api_name} 返回格式无法解析：{type(exc).__name__}"
             ) from exc
+
+    def _record_success(self) -> None:
+        with self._circuit_lock:
+            self._consecutive_failures = 0
+            self._circuit_open_until = 0.0
+
+    def _record_failure(self) -> None:
+        with self._circuit_lock:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self.CIRCUIT_FAILURE_THRESHOLD:
+                self._circuit_open_until = (
+                    time.monotonic() + self.CIRCUIT_COOLDOWN_SECONDS
+                )
 
     @staticmethod
     def to_tushare_symbol(symbol: str) -> str:
