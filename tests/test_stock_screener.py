@@ -155,6 +155,105 @@ class MissingValuationFieldClient(FakeTushareClient):
         return result
 
 
+class FakePersistedSnapshotDatabase:
+    def __init__(self) -> None:
+        self.trade_dates = [
+            value.strftime("%Y%m%d")
+            for value in pd.bdate_range(end="2026-07-24", periods=25)
+        ]
+        self.codes = ["000063.SZ", "300308.SZ", "000001.SZ", "600000.SH"]
+        self.names = ["中兴通讯", "中际旭创", "平安银行", "浦发银行"]
+        self.industries = ["通信设备", "通信设备", "银行", "银行"]
+        self.latest_closes = [120.0, 100.0, 12.0, 11.0]
+        self.base_5 = [100.0, 95.0, 11.5, 10.0]
+        self.base_20 = [80.0, 90.0, 10.0, 9.0]
+
+    def list_latest_tushare_dataset_snapshots(self, dataset: str, **_kwargs):
+        if dataset == "stock_basic":
+            return [
+                self._record(
+                    code,
+                    [{
+                        "ts_code": code,
+                        "name": name,
+                        "industry": industry,
+                        "market": "主板",
+                        "list_date": "20100101",
+                        "exchange": code.split(".")[1],
+                    }],
+                )
+                for code, name, industry in zip(
+                    self.codes, self.names, self.industries, strict=True
+                )
+            ]
+        if dataset == "daily_basic":
+            return [
+                self._record(
+                    code,
+                    [{
+                        "ts_code": code,
+                        "trade_date": self.trade_dates[-1],
+                        "turnover_rate": 2.0,
+                        "volume_ratio": 1.2,
+                        "pe_ttm": 20.0 + index,
+                        "pb": 2.0,
+                        "total_mv_yi": 200.0 + index * 20,
+                        "circ_mv_yi": 160.0 + index * 20,
+                    }],
+                )
+                for index, code in enumerate(self.codes)
+            ]
+        if dataset == "daily":
+            records = []
+            for index, code in enumerate(self.codes):
+                rows = []
+                for offset, trade_date in enumerate(self.trade_dates):
+                    close = 90.0 + index + offset
+                    if offset == 4:
+                        close = self.base_20[index]
+                    elif offset == 19:
+                        close = self.base_5[index]
+                    elif offset == 24:
+                        close = self.latest_closes[index]
+                    rows.append({
+                        "ts_code": code,
+                        "trade_date": trade_date,
+                        "open": close - 0.2,
+                        "high": close + 0.5,
+                        "low": close - 0.5,
+                        "close": close,
+                        "pct_chg": 1.0,
+                        "vol": 1_000_000 + index,
+                        "amount": 50_000 - index * 1_000,
+                    })
+                records.append(self._record(code, list(reversed(rows))))
+            return records
+        if dataset == "fina_indicator":
+            return [
+                self._record(
+                    code,
+                    [{
+                        "ts_code": code,
+                        "ann_date": "20260429",
+                        "end_date": "20260331",
+                        "roe": 8.0 + index,
+                    }],
+                )
+                for index, code in enumerate(self.codes)
+            ]
+        return []
+
+    def latest_tushare_dataset_snapshot(self, dataset: str, scope_key: str):
+        if dataset == "a_share_universe" and scope_key == "all":
+            return {"payload": {"coverage": {"listed": len(self.codes)}}}
+        return None
+
+    @staticmethod
+    def _record(scope_key: str, rows: list[dict]) -> dict:
+        internal = scope_key[:-3] + ".SS" if scope_key.endswith(".SH") else scope_key
+        return {"scope_key": internal, "payload": {"rows": rows}}
+
+
 def test_quality_screen_is_transparent_and_has_separate_data_dates():
     fake = FakeTushareClient()
     service = StockScreenerService(fake, snapshot_ttl_seconds=600)
@@ -191,6 +290,31 @@ def test_quality_screen_is_transparent_and_has_separate_data_dates():
     cached = service.screen(profile="value", max_results=2)
     assert cached["data_meta"]["cache_hit"] is True
     assert fake.calls["trade_cal"] == 1
+
+
+def test_persisted_database_snapshot_keeps_screener_usable_without_live_provider():
+    service = StockScreenerService(
+        None,
+        database=FakePersistedSnapshotDatabase(),
+        snapshot_ttl_seconds=600,
+    )
+
+    result = service.screen(max_results=3)
+
+    assert result["status"] == "ready"
+    assert result["profile"]["key"] == "trend"
+    assert result["data_meta"]["source_mode"] == "persisted"
+    assert result["data_meta"]["latest_completed_trade_date"] == "2026-07-24"
+    assert result["data_contract"]["data_version"].startswith("stock-screen-db-v1-")
+    assert result["data_contract"]["coverage"]["market_snapshot"] == {
+        "available": 4,
+        "expected": 4,
+        "missing": 0,
+        "ratio": 1.0,
+    }
+    assert {item["name"] for item in result["items"]} == {"中兴通讯", "浦发银行"}
+    assert all(item["financials"]["report_period"] == "2026-03-31" for item in result["items"])
+    assert "生产数据库" in result["warnings"][0]
 
 
 def test_stock_screener_api_requires_user_and_returns_deterministic_candidates(app):

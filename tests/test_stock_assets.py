@@ -300,8 +300,8 @@ def test_stock_asset_latest_change_keeps_user_read_and_relevance_state(app):
     app.state.database.upsert_change_event(
         symbol="000063.SZ",
         event_type="daily_price_anomaly",
-        title="中兴通讯完整日线变化",
-        fact_summary="最近完整日线变化达到白名单阈值。",
+        title="ZTE Corporation完整日线变化",
+        fact_summary="ZTE Corporation最近完整日线变化达到白名单阈值。",
         occurred_at="2026-07-23T15:00:00+08:00",
         detected_at="2026-07-24T01:00:00+00:00",
         source_name="Test verified daily source",
@@ -310,9 +310,12 @@ def test_stock_asset_latest_change_keeps_user_read_and_relevance_state(app):
         rule_version=app.state.change_events.PRICE_RULE_VERSION,
         dedupe_hash="stock-asset-user-state",
         payload={
-            "name": "中兴通讯",
+            "name": "ZTE Corporation",
             "daily_date": "2026-07-23",
             "return_1d_pct": 5.5,
+            "nested_evidence": {
+                "summary": "继续核验 ZTE Corporation 的价格变化。"
+            },
         },
     )
     app.state.database.ensure_user_change_links(user["id"], "000063.SZ")
@@ -321,6 +324,9 @@ def test_stock_asset_latest_change_keeps_user_read_and_relevance_state(app):
     assert first["link_id"]
     assert first["read_at"] is None
     assert first["relevance_status"] == "pending"
+    assert first["title"] == "中兴通讯完整日线变化"
+    assert first["summary"] == "中兴通讯最近完整日线变化达到白名单阈值。"
+    assert "ZTE Corporation" not in str(first)
 
     assert client.post(f"/v1/user-changes/{first['link_id']}/read").status_code == 200
     relevant = client.post(

@@ -7,6 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.db import Database
+from app.services.security_master import SecurityMasterService
 
 
 _LATIN_TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9._+-]{1,}")
@@ -17,6 +18,7 @@ class KnowledgeService:
     def __init__(self, database: Database, common_root: Path):
         self.database = database
         self.common_root = Path(common_root)
+        self.security_master = SecurityMasterService(database)
 
     def seed_common_documents(self) -> int:
         count = 0
@@ -88,9 +90,15 @@ class KnowledgeService:
         for document in documents:
             best_excerpt = ""
             best_score = 0.0
-            title_tokens = self._tokens(str(document.get("title") or ""))
+            public_title = self.localize_document_text(
+                document, str(document.get("title") or "")
+            )
+            public_content = self.localize_document_text(
+                document, str(document.get("content") or "")
+            )
+            title_tokens = self._tokens(public_title)
             title_score = len(query_tokens & title_tokens) * 4.0
-            for excerpt in self._chunks(str(document.get("content") or "")):
+            for excerpt in self._chunks(public_content):
                 excerpt_tokens = self._tokens(excerpt)
                 overlap = query_tokens & excerpt_tokens
                 if not overlap:
@@ -106,7 +114,7 @@ class KnowledgeService:
                 ranked.append(
                     {
                         "document_id": document["id"],
-                        "title": document["title"],
+                        "title": public_title,
                         "scope": document["scope"],
                         "source_key": document.get("source_key"),
                         "excerpt": best_excerpt[:1400],
@@ -133,10 +141,17 @@ class KnowledgeService:
             item = ranked_by_source.get(source_key)
             if item is None and source_key in documents_by_source:
                 document = documents_by_source[source_key]
-                chunks = self._chunks(str(document.get("content") or ""))
+                public_title = self.localize_document_text(
+                    document, str(document.get("title") or "")
+                )
+                chunks = self._chunks(
+                    self.localize_document_text(
+                        document, str(document.get("content") or "")
+                    )
+                )
                 item = {
                     "document_id": document["id"],
-                    "title": document["title"],
+                    "title": public_title,
                     "scope": document["scope"],
                     "source_key": document.get("source_key"),
                     "excerpt": (chunks[0] if chunks else "")[:1400],
@@ -165,9 +180,8 @@ class KnowledgeService:
             },
         }
 
-    @staticmethod
-    def public_document(document: dict[str, Any]) -> dict[str, Any]:
-        return {
+    def public_document(self, document: dict[str, Any]) -> dict[str, Any]:
+        item = {
             key: document.get(key)
             for key in (
                 "id",
@@ -180,6 +194,29 @@ class KnowledgeService:
                 "updated_at",
             )
         }
+        item["title"] = self.localize_document_text(
+            document, str(item.get("title") or "")
+        )
+        return item
+
+    def localize_document_text(
+        self, document: dict[str, Any], value: str
+    ) -> str:
+        source_key = str(document.get("source_key") or "")
+        match = re.fullmatch(r"research-(?:report|outcome):(.+)", source_key)
+        if not match:
+            return value
+        symbol = match.group(1)
+        title = str(document.get("title") or "")
+        original_name = title
+        for suffix in ("长期研究档案", "研究结果复盘"):
+            if title.endswith(suffix):
+                original_name = title[: -len(suffix)]
+                break
+        display_name = self.security_master.display_name(symbol, original_name)
+        if original_name and original_name != display_name:
+            return value.replace(original_name, display_name)
+        return value
 
     @staticmethod
     def _title_from_content(content: str, fallback: str) -> str:

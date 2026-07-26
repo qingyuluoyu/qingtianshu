@@ -25,7 +25,6 @@ def main(argv: list[str] | None = None) -> None:
     args = parser().parse_args(argv)
     settings = Settings.from_env()
     database = Database(
-        settings.database_path,
         settings.workspace_root,
         settings.database_url,
     )

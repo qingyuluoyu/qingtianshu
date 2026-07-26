@@ -18,6 +18,7 @@ from app.services.stock_domain import (
     StockDomainService,
     StockDomainVersionConflict,
 )
+from app.services.stock_price_move import is_stock_price_move_question
 from app.services.trade_workflow import (
     TradeWorkflowConflict,
     TradeWorkflowInvalidState,
@@ -132,6 +133,18 @@ class StructuredAIService:
     ) -> dict[str, Any] | None:
         intent = str(run.get("intent") or evidence.get("type") or "")
         if intent not in self.STOCK_RESEARCH_INTENTS:
+            return None
+        if is_stock_price_move_question(message) and not any(
+            (
+                self._wants_thesis_writeback(message),
+                self._wants_observation_task_writeback(message),
+                self._wants_action_plan_writeback(message),
+            )
+        ):
+            # A focused price-move answer already has a concise, date-aligned
+            # evidence list.  Building the broad research ledger here would
+            # reintroduce old filings, technical indicators and financial
+            # history that the user did not ask to review.
             return None
         ledger = evidence.get("research_claims") or build_research_claim_ledger(
             evidence

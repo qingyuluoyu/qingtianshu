@@ -103,7 +103,9 @@ class DataHealthService:
             "checks": checks,
             "method": "deterministic_data_health_audit_v1",
         }
-        return self.database.save_data_health_snapshot(snapshot) if persist else snapshot
+        return (
+            self.database.save_data_health_snapshot(snapshot) if persist else snapshot
+        )
 
     def latest(self, generate_if_missing: bool = False) -> dict[str, Any] | None:
         snapshot = self.database.latest_data_health_snapshot()
@@ -150,7 +152,9 @@ class DataHealthService:
             if session.get("calendar_status") == "fallback":
                 status = "attention"
                 label = f"{market['name']}交易日历已降级"
-            elif session["is_open"] and (age is None or age > (900 if interval == "5m" else 300)):
+            elif session["is_open"] and (
+                age is None or age > (900 if interval == "5m" else 300)
+            ):
                 status = "critical"
                 label = f"{market['name']}盘中分钟线延迟"
             elif not session["is_open"] and (age is None or age > 7 * 86400):
@@ -192,6 +196,7 @@ class DataHealthService:
         coverage = snapshot.get("coverage") or {}
         breadth = snapshot.get("breadth") or {}
         turnover = snapshot.get("turnover") or {}
+        history = turnover.get("history_comparison") or {}
         distribution = snapshot.get("distribution") or {}
         age = _age_seconds(snapshot.get("fetched_at"), now)
         max_age = max(900, self.settings.sector_cache_seconds * 10)
@@ -209,8 +214,13 @@ class DataHealthService:
             and distribution.get("status") == "available"
             and (distribution.get("coverage") or {}).get("coverage_ratio") == 1.0
         )
+        history_issue = self._turnover_history_issue(snapshot)
         if not complete:
             status, label = "critical", "A股全市场广度或成交分布覆盖不完整"
+        elif history_issue and history_issue["severity"] == "critical":
+            status, label = "critical", "A股成交额历史比较存在数量级或日期异常"
+        elif history_issue:
+            status, label = "attention", "A股成交额历史比较已排除不完整快照"
         elif snapshot.get("is_stale") or age is None or age > max_age:
             status, label = "attention", "A股全市场广度与成交分布快照较旧"
         else:
@@ -227,11 +237,81 @@ class DataHealthService:
                 decliners=breadth.get("decliners"),
                 unchanged=breadth.get("unchanged"),
                 total_amount_cny=turnover.get("total_amount_cny"),
+                total_amount_100m_cny=turnover.get("total_amount_100m_cny"),
+                turnover_unit=turnover.get("unit"),
+                turnover_amount_basis=turnover.get("amount_basis") or {},
+                market_date=snapshot.get("market_date"),
+                latest_tick_time=coverage.get("latest_tick_time"),
+                history_status=history.get("status"),
+                previous_market_date=history.get("previous_market_date"),
+                previous_total_amount_cny=history.get("previous_total_amount_cny"),
+                change_vs_previous_pct=history.get("change_vs_previous_pct"),
+                history_issue=history_issue,
                 median_pct_change=distribution.get("median_pct_change"),
                 coverage_ratio=coverage.get("coverage_ratio"),
                 scope=snapshot.get("scope"),
             )
         ]
+
+    @staticmethod
+    def _turnover_history_issue(
+        snapshot: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        turnover = snapshot.get("turnover") or {}
+        history = turnover.get("history_comparison") or {}
+        status = history.get("status")
+        if status == "anomaly":
+            return {
+                "severity": "critical",
+                "reason": history.get("anomaly_reason") or "history_anomaly",
+                "magnitude_ratio": history.get("magnitude_ratio"),
+                "candidate_previous_market_date": history.get(
+                    "candidate_previous_market_date"
+                ),
+                "candidate_previous_total_amount_cny": history.get(
+                    "candidate_previous_total_amount_cny"
+                ),
+            }
+        if status == "available":
+            market_date = str(snapshot.get("market_date") or "")
+            previous_date = str(history.get("previous_market_date") or "")
+            current_total = turnover.get("total_amount_cny")
+            previous_total = history.get("previous_total_amount_cny")
+            if not previous_date or previous_date >= market_date:
+                return {
+                    "severity": "critical",
+                    "reason": "history_date_order_mismatch",
+                    "market_date": market_date,
+                    "previous_market_date": previous_date or None,
+                }
+            if (
+                isinstance(current_total, (int, float))
+                and isinstance(previous_total, (int, float))
+                and current_total > 0
+                and previous_total > 0
+            ):
+                magnitude_ratio = max(
+                    float(current_total) / float(previous_total),
+                    float(previous_total) / float(current_total),
+                )
+                if magnitude_ratio > 10:
+                    return {
+                        "severity": "critical",
+                        "reason": "order_of_magnitude_mismatch",
+                        "magnitude_ratio": round(magnitude_ratio, 4),
+                        "market_date": market_date,
+                        "previous_market_date": previous_date,
+                        "current_total_amount_cny": current_total,
+                        "previous_total_amount_cny": previous_total,
+                    }
+        excluded = list(history.get("excluded_prior_sessions") or [])
+        if excluded:
+            return {
+                "severity": "attention",
+                "reason": "incompatible_history_excluded",
+                "excluded_prior_sessions": excluded,
+            }
+        return None
 
     def _fundamental_checks(self, now: datetime) -> list[dict[str, Any]]:
         checks = []
@@ -264,7 +344,9 @@ class DataHealthService:
                     "fundamentals",
                     "healthy" if periods else "critical",
                     f"{symbol}结构化财务{'正常' if periods else '缺失'}",
-                    latest_report_date=(periods[0].get("report_date") if periods else None),
+                    latest_report_date=(
+                        periods[0].get("report_date") if periods else None
+                    ),
                 )
             )
             group = PEER_GROUPS.get(symbol) or {}
@@ -277,7 +359,9 @@ class DataHealthService:
                 _check(
                     f"peers:{symbol}",
                     "fundamentals",
-                    "healthy" if available_peers == requested_peers and requested_peers else "attention",
+                    "healthy"
+                    if available_peers == requested_peers and requested_peers
+                    else "attention",
                     f"{symbol}同行估值覆盖 {available_peers}/{requested_peers}",
                     available=available_peers,
                     requested=requested_peers,
@@ -288,20 +372,69 @@ class DataHealthService:
     def _information_checks(self, now: datetime) -> list[dict[str, Any]]:
         checks = []
         max_age = max(7200, self.settings.background_info_refresh_seconds * 3)
+        latest_jobs = {
+            item["job_name"]: item for item in self.database.latest_background_jobs()
+        }
         for symbol in self.settings.default_research_symbols:
+            is_a_share = symbol.endswith((".SS", ".SZ"))
             categories = (
                 ("announcement", "news", "social")
-                if symbol.endswith((".SS", ".SZ"))
+                if is_a_share
                 else ("regulatory_filing", "global_news")
             )
             items = self.database.list_news(symbol, limit=20, categories=categories)
-            age = _age_seconds(items[0].get("fetched_at") if items else None, now)
+            content_ages = [
+                age
+                for item in items
+                if (age := _age_seconds(item.get("fetched_at"), now)) is not None
+            ]
+            content_age = min(content_ages) if content_ages else None
+            job_name = (
+                "a_share_information_refresh"
+                if is_a_share
+                else "us_equity_fundamentals_refresh"
+            )
+            job = latest_jobs.get(job_name) or {}
+            poll_age = _age_seconds(job.get("finished_at"), now)
+            summary = job.get("summary") or {}
+            refresh_result = next(
+                (
+                    item
+                    for item in summary.get("information_results") or []
+                    if item.get("symbol") == symbol
+                ),
+                None,
+            )
+            sources = (refresh_result or {}).get("sources") or {}
+            source_status = {
+                category: str((sources.get(category) or {}).get("status") or "missing")
+                for category in categories
+            }
+            sources_polled = sum(status == "ok" for status in source_status.values())
+            has_fresh_source_audit = bool(
+                job.get("status") == "completed"
+                and poll_age is not None
+                and poll_age <= max_age
+                and refresh_result is not None
+            )
+            all_sources_polled = bool(
+                has_fresh_source_audit and sources_polled == len(categories)
+            )
             if not items:
                 status, label = "critical", f"{symbol}缺少事件信息"
-            elif age is None or age > max_age:
+                freshness_basis = "missing_content"
+            elif all_sources_polled:
+                status, label = "healthy", f"{symbol}事件信息正常"
+                freshness_basis = "successful_source_poll"
+            elif has_fresh_source_audit:
+                status, label = "attention", f"{symbol}事件信息部分来源待补"
+                freshness_basis = "partial_source_poll"
+            elif content_age is None or content_age > max_age:
                 status, label = "attention", f"{symbol}事件信息较旧"
+                freshness_basis = "latest_item_fetch"
             else:
                 status, label = "healthy", f"{symbol}事件信息正常"
+                freshness_basis = "latest_item_fetch"
             checks.append(
                 _check(
                     f"information:{symbol}",
@@ -309,7 +442,13 @@ class DataHealthService:
                     status,
                     label,
                     items=len(items),
-                    age_seconds=age,
+                    age_seconds=poll_age if has_fresh_source_audit else content_age,
+                    poll_age_seconds=poll_age,
+                    content_fetch_age_seconds=content_age,
+                    freshness_basis=freshness_basis,
+                    sources_expected=len(categories),
+                    sources_polled=sources_polled,
+                    source_status=source_status,
                 )
             )
         return checks
@@ -320,13 +459,17 @@ class DataHealthService:
             latest_periods = self.database.list_financial_periods(symbol, limit=1)
             snapshot = self.database.latest_earnings_quality_snapshot(symbol)
             payload = (snapshot or {}).get("payload") or {}
-            snapshot_report_date = ((payload.get("latest_report") or {}).get("report_date"))
+            snapshot_report_date = (payload.get("latest_report") or {}).get(
+                "report_date"
+            )
             financial_report_date = (
                 latest_periods[0].get("report_date") if latest_periods else None
             )
             if snapshot is None:
                 status, label = "critical", f"{symbol}缺少财报质量分析"
-            elif financial_report_date and snapshot_report_date != financial_report_date:
+            elif (
+                financial_report_date and snapshot_report_date != financial_report_date
+            ):
                 status, label = "attention", f"{symbol}财报质量分析待更新"
             elif payload.get("status") != "available":
                 status, label = "critical", f"{symbol}财报质量证据不足"
@@ -352,8 +495,8 @@ class DataHealthService:
             snapshot = self.database.latest_financial_driver_snapshot(symbol)
             payload = (snapshot or {}).get("payload") or {}
             detail_report_date = details[0].get("report_date") if details else None
-            snapshot_report_date = (
-                (payload.get("latest_period") or {}).get("report_date")
+            snapshot_report_date = (payload.get("latest_period") or {}).get(
+                "report_date"
             )
             if not details:
                 status, label = "critical", f"{symbol}缺少详细三表"
@@ -386,7 +529,9 @@ class DataHealthService:
             _check(
                 f"report:{symbol}",
                 "reports",
-                "healthy" if (report := self.database.latest_research_report(symbol)) else "critical",
+                "healthy"
+                if (report := self.database.latest_research_report(symbol))
+                else "critical",
                 f"{symbol}预生成报告{'存在' if report else '缺失'}",
                 generated_at=(report or {}).get("generated_at"),
             )
@@ -410,9 +555,13 @@ class DataHealthService:
                 ),
                 None,
             )
-            snapshot = self.database.latest_filing_evidence_snapshot(
-                symbol, report_period=report_period
-            ) if report_period else self.database.latest_filing_evidence_snapshot(symbol)
+            snapshot = (
+                self.database.latest_filing_evidence_snapshot(
+                    symbol, report_period=report_period
+                )
+                if report_period
+                else self.database.latest_filing_evidence_snapshot(symbol)
+            )
             payload = (snapshot or {}).get("payload") or {}
             if not details:
                 status, label = "critical", f"{symbol}缺少可匹配的详细财务期"
@@ -557,8 +706,7 @@ class DataHealthService:
             elif payload.get("status") != "available":
                 status, label = "attention", f"{symbol}分析师预期证据有限"
             elif not (
-                coverage.get("estimate_years")
-                or coverage.get("reports_returned")
+                coverage.get("estimate_years") or coverage.get("reports_returned")
             ):
                 status, label = "attention", f"{symbol}分析师预期覆盖待补"
             else:
@@ -571,9 +719,7 @@ class DataHealthService:
                     label,
                     as_of_date=payload.get("as_of_date"),
                     latest_report_date=payload.get("latest_report_date"),
-                    rating_organizations=payload.get(
-                        "rating_organization_count"
-                    ),
+                    rating_organizations=payload.get("rating_organization_count"),
                     estimate_years=coverage.get("estimate_years", 0),
                     reports=coverage.get("reports_returned", 0),
                 )
@@ -612,7 +758,9 @@ class DataHealthService:
         return checks
 
     def _background_checks(self) -> list[dict[str, Any]]:
-        latest = {item["job_name"]: item for item in self.database.latest_background_jobs()}
+        latest = {
+            item["job_name"]: item for item in self.database.latest_background_jobs()
+        }
         checks = []
         for job_name in sorted(_REQUIRED_BACKGROUND_JOBS):
             job = latest.get(job_name)

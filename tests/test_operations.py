@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.operations import build_operations_report
 
 
-def test_operations_report_detects_wrong_backend_and_missing_worker(client):
+def test_operations_report_requires_an_active_worker_on_postgres(client):
     report = build_operations_report(
         client.app.state.database,
         client.app.state.background.job_store,
@@ -13,8 +13,10 @@ def test_operations_report_detects_wrong_backend_and_missing_worker(client):
         check_backup=False,
     )
     assert report["status"] == "degraded"
-    assert "domain_database_not_postgresql" in report["failures"]
+    assert "domain_database_not_postgresql" not in report["failures"]
     assert "active_worker_count_below_minimum" in report["failures"]
+    assert report["storage"]["domain_database"]["backend"] == "postgresql"
+    assert report["storage"]["operational_database"]["backend"] == "postgresql"
 
 
 def test_operations_report_passes_with_registered_worker_in_local_mode(client):
@@ -32,7 +34,7 @@ def test_operations_report_passes_with_registered_worker_in_local_mode(client):
     )
     assert report["status"] == "ok"
     assert report["failures"] == []
-    assert report["backups"]["status"] == "not_applicable"
+    assert report["backups"]["status"] == "ok"
     assert report["workers"][0]["worker_id"] == "operations-probe"
 
 

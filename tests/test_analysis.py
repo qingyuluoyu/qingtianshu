@@ -86,6 +86,11 @@ class _NextDaySectorProvider:
         }
 
 
+class _UnexpectedSectorProvider:
+    def fetch_hot_sectors(self, limit: int = 20):
+        raise AssertionError("non-China market brief must not fetch A-share sectors")
+
+
 class _PreviousSessionBreadthProvider:
     def fetch_breadth(self):
         return {
@@ -415,6 +420,21 @@ def test_market_brief_uses_newer_index_session_before_previous_day_breadth():
     assert brief["hot_sectors"]["analysis_eligibility"] == "same_market_date"
     assert brief["market_breadth"]["same_date_as_analysis_target"] is False
     assert brief["market_state"]["whole_market_breadth_available"] is False
+
+
+def test_non_china_market_brief_does_not_fetch_or_expose_a_share_sectors():
+    service = MarketAnalysisService(
+        None,
+        _CurrentSessionMarketProvider(),
+        _UnexpectedSectorProvider(),
+        _PreviousSessionBreadthProvider(),
+    )
+
+    brief = service.market_brief(market_key="us")
+
+    assert brief["hot_sectors"]["status"] == "not_applicable"
+    assert brief["hot_sectors"]["sectors"] == []
+    assert brief["date_alignment"]["sector_status"] == "not_date_constrained"
 
 
 def test_conditional_outlook_exposes_scenarios_without_fake_probability():

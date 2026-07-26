@@ -1,14 +1,49 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
+import os
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.static_assets import STATIC_ASSET_MEDIA_TYPES
+
+os.environ["QINGSHU_APP_FACTORY_ONLY"] = "1"
+
 from app.main import create_app
+
+
+@pytest.fixture(autouse=True)
+def isolated_postgres_schema(monkeypatch):
+    """Run every test against PostgreSQL in its own disposable schema."""
+
+    import psycopg
+
+    base_url = os.getenv(
+        "QINGSHU_TEST_POSTGRES_URL",
+        "postgresql://chr@localhost/qingshu_test",
+    ).strip()
+    schema = "test_" + uuid4().hex
+    try:
+        with psycopg.connect(base_url) as connection:
+            connection.execute(f'CREATE SCHEMA "{schema}"')
+    except Exception as exc:
+        pytest.fail(f"PostgreSQL test database is unavailable: {exc}")
+    separator = "&" if "?" in base_url else "?"
+    schema_url = f"{base_url}{separator}options={quote(f'-csearch_path={schema}')}"
+    monkeypatch.setenv("QINGSHU_DATABASE_URL", schema_url)
+    monkeypatch.setenv("QINGSHU_TEST_POSTGRES_URL", base_url)
+    try:
+        yield schema_url
+    finally:
+        with psycopg.connect(base_url) as connection:
+            connection.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
 
 
 class FakeMarketProvider:
@@ -72,7 +107,9 @@ class FakeSectorProvider:
                 "decliners": 3 + index,
                 "unchanged": 1,
             }
-            for index, name in enumerate(["算力", "机器人", "证券", "白酒", "医药", "电力"])
+            for index, name in enumerate(
+                ["算力", "机器人", "证券", "白酒", "医药", "电力"]
+            )
         ][:limit]
         return {
             "source": "Fake sector provider",
@@ -89,7 +126,9 @@ class FakeSectorProvider:
 
 class FakeGoldProvider:
     def fetch_intraday(self) -> dict[str, Any]:
-        history = FakeMarketProvider().fetch_history("XAU", range_name="1d", interval="5m")
+        history = FakeMarketProvider().fetch_history(
+            "XAU", range_name="1d", interval="5m"
+        )
         history["display_name"] = "伦敦金（测试）"
         history["source"] = "Fake gold provider"
         history["previous_close"] = 100.0
@@ -171,7 +210,9 @@ class FakeBusinessStructureProvider:
                     "item_name": item_name,
                     "revenue": revenue,
                     "revenue_share_pct": revenue_share_pct,
-                    "cost": revenue - gross_profit if gross_profit is not None else None,
+                    "cost": revenue - gross_profit
+                    if gross_profit is not None
+                    else None,
                     "cost_share_pct": None,
                     "gross_profit": gross_profit,
                     "gross_profit_share_pct": None,
@@ -847,9 +888,30 @@ class FakeAnalystExpectationsProvider:
 
 @pytest.fixture()
 def settings(tmp_path: Path) -> Settings:
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup_file = backup_dir / "qingshu-test.dump"
+    backup_file.write_bytes(b"isolated test backup")
+    (backup_dir / "latest.json").write_text(
+        json.dumps(
+            {
+                "status": "complete",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "database": "qingshu_test",
+                "server": "localhost:5432",
+                "backup_file": backup_file.name,
+                "format": "postgresql_custom",
+                "archive_verified": True,
+                "size_bytes": backup_file.stat().st_size,
+                "sha256": "test-only",
+            }
+        ),
+        encoding="utf-8",
+    )
     return Settings(
         data_dir=tmp_path,
-        database_path=tmp_path / "test.db",
+        backup_dir=backup_dir,
+        database_url=os.environ["QINGSHU_DATABASE_URL"],
         workspace_root=tmp_path / "workspaces",
         hermes_bin=Path("/nonexistent/hermes"),
         hermes_enabled=False,
@@ -894,3 +956,12 @@ def app(settings: Settings):
 @pytest.fixture()
 def client(app) -> TestClient:
     return TestClient(app)
+
+
+@pytest.fixture()
+def frontend_source(client: TestClient) -> str:
+    page = client.get("/demo")
+    assert page.status_code == 200
+    assets = [client.get(f"/static/{name}") for name in STATIC_ASSET_MEDIA_TYPES]
+    assert all(asset.status_code == 200 for asset in assets)
+    return "\n".join([page.text, *(asset.text for asset in assets)])

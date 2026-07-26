@@ -107,7 +107,7 @@ def save_business_profile(database: Database, symbol: str, name: str) -> None:
 
 
 def test_fixed_peer_packet_uses_peer_median_without_rating_language(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     values = {
         "000063.SZ": (40.0, 3.0, 100_000_000_000.0),
@@ -137,7 +137,7 @@ def test_fixed_peer_packet_uses_peer_median_without_rating_language(tmp_path: Pa
 
 
 def test_peer_refresh_persists_subject_and_all_peers(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     values = {
         "000063.SZ": (40.0, 3.0, 100.0),
@@ -158,7 +158,7 @@ def test_peer_refresh_persists_subject_and_all_peers(tmp_path: Path):
 def test_peer_operating_packet_compares_exact_period_and_persists_knowledge(
     tmp_path: Path,
 ):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     rows = [
         financial_period(
@@ -209,20 +209,18 @@ def test_peer_operating_packet_compares_exact_period_and_persists_knowledge(
         "business_profile_peers": 3,
     }
     assert packet["metrics"]["revenue_yoy_pct"]["peer_median"] == 20.0
-    assert packet["metrics"]["operating_cashflow_to_net_profit"][
-        "peer_sample_size"
-    ] == 3
+    assert (
+        packet["metrics"]["operating_cashflow_to_net_profit"]["peer_sample_size"] == 3
+    )
     assert all(item["status"] == "comparable" for item in packet["peers"])
     snapshot = database.latest_peer_operating_snapshot("000063.SZ")
     assert snapshot["payload"]["method"] == "fixed_peer_operating_comparison_v1"
     documents = database.list_knowledge_documents(None)
-    assert any(
-        item["source_key"] == "peer-operating:000063.SZ" for item in documents
-    )
+    assert any(item["source_key"] == "peer-operating:000063.SZ" for item in documents)
 
 
 def test_peer_operating_packet_excludes_period_mismatch_from_metrics(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     database.upsert_financial_periods(
         [
@@ -372,6 +370,6 @@ def test_research_report_fingerprint_changes_with_peer_operating_evidence():
         },
     }
 
-    assert ResearchReportService._fingerprint(base) != ResearchReportService._fingerprint(
-        changed
-    )
+    assert ResearchReportService._fingerprint(
+        base
+    ) != ResearchReportService._fingerprint(changed)

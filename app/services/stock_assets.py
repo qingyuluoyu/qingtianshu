@@ -5,6 +5,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from app.db import Database
+from app.services.security_master import SecurityMasterService
 from app.services.stock_workspace import StockWorkspaceService
 
 
@@ -25,6 +26,7 @@ class StockAssetListService:
     ) -> None:
         self.database = database
         self.stock_workspace = stock_workspace
+        self.security_master = SecurityMasterService(database)
 
     def list_assets(self, user_id: str) -> dict[str, Any]:
         workspaces = self.database.list_stock_workspaces(user_id)
@@ -63,15 +65,19 @@ class StockAssetListService:
         formal_workspace: dict[str, Any],
     ) -> dict[str, Any]:
         workspace_id = str(formal_workspace["id"])
+        symbol = str(formal_workspace.get("symbol") or "")
         active_thesis = self._safe_active_thesis(user_id, workspace_id)
-        report = self.database.latest_research_report(
-            str(formal_workspace.get("symbol") or "")
+        report = self.database.latest_research_report(symbol)
+        display_name = self.security_master.display_name(
+            symbol,
+            formal_workspace.get("name"),
+            (report or {}).get("name"),
         )
         base = {
             "workspace_id": workspace_id,
             "version": formal_workspace.get("version"),
             "symbol": formal_workspace.get("symbol"),
-            "name": formal_workspace.get("name") or formal_workspace.get("symbol"),
+            "name": display_name,
             "market": formal_workspace.get("market"),
             "relation_type": formal_workspace.get("relation_type"),
             "relation_label": self.RELATION_LABELS.get(
@@ -117,6 +123,11 @@ class StockAssetListService:
             return base
 
         relation = aggregate.get("relation") or {}
+        base["name"] = self.security_master.display_name(
+            symbol,
+            aggregate.get("name"),
+            base["name"],
+        )
         thesis = aggregate.get("thesis") or {}
         if thesis.get("status") == "active":
             base["active_thesis"] = {
@@ -204,16 +215,27 @@ class StockAssetListService:
             "boundary": change.get("boundary"),
         }
 
-    @staticmethod
-    def _report_meta(report: dict[str, Any] | None) -> dict[str, Any] | None:
+    def _report_meta(self, report: dict[str, Any] | None) -> dict[str, Any] | None:
         if report is None:
             return None
+        symbol = str(report.get("symbol") or "")
+        original_name = str(report.get("name") or "")
+        display_name = self.security_master.display_name(
+            symbol,
+            original_name,
+            (report.get("evidence") or {}).get("display_name"),
+        )
+        title = str(report.get("title") or "")
+        summary = str(report.get("summary") or "")
+        if original_name and original_name != display_name:
+            title = title.replace(original_name, display_name)
+            summary = summary.replace(original_name, display_name)
         return {
             "id": report.get("id"),
             "symbol": report.get("symbol"),
-            "name": report.get("name"),
-            "title": report.get("title"),
-            "summary": report.get("summary"),
+            "name": display_name,
+            "title": title,
+            "summary": summary,
             "status": report.get("status"),
             "generated_at": report.get("generated_at"),
             "market_timestamp": report.get("market_timestamp"),
@@ -246,9 +268,7 @@ class StockAssetListService:
         )
         report_status = str(report.get("status") or "unknown")
         if report_status == "failed":
-            status, label = "failed", "生成失败"
-        elif report_status != "completed":
-            status, label = "partial", "部分完成"
+            status, label = "attention", "等待更新"
         elif is_today:
             status, label = "today", "今日已更新"
         else:

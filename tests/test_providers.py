@@ -43,7 +43,7 @@ def test_star_50_is_a_first_class_china_index():
 
 
 def test_yahoo_provider_parses_and_caches(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     calls = []
     payload = {
@@ -94,7 +94,7 @@ def test_yahoo_provider_parses_and_caches(tmp_path: Path):
 
 
 def test_yahoo_provider_returns_explicit_stale_cache_on_failure(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     payload = {
         "chart": {
@@ -254,7 +254,7 @@ def test_tencent_china_index_provider_drops_current_incomplete_daily_bar():
 
 
 def test_tencent_china_index_provider_persists_and_caches(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     calls = []
     payload = {
@@ -287,9 +287,7 @@ def test_tencent_china_index_provider_persists_and_caches(tmp_path: Path):
         calls.append((args, kwargs))
         return FakeResponse(payload)
 
-    provider = TencentChinaIndexProvider(
-        database, ttl_seconds=60, http_get=http_get
-    )
+    provider = TencentChinaIndexProvider(database, ttl_seconds=60, http_get=http_get)
     first = provider.fetch_history("000300.SS", range_name="3mo")
     second = provider.fetch_history("000300.SS", range_name="3mo")
 
@@ -301,7 +299,7 @@ def test_tencent_china_index_provider_persists_and_caches(tmp_path: Path):
 
 
 def test_eastmoney_provider_parses_sector_fields(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     payload = {
         "data": {
@@ -353,7 +351,7 @@ def test_csi_industry_provider_accepts_alphanumeric_official_index_codes():
 def test_csi_industry_provider_builds_official_constituents_and_history(
     tmp_path: Path, monkeypatch
 ):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     calls = []
     search_payload = {
@@ -455,9 +453,7 @@ def test_csi_industry_provider_builds_official_constituents_and_history(
                     ["2026-07-20", "50.20", "51.00", "51.50", "50.10", "95"],
                 ]
             )
-            return FakeResponse(
-                {"data": {quote_symbol: {"qfqday": rows}}}
-            )
+            return FakeResponse({"data": {quote_symbol: {"qfqday": rows}}})
         raise AssertionError(url)
 
     constituent_frame = pd.DataFrame(
@@ -481,9 +477,7 @@ def test_csi_industry_provider_builds_official_constituents_and_history(
         return constituent_frame if content == b"constituents" else weight_frame
 
     monkeypatch.setattr("app.providers.market.pd.read_excel", fake_read_excel)
-    provider = CSIIndustryIndexProvider(
-        database, ttl_seconds=60, http_get=http_get
-    )
+    provider = CSIIndustryIndexProvider(database, ttl_seconds=60, http_get=http_get)
 
     first = provider.fetch("通信设备", market_date="2026-07-20")
     second = provider.fetch("通信设备", market_date="2026-07-20")
@@ -540,14 +534,12 @@ def test_csi_industry_provider_uses_verified_cross_taxonomy_aliases():
 def test_csi_industry_components_fall_back_to_sina_for_bse_history(
     tmp_path: Path,
 ):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
 
     def http_get(url, **kwargs):
         if url == CSIIndustryIndexProvider.COMPONENT_HISTORY_URL:
-            return FakeResponse(
-                {"data": {"bj920185": {"qfqday": [], "day": []}}}
-            )
+            return FakeResponse({"data": {"bj920185": {"qfqday": [], "day": []}}})
         if url == CSIIndustryIndexProvider.SINA_COMPONENT_HISTORY_URL:
             return FakeResponse(
                 [
@@ -584,9 +576,7 @@ def test_csi_industry_components_fall_back_to_sina_for_bse_history(
                     "weight_pct": 4.0,
                 }
             ],
-            "points": [
-                {"market_date": "2026-07-20", "pct_change": -2.0}
-            ],
+            "points": [{"market_date": "2026-07-20", "pct_change": -2.0}],
         },
         "2026-07-20",
     )
@@ -605,14 +595,12 @@ def test_csi_industry_components_fall_back_to_sina_for_bse_history(
 def test_csi_industry_components_keep_structured_failure_reasons(
     tmp_path: Path,
 ):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
 
     def http_get(url, **kwargs):
         if url == CSIIndustryIndexProvider.COMPONENT_HISTORY_URL:
-            return FakeResponse(
-                {"data": {"bj999999": {"qfqday": [], "day": []}}}
-            )
+            return FakeResponse({"data": {"bj999999": {"qfqday": [], "day": []}}})
         if url == CSIIndustryIndexProvider.SINA_COMPONENT_HISTORY_URL:
             return FakeResponse([])
         raise AssertionError(url)
@@ -647,7 +635,7 @@ def test_csi_industry_components_keep_structured_failure_reasons(
 def test_eastmoney_global_index_provider_parses_current_minute_bars(
     tmp_path: Path,
 ):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     payload = {
         "data": {
@@ -675,10 +663,10 @@ def test_eastmoney_global_index_provider_parses_current_minute_bars(
 
 
 def test_sina_fallback_parses_gb18030_industry_data(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     content = (
-        'var S_Finance_bankuai_sinaindustry = {'
+        "var S_Finance_bankuai_sinaindustry = {"
         '"new_a":"new_a,行业甲,10,12.3,0.2,2.5,1000,2000,sh600000,1,10,0.1,龙头甲",'
         '"new_b":"new_b,行业乙,12,8.3,-0.1,-1.5,900,1800,sz000001,1,9,0.1,龙头乙"};'
     ).encode("gb18030")
@@ -703,7 +691,7 @@ def test_sina_fallback_parses_gb18030_industry_data(tmp_path: Path):
 def test_sina_market_breadth_provider_fetches_complete_snapshot_and_caches(
     tmp_path: Path,
 ):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     rows = [
         {
@@ -768,6 +756,18 @@ def test_sina_market_breadth_provider_fetches_complete_snapshot_and_caches(
     assert first["exchange_breakdown"]["beijing"]["unchanged"] == 1
     assert first["turnover"]["status"] == "available"
     assert first["turnover"]["total_amount_cny"] == 6_000_000
+    assert first["turnover"]["amount_basis"] == {
+        "raw_field": "amount",
+        "raw_unit": "CNY_yuan_per_security",
+        "raw_total": 6_000_000,
+        "normalized_unit": "CNY_yuan",
+        "normalized_total": 6_000_000,
+        "display_unit": "CNY_100m_yuan",
+        "display_total": 0.06,
+        "scope": "all_a_shares_including_beijing",
+        "market_date": first["market_date"],
+        "aggregation": "sum_unique_security_turnover_v1",
+    }
     assert first["turnover"]["coverage"]["exchange_sum_matches"] is True
     assert first["distribution"] == {
         "status": "available",
@@ -832,14 +832,29 @@ def test_sina_market_breadth_infers_previous_session_before_open():
 def test_sina_market_breadth_reuses_last_completed_session_for_zero_placeholder(
     tmp_path: Path,
 ):
-    database = Database(tmp_path / "breadth-fallback.db", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     provider = SinaMarketBreadthProvider(database)
     usable = provider._parse(
         [
-            {"symbol": "sh600000", "changepercent": 1.2, "amount": 1_000_000, "ticktime": "15:00:00"},
-            {"symbol": "sz000001", "changepercent": -0.5, "amount": 2_000_000, "ticktime": "15:00:01"},
-            {"symbol": "bj920001", "changepercent": 0, "amount": 3_000_000, "ticktime": "15:30:00"},
+            {
+                "symbol": "sh600000",
+                "changepercent": 1.2,
+                "amount": 1_000_000,
+                "ticktime": "15:00:00",
+            },
+            {
+                "symbol": "sz000001",
+                "changepercent": -0.5,
+                "amount": 2_000_000,
+                "ticktime": "15:00:01",
+            },
+            {
+                "symbol": "bj920001",
+                "changepercent": 0,
+                "amount": 3_000_000,
+                "ticktime": "15:30:00",
+            },
         ],
         total_expected=3,
     )
@@ -876,13 +891,23 @@ def test_sina_market_breadth_reuses_last_completed_session_for_zero_placeholder(
 def test_sina_market_breadth_rejects_zero_placeholder_without_fallback(
     tmp_path: Path,
 ):
-    database = Database(tmp_path / "breadth-reject.db", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     provider = SinaMarketBreadthProvider(database)
     placeholder = provider._parse(
         [
-            {"symbol": "sh600000", "changepercent": 0, "amount": 0, "ticktime": "09:10:00"},
-            {"symbol": "sz000001", "changepercent": 0, "amount": 0, "ticktime": "09:10:00"},
+            {
+                "symbol": "sh600000",
+                "changepercent": 0,
+                "amount": 0,
+                "ticktime": "09:10:00",
+            },
+            {
+                "symbol": "sz000001",
+                "changepercent": 0,
+                "amount": 0,
+                "ticktime": "09:10:00",
+            },
         ],
         total_expected=2,
     )
@@ -897,18 +922,37 @@ def test_sina_market_breadth_rejects_zero_placeholder_without_fallback(
 
 
 def test_market_breadth_history_ignores_future_dated_snapshot(tmp_path: Path):
-    database = Database(tmp_path / "history.db", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     provider = SinaMarketBreadthProvider(database)
 
-    def snapshot(market_date: str, amount: int) -> dict:
+    def snapshot(
+        market_date: str, amount: int, latest_tick_time: str = "15:00:00"
+    ) -> dict:
         return {
             "source": "test",
             "market_date": market_date,
             "fetched_at": f"{market_date}T08:00:00+00:00",
+            "status": "available",
+            "scope": "all_a_shares_including_beijing",
+            "coverage": {
+                "expected": 2,
+                "returned": 2,
+                "coverage_ratio": 1.0,
+                "latest_tick_time": latest_tick_time,
+            },
+            "breadth": {
+                "total": 2,
+                "advancers": 1,
+                "decliners": 1,
+                "unchanged": 0,
+            },
             "turnover": {
                 "status": "available",
+                "currency": "CNY",
+                "unit": "yuan",
                 "total_amount_cny": amount,
+                "coverage": {"coverage_ratio": 1.0},
             },
         }
 
@@ -923,21 +967,135 @@ def test_market_breadth_history_ignores_future_dated_snapshot(tmp_path: Path):
     assert comparison["change_vs_previous_pct"] == 20.0
 
 
+def test_market_breadth_history_excludes_preopen_snapshot(tmp_path: Path):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    provider = SinaMarketBreadthProvider(database)
+
+    def snapshot(market_date: str, amount: int, tick: str) -> dict:
+        return {
+            "source": "test",
+            "market_date": market_date,
+            "fetched_at": f"{market_date}T08:00:00+00:00",
+            "status": "available",
+            "scope": "all_a_shares_including_beijing",
+            "coverage": {
+                "expected": 5530,
+                "returned": 5530,
+                "coverage_ratio": 1.0,
+                "latest_tick_time": tick,
+            },
+            "breadth": {
+                "total": 5530,
+                "advancers": 2500,
+                "decliners": 2900,
+                "unchanged": 130,
+            },
+            "turnover": {
+                "status": "available",
+                "currency": "CNY",
+                "unit": "yuan",
+                "total_amount_cny": amount,
+                "coverage": {"coverage_ratio": 1.0},
+            },
+        }
+
+    database.upsert_market_breadth_snapshot(
+        snapshot("2026-07-23", 20_278_178_800, "09:29:31")
+    )
+
+    payload = provider._attach_history_comparison(
+        snapshot("2026-07-24", 1_944_224_878_192, "15:36:00")
+    )
+    comparison = payload["turnover"]["history_comparison"]
+
+    assert comparison["status"] == "building_history"
+    assert comparison["change_vs_previous_pct"] is None
+    assert comparison["excluded_prior_sessions"] == [
+        {
+            "market_date": "2026-07-23",
+            "reason": "incomplete_market_session",
+            "latest_tick_time": "09:29:31",
+            "total_amount_cny": 20_278_178_800,
+        }
+    ]
+
+
+def test_market_breadth_history_rejects_order_of_magnitude_jump(tmp_path: Path):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    provider = SinaMarketBreadthProvider(database)
+
+    def completed_snapshot(market_date: str, amount: int) -> dict:
+        return {
+            "source": "test",
+            "market_date": market_date,
+            "fetched_at": f"{market_date}T08:00:00+00:00",
+            "status": "available",
+            "scope": "all_a_shares_including_beijing",
+            "coverage": {
+                "expected": 5530,
+                "returned": 5530,
+                "coverage_ratio": 1.0,
+                "latest_tick_time": "15:00:00",
+            },
+            "breadth": {
+                "total": 5530,
+                "advancers": 2500,
+                "decliners": 2900,
+                "unchanged": 130,
+            },
+            "turnover": {
+                "status": "available",
+                "currency": "CNY",
+                "unit": "yuan",
+                "total_amount_cny": amount,
+                "coverage": {"coverage_ratio": 1.0},
+            },
+        }
+
+    database.upsert_market_breadth_snapshot(
+        completed_snapshot("2026-07-23", 20_278_178_800)
+    )
+    payload = provider._attach_history_comparison(
+        completed_snapshot("2026-07-24", 1_944_224_878_192)
+    )
+    comparison = payload["turnover"]["history_comparison"]
+
+    assert comparison["status"] == "anomaly"
+    assert comparison["anomaly_reason"] == "order_of_magnitude_mismatch"
+    assert comparison["change_vs_previous_pct"] is None
+    assert comparison["magnitude_ratio"] > 90
+
+
 def test_sina_gold_provider_aggregates_minute_prices_to_five_minute_candles(
     tmp_path: Path,
 ):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     payload = {
         "minLine_1d": [
-            ["2026-07-21", "4000.0", "LIFFE", "", "06:00", "4001.0", "0", "0", "4001.0", "2026-07-21 06:00:00"],
+            [
+                "2026-07-21",
+                "4000.0",
+                "LIFFE",
+                "",
+                "06:00",
+                "4001.0",
+                "0",
+                "0",
+                "4001.0",
+                "2026-07-21 06:00:00",
+            ],
             ["06:00", "4001.0", "0", "0", "4001.0", "2026-07-21 06:00:00"],
             ["06:01", "4003.0", "0", "0", "4002.0", "2026-07-21 06:01:00"],
             ["06:04", "3999.0", "0", "0", "4001.0", "2026-07-21 06:04:00"],
             ["06:05", "4004.0", "0", "0", "4004.0", "2026-07-21 06:05:00"],
         ]
     }
-    content = f"var qingshu_xau=({__import__('json').dumps(payload)});".encode("gb18030")
+    content = f"var qingshu_xau=({__import__('json').dumps(payload)});".encode(
+        "gb18030"
+    )
 
     class GoldResponse:
         def raise_for_status(self):
@@ -962,7 +1120,7 @@ def test_sina_gold_provider_aggregates_minute_prices_to_five_minute_candles(
 
 
 def test_background_job_runs_are_persisted(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     job_id = database.start_background_job("market_intraday_refresh")
     database.finish_background_job(
@@ -996,7 +1154,9 @@ def test_global_market_news_provider_parses_timed_rss_items(monkeypatch):
     )
     packet = GoogleNewsMarketProvider().fetch("us")
     assert packet["market_label"] == "美国股市"
-    assert packet["items"][0]["title"] == "US stocks retreat as investors lock in profits"
+    assert (
+        packet["items"][0]["title"] == "US stocks retreat as investors lock in profits"
+    )
     assert packet["items"][0]["published_at"] == "2026-07-20T20:34:54+00:00"
     assert packet["items"][0]["category"] == "market_news"
 

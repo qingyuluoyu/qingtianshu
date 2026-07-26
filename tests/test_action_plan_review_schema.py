@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import sqlite3
+from typing import Any
 
 import pytest
+from psycopg import IntegrityError
 
 from app.db import Database
 
@@ -29,20 +30,28 @@ REVIEW_STATUSES = {
 
 
 def _database(tmp_path: Path) -> Database:
-    database = Database(tmp_path / "qingshu.db", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     return database
 
 
-def _columns(connection: sqlite3.Connection, table: str) -> dict[str, sqlite3.Row]:
+def _columns(connection: Any, table: str) -> dict[str, dict[str, Any]]:
     return {
-        str(row["name"]): row
-        for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+        str(row["column_name"]): dict(row)
+        for row in connection.execute(
+            """
+            SELECT column_name, column_default, is_nullable, data_type
+            FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = ?
+            ORDER BY ordinal_position
+            """,
+            (table,),
+        ).fetchall()
     }
 
 
 def _seed_scope(
-    connection: sqlite3.Connection,
+    connection: Any,
     *,
     user_id: str,
     workspace_id: str,
@@ -73,9 +82,12 @@ def test_action_plan_and_trade_review_schema_is_idempotent(tmp_path: Path) -> No
 
     with database.connect() as connection:
         tables = {
-            str(row["name"])
+            str(row["table_name"])
             for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
+                """
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = current_schema()
+                """
             ).fetchall()
         }
         assert {
@@ -104,8 +116,12 @@ def test_action_plan_and_trade_review_schema_is_idempotent(tmp_path: Path) -> No
             "created_at",
             "updated_at",
         } <= action_plan_columns.keys()
-        assert action_plan_columns["check_result_json"]["dflt_value"] == "'{}'"
-        assert action_plan_columns["status"]["dflt_value"] == "'draft'"
+        assert str(
+            action_plan_columns["check_result_json"]["column_default"]
+        ).startswith("'{}'")
+        assert str(action_plan_columns["status"]["column_default"]).startswith(
+            "'draft'"
+        )
 
         history_columns = _columns(connection, "action_plan_history")
         assert {
@@ -120,7 +136,9 @@ def test_action_plan_and_trade_review_schema_is_idempotent(tmp_path: Path) -> No
             "snapshot_json",
             "created_at",
         } <= history_columns.keys()
-        assert history_columns["snapshot_json"]["dflt_value"] == "'{}'"
+        assert str(history_columns["snapshot_json"]["column_default"]).startswith(
+            "'{}'"
+        )
 
         context_columns = _columns(connection, "operation_context_snapshots")
         assert {
@@ -135,7 +153,9 @@ def test_action_plan_and_trade_review_schema_is_idempotent(tmp_path: Path) -> No
             "snapshot_version",
             "created_at",
         } <= context_columns.keys()
-        assert context_columns["snapshot_json"]["dflt_value"] == "'{}'"
+        assert str(context_columns["snapshot_json"]["column_default"]).startswith(
+            "'{}'"
+        )
 
         review_columns = _columns(connection, "trade_reviews")
         assert {
@@ -154,18 +174,29 @@ def test_action_plan_and_trade_review_schema_is_idempotent(tmp_path: Path) -> No
             "created_at",
             "updated_at",
         } <= review_columns.keys()
-        assert review_columns["status"]["dflt_value"] == "'waiting_data'"
-        assert review_columns["data_status"]["dflt_value"] == "'missing'"
+        assert str(review_columns["status"]["column_default"]).startswith(
+            "'waiting_data'"
+        )
+        assert str(review_columns["data_status"]["column_default"]).startswith(
+            "'missing'"
+        )
 
         review_version_columns = _columns(connection, "trade_review_versions")
         assert "source_run_id" in review_version_columns
-        assert review_version_columns["bias_tags_json"]["dflt_value"] == "'[]'"
-        assert review_version_columns["status"]["dflt_value"] == "'draft'"
+        assert str(
+            review_version_columns["bias_tags_json"]["column_default"]
+        ).startswith("'[]'")
+        assert str(review_version_columns["status"]["column_default"]).startswith(
+            "'draft'"
+        )
 
         index_names = {
-            str(row["name"])
+            str(row["indexname"])
             for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'index'"
+                """
+                SELECT indexname FROM pg_indexes
+                WHERE schemaname = current_schema()
+                """
             ).fetchall()
         }
         assert {
@@ -177,15 +208,27 @@ def test_action_plan_and_trade_review_schema_is_idempotent(tmp_path: Path) -> No
             "idx_trade_review_versions_scope_version",
         } <= index_names
 
-        plan_sql = str(
-            connection.execute(
-                "SELECT sql FROM sqlite_master WHERE name = 'action_plans'"
-            ).fetchone()["sql"]
+        constraint_rows = connection.execute(
+            """
+            SELECT relation.relname AS table_name,
+                   pg_get_constraintdef(constraint_row.oid) AS check_clause
+            FROM pg_constraint AS constraint_row
+            JOIN pg_class AS relation ON relation.oid = constraint_row.conrelid
+            JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+            WHERE namespace.nspname = current_schema()
+              AND constraint_row.contype = 'c'
+              AND relation.relname IN ('action_plans', 'trade_reviews')
+            """
+        ).fetchall()
+        plan_sql = " ".join(
+            str(row["check_clause"])
+            for row in constraint_rows
+            if row["table_name"] == "action_plans"
         )
-        review_sql = str(
-            connection.execute(
-                "SELECT sql FROM sqlite_master WHERE name = 'trade_reviews'"
-            ).fetchone()["sql"]
+        review_sql = " ".join(
+            str(row["check_clause"])
+            for row in constraint_rows
+            if row["table_name"] == "trade_reviews"
         )
         assert all(f"'{status}'" in plan_sql for status in PLAN_STATUSES)
         assert all(f"'{status}'" in review_sql for status in REVIEW_STATUSES)
@@ -319,9 +362,7 @@ def test_plan_review_defaults_scope_guards_and_existing_data_survive_reinitializ
         assert review["current_version_id"] == "review-version-1"
         assert review_version is not None
         assert json.loads(review_version["bias_tags_json"]) == []
-        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
-
-    with database.connect() as connection, pytest.raises(sqlite3.IntegrityError):
+    with database.connect() as connection, pytest.raises(IntegrityError):
         connection.execute(
             """
             INSERT INTO action_plan_history(
@@ -333,7 +374,7 @@ def test_plan_review_defaults_scope_guards_and_existing_data_survive_reinitializ
             (now,),
         )
 
-    with database.connect() as connection, pytest.raises(sqlite3.IntegrityError):
+    with database.connect() as connection, pytest.raises(IntegrityError):
         connection.execute(
             """
             INSERT INTO operation_context_snapshots(
@@ -345,7 +386,7 @@ def test_plan_review_defaults_scope_guards_and_existing_data_survive_reinitializ
             (now, now),
         )
 
-    with database.connect() as connection, pytest.raises(sqlite3.IntegrityError):
+    with database.connect() as connection, pytest.raises(IntegrityError):
         connection.execute(
             """
             INSERT INTO trade_review_versions(
@@ -357,7 +398,7 @@ def test_plan_review_defaults_scope_guards_and_existing_data_survive_reinitializ
             (now,),
         )
 
-    with database.connect() as connection, pytest.raises(sqlite3.IntegrityError):
+    with database.connect() as connection, pytest.raises(IntegrityError):
         connection.execute(
             """
             INSERT INTO action_plans(
@@ -369,7 +410,7 @@ def test_plan_review_defaults_scope_guards_and_existing_data_survive_reinitializ
             (now, now),
         )
 
-    with database.connect() as connection, pytest.raises(sqlite3.IntegrityError):
+    with database.connect() as connection, pytest.raises(IntegrityError):
         connection.execute(
             """
             INSERT INTO trade_reviews(
@@ -383,12 +424,18 @@ def test_plan_review_defaults_scope_guards_and_existing_data_survive_reinitializ
 
     database.initialize()
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) AS count FROM action_plans WHERE id = 'plan-1'"
-        ).fetchone()["count"] == 1
-        assert connection.execute(
-            "SELECT COUNT(*) AS count FROM trade_reviews WHERE id = 'review-1'"
-        ).fetchone()["count"] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM action_plans WHERE id = 'plan-1'"
+            ).fetchone()["count"]
+            == 1
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM trade_reviews WHERE id = 'review-1'"
+            ).fetchone()["count"]
+            == 1
+        )
         connection.execute("DELETE FROM users WHERE id = 'user-1'")
         for table in (
             "action_plans",
@@ -397,6 +444,9 @@ def test_plan_review_defaults_scope_guards_and_existing_data_survive_reinitializ
             "trade_reviews",
             "trade_review_versions",
         ):
-            assert connection.execute(
-                f"SELECT COUNT(*) AS count FROM {table} WHERE user_id = 'user-1'"
-            ).fetchone()["count"] == 0
+            assert (
+                connection.execute(
+                    f"SELECT COUNT(*) AS count FROM {table} WHERE user_id = 'user-1'"
+                ).fetchone()["count"]
+                == 0
+            )

@@ -32,18 +32,11 @@ def build_operations_report(
             settings.backup_dir,
             max_age_seconds=settings.backup_max_age_seconds,
         )
-        if database.backend == "postgresql" and check_backup
-        else {
-            "status": "skipped"
-            if database.backend == "postgresql"
-            else "not_applicable",
-            "backend": database.backend,
-        }
+        if check_backup
+        else {"status": "skipped", "backend": "postgresql"}
     )
     failures: list[str] = []
     warnings: list[str] = []
-    if require_postgres and database.backend != "postgresql":
-        failures.append("domain_database_not_postgresql")
     if domain["schema_version"] < Database.SCHEMA_VERSION:
         failures.append("domain_schema_outdated")
     if queue["schema_version"] < OperationalDatabase.SCHEMA_VERSION:
@@ -64,11 +57,7 @@ def build_operations_report(
         failures.append("failure_rate_above_threshold")
     elif int(queue_metrics["failed_24h"]) > 0:
         warnings.append("recent_failed_jobs_present")
-    if (
-        database.backend == "postgresql"
-        and check_backup
-        and backups["status"] != "ok"
-    ):
+    if check_backup and backups["status"] != "ok":
         failures.append("postgres_backup_not_healthy")
     return {
         "status": "degraded" if failures else "ok",

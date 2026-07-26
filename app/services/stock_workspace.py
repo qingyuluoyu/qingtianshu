@@ -9,6 +9,7 @@ from app.services.observation_tasks import ObservationTaskService
 from app.services.research_actions import ResearchActionService
 from app.services.research_claims import build_research_claim_ledger
 from app.services.research_tracking import ResearchTrackingService
+from app.services.security_master import SecurityMasterService
 
 
 class StockWorkspaceService:
@@ -89,6 +90,7 @@ class StockWorkspaceService:
         self.position_ledger = position_ledger
         self.trade_workflow = trade_workflow
         self.change_events = change_events
+        self.security_master = SecurityMasterService(database)
 
     def get_workspace(self, user_id: str, symbol: str) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
@@ -119,11 +121,12 @@ class StockWorkspaceService:
             user_id=user_id, symbol=canonical, limit=100
         )
         action_item = self._action_item(user_id, canonical, watchlist)
-        name = str(
-            (session or {}).get("name")
-            or self._display_name(
+        name = self.security_master.display_name(
+            canonical,
+            (session or {}).get("name"),
+            self._display_name(
                 canonical, formal_workspace, watchlist, report, evidence
-            )
+            ),
         )
 
         if session is not None:
@@ -489,8 +492,8 @@ class StockWorkspaceService:
             )
         return output
 
-    @staticmethod
     def _display_name(
+        self,
         symbol: str,
         formal_workspace: dict[str, Any] | None,
         watchlist: dict[str, Any] | None,
@@ -498,14 +501,14 @@ class StockWorkspaceService:
         evidence: dict[str, Any],
     ) -> str:
         quote = evidence.get("current_quote") or {}
-        return str(
-            (formal_workspace or {}).get("name")
-            or (watchlist or {}).get("name")
-            or (report or {}).get("name")
-            or quote.get("name")
-            or evidence.get("display_name")
-            or (RESEARCH_TARGETS.get(symbol) or {}).get("name")
-            or symbol
+        return self.security_master.display_name(
+            symbol,
+            (formal_workspace or {}).get("name"),
+            (watchlist or {}).get("name"),
+            (report or {}).get("name"),
+            quote.get("name"),
+            evidence.get("display_name"),
+            (RESEARCH_TARGETS.get(symbol) or {}).get("name"),
         )
 
     @staticmethod
@@ -1332,17 +1335,31 @@ class StockWorkspaceService:
             }
         ]
 
-    @staticmethod
-    def _public_report(report: dict[str, Any] | None) -> dict[str, Any] | None:
+    def _public_report(
+        self, report: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
         if report is None:
             return None
+        symbol = str(report.get("symbol") or "")
+        original_name = str(report.get("name") or "")
+        display_name = self.security_master.display_name(
+            symbol,
+            original_name,
+            (report.get("evidence") or {}).get("display_name"),
+        )
+
+        def localized(value: Any) -> Any:
+            if not value or not original_name or original_name == display_name:
+                return value
+            return str(value).replace(original_name, display_name)
+
         return {
             "id": report.get("id"),
             "symbol": report.get("symbol"),
-            "name": report.get("name"),
-            "title": report.get("title"),
-            "summary": report.get("summary"),
-            "body": report.get("body"),
+            "name": display_name,
+            "title": localized(report.get("title")),
+            "summary": localized(report.get("summary")),
+            "body": localized(report.get("body")),
             "status": report.get("status"),
             "generated_at": report.get("generated_at"),
             "market_timestamp": report.get("market_timestamp"),

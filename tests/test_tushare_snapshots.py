@@ -67,9 +67,7 @@ class FakeSnapshotTushareClient:
             start_date = str(params.get("start_date") or self.trade_dates[0])
             end_date = str(params.get("end_date") or self.trade_dates[-1])
             dates = [
-                value
-                for value in self.trade_dates
-                if start_date <= value <= end_date
+                value for value in self.trade_dates if start_date <= value <= end_date
             ]
             return pd.DataFrame(
                 [
@@ -356,9 +354,7 @@ def test_incomplete_universe_refresh_retains_previous_stable_snapshot(app):
     stable = service.sync_a_share_universe(as_of_date="2026-07-21")
 
     fake.daily_basic_rows = fake.daily_basic_rows[:1]
-    incomplete = service.sync_a_share_universe(
-        as_of_date="2026-07-21", force=True
-    )
+    incomplete = service.sync_a_share_universe(as_of_date="2026-07-21", force=True)
     published = service.get_a_share_universe()
 
     assert stable["published"] is True
@@ -394,9 +390,10 @@ def test_preopen_sync_falls_back_to_latest_date_with_daily_basic_data(app):
     assert symbol["snapshot"]["as_of_date"] == service._iso_date(
         previous_completed_date
     )
-    assert symbol["snapshot"]["datasets"]["daily"]["rows"][-1][
-        "trade_date"
-    ] == previous_completed_date
+    assert (
+        symbol["snapshot"]["datasets"]["daily"]["rows"][-1]["trade_date"]
+        == previous_completed_date
+    )
     assert fake.calls["daily_basic"] == 4
 
 
@@ -426,9 +423,10 @@ def test_symbol_snapshot_publishes_traceable_stable_version(app):
     stored = service.get_symbol_snapshot("000063")
     assert stored["status"] == "stable"
     assert stored["data_version"] == result["run"]["data_version"]
-    assert stored["snapshot"]["datasets"]["daily_basic"]["rows"][0][
-        "trade_date"
-    ] == "20260721"
+    assert (
+        stored["snapshot"]["datasets"]["daily_basic"]["rows"][0]["trade_date"]
+        == "20260721"
+    )
 
 
 def test_strategy_symbol_sync_reuses_universe_rows_and_skips_optional_calls(app):
@@ -457,12 +455,8 @@ def test_strategy_symbol_sync_reuses_universe_rows_and_skips_optional_calls(app)
         "express",
         "disclosure_date",
     ]
-    assert snapshot["datasets"]["stock_basic"][
-        "reused_from_universe_snapshot"
-    ] is True
-    assert snapshot["datasets"]["daily_basic"][
-        "reused_from_universe_snapshot"
-    ] is True
+    assert snapshot["datasets"]["stock_basic"]["reused_from_universe_snapshot"] is True
+    assert snapshot["datasets"]["daily_basic"]["reused_from_universe_snapshot"] is True
     assert fake.calls["stock_basic"] == 0
     assert fake.calls["daily_basic"] == 0
     assert fake.calls["trade_cal"] == 1
@@ -501,9 +495,10 @@ def test_same_snapshot_content_keeps_same_data_version(app):
     second = service.sync_symbol("000063", as_of_date="2026-07-21")
 
     assert first["run"]["data_version"] == second["run"]["data_version"]
-    assert service.get_symbol_snapshot("000063")["data_version"] == first["run"][
-        "data_version"
-    ]
+    assert (
+        service.get_symbol_snapshot("000063")["data_version"]
+        == first["run"]["data_version"]
+    )
 
 
 def test_incomplete_or_failed_sync_never_overwrites_previous_stable_snapshot(app):
@@ -578,7 +573,7 @@ def test_legacy_incomplete_snapshot_recovers_issues_from_sync_run(app):
         connection.execute(
             """
             UPDATE tushare_dataset_snapshots
-            SET payload_json = json_remove(payload_json, '$.issues')
+            SET payload_json = (payload_json::jsonb - 'issues')::text
             WHERE dataset = 'li_zong_inputs_incomplete'
                 AND scope_key = '000063.SZ'
             """

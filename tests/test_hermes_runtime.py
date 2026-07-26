@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
+import subprocess
+import sys
 
 from app.hermes_runtime import (
     resolve_hermes_executable,
@@ -15,6 +18,32 @@ def test_packaged_stream_bridge_is_available():
     assert bridge.name == "hermes_stream_bridge.py"
     assert bridge.parent.name == "app"
     assert bridge.is_file()
+
+
+def test_packaged_stream_bridge_accepts_output_budget():
+    bridge = resolve_hermes_stream_bridge()
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(bridge),
+            "--self-test",
+            "--max-tokens",
+            "900",
+            "--max-iterations",
+            "4",
+            "--reasoning-effort",
+            "low",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert result.returncode == 0, result.stderr
+    events = [json.loads(line) for line in result.stdout.splitlines()]
+    assert events[-1]["type"] == "final"
 
 
 def _make_executable(path: Path, content: str = "") -> None:

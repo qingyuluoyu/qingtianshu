@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import sqlite3
 
 from fastapi.testclient import TestClient
 
@@ -74,9 +73,7 @@ def _evidence() -> dict:
                 }
             ],
         },
-        "research_frame": {
-            "missing_information": ["补齐下一报告期经营现金流数据"]
-        },
+        "research_frame": {"missing_information": ["补齐下一报告期经营现金流数据"]},
         "conditional_outlook": {
             "invalidation": "价格与经营现金流同时跌破当前研究假设时重新判断。",
             "scenarios": [
@@ -140,17 +137,13 @@ def test_structured_answer_persists_public_citations_and_requires_completed_run(
     assert partial["status"] == "partial"
     assert partial["candidate_writebacks"] == []
     assert partial["confirmed_facts"]
-    assert partial["evidence_based_inferences"][0][
-        "supporting_citation_ids"
-    ]
+    assert partial["evidence_based_inferences"][0]["supporting_citation_ids"]
     assert partial["counter_evidence_and_risks"]
     assert partial["invalidation_conditions"]
     assert partial["next_evidence_tasks"]
     assert partial["citations"]
     assert all(
-        "user_id" not in item
-        and "run_id" not in item
-        and "source_key" not in item
+        "user_id" not in item and "run_id" not in item and "source_key" not in item
         for item in partial["citations"]
     )
 
@@ -175,7 +168,9 @@ def test_structured_answer_persists_public_citations_and_requires_completed_run(
     assert "run_id" not in candidate
 
 
-def test_normal_question_does_not_create_writeback_and_negated_request_is_respected(app):
+def test_normal_question_does_not_create_writeback_and_negated_request_is_respected(
+    app,
+):
     client = TestClient(app)
     user = _create_user(client, "Structured AI Intent")
     _add_stock(client, "正式判断保持不变")
@@ -198,6 +193,38 @@ def test_normal_question_does_not_create_writeback_and_negated_request_is_respec
             symbol="000063.SZ",
         )
         assert result["candidate_writebacks"] == []
+
+
+def test_plain_price_move_question_skips_broad_structured_research_card(app):
+    client = TestClient(app)
+    user = _create_user(client, "Focused Price Move")
+    _add_stock(client, "正式判断保持不变")
+    evidence = {
+        **_evidence(),
+        "user_question": "中兴通讯7月24日为什么下跌？只使用同日事实。",
+        "stock_market_context": {
+            "analysis_target": {"market_date": "2026-07-24"}
+        },
+    }
+    run = _run(
+        app,
+        user["id"],
+        "completed",
+        evidence["user_question"],
+        evidence,
+    )
+
+    result = app.state.structured_ai.build_and_persist(
+        user_id=user["id"],
+        run=run,
+        evidence=evidence,
+        answer=run["answer"],
+        message=evidence["user_question"],
+        conversation_id=None,
+        symbol="000063.SZ",
+    )
+
+    assert result is None
 
 
 def test_action_plan_writeback_requires_confirmation_and_keeps_targets_empty(app):
@@ -319,10 +346,7 @@ def test_observation_task_writeback_requires_confirmation_and_is_idempotent(app)
     owner = TestClient(app)
     owner_user = _create_user(owner, "Structured AI Observation Owner")
     _add_stock(owner, "关注利润、现金流和订单兑现")
-    message = (
-        "分析中兴通讯并把“继续核验经营现金流与订单兑现”"
-        "保存为核验任务，供我确认。"
-    )
+    message = "分析中兴通讯并把“继续核验经营现金流与订单兑现”保存为核验任务，供我确认。"
     run = _run(app, owner_user["id"], "completed", message, _evidence())
     result = app.state.structured_ai.build_and_persist(
         user_id=owner_user["id"],
@@ -424,10 +448,7 @@ def test_li_zong_stock_screen_can_create_confirmable_observation_task(app):
         ],
         "data_meta": {"latest_completed_trade_date": "2026-07-23"},
     }
-    message = (
-        "请核验李总策略8/9观察结果，并把“继续跟踪5%阴线是否滑出”"
-        "保存为核验任务。"
-    )
+    message = "请核验李总策略8/9观察结果，并把“继续跟踪5%阴线是否滑出”保存为核验任务。"
     run = _run(app, owner_user["id"], "completed", message, evidence)
 
     result = app.state.structured_ai.build_and_persist(
@@ -452,36 +473,21 @@ def test_li_zong_stock_screen_can_create_confirmable_observation_task(app):
     assert owner.get("/v1/observation-tasks").json()["items"] == []
 
 
-def test_database_migrates_existing_thesis_only_writeback_schema(tmp_path: Path):
-    database_path = tmp_path / "legacy.db"
-    with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            """
-            CREATE TABLE ai_writeback_candidates (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                run_id TEXT NOT NULL,
-                conversation_id TEXT,
-                workspace_id TEXT NOT NULL,
-                symbol TEXT NOT NULL,
-                candidate_type TEXT NOT NULL CHECK(candidate_type IN ('thesis')),
-                status TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                citation_ids_json TEXT NOT NULL DEFAULT '[]',
-                base_version INTEGER NOT NULL,
-                target_object_id TEXT,
-                created_at TEXT NOT NULL,
-                resolved_at TEXT,
-                UNIQUE(user_id, run_id, candidate_type)
-            )
-            """
-        )
-    database = Database(database_path, tmp_path / "workspaces")
+def test_postgres_writeback_schema_supports_all_candidate_types(tmp_path: Path):
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     with database.connect() as connection:
-        schema = connection.execute(
-            "SELECT sql FROM sqlite_master WHERE name = 'ai_writeback_candidates'"
-        ).fetchone()["sql"]
+        schema = " ".join(
+            row["definition"]
+            for row in connection.execute(
+                """
+                SELECT pg_get_constraintdef(oid) AS definition
+                FROM pg_constraint
+                WHERE conrelid = 'ai_writeback_candidates'::regclass
+                  AND contype = 'c'
+                """
+            ).fetchall()
+        )
     assert "observation_task" in schema
     assert "action_plan" in schema
     assert "review_draft" in schema
@@ -527,9 +533,7 @@ def test_writeback_confirm_reject_stale_and_user_isolation(app):
 
     rejected_candidate = create_candidate()
     active_before_reject = owner.get("/v1/stocks/000063/theses").json()["active"]
-    rejected = owner.post(
-        f"/v1/ai-writebacks/{rejected_candidate['id']}/reject"
-    )
+    rejected = owner.post(f"/v1/ai-writebacks/{rejected_candidate['id']}/reject")
     assert rejected.status_code == 200
     assert rejected.json()["status"] == "rejected"
     assert owner.get("/v1/stocks/000063/theses").json()["active"] == (
@@ -561,9 +565,7 @@ def test_chat_history_and_private_stream_include_structured_answer(client):
     structured = payload["structured_answer"]
     assert structured["contract_version"] == "structured_ai_response_v1"
     assert structured["citations"]
-    conversation = client.get(
-        f"/me/conversations/{payload['conversation_id']}"
-    ).json()
+    conversation = client.get(f"/me/conversations/{payload['conversation_id']}").json()
     assistant = conversation["messages"][-1]
     assert assistant["metadata"]["structured_answer"] == structured
 

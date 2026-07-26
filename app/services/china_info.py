@@ -52,6 +52,7 @@ class ChinaInformationService:
         if not canonical.endswith((".SS", ".SZ")):
             raise ValueError("只支持 A 股证券的信息刷新")
         warnings = []
+        source_status: dict[str, dict[str, Any]] = {}
         collected: dict[str, list[dict[str, Any]]] = {
             "announcement": [],
             "news": [],
@@ -66,27 +67,41 @@ class ChinaInformationService:
             try:
                 collected[category] = fetcher(canonical)
                 self.database.upsert_news_items(collected[category])
+                source_status[category] = {
+                    "status": "ok",
+                    "items": len(collected[category]),
+                    "polled_at": utc_now(),
+                }
             except Exception as exc:
                 warnings.append(f"{category} 数据源失败：{type(exc).__name__}")
+                source_status[category] = {
+                    "status": "failed",
+                    "items": 0,
+                    "polled_at": utc_now(),
+                    "error_type": type(exc).__name__,
+                }
         sentiment = score_social_sentiment(canonical, collected["social"], warnings)
         saved_sentiment = self.database.save_sentiment_snapshot(sentiment)
         return {
             "symbol": canonical,
             "refreshed_at": utc_now(),
             "counts": {key: len(value) for key, value in collected.items()},
+            "sources": source_status,
             "sentiment": saved_sentiment,
             "warnings": warnings,
         }
 
-    def get_packet(self, symbol: str, refresh_max_age_seconds: int = 300) -> dict[str, Any]:
+    def get_packet(
+        self, symbol: str, refresh_max_age_seconds: int = 300
+    ) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
         sentiment = self.database.latest_sentiment(canonical)
         should_refresh = sentiment is None
         if sentiment is not None:
             created = datetime.fromisoformat(sentiment["created_at"])
-            should_refresh = datetime.now(timezone.utc) - created.astimezone(timezone.utc) > timedelta(
-                seconds=refresh_max_age_seconds
-            )
+            should_refresh = datetime.now(timezone.utc) - created.astimezone(
+                timezone.utc
+            ) > timedelta(seconds=refresh_max_age_seconds)
         refresh_result = None
         if should_refresh:
             refresh_result = self.refresh_symbol(canonical)

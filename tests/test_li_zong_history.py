@@ -156,7 +156,7 @@ class SnapshotServiceStub:
 
 
 def _service(tmp_path: Path, *, market_cap_wan: float = 2_000_000.0):
-    database = Database(tmp_path / "history.db", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     payload = _strategy_packet()
     dates = [row["trade_date"] for row in payload["datasets"]["daily"]["rows"]]
@@ -299,20 +299,52 @@ def test_history_api_exposes_coverage_and_requires_admin_for_manual_run(
     assert denied.status_code == 403
 
 
-def test_demo_contract_contains_history_replay_and_agent_entry(app, client):
+def test_demo_contract_contains_history_replay_and_agent_entry(
+    app, client, frontend_source
+):
     page = client.get("/demo")
+    source = frontend_source
 
     assert page.status_code == 200
     assert 'id="liZongHistoryPanel"' in page.text
     assert "历史真实命中与后续表现" in page.text
     assert 'id="liZongFunnel"' in page.text
-    assert "/v1/stock-strategies/li-zong/history?limit=30" in page.text
-    assert "让 Agent 复盘" in page.text
-    assert "{agentQuestion}" in page.text
-    assert "context?.agentQuestion" in page.text
-    assert "请基于李总策略的真实历史回放" in page.text
-    assert "continueDeepStockConversation(question, session)" in page.text
-    assert "targetSession || state.deepStock || await startDeepStockSession()" in page.text
+    assert 'id="liZongHistoryToggle"' in page.text
+    assert 'data-screening-jump="general"' in page.text
+    assert 'data-screening-jump="li_zong"' in page.text
+    assert 'liZongHistoryExpanded: false' in source
+    assert 'container.hidden = !state.liZongHistoryExpanded' in source
+    assert '$("stockScreenerPanel").appendChild($("liZongPanel"))' in source
+    assert "/v1/stock-strategies/li-zong/history?limit=30" in source
+    assert "让 Agent 复盘" in source
+    assert "{agentQuestion}" in source
+    assert "context?.agentQuestion" in source
+    assert "请基于李总策略的真实历史回放" in source
+    assert "continueDeepStockConversation(question, session)" in source
+    assert (
+        "targetSession || state.deepStock || await startDeepStockSession()" in source
+    )
+
+
+def test_screening_sections_are_mutually_exclusive_and_general_screen_is_explicit(
+    app, client, frontend_source
+):
+    page = client.get("/demo")
+    source = frontend_source
+
+    assert page.status_code == 200
+    assert 'id="generalScreenerPanel"' in page.text
+    assert 'screeningSection: "general"' in source
+    assert "function syncScreeningSection(options = {})" in source
+    assert '$("generalScreenerPanel").hidden = section !== "general"' in source
+    assert '$("liZongPanel").hidden = section !== "li_zong"' in source
+    assert 'data-load-state="idle"' in page.text
+    assert 'renderLiZongLoadState("loading", "正在读取最新策略结果")' in source
+    assert 'renderLiZongLoadState("error", "暂时没有取得最新策略结果")' in source
+    assert "重新加载策略结果" in source
+    assert 'role="tab" aria-selected="true" data-screening-jump="general"' in page.text
+    assert 'if (!state.stockScreener) void loadStockScreener();' not in source
+    assert 'params.set("section", "li_zong")' in source
 
 
 def test_history_replay_agent_question_reuses_the_exact_event_evidence(

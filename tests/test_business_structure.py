@@ -87,8 +87,7 @@ def test_service_separates_latest_revenue_and_margin_reference(app):
         "gross_margin_pct"
     ] == pytest.approx(53.0)
     assert any(
-        item.get("report_date") == "2025-06-30"
-        and "毛利率参考期" in item["statement"]
+        item.get("report_date") == "2025-06-30" and "毛利率参考期" in item["statement"]
         for item in packet["key_changes"]
     )
 
@@ -112,14 +111,20 @@ def test_business_structure_persists_snapshot_and_long_term_knowledge(app):
     app.state.business_structure.refresh_symbol("000063.SZ")
 
     with app.state.database.connect() as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM business_segment_rows WHERE symbol = ?",
-            ("000063.SZ",),
-        ).fetchone()[0] == 22
-        assert connection.execute(
-            "SELECT COUNT(*) FROM business_structure_snapshots WHERE symbol = ?",
-            ("000063.SZ",),
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM business_segment_rows WHERE symbol = ?",
+                ("000063.SZ",),
+            ).fetchone()["count"]
+            == 22
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM business_structure_snapshots WHERE symbol = ?",
+                ("000063.SZ",),
+            ).fetchone()["count"]
+            == 1
+        )
 
     document = next(
         item
@@ -199,8 +204,7 @@ def test_business_structure_api_and_chat_routing(client, app):
     ]
     assert operating["coverage"]["same_period_financial_peers"] == 3
     assert all(
-        (item.get("business_profile") or {}).get("anchor_report_date")
-        == "2025-12-31"
+        (item.get("business_profile") or {}).get("anchor_report_date") == "2025-12-31"
         for item in operating["peers"]
     )
 
@@ -239,6 +243,6 @@ def test_research_report_fingerprint_changes_with_business_structure():
         },
     }
 
-    assert ResearchReportService._fingerprint(base) != ResearchReportService._fingerprint(
-        changed
-    )
+    assert ResearchReportService._fingerprint(
+        base
+    ) != ResearchReportService._fingerprint(changed)

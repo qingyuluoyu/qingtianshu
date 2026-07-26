@@ -379,7 +379,8 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
     )
     assert guarded is not None
     assert guarded["progress"]["completed"] == 1
-    assert "没有推进研究阶段" in guarded["unresolved_items"][-1]
+    assert "研究进度保持不变" in guarded["unresolved_items"][-1]
+    assert "输出校验" not in " ".join(guarded["unresolved_items"])
 
     specialized = app.state.deep_stock.observe_chat(
         user_id=user["id"],
@@ -500,7 +501,7 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
     assert failed is not None
     assert failed["evidence_coverage"]["summary"]["sufficient"] == 6
     assert failed["coverage_history"] == history_before_failure
-    assert "没有推进研究阶段" in failed["unresolved_items"][-1]
+    assert "研究进度保持不变" in failed["unresolved_items"][-1]
 
     restored_after_failure = client.get("/me/deep-stock/000063").json()
     assert restored_after_failure["evidence_coverage"] == failed["evidence_coverage"]
@@ -581,9 +582,10 @@ def test_completed_run_requires_guard_pass_and_available_evidence(app):
     assert missing_guard["progress"]["completed"] == 1
     assert _stage(missing_guard, "company_industry")["status"] == "in_progress"
     assert any(
-        "缺少可验证的最终输出守卫通过记录" in item
+        "研究进度保持不变" in item
         for item in missing_guard["unresolved_items"]
     )
+    assert "输出守卫" not in " ".join(missing_guard["unresolved_items"])
 
     failed_evidence = app.state.deep_stock.observe_chat(
         user_id=user["id"],
@@ -597,7 +599,7 @@ def test_completed_run_requires_guard_pass_and_available_evidence(app):
     assert failed_evidence is not None
     assert failed_evidence["progress"]["completed"] == 1
     assert any(
-        "核心证据包缺失或失败" in item
+        "核心证据尚不完整" in item
         for item in failed_evidence["unresolved_items"]
     )
 
@@ -751,14 +753,15 @@ def test_legacy_completed_stages_are_reconciled_from_their_original_run(app):
         "https://example.invalid/business",
     ]
     assert financial["status"] == "needs_review"
-    assert "历史阶段缺少可回溯的完成 Run" in " ".join(
+    assert "部分历史研究阶段需要用当前证据重新核验" in " ".join(
         financial["review_reasons"]
     )
+    assert "Run" not in " ".join(financial["review_reasons"])
     assert reconciled["progress"]["completed"] == 2
     assert reconciled["current_stage"]["key"] == "financial_cashflow"
     assert reconciled["current_stage"]["status"] == "needs_review"
     assert any(
-        "历史研究阶段已按更严格的证据门禁重新审计" in item
+        "部分历史研究阶段需要用当前证据重新核验" in item
         for item in reconciled["unresolved_items"]
     )
 

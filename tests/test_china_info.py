@@ -12,7 +12,9 @@ class FakeResponse:
     def __init__(self, *, payload=None, content: bytes = b"", text: str | None = None):
         self._payload = payload
         self.content = content
-        self.text = text if text is not None else content.decode("utf-8", errors="replace")
+        self.text = (
+            text if text is not None else content.decode("utf-8", errors="replace")
+        )
 
     def raise_for_status(self):
         return None
@@ -58,7 +60,9 @@ def test_a_share_provider_parses_announcements_news_and_social_posts():
             return FakeResponse(payload=announcement_payload)
         if "AllNewsStock" in url:
             return FakeResponse(content=sina_html)
-        return FakeResponse(text=f"<script>var article_list={json.dumps(guba_payload)};</script>")
+        return FakeResponse(
+            text=f"<script>var article_list={json.dumps(guba_payload)};</script>"
+        )
 
     provider = AShareInformationProvider(http_get=http_get)
     announcements = provider.fetch_announcements("600519.SS")
@@ -82,7 +86,7 @@ def test_sentiment_is_transparent_and_persisted(tmp_path: Path):
     assert snapshot["negative_count"] == 1
     assert "不能单独用于价格预测" in snapshot["evidence"]["caveat"]
 
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     saved = database.save_sentiment_snapshot(snapshot)
     assert saved["method"] == "keyword_engagement_weighted_v1"
@@ -90,7 +94,7 @@ def test_sentiment_is_transparent_and_persisted(tmp_path: Path):
 
 
 def test_news_upsert_accepts_source_name_change_for_stable_item_id(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     original = {
         "id": "stable-market-news-id",
@@ -112,9 +116,8 @@ def test_news_upsert_accepts_source_name_change_for_stable_item_id(tmp_path: Pat
     database.upsert_news_items([original])
     database.upsert_news_items([renamed_source])
 
-    stored = database.list_news(
-        symbol="__MARKET_GOLD__", categories=("market_news",)
-    )
+    stored = database.list_news(symbol="__MARKET_GOLD__", categories=("market_news",))
     assert len(stored) == 1
     assert stored[0]["id"] == "stable-market-news-id"
     assert stored[0]["source"] == "Shanghai Metals Market"
+    assert stored[0]["fetched_at"] == "2026-07-21T08:02:00+00:00"

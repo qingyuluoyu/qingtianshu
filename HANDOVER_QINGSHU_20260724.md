@@ -1,5 +1,25 @@
 # 清数智算 MVP 交接说明（2026-07-24）
 
+## 最新续接断点（2026-07-26）
+
+本节是当前续接入口；与下方 2026-07-24 运行快照冲突时，以本节和 `VERIFICATION.md` 顶部最新工作包为准。
+
+- 权威仓库仍为 `/Users/chr/Documents/qingtianshu`，分支仍为 `codex/structured-ai-writeback`。工作树包含连续开发修改，禁止清理、重置或覆盖未审查内容。
+- 当前 Web 与独立 Worker 已重新加载最新代码。`/health=ok`、Hermes 启用、领域库 PostgreSQL Schema v2、运维与持久化队列 PostgreSQL Schema v4；Worker 默认双并发，最近一次重启后 active Worker 为 2，并已将 10 个等待任务清至 0。54 项数据健康为 53 healthy、1 attention、0 critical。
+- 当前自动化基线为 `731 tests collected` 且全量通过；Ruff、Python `compileall`、静态 JavaScript `node --check`、`uv lock --check` 和 `git diff --check` 通过。真实页面已回归今日观察、个股研究、AI研究和复盘中心；美股目标交易日资讯召回与跨市场证据清理均已验收。
+- 巨型模块治理已经完成第五批：API 输入模型、李总策略公共输出、Agent 意图回答合同、Hermes 执行协议、Prompt 证据压缩、金融输出校验/修复，以及证券识别、选股参数、市场/个股上下文恢复等 Chat 纯路由规则均已迁移到独立模块。`main.py` 现约 5,703 行，`agent.py` 现约 3,461 行；`db.py` 和 `demo.html` 仍显著过大，不能把当前抽取视为治理完成。
+- 透明选股改为“通用截面筛选 / 李总策略”互斥页签。通用筛选不再在进入页面时自动进行全市场计算；李总策略按需加载。页签状态写入 URL，刷新恢复通过；桌面和 390×844 均无双区堆叠或横向溢出。
+- 最近真实 Agent 验收继续以 DeepSeek `deepseek-v4-pro` 即时生成。个股涨跌问题只显示一份最终回答和折叠引用，不再自动附加大块结构化报告；同日公司公告、行业与市场事实、媒体线索和收盘后事件按时间边界分开。美股历史原因问题会从更大的已存资讯窗口优先召回目标交易日，多来源线索、反方证据和下一步核验均已在真实对话中验证。
+- 最新保守评分：功能设计 8.0、架构设计 8.2、实际可用性 7.2、内部 MVP 综合 7.7、正式对外长期使用 6.2；Agent 7.8、前端信息架构 7.8、工程质量 8.0。运维自检当前唯一失败为缺少可核验 PostgreSQL 备份，不能宣称正式生产就绪。
+
+下一批代码治理优先顺序：
+
+1. 将 `main.py` 的 Chat 编排与路由帮助函数移到应用服务层；API 路由只保留鉴权、校验和响应映射。Agent 输出校验/修复已经完成拆分，不得重复实现。
+2. 将 `db.py` 按用户/对话、研究空间、交易复盘、资料和行情领域拆分仓储，同时保持 PostgreSQL 为唯一运行数据库。
+3. 将 `demo.html` 按路由状态、对话、股票空间、透明选股和复盘拆分；每次拆分都必须跑内联 JavaScript 检查、相关合同测试和真实浏览器验收。
+4. 不为减行数删除金融证据、历史恢复、用户确认边界或真实候选为空时的历史回放。
+5. 上述边界稳定后，按 `HANDOVER_COLLEAGUE_3.3_ABSORPTION_GUIDE.md` 从隔离副本优先吸收 `qs-charts.js`、K 线拖拽、十字光标、OHLC 悬浮、成交量联动和 MA 全量计算后切片；禁止覆盖式导入。
+
 ## 1. 交接目的
 
 本文件供下一位 Agent 直接接续“清数智算”主线开发。当前阶段已经完成李总策略近期无前视历史回放、研究型与交易型 R1 闭环、诊大盘/诊个股、自选股每日研究摘要、通用选股数据合同、核心页面双视口发布门禁，以及核心功能/数据/算法/Agent 架构 Word 报告。
@@ -564,3 +584,402 @@ curl -fsS http://127.0.0.1:8773/health
 当前本地服务已重启为新代码：`http://127.0.0.1:8773`，PID `75046`，工具会话
 `83675`；业务库为 SQLite schema v1、运维库为 schema v2（本地开发模式），embedded
 Worker 正常，队列无积压，数据健康 54/54。
+
+## 18. 2026-07-25 最新断点：PostgreSQL 唯一运行库、Agent 时延与全景报告
+
+本节晚于前文全部断点，覆盖第 3、15、16、17 节中的旧运行态和未完成判断。当前权威仓库仍为 `/Users/chr/Documents/qingtianshu`，分支仍为 `codex/structured-ai-writeback`；工作树包含大量连续开发改动，禁止清理、重置或批量覆盖。
+
+当前运行态（2026-07-25 10:40，Asia/Shanghai）：
+
+- Web：PID `7732`，`http://127.0.0.1:8773`；`/health=ok`、`/ready=ok`。
+- Worker：PID `1862`，外部独立进程，当前活跃 Worker 1 个。
+- 领域数据库：PostgreSQL Schema v2；运维数据库与持久化队列：PostgreSQL Schema v4。应用已取消 SQLite 运行时回退，未配置合法 `QINGSHU_DATABASE_URL` 时拒绝启动。
+- 队列无 ready、delayed、retrying 或过期 running 积压；最近24小时历史失败仍保留在运维统计中，因此就绪接口带 `recent_failed_jobs_present` 警告但状态为 `ok`。
+- 数据健康：54 项中 52 healthy、2 attention。A股成交额完整历史仍在积累；英伟达事件信息较旧。
+- 李总策略当前全市场覆盖率 100%，严格候选和触发均为 0；不要为展示效果放宽九条正式规则。
+
+本轮 Agent 修复与真实验收：
+
+1. 标准文字对话默认 `max_iterations=4`，深入研究默认 `6`；未完整结束的 Hermes 文本和内部迭代错误不再显示为正常答案。
+2. 标准个股仍用 `deepseek-v4-pro`，但默认 `reasoning_effort=none`；Prompt 删除重复资料和非本题长证据，行情原因回答必须分为价格事实、候选事件、反方证据和下一步核验。
+3. 真实中兴通讯 Run `835688a0-3f59-41a8-b8f7-661c5f693118`：单次模型调用，Prompt 38,076 字符，首个安全可见内容 3.638 秒，总耗时 14.792 秒，输出守卫通过，四部分完整。页面等待后没有二次跳文。
+4. 标准大盘 Run `26017438-fe5a-4c0e-97ac-9dedffbb1162`：首个安全可见内容 10.964 秒，总耗时 20.124 秒，单次模型调用。
+5. `2026-07-23 09:29:31` 的A股成交额不完整快照已从历史比较排除；当前只保存2026-07-24约1.94万亿元的完整收盘口径，历史比较保持 `building_history`，不再输出 `+9487.8%`。
+
+最终门禁：全量收集并通过 `651` 项；Ruff、Python `compileall`、内联 JavaScript `node --check`、`uv lock --check` 和 `git diff --check` 通过。
+
+报告交付链：
+
+- Markdown：`reports/清数智算_产品实现全景报告_20260725.md`
+- 构建脚本：`scripts/build_full_implementation_report_20260725.py`
+- DOCX：`output/report/清数智算_产品实现全景报告_20260725.docx`
+- PDF：`output/report/清数智算_产品实现全景报告_20260725.pdf`
+
+报告已经更新为651项测试和最新真实时延，修复个人工作区深色框对比度、Agent链路图换行/箭头重叠、第17页过疏和表格首行重复表头标记。接续者必须重新构建、运行 a11y 审计并逐页检查最新渲染；不得用旧 `tmp/report_render_20260725_v7` 页面作为最终证据。
+
+下一阶段优先级：
+
+1. 继续补强同日公司、行业、宏观和利率事件的直接来源；没有直接证据时保持“具体驱动未确认”。
+2. 用多次 P50/P95 验收标准、深入和长资料问题，不能把单次14.792秒当固定 SLA。
+3. 扩充金额单位、交易日一致性、历史序列跳变、陈旧资讯和多源差异异常样本。
+4. 在不回退现有功能的前提下拆分大型 `main.py`、`agent.py`、`db.py` 和单文件前端。
+5. 不自动写入正式判断、任务、计划或复盘；不自动交易，不输出目标价、仓位、胜率或确定收益。
+
+## 19. 2026-07-25 最新断点：状态一致性、中文证券名称、导航连续性与最终报告
+
+本节晚于前文全部断点。第18节要求重新构建和检查的全景报告已经完成；测试基线已经从当时的651项更新为当前实际653项。接续者不得再使用旧报告或旧渲染目录作为当前证据。
+
+本轮完成：
+
+1. 统一研究快照状态和普通用户文案。我的关注真实显示“4/4只股票已有研究快照”，四张卡片均为“今日已更新”；公共页面不再暴露模型守卫、输出校验、Hermes失败或核心证据包错误等工程术语。历史数据库原始记录继续保留用于审计。
+2. 新增 `app/services/security_master.py`，A股用户可见名称优先使用稳定证券主数据。报告、股票空间、关注资产、研究变化、研究行动和资料库公共返回层会纠正旧英文回退名；变化事件会在返回前递归转换标题、事实摘要和嵌套证据，同时保留数据库原始记录。已验证株冶集团、杰瑞股份和广合科技，刷新后的关注页不再出现 `Yantai Jereh Oilfield Services Group Co., Ltd.`。
+3. 修复启动导航竞态。`workspaceNavigationVersion` 保证用户主动导航优先于 boot 初始路由恢复；刷新后首次点击复盘中心，立即和5秒后都保持 `/reviews?tab=trades`。
+4. 旧市场文章中的缺失指标占位符在公共返回层转换为跨市场时点说明，新文章生成逻辑不再产生空百分比模板。
+5. 全量实际收集并通过 `653` 项；Ruff、Python `compileall`、内联 JavaScript `node --check`、`uv lock --check` 和 `git diff --check` 通过。
+6. 最终报告已经重建：
+   - Markdown：`reports/清数智算_产品实现全景报告_20260725.md`
+   - 构建脚本：`scripts/build_full_implementation_report_20260725.py`
+   - Word：`output/report/清数智算_产品实现全景报告_20260725.docx`
+   - PDF：`output/report/清数智算_产品实现全景报告_20260725.pdf`
+7. 最新 DOCX 使用文档运行时和指定字体配置渲染为25页，已经逐页目视检查；无截断、重叠、缺字或破损表格。a11y 审计结果 high=0、medium=0、low=0。
+8. 服务重启后重新执行仓库 Chrome 冒烟门禁：桌面和390px共12条核心页面检查全部通过，无横向溢出、控制台错误、页面异常或非预期失败响应。真实会话刷新后仍为4/4份今日研究快照；首次点击复盘中心，5秒后仍保持 `/reviews?tab=trades`。
+
+当前运行边界：
+
+- `/health=ok`、`/ready=ok`；领域库 PostgreSQL Schema v2，运维库与持久化队列 Schema v4，独立 Worker 活跃。
+- 当前无 ready/delayed/retrying 或过期 running 积压；历史失败任务记录仍触发非阻断警告，不应误写成当前队列失败。
+- 2026-07-25 11:50 运行快照中，54项数据健康有51项健康、3项提示：A股成交额完整历史仍在积累，中兴通讯与英伟达的直接事件信息较旧；无 critical 项。这是会随后台同步变化的运行态快照，不是固定产品基线。
+- 三项直接体验问题已经关闭。下一轮继续聚焦同日直接事件证据、模型多次P50/P95、跨源数据质量异常样本，以及正式认证、对象存储、外部告警和灾备门禁。
+- 工作树仍包含大量连续开发改动，禁止 reset、clean、批量覆盖或机械暂存；提交前必须按真实 diff 显式选择文件并重新检查敏感内容。
+
+## 20. 2026-07-25 最新断点：项目重评分与选股页渐进披露
+
+本节晚于第19节。当前目标不是继续堆功能，而是按真实用户路径持续提高功能可达性、Agent等待体验和长期使用效率。
+
+本轮完成：
+
+1. 新增详细评分：`reports/清数智算_项目详细评分与持续优化记录_20260725.md`。当前功能设计7.9、架构8.0、实际可用性7.3、内部MVP综合7.7、正式对外6.4。
+2. 真实标准大盘 Run `326a6f44-7480-471a-9df2-bb3aac3fb663` 使用 `deepseek-v4-pro`，completed且守卫通过；首个安全可见内容28.700秒、总耗时35.513秒、API调用2次。回答质量可用，但时延必须继续作为P0问题。
+3. 透明选股页面不再在通用筛选加载后把李总策略插到上方。运行时顺序固定为：顶部快速入口 → 通用截面筛选 → 李总策略。
+4. 李总策略历史回放默认折叠，只显示覆盖和规则漏斗；用户点击后才渲染23条历史详情，再点击可收起。历史样本、表现曲线、证据和Agent复盘没有删减。
+5. AI研究全局历史隐藏零消息空会话；归档从含义不明、触屏不明显的“×”改为明确文字、完整可访问名称和二次确认。真实会话中空会话与旧“×”均为0。
+6. `scripts/browser_smoke.py` 新增信息层级和默认折叠断言。桌面与390px共12项全部通过；两种视口下 `generalBeforeStrategy=true`、历史按钮 `aria-expanded=false`、历史详情不可见。
+7. 当前全量653项测试通过；Ruff、compileall、内联JavaScript、`uv lock --check` 和 `git diff --check` 通过。
+
+下一轮优先级：
+
+1. Agent标准问题首个安全内容P50小于8秒、P95小于20秒；先分析两次API调用和Provider首Token长尾，不通过放宽守卫换速度。
+2. 等待期间显示稳定的确定性事实进度卡，但不能先显示一段伪回答再用最终回答替换。
+3. 历史对话按股票/市场分组，清理空会话和同题重复噪声，把“×”改成明确归档菜单。
+4. 继续收敛今日观察，只把真实变化和必须处理的任务放在第一屏。
+
+当前目标仍为 active；本轮只完成第一轮高收益优化，不能将“持续优化使用体验和功能”提前标记完成。
+
+## 21. 2026-07-25 最新断点：标准大盘 Agent 单次调用、误替换修复与三次真实基线
+
+本节晚于第20节。标准大盘 Agent 的高等待和“先生成一段好回答、随后跳成较差摘要”已经完成一轮真实定位、修复与多次验收；接续者不得再把第20节的 35.513 秒旧 Run 当作当前标准问题表现。
+
+本轮完成：
+
+1. `market_brief / economy` 与标准个股一样使用 `reasoning_effort=none`。模型仍是 `deepseek-v4-pro`，标准大盘最大输出 1000 tokens、最大迭代 4；没有改用预存文案，也没有更换便宜模型。确定性行情、广度、成交额、板块和资讯仍在每轮实时准备。
+2. 修复前同 Prompt A/B 已证明根因：`reasoning_effort=low` 的旧 Run `326a6f44-7480-471a-9df2-bb3aac3fb663` 首 Token 27.573 秒、请求 35.513 秒、API 调用 2 次；同 Prompt `none` 可在约 3 秒得到首 Token，并以一次调用完成。
+3. 第一次正式页面复测 Run `3fd76999-fb44-4389-ad8e-f43ce27b7d97` 暴露真实误替换：DeepSeek 已生成包含价格事实、上涨/下跌家数、反方证据和下一步核验的完整回答，但校验把“不能直接确认新下跌趋势”误判为确认下跌趋势，并因未写平盘家数拒绝全文，页面最终显示了较差的确定性摘要。
+4. 第二个成交额问题 Run `4744d68f-88d0-46f9-a460-b404c815dbf4` 再次证明模型原答案可用，但“不能直接证明资金净流入”被反向识别为声称资金净流入，同时自然的上涨/下跌家数回答被要求额外写平盘数。
+5. 校验语义已修复：
+   - “不能直接确认/无法直接确认”属于明确否定，不再触发下行趋势过度推断；
+   - “不能直接证明/说明、无法直接证明/说明”属于资金因果边界，不再触发资金流向过度推断；
+   - 用户询问涨跌家数与固定分类时，必须给出上涨数、下跌数和证据中的固定分类；只有明确询问平盘/不涨不跌家数时才强制平盘数。
+6. 修复后完成三次真实浏览器与数据库联合验收：
+   - `666f8d72-5ec0-4e03-b287-77f244689b43`，解释 A 股普跌原因，总耗时 14.233 秒；
+   - `124d5638-64fe-46ae-98d5-f7b40d6ad9c4`，解释成交额和涨跌家数，总耗时 12.113 秒；
+   - `968c0c74-9e39-42ba-8a3c-52e43d37875a`，判断普跌与结构性行情，总耗时 10.158 秒。
+7. 三次均为 `deepseek-v4-pro`、`reasoning_effort=none`、`api_calls=1`、`status=completed`、输出校验通过。首 Token 为 2.222—3.218 秒，中位数 2.714 秒；页面最终答案约在 10.246—14.540 秒出现，中位数约 12.2 秒。
+8. 浏览器以约100ms间隔记录消息区变化。三次都只从空的“研究中”状态切换到最终回答，没有先展示一段模型长文、再被另一段摘要替换。最终回答分别覆盖价格事实、广度或成交额、反方证据/不能确认部分和下一步核验。
+9. 详细评分报告已更新：功能设计 7.9、架构设计 8.0、实际可用性 7.5、内部 MVP 综合 7.8、正式对外长期使用 6.4；Agent 分项由 7.2 更新为 7.6。
+10. 当前完整回归为 `654 tests collected` 并全部通过；Ruff、Python `compileall`、内联 JavaScript `node --check`、`uv lock --check` 和 `git diff --check` 通过。仓库浏览器门禁桌面与390px共 `12 passed / 0 failed`，产品页控制台无 warning/error。
+
+当前运行态（约 2026-07-25 12:45，Asia/Shanghai）：
+
+- Web 为本轮最新代码，PID `39428`，工具会话 `45332`，地址 `http://127.0.0.1:8773`。
+- 外部 Worker PID `27934`，活跃 Worker 1 个。
+- `/health=ok`、Hermes 启用；领域库 PostgreSQL Schema v2，运维与持久化队列 PostgreSQL Schema v4。
+- 54项数据健康为50 healthy、4 attention、0 critical；这是运行态快照，不是固定基线。
+
+下一步优先级：
+
+1. 页面虽然约0.1秒即显示研究进度、模型约3秒已有私有安全片段，但为避免未经完整校验正文被替换，最终回答仍在约10—15秒后一次性显示。下一步优先展示确定性的“已读取行情/广度/资讯”事实进度卡，不提前展示可能被改写的模型正文。
+2. 继续分别采样标准/深入、市场/个股、长资料问题；样本足够后再报告 P50/P95，当前三次只能称为小样本基线。
+3. 按股票/市场和日期整理同题历史对话；继续降低今日观察第一屏的信息密度。
+4. 保持正式事实用户确认边界；不要自动写入判断、任务、计划或复盘，不自动交易，不输出目标价、仓位或确定收益。
+
+当前目标继续保持 active；Agent 标准大盘问题本轮已显著改善，但持续优化使用体验和功能尚未完成。
+
+## 22. 2026-07-25 最新断点：历史对话日期分组、同题折叠与真实交互验收
+
+本节晚于第21节。标准大盘 Agent 的一次调用与误替换修复保持不变；本轮继续处理长期使用时最明显的历史对话噪声，没有删除任何真实会话。
+
+本轮完成：
+
+1. AI研究桌面历史侧栏按“今天 / 昨天 / 最近7天 / 更早”分组，并显示每组数量。当前真实用户共有19条非空对话，页面显示今天11个、昨天8个。
+2. 同一日期、规范化标题完全相同的会话只直接展示最新一条；旧记录通过“n个同题旧对话”展开。当前形成四组折叠：成交额1条、A股普跌2条、中兴通讯1条、美股1条。
+3. 展开状态保存在当前页面状态中；如果用户打开的活动会话属于旧记录，该组会自动展开，避免活动项被隐藏。移动端历史下拉仍保留全部会话，数据库记录没有合并或删除。
+4. 真实浏览器验证“A股今天为什么普跌”展开后由1条变为3条，按钮 `aria-expanded=true`；再次点击恢复1条和 `aria-expanded=false`。打开一条旧记录后 URL 正确切换，该组三条记录继续可见。
+5. 桌面截图确认日期标题、重复折叠和活动态层级清晰。重新检查今日观察后，1280×720首屏仍由全球市场和A股核心指数构成，个人待办位于更下方，因此本轮不做无收益重排。
+6. 当前完整回归为 `654 tests collected` 并全部通过；Ruff、Python `compileall`、内联 JavaScript `node --check`、`uv lock --check` 和 `git diff --check` 通过。
+7. 仓库浏览器门禁桌面与390px共 `12 passed / 0 failed`；控制台错误、页面异常、非预期失败响应和横向溢出均为0。报告位于 `tmp/browser-smoke-20260725-conversation-groups/result.json`。
+
+当前运行态（约 2026-07-25 13:00，Asia/Shanghai）：
+
+- Web 地址仍为 `http://127.0.0.1:8773`，`/health=ok`，Hermes启用。
+- 领域库为 PostgreSQL Schema v2；运维库与持久化队列为 PostgreSQL Schema v4；独立 Worker 活跃。
+- 54项数据健康为50 healthy、4 attention、0 critical；这是运行态快照，会随后台同步变化。
+
+下一步优先级：
+
+1. 继续分别采样标准/深入、市场/个股、长资料问题，形成可靠的P50/P95，而不是用三次最好样本代替长期指标。
+2. 为Agent等待阶段增加稳定的确定性事实进度卡，但不能先展示一段可能被改写的模型正文。
+3. 历史对话下一阶段只补搜索、近义主题筛选和“继续上次研究”；任何语义聚类都必须保留全部原始会话并可展开。
+4. 今日观察暂不重排；只有发现真实重复、不可达或首屏优先级错误时再改。
+
+当前评分维持功能设计7.9、架构设计8.0、实际可用性7.5、内部MVP综合7.8、正式对外6.4。当前目标继续保持 active。
+
+## 23. 2026-07-25 最新断点：Agent 确定性证据进度、个股上下文与历史恢复竞态
+
+本节晚于第22节。第22节提出的确定性事实进度卡已经落地；接续者不得再把“等待期只有空白研究状态”作为当前行为，也不得把历史会话刷新后立即发送的旧竞态当作未修复问题。
+
+本轮完成：
+
+1. `app/main.py` 新增 `_agent_evidence_progress(intent, evidence)`，`evidence_ready` 事件携带 `evidence_progress`。市场问题展示同日代表性指数、全市场涨跌家数、成交额、板块与资讯数量；个股问题展示研究重点、最近完整日线日期、计划模块覆盖和可追溯来源数量。
+2. `app/static/demo.html` 新增稳定证据进度卡。后续模型和校验阶段只更新卡片顶部状态，真实证据摘要始终保留；最终答案仍原位替换同一条消息，不提前展示未经校验的模型正文。呼吸动画只作用于状态圆点，移动端保持两列紧凑布局。
+3. 真实市场问题约58毫秒显示路由状态、307毫秒显示证据卡、3.923秒进入草稿校验、10.078秒显示最终答案。卡片当时包含6项代表性指数、沪深京5530只、上涨555/下跌4939、成交额19442.25亿元、10个板块和10条资讯。
+4. 真实个股问题约134毫秒显示财务估值核验、963毫秒显示历史走查、2.053秒显示“本轮已读取的个股证据·中兴通讯”；日线日期已由原始 ISO 时间统一显示为 `2026-07-24`。
+5. 新增 `_prefers_stock_context_followup()` 并扩展 `_needs_stock_market_context()`。“它相对、该股、这只股票、这家公司、相对行业/板块、更强/更弱”等强个股指代优先继承最近证券，即使上一轮误入市场问题也会继续向前寻找股票标的。
+6. 真实追问“它相对通信设备行业更强还是更弱”正确返回中兴通讯 `-2.56%`、通信设备行业 `-3.54%`、相对少跌约 `0.98` 个百分点，以及行业50只成分股中3涨47跌；不再返回泛化大盘广度。单股回答同时写入 `research_targets`，刷新后可靠恢复 K 线和研究对象。
+7. `state.workspaceBootReady` 与 `state.workspaceBootPromise` 关闭历史 URL 刷新后立即发送的竞态。恢复未完成时，`sendChat()` 自动等待并显示“正在恢复对话”，随后把原问题发送到原 conversation ID，不要求用户重新输入。
+8. 真实刷新后立即按 Enter：约80毫秒显示恢复状态、1.339秒问题进入原历史对话、2.171秒显示中兴通讯个股证据卡；URL 始终保持原会话。
+9. 当前完整回归为 `657 tests collected` 并全部通过；Ruff、Python `compileall`、内联 JavaScript `node --check`、`uv lock --check` 和 `git diff --check` 通过。
+10. 仓库浏览器门禁桌面与390px共 `12 passed / 0 failed`；控制台错误、页面异常、非预期失败响应和横向溢出均为0。报告为 `tmp/browser-smoke-20260725-agent-evidence-progress/result.json`。
+
+当前运行态（约2026-07-25 13:40，Asia/Shanghai）：
+
+- Web 地址 `http://127.0.0.1:8773`，Hermes启用；领域库 PostgreSQL Schema v2，运维库与持久化队列 PostgreSQL Schema v4。
+- 独立 Worker 活跃；队列 ready/delayed/retrying/expired 均为0。
+- 54项数据健康为50 healthy、4 attention、0 critical；这是会随后台同步变化的运行态快照。
+
+评分更新为功能设计7.9、架构设计8.0、实际可用性7.7、内部MVP综合7.9、正式对外6.4；Agent分项7.8、前端信息架构7.6。当前目标继续保持 active，下一轮优先扩大市场/个股/长资料问题样本、补同日直接事件证据，并继续收敛高频页面的信息密度。
+
+## 24. 2026-07-25 最新断点：历史会话搜索、类型筛选与移动端长期使用
+
+本节晚于第23节。历史对话已经从日期分组和完全同题折叠，继续扩展为可搜索、可按研究类型筛选的长期使用界面；没有删除、合并或改写历史消息。
+
+本轮完成：
+
+1. `Database.get_conversation()` 和 `list_conversations()` 新增最近非空 `last_intent` 子查询，公共会话列表返回该字段。该字段只用于导航分类，不改变对话或 Run 的审计记录。
+2. AI研究桌面侧栏新增紧凑搜索框和类型选择；会话少于8条时自动隐藏。搜索覆盖标题和最近消息预览，筛选包括个股、大盘、选股、关注和其他。
+3. 390px 页面新增同一搜索与筛选工具，筛选后的历史下拉保留当前对话；没有匹配项时明确显示“没有匹配的历史对话”，不会显示成空白或“新的研究对话”。
+4. 分类规则采用明确题面语义优先、最近 Agent 意图辅助。历史误路由记录不再污染界面：
+   - “它相对通信设备行业更强还是更弱”归入个股；
+   - “今天A股的下跌广度和成交额”归入大盘；
+   - “个股研究｜杰瑞股份/广合科技/株冶集团”不再沿用旧 `stock_screen` 显示为选股；
+   - “候选事件”不再被理解为候选股票，“自选股”不再被理解为选股。
+5. 真实用户当前25条有效会话：个股11、大盘11、关注2、其他1；输入“贵州茅台”只显示1条。日期分组、完全同题折叠、活动对话恢复与归档能力均保留。
+6. 390×844 实测搜索、类型选择和历史下拉宽度约为223、78、336像素；根页面宽度与视口均为390像素，无横向溢出。桌面侧栏新增控件保持一行紧凑布局。
+7. 当前完整回归为 `657 passed`；Ruff、Python `compileall`、内联 JavaScript 解析、`uv lock --check` 和 `git diff --check` 通过。
+8. 仓库浏览器门禁桌面与390px共 `12 passed / 0 failed`，报告为 `tmp/browser-smoke-20260725-conversation-filter/result.json`；真实页面控制台 warning/error 为0。
+
+评分更新为功能设计7.9、架构设计8.0、实际可用性7.8、内部MVP综合7.9、正式对外6.4；Agent分项维持7.8，前端信息架构更新为7.8。当前目标继续保持 active；下一轮优先补近义主题提示、具体股票筛选或“继续上次研究”，同时继续扩大真实 Agent 样本和直接事件证据。
+
+## 25. 2026-07-25 最新断点：资讯持久刷新与数据健康语义修复
+
+本节晚于第24节。第24节记录的 `50 healthy / 4 attention` 已不是当前运行态；其中三个事件信息提示已经通过真实 PostgreSQL 重复同步和来源轮询审计关闭。
+
+本轮完成：
+
+1. 根因不是 Worker 停止。A 股信息与美股财务后台任务当时均为 completed，但 `DataHealthService._information_checks()` 读取按内容发布时间排序的第一条新闻的 `fetched_at`，把内容时间错误当成管道最近轮询时间。
+2. `ChinaInformationService` 现在分别记录公告、公司新闻、股吧的 `status/items/polled_at`；`USEquityFundamentalsService` 记录 SEC 监管文件轮询；`GlobalInformationService` 记录公司新闻轮询。后台任务把每只股票、每个来源的结果写入 PostgreSQL `background_job_runs.summary_json`。
+3. `DataHealthService` 优先依据最近成功后台轮询判断管道时效，并同时返回 `poll_age_seconds`、`content_fetch_age_seconds` 和 `freshness_basis`。成功轮询但没有新内容是 healthy；只有部分来源真实失败时才是 attention；缺少所有内容仍是 critical。
+4. 美股小时任务不再只刷新估值、财务与 SEC 文件，同时刷新 Nasdaq 公司新闻。A 股信息任务显式包含默认研究标的，不依赖标的恰好存在于某个用户关注列表。
+5. 第一次真实重跑暴露 PostgreSQL 重复新闻写入缺陷：兼容层把所有 `news_items` upsert 强制改为 `ON CONFLICT(id)`，普通新闻重新抓取时新随机 ID 无法接住 `UNIQUE(symbol, source, url)`，A 股和美股均出现 `UniqueViolation`。
+6. `Database.upsert_news_items()` 已改为先按稳定 ID 或 `symbol + url` 更新，未命中再 `ON CONFLICT DO NOTHING` 插入，并在并发冲突后重试更新。来源名称变化会更新原记录；同一 URL 重复抓取会刷新标题、摘要和 `fetched_at`，不创建重复项。
+7. 真实生产库重跑通过：6只 A 股的公告、公司新闻和股吧全部为 `ok`；NVDA 的 SEC 监管文件返回12条，Nasdaq公司新闻返回20条，均为 `ok`。中兴通讯、中际旭创和英伟达健康项均为 `freshness_basis=successful_source_poll`。
+8. 最新数据健康为 `53/54 healthy`、`1 attention`、`0 critical`。唯一提示是 A 股成交额历史仍在积累，并继续排除 2026-07-23 盘前不完整快照；这不是实时数据或资讯管道故障。
+9. 当前 `/health=ok`、`/ready=ok`；Hermes启用，领域库 PostgreSQL Schema v2，运维库与持久化队列 PostgreSQL Schema v4，独立 Worker 活跃，队列 ready/delayed/retrying/expired 均为0。
+10. 当前完整回归为 `660 tests collected` 并全部通过；Ruff、Python `compileall`、内联 JavaScript `node --check`、`uv lock --check` 和 `git diff --check` 通过。
+11. 仓库浏览器门禁桌面与390px共 `12 passed / 0 failed`；控制台错误、页面异常、非预期失败响应和横向溢出均为0。报告为 `tmp/browser-smoke-20260725-data-health/result.json`。
+
+评分更新为功能设计7.9、架构设计8.1、实际可用性7.9、内部MVP综合8.0、正式对外6.4；金融数据体系8.0、Agent分项7.8、前端信息架构7.8。当前目标继续保持 active；下一轮优先补强同日直接事件证据和更多真实 Agent 问题样本，其次完善具体股票筛选与“继续上次研究”，不要把来源成功轮询等同于已经获得涨跌因果证据。
+
+## 26. 2026-07-25 最新断点：继续最近研究与 Agent 路由快速恢复
+
+本节晚于第25节。“继续上次研究”已经完成，后续不得再把它列为未实现项；本轮同时修复了直接打开历史 URL 时被无关首页数据阻塞的问题。
+
+本轮完成：
+
+1. `app/static/demo.html` 在新对话入口区新增紧凑的“继续上次研究”。它选择当前用户最新一条非空、非 evaluation 会话，显示标题、研究类型、消息数和更新时间。
+2. 点击入口复用原 `conversation_id` 和 `openConversation()`；不会调用 `sendChat()`、不会启动 Hermes、不会复制保存回答、不会新建 Run，也不会删除或合并历史记录。失败时只显示可重试的用户文案。
+3. 真实桌面页面显示最近会话“分析中兴通讯当前的价格、行业和公告证据。”，8条消息。点击进入 `/research/bae4238b-1dbd-4548-8bb2-a68acccb6be9`，25条历史总数不变，中兴通讯 K 线、证据快照和8条历史消息完整恢复。
+4. 390×844 下入口和按钮完整可见；真实点击进入同一原会话。临时浏览器视口覆盖已重置，页面留在 `/research/new` 供继续验收。
+5. 启动流程对 Agent 路由改为：健康状态与用户就绪 → 并行读取历史会话和股票研究绑定 → 恢复目标会话 → 后台异步加载自选、今日观察、市场、行业、文章和资料库。普通页面原有启动路径不变。
+6. 修复前直接打开历史 URL 曾约8—10秒只显示“正在读取历史对话”；修复后同一真实浏览器刷新约167毫秒出现已保存证据快照、最终纠正回答和25条会话列表。该数字是本机同一会话复测，不是正式 SLA。
+7. 新增两个前端合同测试；完整回归为 `662 tests collected` 并全部通过。Ruff、Python `compileall`、内联 JavaScript `node --check`、`uv lock --check` 和 `git diff --check` 通过。
+
+当前运行态：`/health=ok`，Hermes启用；领域库 PostgreSQL Schema v2，运维库和持久化队列 Schema v4，独立 Worker 活跃；数据健康 `53/54 healthy`、`1 attention`、`0 critical`。
+
+评分更新为功能设计8.0、架构设计8.1、实际可用性8.0、内部MVP综合8.0、正式对外6.4；Agent分项7.8、前端信息架构7.9。当前目标继续保持 active；下一轮优先补同日直接事件证据、扩大真实 Agent 样本，并增加具体股票筛选或谨慎的近义主题提示。
+
+## 27. 2026-07-25 最新断点：历史研究按具体股票筛选
+
+本节晚于第26节。具体股票筛选已经完成，后续不得再把它列为未实现项；筛选只信任结构化证券对象，不使用脆弱的标题名称猜测。
+
+本轮完成：
+
+1. `Database.get_conversation()` 和 `list_conversations()` 返回 `research_targets`。来源为最近 Assistant metadata 中的 `research_targets/symbol`，并补充与会话唯一绑定的 `deep_stock_sessions` 证券对象；证券代码统一 `.SH → .SS`，重复目标去重。
+2. `public_conversation()` 公开该字段。没有证券对象的会话返回空数组；现有数据库表和 Schema 版本不变，不新增迁移。
+3. 前端在原研究类型选择器中动态加入“具体股票”选项，并显示每只股票可筛选的会话数量。桌面选择器由72px调整为86px，390px由78px调整为96px，没有增加第二排筛选控件。
+4. 具体股票筛选同时要求 `conversationScopeKey(item) === "stock"`。真实发现一条“A股下跌广度和成交额”旧会话错误保存了中兴 symbol；该会话现在仍归大盘，不会污染中兴通讯筛选。没有明确 symbol 的旧“它/该股”会话不会被猜测加入。
+5. 真实用户当前具体股票选项：中兴通讯4条，贵州茅台、广合科技、杰瑞股份、株冶集团各1条。中兴筛选显示 `4 / 25`；贵州茅台筛选显示唯一历史，并成功打开原 conversation ID `8ebd8fbc-8c34-4a05-bd59-abb4069edefb`。
+6. 390×844 真实页面显示贵州茅台选项、过滤后的历史下拉和输入框；临时视口覆盖已重置，页面留在 `/research/new`。
+7. Web 与独立 Worker 已重启。重启前查询持久化队列没有 running 项；重启后短暂补跑计划任务并清零，当前 ready/delayed/retrying/expired 均为0，Worker active。
+8. 完整回归为 `663 tests collected` 并全部通过；Ruff、Python `compileall`、内联 JavaScript `node --check`、`uv lock --check` 和 `git diff --check` 通过。
+
+当前运行态：`/health=ok`，Hermes启用；领域库 PostgreSQL Schema v2，运维库和持久化队列 Schema v4；数据健康 `53/54 healthy`、`1 attention`、`0 critical`。
+
+评分更新为功能设计8.0、架构设计8.1、实际可用性8.1、内部MVP综合8.0、正式对外6.4；Agent分项7.8、前端信息架构8.0。当前目标继续保持 active；下一轮优先补同日直接事件证据和更多真实 Agent 样本，其次谨慎处理近义主题提示与批量整理。
+
+## 28. 2026-07-26 最新断点：Hermes 执行拆分、浏览器门禁同步与保守重评分
+
+本节晚于第27节。当前产品仍处于持续优化目标中，不能因为测试数量增加或受控环境可运行就宣称普通用户体验已经成熟。
+
+本轮完成：
+
+1. 新增 `app/services/agent_hermes_execution.py`，集中承接模型路由、Token/迭代预算、Hermes 一次性进程、流式桥接、超时终止和用量统计。
+2. `AgentService` 继续持有金融输出清理、数字校验、语义冲突和必答证据规则，通过 `GuardedStreamCallbacks` 注入执行层。该拆分没有放宽策略规则、证据边界或用户确认要求。
+3. `app/services/agent.py` 从 10,063 行降至 9,739 行；新增两项委托边界测试，防止未来把金融验证或用户状态写入错误地下沉到模型运行时。
+4. 完整浏览器 Runner 首次重跑为 `9 passed / 3 failed`：两个失败来自仍要求李总策略默认显示的旧断言，一个失败来自个股容器先显示、卡片尚未异步渲染的竞态。没有把这些失败直接冒充产品通过。
+5. Runner 现在真实点击“通用筛选 → 李总策略 → 通用筛选”，验证两个结果区互斥、`section=li_zong` URL 状态、返回恢复和历史详情默认折叠。个股概览等待核心卡片真实出现后再检查 390px 宽度。
+6. 服务重启并加载拆分后代码后，桌面与 390px 共 `12 passed / 0 failed`；控制台错误、页面异常、非预期本地失败响应和页面级横向溢出均为0。最终报告为 `/private/tmp/qingshu-browser-smoke-20260726-final/result.json`。
+7. 隔离临时工作区真实调用新 Hermes 执行模块：`deepseek-v4-pro` 返回“本轮模型运行测试成功。”，首 Token `3.444s`、首个受控可见片段 `3.488s`、单次可见更新；没有写入正式用户会话。
+8. 当前完整回归为 `681 passed`；`ruff check app tests scripts`、Python `compileall`、内联 JavaScript、`uv lock --check` 和 `git diff --check` 全部通过。
+9. 当前运行服务仍为 `/health=ok`，Hermes启用；领域库 PostgreSQL Schema v2，运维库与持久化队列 Schema v4，独立 Worker 活跃；数据健康 `53/54 healthy`、`1 attention`、`0 critical`。
+
+保守评分更新为：功能设计8.0、架构设计7.9、实际可用性7.2、内部MVP综合7.7、正式对外长期使用6.2；Agent 7.8、前端信息架构7.8、工程质量7.5。评分下降不是功能回退，而是改用普通用户视角，把首次使用成本、信息密度、Agent长尾质量、巨型单体和生产门槛纳入扣分。
+
+下一步继续保持目标 active：优先拆 `agent.py` 的证据压缩与输出校验/修复，再拆 `main.py` 的 Chat 编排；随后拆 `demo.html` 的路由状态、对话、股票空间、选股和复盘模块。每轮都必须运行定向测试、完整回归、JavaScript 检查和真实双视口浏览器门禁。
+
+## 29. 2026-07-26 最新断点：Agent Prompt 证据压缩模块化
+
+本节晚于第28节。Hermes执行与Prompt证据压缩均已完成物理拆分；后续不得再把这两项列为未完成，下一块是输出校验/修复。
+
+本轮完成：
+
+1. 新增 `app/services/agent_evidence_compaction.py`，集中承接递归公开证据过滤、市场日期对齐、市场状态计算、市场资料和对话压缩，以及个股、比较、研究行动和选股 Prompt 证据压缩。
+2. `AgentService` 保留原静态方法名作为兼容入口，只委托纯函数模块；真实金融输出校验、用户确认边界和运行编排没有迁移或放宽。
+3. 大盘对话仍只携带最近四条用户问题，不把旧助手回答重新当金融证据；市场资料最多保留两条高相关短摘录；个股资料优先用户资料并限制摘录长度。
+4. 新增5项模块边界与纯函数测试，覆盖递归移除 provider/url/source 等私有字段、市场历史裁剪、市场和个股委托入口，以及用户资料优先级。
+5. `app/services/agent.py` 从9,739行降至8,122行；`app/services/agent_evidence_compaction.py` 为1,678行。职责已经分离，但新模块后续仍可按市场/个股进一步拆分，不能把“从一个大文件搬到另一个文件”视为最终治理。
+6. 当前完整回归为 `686 passed`；Ruff、Python `compileall`、内联 JavaScript、`uv lock --check` 和 `git diff --check` 全部通过。
+
+保守评分更新为：功能设计8.0、架构设计8.0、实际可用性7.2、内部MVP综合7.7、正式对外长期使用6.2；Agent 7.8、前端信息架构7.8、工程质量7.7。
+
+用户已把同事3.3版本吸收加入长期目标。权威入口是 `HANDOVER_COLLEAGUE_3.3_ABSORPTION_GUIDE.md`，本轮已完整阅读。执行顺序保持：先继续治理 `agent.py` 输出校验/修复、`main.py`、`db.py` 和 `demo.html`；边界稳定后，从同事隔离副本优先吸收 `qs-charts.js`、K线拖拽、十字光标、OHLC/成交量联动和高保真布局。禁止解压覆盖权威库、读取或复制 `.env`、复用 SQLite 队列或旧李总策略。
+
+## 30. 2026-07-26 最新断点：李总策略首次加载不再空白
+
+本节晚于第29节。李总策略冷启动体验已经修复并通过真实双视口门禁；后续不得重新恢复为“接口完成后才显示整个面板”。
+
+1. `app/static/demo.html` 为 `liZongPanel` 增加 `idle/loading/ready/error` 状态。切换李总策略后面板立即可见；无缓存时显示读取状态，失败时提供重新加载，有最近结果时刷新失败继续展示最近结果。
+2. `scripts/browser_smoke.py` 先要求面板在1.5秒内出现，再等待结果进入 `ready`；不再用单纯扩大总体超时掩盖首次反馈问题。
+3. 真实 Chrome 门禁：桌面面板 `0.091s` 可见、`2.899s` ready；390px 面板 `0.079s` 可见、`3.389s` ready。六个核心页面、双视口共 `12 passed / 0 failed`，报告为 `tmp/browser-smoke-20260726-li-zong-first-load/result.json`。
+4. 第一次完整回归发现 `tests/test_api.py` 仍要求切页时直接隐藏李总面板；该旧合同已改为验证按分区显示并进入 loading。最终 `686 tests collected` 且全部通过，Ruff、compileall、内联 JavaScript、锁文件和差异检查通过。
+5. 当前服务工具会话为 `29719`，地址 `http://127.0.0.1:8773`；Hermes启用，领域库 PostgreSQL Schema v2，运维库与持久化队列 Schema v4，独立 Worker active=1，队列无积压，数据健康 `53/54 healthy`、`1 attention`、`0 critical`。
+6. 运维检查唯一降级项为本机备份目录缺少最新 PostgreSQL 备份。它与本次前端修复无关，但继续阻止正式生产就绪声明。
+
+评分维持功能设计8.0、架构设计8.0、实际可用性7.2、内部MVP综合7.7、正式对外长期使用6.2；此次修复解决了一个明确的首次反馈缺陷，但不应凭单一页面修复提高整体成熟度。下一块仍是拆分 `agent.py` 的输出校验与修复，然后治理 `main.py` Chat 编排、`db.py` 仓储和 `demo.html` 模块。
+
+## 31. 2026-07-26 最新断点：Agent 输出守卫完成拆分并重跑最终门禁
+
+本节晚于第30节。Agent 输出校验/修复已经完成物理拆分；后续不得再把它列为未完成，也不得把旧的 `686 passed` 或 `agent.py 8,122 行` 当作当前基线。
+
+1. 新增 `app/services/agent_output_guard_common.py`、`agent_output_guard_market.py`、`agent_output_guard_stock.py` 和 `agent_output_guard.py`。共用规则、市场规则、个股规则与总校验/修复编排不再混在 `AgentService` 中。
+2. `AgentService` 保留原静态方法入口并委托 `AgentOutputGuard`；旧模块级私有函数保留兼容导出。拆分没有删除金融规则、真实候选为空边界、用户确认要求或内部信息过滤。
+3. `app/services/agent.py` 现为 3,461 行；四个守卫模块分别为 78、1,293、1,390 和 2,106 行。相较最早约 10,467 行，Agent 单体累计减少约 7,006 行，但 `main.py`、`db.py` 和 `demo.html` 仍需治理。
+4. 新增 `tests/test_agent_output_guard_modules.py`，验证兼容导出、无循环依赖、市场和个股规则、当前报价必答边界。最终完整回归为 `691 tests collected` 且全量通过；Ruff、compileall、内联 JavaScript、锁文件和差异检查全部通过。
+5. 最终代码上的真实 Chrome Runner：桌面与 390px 六个核心页面共 `12 passed / 0 failed`，报告为 `tmp/browser-smoke-20260726-output-guard-core/result.json`。
+6. 隔离目录真实调用 `deepseek-v4-pro` 返回“本轮模块化验证完成。”；最终 `guard_passed=true`，没有不受支持的数字或语义冲突，未写入正式用户会话。
+7. 当前服务地址仍为 `http://127.0.0.1:8773`；Hermes 启用，领域库 PostgreSQL Schema v2，运维库和持久化队列 Schema v4，独立 Worker active=1，队列无积压，数据健康 `53/54 healthy`、`1 attention`、`0 critical`。
+8. 运维自检唯一失败为 `postgres_backup_not_healthy`：`/Users/chr/.qingshu/backups` 尚无可核验备份。该项继续阻止正式生产就绪声明。
+
+最新保守评分为：功能设计8.0、架构设计8.1、实际可用性7.2、内部MVP综合7.7、正式对外长期使用6.2；Agent 7.8、前端信息架构7.8、工程质量7.9。下一步依次治理 `main.py` Chat 编排、`db.py` 领域仓储和 `demo.html` 模块；随后按同事3.3吸收指南引入图表交互，不吸收 SQLite 队列、旧李总策略或平行交易模型。
+
+## 32. 2026-07-26 最新断点：Chat 纯路由规则迁出 main.py
+
+本节晚于第31节。Chat 的纯识别与历史恢复规则已经迁出，但 `/users/{user_id}/chat` 的证据获取、服务调用、流式发布和结果落库编排仍在 `main.py`，后续不得把本轮描述成 Chat 编排已经全部完成。
+
+1. 新增 `app/services/chat_routing.py`，承接证券名称/代码识别、选股意图与参数、市场问题/焦点、日期与涨跌方向、上下文追问、历史证券/意图恢复，以及财报、业务、股东、研报、事件、研究行动等纯路由规则。
+2. `app.main` 继续导入同名私有函数，保留现有内部调用和测试兼容；新模块没有反向导入 `app.main`。`main.py` 从约6,679行降至5,703行，新模块1,069行。
+3. 第一次定向回归发现行业比较追问保持中兴标的但缺少 `stock_market_context`。抽取时遗漏了工作树新增的“相对行业/板块、所属行业、更强/更弱”触发词；恢复后原 API 测试通过。以后抽取必须以当前工作树和行为测试为准，不能从 Git 基线盲目复刻。
+4. 新增4项模块边界测试。当前完整回归为 `695 tests collected` 且全量通过；Ruff、compileall、内联 JavaScript、锁文件和差异检查全部通过。
+5. Web 与独立 Worker 重启加载全部纯路由模块后，Chrome 桌面与390px共 `12 passed / 0 failed`，报告为 `tmp/browser-smoke-20260726-chat-routing-complete/result.json`。
+6. 新进程健康状态正常：双 PostgreSQL Schema v2/v4、Worker active=1、队列无积压、数据健康 `53/54 healthy`；隔离真实 `deepseek-v4-pro` 调用返回“本轮模块化验证完成。”且 `guard_passed=true`。
+
+最新保守评分为：功能设计8.0、架构设计8.2、实际可用性7.2、内部MVP综合7.7、正式对外长期使用6.2；Agent 7.8、前端信息架构7.8、工程质量8.0。下一步继续把 Chat 证据装配和流式/落库编排移到应用服务层，然后治理 `db.py` 与 `demo.html`；正式吸收同事3.3图表仍排在工程边界稳定之后。
+
+## 33. 2026-07-26 最新断点：Chat 持久化、SSE 发布拆分与冷启动导航竞态修复
+
+本节晚于第32节。Chat 回答落库和流式事件发布已经迁出 `main.py`；会话准备、知识查询、证据装配和服务调用顺序仍在主路由，所以后续不得把 Chat 编排整体标成完成。
+
+1. 新增 `app/services/chat_persistence.py`，统一保存 Assistant 消息、知识/市场/证据来源、研究对象、结构化卡片、模型层级和选股 Profile。个股涨跌问题不会把历史资料库摘录冒充为本轮直接事件证据。
+2. 新增 `app/services/chat_streaming.py`，统一发布确定性进度、Hermes delta、reset、引用、待确认写回候选、结构化失败和完成事件。主路由不再直接拼装这些 SSE 协议细节。
+3. 新增 7 项模块测试；正确的网页合同、浏览器合同和两个新模块定向回归共 10 项通过。`app/main.py` 当前 5,509 行，`app/services/chat_routing.py` 1,069 行，`chat_persistence.py` 179 行，`chat_streaming.py` 153 行。
+4. 第一次最终浏览器 Runner 为 `11 passed / 1 failed`。失败只出现在桌面选股冷启动：李总策略请求已经 ready，但初始化流程随后恢复默认通用分区，把用户刚点击的面板重新隐藏。移动端因时序不同没有复现，说明不能只用单视口替代真实竞态验收。
+5. 根因是 `openScreeningSection()` 未增加 `workspaceNavigationVersion`。修复后主动导航会阻止启动流程覆盖用户选择；对应合同已加入 `tests/test_api.py::test_demo_page_is_the_default_human_facing_entry`。
+6. 最终桌面与 390px 六个核心页面共 `12 passed / 0 failed`，报告为 `tmp/browser-smoke-20260726-chat-orchestration-rerun/result.json`。控制台错误、页面异常、非预期失败响应和页面级横向溢出均为 0。
+7. 当前完整回归为 `702 tests collected` 且全量通过；Ruff、Python `compileall`、内联 JavaScript、`uv lock --check` 和 `git diff --check` 全部通过。
+8. 当前 `/health=ok`、Hermes 启用，领域库 PostgreSQL Schema v2，运维库和持久化队列 Schema v4，独立 Worker active=1，ready/delayed/retrying/expired 均为 0。数据健康为 53 healthy、1 attention、0 critical；唯一提示是 A 股成交额完整历史仍在积累，系统已排除盘前不完整快照。
+9. 运维管理接口继续要求认证；此前正式自检的唯一生产缺口仍是没有可核验 PostgreSQL 备份。本轮不把业务门禁通过表述为完整生产就绪。
+
+最新保守评分为：功能设计8.0、架构设计8.3、实际可用性7.2、内部MVP综合7.7、正式对外长期使用6.2；Agent 7.8、前端信息架构7.8、工程质量8.1。下一步继续迁移 Chat 会话准备、知识查询和证据装配，再治理 `db.py` 领域仓储与 `demo.html` 模块；边界稳定后按同事3.3指南吸收图表交互。
+
+## 34. 2026-07-26 最新断点：Chat 请求准备上下文完成拆分
+
+本节晚于第33节。会话准备、路由结果汇总、图片校验、资料库检索请求和用户消息保存已经迁出；金融证据获取与各服务调用顺序仍在 `main.py`，下一轮应从证据装配继续，而不是重复拆本节内容。
+
+1. 新增 `app/services/chat_context.py`，提供 `ChatRequestContextService` 和显式的会话不存在、图片不存在、图片文件失效异常。服务不依赖 `app.main`。
+2. 新服务建立或恢复当前用户研究对话，读取最多40条最近历史，保留新对话自动命名；证券、市场、选股、李总策略、财务、股东、分析师预期和事件上下文继续调用 `chat_routing.py` 的既有规则。
+3. 市场问题仍强制检索证据层级、市场因果和趋势风险三份通用资料；李总、通用选股、多股比较、分析师预期和事件问题的专属检索词保持不变。用户消息仍在任何回答分支之前写入原对话。
+4. 图片仍必须属于当前用户且工作区文件实际存在；通过后标记已使用并切到 vision 层级。API 对失效会话、非本人图片和失效文件继续返回原有404/410。
+5. `app/main.py` 从5,509行降至5,382行，`chat_context.py` 为342行。新增4项测试；正确的定向集合17项通过，原行业比较追问完整API链保持中兴通讯标的与同日行业证据。
+6. 当前完整回归为 `706 tests collected` 且全量通过；Ruff、compileall、内联 JavaScript、锁文件和差异检查全部通过。
+7. Web与独立Worker重启加载新模块后，`/health=ok`、Hermes启用，领域库PostgreSQL Schema v2，运维库和队列Schema v4，Worker active=1，retrying/expired为0，数据健康53/54。
+8. 最终桌面与390px六个核心页面共 `12 passed / 0 failed`，报告为 `tmp/browser-smoke-20260726-chat-context/result.json`。
+
+评分维持功能设计8.0、架构设计8.3、实际可用性7.2、内部MVP综合7.7、正式对外长期使用6.2；Agent 7.8、前端信息架构7.8、工程质量8.1。下一步迁移金融证据装配和服务调用编排，再拆 `db.py` 与 `demo.html`；之后按同事3.3指南吸收图表交互。
+
+## 35. 2026-07-26 最新断点：Chat Agent 执行收尾编排完成拆分
+
+本节晚于第34节。证据准备后的 Agent 调用、结构化结果、深度研究观察、补证任务、回答保存和完成事件已经迁出；具体金融证据分支仍在 `main.py`，下一轮应继续迁移证据装配，不要重复拆执行收尾。
+
+1. 新增 `app/services/chat_execution.py`，由 `ChatAgentExecutionService` 承接证据就绪事件、Agent 调用参数、受控流式回调和路由/证据耗时记录。
+2. Structured AI 卡片及待确认写回候选仍在 Agent 回答之后生成。该步骤异常时只发布 `failed=true` 的结构化事件，原金融回答、Run和证据仍保存并返回，防止用户再次遇到有效正文被失败文案替换。
+3. 服务继续调用 `DeepStockResearchService.observe_chat()` 与 `EvidenceTaskService.capture_from_chat()`，并通过既有 `ChatResponsePersistence` 保存回答；研究对象、知识来源、模型层级和结构化结果协议不变。
+4. 拆分时发现 `tests/test_api.py` 仍从 `app.main` 引用 `_agent_evidence_progress`；已保留兼容导出，不能因内部迁移破坏既有入口。
+5. `app/main.py` 从5,382行降至5,309行，`chat_execution.py` 为148行。新增3项测试，定向集合16项通过。
+6. 当前完整回归为 `709 tests collected` 且全量通过；Ruff、compileall、内联JavaScript、锁文件和差异检查全部通过。
+7. 新进程真实HTTP对话“美股为什么收盘跌了”返回 `market_brief / preview`、580字回答、有效Run/Assistant消息/Conversation ID且 `error=null`，证明新编排经过真实路由与数据库链。
+8. 桌面与390px六个核心页面最终 `12 passed / 0 failed`，报告为 `tmp/browser-smoke-20260726-chat-execution/result.json`。Web、Hermes、PostgreSQL双库和独立Worker正常，数据健康53/54。
+
+评分维持功能设计8.0、架构设计8.3、实际可用性7.2、内部MVP综合7.7、正式对外长期使用6.2；Agent 7.8、前端信息架构7.8、工程质量8.1。下一步拆具体金融证据装配，再治理 `db.py` 和 `demo.html`，最后按3.3指南吸收图表交互。
+
+## 36. 2026-07-26 最新断点：大盘证据装配完成拆分
+
+本节晚于第35节。大盘/市场问题的证据装配已经迁出 `main.py`；个股、财务、选股、研究行动等证据分支仍在主路由，下一轮不要重复拆大盘路径。
+
+1. 新增 `app/services/chat_market_evidence.py`，显式市场问题使用 `MarketNewsService.infer_market()`，连续追问从历史消息恢复 `market_key`。
+2. 服务统一构建问题焦点、代表指数、目标交易日和 `market_drivers`，市场资讯与指数分析使用同一交易日；A股行业专题也使用同日快照。
+3. 伦敦金问题额外读取 `london_gold` 实时市场卡；实时快照失败时只返回空的聚焦实时项，不破坏其他已经取得的金融证据。
+4. `app/main.py` 从5,309行降至5,272行，`chat_market_evidence.py` 为73行。新增4项测试；定向集合7项通过。
+5. 当前完整回归为 `713 tests collected` 且全量通过；Ruff、compileall、内联JavaScript、锁文件和差异检查全部通过。
+6. 新进程真实HTTP问题“美股为什么收盘跌了”返回 `market_key=us`，指数仅含标普、纳指、道指、罗素2000，目标日2026-07-23，回答580字且Run/消息落库正常。
+7. 桌面与390px六个核心页面最终 `12 passed / 0 failed`，报告为 `tmp/browser-smoke-20260726-chat-market-evidence/result.json`。队列无积压，数据健康53/54。
+
+评分维持功能设计8.0、架构设计8.3、实际可用性7.2、内部MVP综合7.7、正式对外长期使用6.2；Agent 7.8、前端信息架构7.8、工程质量8.1。下一步优先拆个股/财务证据装配，再治理 `db.py` 和 `demo.html`；工程边界稳定后按3.3指南吸收图表交互。

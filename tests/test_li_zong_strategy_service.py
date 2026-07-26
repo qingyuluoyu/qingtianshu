@@ -194,7 +194,9 @@ def _snapshot_packet(
         daily[relative]["vol"] = 200.0
 
     datasets = {
-        "trade_cal": _dataset("trade_cal", [{"cal_date": row.strftime("%Y%m%d")} for row in dates]),
+        "trade_cal": _dataset(
+            "trade_cal", [{"cal_date": row.strftime("%Y%m%d")} for row in dates]
+        ),
         "stock_basic": _dataset(
             "stock_basic",
             [
@@ -301,7 +303,11 @@ def _with_transient_issue(
 
 def _table_count(database, table: str) -> int:
     with database.connect() as connection:
-        return int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        return int(
+            connection.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()[
+                "count"
+            ]
+        )
 
 
 def test_service_bootstraps_all_strategy_tables_and_versioned_definition(app):
@@ -312,9 +318,12 @@ def test_service_bootstraps_all_strategy_tables_and_versioned_definition(app):
 
     with app.state.database.connect() as connection:
         tables = {
-            row["name"]
+            row["table_name"]
             for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
+                """
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = current_schema()
+                """
             ).fetchall()
         }
     assert {
@@ -332,9 +341,7 @@ def test_service_bootstraps_all_strategy_tables_and_versioned_definition(app):
     assert definition["current_version"] == "li_zong_v1"
     assert definition["version"]["method"] == "deterministic_li_zong_v1"
     assert len(definition["version"]["rules"]) == 12
-    assert definition["default_parameter_version"]["parameters"][
-        "roe_min_pct"
-    ] == 10.0
+    assert definition["default_parameter_version"]["parameters"]["roe_min_pct"] == 10.0
     assert definition["subscriptions_enabled"] is False
     assert "暂未" in definition["subscription_boundary"]
     assert service.list_strategies()[0]["name"] == "李总策略"
@@ -527,9 +534,7 @@ def test_missing_dataset_is_always_data_incomplete_even_with_known_failed_rule(a
         "available": 8,
         "missing": ["fina_indicator"],
     }
-    packet["snapshot"]["datasets"]["fina_indicator"] = _dataset(
-        "fina_indicator", []
-    )
+    packet["snapshot"]["datasets"]["fina_indicator"] = _dataset("fina_indicator", [])
     service = LiZongStrategyService(
         app.state.database, SnapshotStub({"000063.SZ": packet})
     )
@@ -633,9 +638,7 @@ def test_universe_batch_prefilters_limits_deep_sync_and_is_idempotent(app):
                 stock_name="贵州茅台",
                 industry="白酒",
             ),
-            "000063.SZ": _snapshot_packet(
-                symbol="000063.SZ", market_cap_yi=220.0
-            ),
+            "000063.SZ": _snapshot_packet(symbol="000063.SZ", market_cap_yi=220.0),
             "300308.SZ": _snapshot_packet(
                 symbol="300308.SZ",
                 market_cap_yi=180.0,
@@ -704,9 +707,7 @@ def test_universe_batch_skips_recent_listing_and_reports_real_deep_progress(app)
     assert recent["status"] == "data_incomplete"
     assert recent["result"]["evaluation_depth"] == "history_precheck"
     assert recent["result"]["history_precheck"]["status"] == "insufficient"
-    assert "上市后量价历史预判未达到" in " ".join(
-        recent["result"]["limitations"]
-    )
+    assert "上市后量价历史预判未达到" in " ".join(recent["result"]["limitations"])
     coverage = result["coverage"]
     assert coverage["universe_count"] == 2
     assert coverage["history_insufficient_count"] == 1
@@ -767,11 +768,7 @@ def test_transient_sync_issue_retries_three_times_without_false_completion(app):
         "total_mv_yi": 220.0,
     }
     snapshots = UniverseSnapshotStub(
-        {
-            "000063.SZ": _with_transient_issue(
-                _snapshot_packet(symbol="000063.SZ")
-            )
-        },
+        {"000063.SZ": _with_transient_issue(_snapshot_packet(symbol="000063.SZ"))},
         [item],
     )
     service = LiZongStrategyService(app.state.database, snapshots)
@@ -789,9 +786,7 @@ def test_transient_sync_issue_retries_three_times_without_false_completion(app):
     assert candidate["result"]["evaluation_depth"] == "sync_incomplete"
     assert candidate["result"]["sync_retry_count"] == 3
     assert candidate["result"]["sync_retry_exhausted"] is True
-    assert "本交易日停止自动重试" in " ".join(
-        candidate["result"]["limitations"]
-    )
+    assert "本交易日停止自动重试" in " ".join(candidate["result"]["limitations"])
     coverage = attempts[-1]["coverage"]
     assert coverage["deep_processed_symbols"] == 0
     assert coverage["deep_remaining_symbols"] == 1
@@ -804,9 +799,7 @@ def test_transient_sync_issue_retries_three_times_without_false_completion(app):
     snapshots.packets["000063.SZ"]["snapshot"]["generated_at"] = (
         "2026-07-22T10:00:00+00:00"
     )
-    next_day = service.run_universe_batch(
-        batch_size=1, as_of_date="2026-07-22"
-    )
+    next_day = service.run_universe_batch(batch_size=1, as_of_date="2026-07-22")
 
     assert next_day["selected_symbols"] == ["000063.SZ"]
     candidate = service.get_candidate("000063.SZ")
@@ -856,9 +849,9 @@ def test_legacy_full_rules_incomplete_requeues_when_transient_issue_appears(app)
     service = LiZongStrategyService(app.state.database, snapshots)
     first = service.run_universe_batch(batch_size=1)
     assert first["selected_symbols"] == ["000063.SZ"]
-    assert service.get_candidate("000063.SZ")["result"][
-        "evaluation_depth"
-    ] == "full_rules"
+    assert (
+        service.get_candidate("000063.SZ")["result"]["evaluation_depth"] == "full_rules"
+    )
 
     snapshots.packets["000063.SZ"]["snapshot"]["issues"] = [
         {"dataset": "daily", "error_type": "TushareProviderError"}
@@ -1132,7 +1125,10 @@ def test_missing_tushare_annual_roe_uses_reported_eastmoney_fallback(app):
     assert actual["2022-12-31"]["roe_pct"] == 25.55
     assert actual["2022-12-31"]["source"] == "Eastmoney F10 Main Financial Data"
     assert actual["2022-12-31"]["source_url"] == "https://example.test/eastmoney-f10"
-    assert actual["2022-12-31"]["fallback_reason"] == "Tushare fina_indicator 缺少该年度ROE"
+    assert (
+        actual["2022-12-31"]["fallback_reason"]
+        == "Tushare fina_indicator 缺少该年度ROE"
+    )
     assert actual["2023-12-31"]["roe_pct"] == 12.0
     assert candidate["result"]["roe_fallback_version"] == service.ROE_FALLBACK_VERSION
     assert candidate["result"]["roe_fallback_rows"] == 1
@@ -1333,9 +1329,7 @@ def test_strategy_api_uses_snapshot_name_for_unconfigured_symbol(app, client):
         stock_name="平安银行",
         industry="银行",
     )
-    app.state.li_zong_strategy.snapshot_service = SnapshotStub(
-        {"000001.SZ": packet}
-    )
+    app.state.li_zong_strategy.snapshot_service = SnapshotStub({"000001.SZ": packet})
     app.state.li_zong_strategy.run_symbols(["000001"])
 
     response = client.get("/v1/stock-strategies/li-zong/candidates")
@@ -1349,7 +1343,9 @@ def test_strategy_api_uses_snapshot_name_for_unconfigured_symbol(app, client):
 
 
 def test_strategy_api_backfills_snapshot_name_for_legacy_candidate(app, client):
-    assert client.post("/users", json={"name": "Legacy Candidate User"}).status_code == 201
+    assert (
+        client.post("/users", json={"name": "Legacy Candidate User"}).status_code == 201
+    )
     packet = _snapshot_packet(
         symbol="000001.SZ",
         stock_name="平安银行",
@@ -1391,10 +1387,13 @@ def test_strategy_run_api_requires_admin_token_and_versions_custom_roe(app, clie
         json=request_body,
     )
     assert disabled.status_code == 403
-    assert client.post(
-        "/v1/stock-strategies/li-zong/universe-runs",
-        json={"batch_size": 1},
-    ).status_code == 403
+    assert (
+        client.post(
+            "/v1/stock-strategies/li-zong/universe-runs",
+            json={"batch_size": 1},
+        ).status_code
+        == 403
+    )
 
     latest = client.get("/v1/stock-strategies/li-zong/runs/latest")
     assert latest.status_code == 200
@@ -1443,7 +1442,9 @@ def test_tushare_snapshot_api_keeps_external_ts_code_and_neutral_empty_state(cli
 def test_empty_li_zong_filter_is_ready_after_stable_universe_publish(
     app, client, monkeypatch
 ):
-    assert client.post("/users", json={"name": "Stable Empty Strategy"}).status_code == 201
+    assert (
+        client.post("/users", json={"name": "Stable Empty Strategy"}).status_code == 201
+    )
     monkeypatch.setattr(app.state.li_zong_strategy, "list_candidates", lambda **_: [])
     monkeypatch.setattr(
         app.state.li_zong_strategy,
@@ -1475,12 +1476,13 @@ def test_empty_li_zong_filter_is_ready_after_stable_universe_publish(
     assert response.json()["counts"]["qualified"] == 0
 
 
-def test_li_zong_observation_pool_api_keeps_bands_separate_from_candidates(
-    app, client
-):
-    assert client.post(
-        "/users", json={"name": "Li Zong Observation Pool User"}
-    ).status_code == 201
+def test_li_zong_observation_pool_api_keeps_bands_separate_from_candidates(app, client):
+    assert (
+        client.post(
+            "/users", json={"name": "Li Zong Observation Pool User"}
+        ).status_code
+        == 201
+    )
     near_packet = _snapshot_packet(
         symbol="000063.SZ",
         data_version="near-api-v1",
@@ -1500,8 +1502,7 @@ def test_li_zong_observation_pool_api_keeps_bands_separate_from_candidates(
     app.state.li_zong_strategy.run_symbols(["000063.SZ", "000001.SZ"])
 
     near = client.get(
-        "/v1/stock-strategies/li-zong/observation-pool"
-        "?band=near_8_of_9&limit=20"
+        "/v1/stock-strategies/li-zong/observation-pool?band=near_8_of_9&limit=20"
     )
     strict = client.get(
         "/v1/stock-strategies/li-zong/candidates?status=qualified&limit=20"
@@ -1523,24 +1524,27 @@ def test_li_zong_observation_pool_api_keeps_bands_separate_from_candidates(
     assert strict.json()["items"] == []
 
 
-def test_demo_exposes_strictly_separate_li_zong_observation_pool(app, client):
+def test_demo_exposes_strictly_separate_li_zong_observation_pool(
+    app, client, frontend_source
+):
     page = client.get("/demo")
+    source = frontend_source
 
     assert page.status_code == 200
     assert 'data-li-zong-filter="near_8_of_9"' in page.text
     assert 'data-li-zong-filter="watch_6_7_of_9"' in page.text
-    assert (
-        "/v1/stock-strategies/li-zong/observation-pool?band="
-        in page.text
-    )
-    assert "limit=30" in page.text
-    assert "只研究观察" in page.text
-    assert "完整规则核验后的研究观察分层，不是候选" in page.text
-    assert "严格9条候选规则和3条触发规则保持不变" in page.text
+    assert "/v1/stock-strategies/li-zong/observation-pool?band=" in source
+    assert "limit=30" in source
+    assert "只研究观察" in source
+    assert "完整规则核验后的研究观察分层，不是候选" in source
+    assert "严格9条候选规则和3条触发规则保持不变" in source
 
 
 def test_trigger_enters_stock_workspace_and_agent_uses_strategy_evidence(app, client):
-    assert client.post("/users", json={"name": "Strategy Workspace User"}).status_code == 201
+    assert (
+        client.post("/users", json={"name": "Strategy Workspace User"}).status_code
+        == 201
+    )
     app.state.li_zong_strategy.snapshot_service = SnapshotStub(
         {"000063.SZ": _snapshot_packet(triggered=True, data_version="workspace-v1")}
     )
@@ -1573,7 +1577,9 @@ def test_agent_li_zong_pool_excludes_failed_stocks_and_followup_keeps_context(
     assert client.post("/users", json={"name": "Li Zong Chat User"}).status_code == 201
     app.state.li_zong_strategy.snapshot_service = SnapshotStub(
         {
-            "000063.SZ": _snapshot_packet(triggered=True, data_version="chat-triggered"),
+            "000063.SZ": _snapshot_packet(
+                triggered=True, data_version="chat-triggered"
+            ),
             "000001.SZ": _snapshot_packet(
                 symbol="000001.SZ",
                 data_version="chat-rejected",
@@ -1636,8 +1642,7 @@ def test_agent_li_zong_pool_excludes_failed_stocks_and_followup_keeps_context(
         json={
             "conversation_id": rejected_payload["conversation_id"],
             "message": (
-                "如果未通过规则以后转为通过，是否还需要满足盘后触发规则"
-                "才能进入候选？"
+                "如果未通过规则以后转为通过，是否还需要满足盘后触发规则才能进入候选？"
             ),
             "execute_agent": False,
         },
@@ -1651,9 +1656,10 @@ def test_agent_li_zong_pool_excludes_failed_stocks_and_followup_keeps_context(
 
 
 def test_agent_li_zong_resolves_multiple_universe_company_names(app, client):
-    assert client.post(
-        "/users", json={"name": "Li Zong Multi Symbol User"}
-    ).status_code == 201
+    assert (
+        client.post("/users", json={"name": "Li Zong Multi Symbol User"}).status_code
+        == 201
+    )
     recent = {
         "symbol": "001391.SZ",
         "name": "国货航",
@@ -1685,9 +1691,7 @@ def test_agent_li_zong_resolves_multiple_universe_company_names(app, client):
         as_of_date="2026-07-22",
     )
     app.state.li_zong_strategy.snapshot_service = snapshots
-    app.state.li_zong_strategy.run_universe_batch(
-        batch_size=1, as_of_date="2026-07-22"
-    )
+    app.state.li_zong_strategy.run_universe_batch(batch_size=1, as_of_date="2026-07-22")
 
     response = client.post(
         "/me/chat",
@@ -1715,11 +1719,11 @@ def test_agent_li_zong_resolves_multiple_universe_company_names(app, client):
     assert "上市后量价历史预判未达到" in payload["answer"]
     assert "新潮能源（600777.SS）" in payload["answer"]
     assert "完整交易日不足" in payload["answer"]
-    conversation = client.get(
-        f"/me/conversations/{payload['conversation_id']}"
-    ).json()
+    conversation = client.get(f"/me/conversations/{payload['conversation_id']}").json()
     assistant = next(
-        item for item in reversed(conversation["messages"]) if item["role"] == "assistant"
+        item
+        for item in reversed(conversation["messages"])
+        if item["role"] == "assistant"
     )
     assert assistant["metadata"]["research_targets"] == [
         {"symbol": "001391.SZ", "name": "国货航"},

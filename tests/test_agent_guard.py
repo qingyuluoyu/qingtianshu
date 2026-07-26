@@ -59,6 +59,57 @@ def test_hermes_route_keeps_explicit_override_and_vision_route(monkeypatch):
     assert agent_module._resolve_hermes_route("vision") == (None, None)
 
 
+def test_hermes_output_budget_is_intent_aware_and_operator_tunable(monkeypatch):
+    monkeypatch.delenv("HERMES_ECONOMY_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("HERMES_DEEP_MAX_TOKENS", raising=False)
+
+    assert agent_module._hermes_max_tokens("market_brief", "economy") == 900
+    assert agent_module._hermes_max_tokens("stock_research", "economy") == 1200
+    assert agent_module._hermes_max_tokens("stock_research", "deep") == 2200
+
+    monkeypatch.setenv("HERMES_ECONOMY_MAX_TOKENS", "700")
+    assert agent_module._hermes_max_tokens("market_brief", "economy") == 700
+
+    monkeypatch.setenv("HERMES_ECONOMY_MAX_TOKENS", "not-a-number")
+    assert agent_module._hermes_max_tokens("market_brief", "economy") == 900
+
+
+def test_hermes_reasoning_effort_keeps_standard_turns_faster(monkeypatch):
+    monkeypatch.delenv("HERMES_ECONOMY_REASONING_EFFORT", raising=False)
+    monkeypatch.delenv("HERMES_DEEP_REASONING_EFFORT", raising=False)
+
+    assert agent_module._hermes_reasoning_effort("economy") == "low"
+    assert (
+        agent_module._hermes_reasoning_effort("economy", "stock_research")
+        == "none"
+    )
+    assert (
+        agent_module._hermes_reasoning_effort("economy", "market_brief")
+        == "none"
+    )
+    assert agent_module._hermes_reasoning_effort("deep") == "medium"
+
+    monkeypatch.setenv("HERMES_ECONOMY_REASONING_EFFORT", "none")
+    assert agent_module._hermes_reasoning_effort("economy") == "none"
+
+    monkeypatch.setenv("HERMES_ECONOMY_REASONING_EFFORT", "invalid")
+    assert agent_module._hermes_reasoning_effort("economy") == "low"
+
+
+def test_hermes_turn_budget_allows_completion_without_long_loops(monkeypatch):
+    monkeypatch.delenv("HERMES_ECONOMY_MAX_ITERATIONS", raising=False)
+    monkeypatch.delenv("HERMES_DEEP_MAX_ITERATIONS", raising=False)
+
+    assert agent_module._hermes_max_iterations("economy") == 4
+    assert agent_module._hermes_max_iterations("deep") == 6
+
+    monkeypatch.setenv("HERMES_ECONOMY_MAX_ITERATIONS", "3")
+    assert agent_module._hermes_max_iterations("economy") == 3
+
+    monkeypatch.setenv("HERMES_ECONOMY_MAX_ITERATIONS", "1")
+    assert agent_module._hermes_max_iterations("economy") == 2
+
+
 def test_hermes_oneshot_fallback_disables_all_tools(
     tmp_path: Path, settings, monkeypatch
 ):
@@ -67,12 +118,11 @@ def test_hermes_oneshot_fallback_disables_all_tools(
     hermes_bin.chmod(0o755)
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "oneshot-no-tools.db",
         workspace_root=tmp_path / "oneshot-no-tools-workspaces",
         hermes_bin=hermes_bin,
         hermes_enabled=True,
     )
-    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     service = AgentService(database, guarded_settings)
     run_dir = tmp_path / "run"
@@ -87,7 +137,9 @@ def test_hermes_oneshot_fallback_disables_all_tools(
         captured["command"] = command
         return Result()
 
-    monkeypatch.setattr("app.services.agent.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "app.services.agent_hermes_execution.subprocess.run", fake_run
+    )
 
     answer, _ = service._execute_hermes(
         prompt="整理待确认任务，不要执行写入。",
@@ -151,6 +203,24 @@ def test_market_knowledge_context_prefers_specific_market_rules():
         "市场涨跌原因的证据规则",
         "市场趋势与风险分析规则",
     ]
+
+
+def test_stock_knowledge_context_prefers_user_material_and_limits_excerpts():
+    compact = AgentService._compact_stock_knowledge_context(
+        {
+            "query": "中兴通讯为什么跌",
+            "items": [
+                {"title": "通用规则", "scope": "common", "excerpt": "甲" * 900},
+                {"title": "用户研究", "scope": "user", "excerpt": "乙" * 900},
+                {"title": "事件资料", "scope": "common", "excerpt": "丙" * 900},
+                {"title": "多余资料", "scope": "common", "excerpt": "丁" * 900},
+            ],
+        }
+    )
+
+    assert len(compact["items"]) == 3
+    assert compact["items"][0]["title"] == "用户研究"
+    assert all(len(item["excerpt"]) <= 500 for item in compact["items"])
 
 
 def test_numeric_guard_accepts_evidence_rounding_and_rejects_new_targets():
@@ -332,11 +402,10 @@ def test_numeric_only_guard_failure_keeps_question_specific_model_answer(
 ):
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "guard-repair.db",
         workspace_root=tmp_path / "workspaces-guard-repair",
         hermes_enabled=True,
     )
-    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     user = database.create_user("Guard Repair User")
     service = AgentService(database, guarded_settings)
@@ -403,11 +472,10 @@ def test_trade_review_json_drops_only_unsupported_numeric_clauses(
 ):
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "trade-review-guard-repair.db",
         workspace_root=tmp_path / "workspaces-trade-review-guard-repair",
         hermes_enabled=True,
     )
-    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     user = database.create_user("Trade Review Guard Repair User")
     service = AgentService(database, guarded_settings)
@@ -473,11 +541,10 @@ def test_run_guard_does_not_trust_numeric_claims_from_user_history(
 ):
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "guard-user-history.db",
         workspace_root=tmp_path / "workspaces-guard-user-history",
         hermes_enabled=True,
     )
-    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     user = database.create_user("Guarded History User")
     service = AgentService(database, guarded_settings)
@@ -508,11 +575,10 @@ def test_run_guard_does_not_trust_numeric_claims_from_assistant_history(
 ):
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "guard-assistant-history.db",
         workspace_root=tmp_path / "workspaces-guard-assistant-history",
         hermes_enabled=True,
     )
-    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     user = database.create_user("Guarded Assistant History User")
     service = AgentService(database, guarded_settings)
@@ -841,10 +907,7 @@ def test_li_zong_normalization_does_not_publish_raw_trigger_shape_before_candida
             }
         ],
     }
-    answer = (
-        "当日收盘涨停触发，但候选规则尚未全部通过，"
-        "所以当前不会进入人工复核。"
-    )
+    answer = "当日收盘涨停触发，但候选规则尚未全部通过，所以当前不会进入人工复核。"
 
     normalized = AgentService._normalize_li_zong_candidate_trigger_boundary(
         answer,
@@ -919,6 +982,9 @@ def test_prompt_evidence_and_output_guard_hide_provider_operations():
     guarded = AgentService._validate_model_output(
         "A股板块数据已从东方财富降级到新浪口径。", evidence
     )
+    incomplete = AgentService._validate_model_output(
+        "No reply: the maximum tool-iteration limit was reached.", evidence
+    )
 
     assert public_evidence["market_state"]["label"] == "承压"
     assert public_evidence["hot_sectors"]["sectors"][0]["pct_change"] == 2.34
@@ -928,6 +994,8 @@ def test_prompt_evidence_and_output_guard_hide_provider_operations():
     assert "degraded_from" not in public_evidence["hot_sectors"]
     assert guarded["passed"] is False
     assert guarded["private_operational_patterns"]
+    assert incomplete["passed"] is False
+    assert incomplete["private_operational_patterns"]
 
 
 def test_failed_model_guard_falls_back_to_deterministic_preview(
@@ -935,11 +1003,10 @@ def test_failed_model_guard_falls_back_to_deterministic_preview(
 ):
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "guard.db",
         workspace_root=tmp_path / "workspaces-guard",
         hermes_enabled=True,
     )
-    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     user = database.create_user("Guarded User")
     service = AgentService(database, guarded_settings)
@@ -1102,6 +1169,416 @@ def test_economy_stock_prompt_compacts_large_event_and_fundamental_payloads():
             "business_profile"
         ]["anchor_report_date"]
         == "2025-12-31"
+    )
+
+
+def test_stock_cause_prompt_drops_noncausal_bulk_and_duplicate_provenance():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯7月24日为什么大跌？只使用同日公司公告和新闻。",
+        "conditional_outlook": {
+            "label": "偏弱观察",
+            "calibration": {"samples": ["x" * 1000]},
+        },
+        "research_claims": {
+            "status": "available",
+            "claims": [
+                {
+                    "relation": relation,
+                    "claim": f"主张{i}",
+                    "evidence_summary": "摘要",
+                    "source_url": "https://example.invalid/very-long",
+                    "source_key": "internal-source",
+                    "next_step": "核验原文",
+                }
+                for i, relation in enumerate(
+                    ["supports", "weakens", "unresolved"] * 4
+                )
+            ],
+        },
+        "stock_market_context": {
+            "analysis_target": {"market_date": "2026-07-24"},
+            "indices": [{"name": f"指数{i}"} for i in range(8)],
+            "exact_industry_index": {
+                "status": "same_market_date",
+                "name": "通信设备",
+                "component_breadth": {
+                    "status": "available",
+                    "advancers": 3,
+                    "decliners": 47,
+                },
+                "component_contribution": {"items": ["x" * 1000]},
+                "source_url": "https://example.invalid/index",
+            },
+            "market_breadth": {
+                "distribution": {
+                    "median_pct_change": -0.5,
+                    "bins": ["x" * 1000],
+                    "bin_ratios": [0.5],
+                }
+            },
+        },
+        "a_share_information": {
+            "announcements": [
+                {
+                    "title": "同日盘中公告",
+                    "published_at": "2026-07-24T14:00:00+08:00",
+                    "source": "深交所",
+                },
+                {
+                    "title": "前一日公告",
+                    "published_at": "2026-07-23T18:00:00+08:00",
+                    "source": "深交所",
+                },
+            ],
+            "news": [
+                {
+                    "title": "同日盘中媒体线索",
+                    "published_at": "2026-07-24T13:30:00+08:00",
+                    "source": "媒体甲",
+                },
+                {
+                    "title": "同日收盘后报道",
+                    "published_at": "2026-07-24T19:30:00+08:00",
+                    "source": "媒体甲",
+                },
+            ],
+        },
+        "event_timeline": {
+            "events": [
+                {
+                    "title": "同日盘中媒体线索",
+                    "event_date": "2026-07-24",
+                    "published_at": "2026-07-24T13:30:00+08:00",
+                    "source": "媒体甲",
+                    "evidence_level": "media_report",
+                }
+            ]
+        },
+    }
+
+    compact = AgentService._compact_stock_research_evidence(evidence)
+
+    assert "conditional_outlook" not in compact
+    assert "research_claims" not in compact
+    assert "a_share_information" not in compact
+    assert "event_timeline" not in compact
+    assert len(compact["stock_market_context"]["indices"]) == 4
+    assert (
+        "component_contribution"
+        not in compact["stock_market_context"]["exact_industry_index"]
+    )
+    assert "turnover" not in compact["stock_market_context"]["market_breadth"]
+    assert "distribution" not in compact["stock_market_context"]["market_breadth"]
+    packet = compact["price_move_event_evidence"]
+    assert packet["target_market_date"] == "2026-07-24"
+    assert packet["strict_same_date_only"] is True
+    assert packet["coverage_status"] == "same_date_official_disclosure"
+    assert [
+        item["title"] for item in packet["same_date_official_disclosures"]
+    ] == ["同日盘中公告"]
+    assert [item["title"] for item in packet["same_date_media_clues"]] == [
+        "同日盘中媒体线索"
+    ]
+    assert [
+        item["title"] for item in packet["same_date_after_close_events"]
+    ] == ["同日收盘后报道"]
+    assert [item["title"] for item in packet["adjacent_date_events"]] == [
+        "前一日公告"
+    ]
+    assert packet["same_date_media_source_count"] == 1
+
+
+def test_stock_cause_prompt_limits_headlines_without_changing_full_ui_evidence():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯7月24日为什么下跌？只使用同日事实。",
+        "stock_market_context": {
+            "analysis_target": {"market_date": "2026-07-24"}
+        },
+        "a_share_information": {
+            "news": [
+                {
+                    "title": f"同日媒体线索{i}",
+                    "published_at": f"2026-07-24T{10 + i}:00:00+08:00",
+                    "source": f"媒体{i}",
+                }
+                for i in range(5)
+            ]
+        },
+    }
+
+    compact = AgentService._compact_stock_research_evidence(evidence)
+
+    assert len(compact["price_move_event_evidence"]["same_date_media_clues"]) == 3
+    assert len(evidence["a_share_information"]["news"]) == 5
+
+
+def test_stock_cause_preview_uses_aligned_events_and_omits_unasked_bulk():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "display_name": "中兴通讯",
+        "user_question": (
+            "中兴通讯7月24日为什么下跌？只使用同日公司公告、行业和市场事实。"
+        ),
+        "metrics": {"latest_close": 35.0, "return_1d_pct": -2.56},
+        "current_quote": {
+            "price": 35.0,
+            "pct_change": -2.56,
+            "currency": "CNY",
+            "market_date": "2026-07-24",
+            "market_timestamp": "2026-07-24T16:14:00+08:00",
+        },
+        "provenance": {"market_timestamp": "2026-07-24T01:30:00+00:00"},
+        "stock_market_context": {
+            "analysis_target": {
+                "market_date": "2026-07-24",
+                "basis": "explicit_question_date",
+            },
+            "stock_target": {
+                "status": "same_market_date",
+                "market_date": "2026-07-24",
+                "close": 35.0,
+                "return_1d_pct": -2.56,
+            },
+            "market_state": {"summary": "代表性指数全部下跌。"},
+            "indices": [
+                {
+                    "name": "沪深300",
+                    "comparison_status": "same_market_date",
+                    "return_1d_pct": -1.67,
+                }
+            ],
+            "market_breadth": {
+                "same_date_as_target": True,
+                "breadth": {
+                    "advancers": 555,
+                    "decliners": 4939,
+                    "unchanged": 36,
+                    "state": "普跌",
+                },
+            },
+            "exact_industry_match_available": True,
+            "exact_industry_index": {
+                "status": "same_market_date",
+                "name": "通信设备",
+                "return_1d_pct": -3.54,
+                "stock_return_1d_pct": -2.56,
+                "stock_minus_industry_pct": 0.98,
+                "constituent_count": 50,
+                "component_breadth": {
+                    "status": "available",
+                    "advancers": 3,
+                    "decliners": 47,
+                    "unchanged": 0,
+                    "state": "普跌",
+                    "median_pct_change": -3.4,
+                    "coverage": {},
+                },
+                "component_contribution": {
+                    "status": "available",
+                    "subject": {
+                        "name": "中兴通讯",
+                        "estimated_contribution_pp": -0.1,
+                    },
+                },
+            },
+        },
+        "a_share_information": {
+            "announcements": [
+                {
+                    "title": "前一日公司公告",
+                    "published_at": "2026-07-23T18:00:00+08:00",
+                    "source": "深交所",
+                }
+            ],
+            "news": [
+                {
+                    "title": "盘中同日媒体线索",
+                    "published_at": "2026-07-24T13:30:00+08:00",
+                    "source": "媒体甲",
+                },
+                {
+                    "title": "收盘后同日报道",
+                    "published_at": "2026-07-24T19:30:00+08:00",
+                    "source": "媒体甲",
+                },
+            ],
+            "sentiment": {
+                "band": "偏空",
+                "sample_size": 20,
+                "confidence": "low_to_medium",
+            },
+        },
+    }
+
+    preview = AgentService._render_preview(evidence)
+
+    assert "盘中同日媒体线索" in preview
+    assert "发布时间晚于当日收盘" in preview
+    assert "前一日公司公告" not in preview
+    assert "静态估算贡献" not in preview
+    assert "社区情绪" not in preview
+    assert "没有同日公司公告" in preview
+    assert "具体驱动未确认" in preview
+
+
+def test_stock_cause_guard_rejects_ruling_out_company_specific_driver():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯7月24日为什么跌？",
+        "metrics": {"latest_close": 35.0, "return_1d_pct": -2.56},
+        "stock_market_context": {
+            "analysis_target": {"market_date": "2026-07-24"},
+            "exact_industry_index": {
+                "status": "same_market_date",
+                "stock_minus_industry_pct": 0.98,
+                "component_breadth": {"status": "available"},
+            },
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "中兴通讯当日下跌2.56%，但跑赢行业，这表明并没有独立于市场的个股驱动信号。",
+        evidence,
+    )
+
+    assert guard["passed"] is False
+    assert (
+        "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
+        in guard["unsupported_market_inferences"]
+    )
+
+
+def test_stock_cause_guard_rejects_media_sentiment_labels_and_unpublished_checks():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯7月24日为什么跌？",
+        "metrics": {"latest_close": 35.0, "return_1d_pct": -2.56},
+        "stock_market_context": {
+            "analysis_target": {"market_date": "2026-07-24"},
+            "exact_industry_index": {
+                "component_breadth": {"status": "available"}
+            },
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "媒体标题涉及正面或中性话题。仍需核验当日是否有未公开订单或机构仓位变动。",
+        evidence,
+    )
+
+    assert guard["passed"] is False
+    assert (
+        "公告或媒体线索不能在缺少事件研究时评为正面负面或催化"
+        in guard["unsupported_market_inferences"]
+    )
+    assert (
+        "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
+        in guard["unsupported_market_inferences"]
+    )
+
+
+def test_stock_cause_guard_rejects_indirect_media_sentiment_wording():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯7月24日为什么跌？",
+        "metrics": {"latest_close": 35.0, "return_1d_pct": -2.56},
+        "stock_market_context": {
+            "analysis_target": {"market_date": "2026-07-24"},
+            "exact_industry_index": {
+                "component_breadth": {"status": "available"}
+            },
+        },
+    }
+    answer = (
+        "中兴通讯7月24日收盘35元，跌2.56%。"
+        "个股与行业同日下跌，但相对表现只能确认同步或分化，不能证明具体原因。"
+        "已确认的是价格下跌，具体公司驱动仍未取得同日官方披露确认。"
+        "一条媒体报道可能被市场视为负面，但仍需核验。"
+        "其余媒体线索方向不一，无法构成一致的解释方向。"
+        "公司层面未出现同日公告或可确认的利空事件。"
+        "后续只核验交易所公告、监管文件、公司原文和公开行情。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert guard["passed"] is False
+    assert (
+        "公告或媒体线索不能在缺少事件研究时评为正面负面或催化"
+        in guard["unsupported_market_inferences"]
+    )
+    assert repaired is not None
+    assert repaired[1]["passed"] is True
+    assert "视为负面" not in repaired[0]
+    assert "方向不一" not in repaired[0]
+    assert "解释方向" not in repaired[0]
+    assert "利空事件" not in repaired[0]
+
+
+def test_stock_cause_guard_rejects_generic_positive_report_label():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯7月24日为什么跌？",
+        "metrics": {"latest_close": 35.0, "return_1d_pct": -2.56},
+        "stock_market_context": {
+            "analysis_target": {"market_date": "2026-07-24"},
+            "exact_industry_index": {
+                "component_breadth": {"status": "available"}
+            },
+        },
+    }
+    answer = (
+        "中兴通讯7月24日收盘35元，跌2.56%。"
+        "个股与行业同日下跌，但相对表现只能确认同步或分化，不能证明具体原因。"
+        "已确认的是价格下跌，具体公司驱动仍未取得同日官方披露确认。"
+        "午间正面产品报道与当日价格走势方向不匹配。"
+        "后续只核验交易所公告、监管文件、公司原文和公开行情。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert guard["passed"] is False
+    assert (
+        "公告或媒体线索不能在缺少事件研究时评为正面负面或催化"
+        in guard["unsupported_market_inferences"]
+    )
+    assert repaired is not None
+    assert repaired[1]["passed"] is True
+    assert "正面产品报道" not in repaired[0]
+
+
+def test_stock_cause_guard_allows_explicit_media_sentiment_boundary():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯7月24日为什么跌？",
+        "metrics": {"latest_close": 35.0, "return_1d_pct": -2.56},
+        "stock_market_context": {
+            "analysis_target": {"market_date": "2026-07-24"},
+            "exact_industry_index": {
+                "component_breadth": {"status": "available"}
+            },
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "媒体报道不能据此评价为正面或负面，具体公司驱动仍未确认。",
+        evidence,
+    )
+
+    assert (
+        "公告或媒体线索不能在缺少事件研究时评为正面负面或催化"
+        not in guard["unsupported_market_inferences"]
     )
 
 
@@ -1347,18 +1824,24 @@ def test_market_prompt_keeps_only_the_requested_market_and_relevant_material():
 
     public = AgentService._evidence_for_prompt(evidence)
     compact = AgentService._compact_market_brief_evidence(public)
+    compact_knowledge = AgentService._compact_market_knowledge_context(
+        public["knowledge_context"]
+    )
 
     assert [item["symbol"] for item in compact["indices"]] == ["^GSPC"]
     assert "hot_sectors" not in compact
-    assert len(compact["market_drivers"]["items"]) == 6
-    assert len(compact["knowledge_context"]["items"]) == 3
+    assert len(compact["market_drivers"]["items"]) == 4
+    assert "knowledge_context" not in compact
+    assert [item["title"] for item in compact_knowledge["items"]] == [
+        "用户的美股笔记",
+        "多余资料",
+    ]
     assert "source" not in compact["indices"][0]
     assert compact["indices"][0]["metrics"] == {
         "return_1d_pct": -0.19,
-        "return_5d_pct": -0.7,
     }
     assert compact["indices"][0]["market_date"] == "2026-07-21"
-    assert compact["indices"][0]["coverage"]["last_date"] == "2026-07-21"
+    assert "coverage" not in compact["indices"][0]
     assert "market_timestamp" not in compact["indices"][0]
 
 
@@ -1654,6 +2137,69 @@ def test_market_prompt_excludes_cross_date_index_and_sector_snapshots():
     assert compact["market_breadth"]["market_date"] == "2026-07-21"
 
 
+def test_market_cause_prompt_keeps_structured_causal_evidence():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "美股为什么跌",
+        "question_focus": {"key": "market_cause", "label": "涨跌原因"},
+        "analysis_target": {
+            "market_date": "2026-07-24",
+            "market_key": "us",
+        },
+        "indices": [],
+        "market_drivers": {
+            "market_key": "us",
+            "market_label": "美国股市",
+            "items": [],
+            "causal_evidence": {
+                "target_market_date": "2026-07-24",
+                "coverage_status": "same_date_multi_source",
+                "candidate_count": 2,
+                "same_date_candidate_count": 2,
+                "source_count": 2,
+                "corroborated_categories": [
+                    {
+                        "category": "monetary_policy",
+                        "category_label": "货币政策与央行表态",
+                        "same_date_sources": 2,
+                    }
+                ],
+                "boundary": "同日多来源线索不能自动证明唯一因果。",
+                "candidates": [
+                    {
+                        "category_label": "货币政策与央行表态",
+                        "source": "Example Wire",
+                        "title": "Fed signals rates may stay high",
+                        "published_at": "2026-07-24T20:10:00+00:00",
+                        "published_market_date": "2026-07-24",
+                        "date_relation": "same_date",
+                        "independent_sources": 2,
+                        "same_date_sources": 2,
+                        "support_level": "same_date_multi_source",
+                    }
+                ],
+            },
+        },
+    }
+
+    compact = AgentService._compact_market_brief_evidence(evidence)
+
+    assert compact["causal_evidence"]["coverage_status"] == (
+        "same_date_multi_source"
+    )
+    assert compact["causal_evidence"]["corroborated_categories"][0] == {
+        "category": "monetary_policy",
+        "category_label": "货币政策与央行表态",
+        "same_date_sources": 2,
+    }
+    assert compact["causal_evidence"]["candidates"][0]["title"] == (
+        "Fed signals rates may stay high"
+    )
+    assert compact["causal_evidence"]["candidates"][0]["source"] == (
+        "Example Wire"
+    )
+
+
 def test_market_answer_removes_internal_routing_preamble():
     cleaned = AgentService._clean_user_facing_model_language(
         "## 来龙去脉\n\n"
@@ -1740,7 +2286,7 @@ def test_market_guard_rejects_news_absorption_and_coverage_overclaims():
 
 
 def test_market_guard_requires_turnover_snapshot_date_when_user_asks_time(settings):
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     service = AgentService(database, settings)
     evidence = {
@@ -1782,7 +2328,7 @@ def test_market_guard_requires_turnover_snapshot_date_when_user_asks_time(settin
 
 
 def test_market_guard_accepts_natural_turnover_time_and_negative_boundary(settings):
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     service = AgentService(database, settings)
     evidence = {
@@ -2076,11 +2622,10 @@ def test_market_guard_repairs_unsupported_style_flow_and_history_inferences(
 ):
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "market-inference-guard.db",
         workspace_root=tmp_path / "workspaces-market-inference-guard",
         hermes_enabled=True,
     )
-    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     user = database.create_user("Market Inference Repair User")
     service = AgentService(database, guarded_settings)
@@ -2267,6 +2812,20 @@ def test_market_guard_requires_fixed_breadth_classification_when_data_exists():
             "user_question": "请给出涨跌家数和固定分类",
         },
     )
+    natural_counts = AgentService._validate_model_output(
+        "上涨3107家、下跌2300家，固定分类为上涨家数占优。",
+        {
+            **evidence,
+            "user_question": "请给出涨跌家数和固定分类",
+        },
+    )
+    missing_explicit_flat_count = AgentService._validate_model_output(
+        "上涨3107家、下跌2300家，固定分类为上涨家数占优。",
+        {
+            **evidence,
+            "user_question": "请给出上涨、下跌、平盘家数和固定分类",
+        },
+    )
     invented_attribution = AgentService._validate_model_output(
         "上涨3107家、下跌2300家、平盘121家，固定分类为上涨家数占优。"
         "上涨比例与指数涨幅分化，说明少数权重股带动，而且多数股票涨幅温和。",
@@ -2282,11 +2841,37 @@ def test_market_guard_requires_fixed_breadth_classification_when_data_exists():
     assert missing_state["unsupported_market_inferences"] == [
         "用户询问全市场广度时回答必须给出涨跌家数和固定分类"
     ]
+    assert natural_counts["passed"] is True
+    assert missing_explicit_flat_count["passed"] is False
+    assert missing_explicit_flat_count["unsupported_market_inferences"] == [
+        "用户询问全市场广度时回答必须给出涨跌家数和固定分类"
+    ]
     assert invented_attribution["passed"] is False
     assert set(invented_attribution["unsupported_market_inferences"]) == {
         "全市场涨跌家数不能直接证明少数权重或集中板块拉动",
         "缺少个股涨幅分布时不能声称多数股票涨幅温和",
     }
+
+
+def test_market_cause_question_does_not_require_unchanged_count():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "A股今天为什么普跌？请说明价格事实和反方证据。",
+        "market_state": {
+            "whole_market_breadth_available": True,
+            "whole_market_breadth_state": "普跌",
+            "whole_market_advancers": 555,
+            "whole_market_decliners": 4939,
+            "whole_market_unchanged": 36,
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "全市场555只上涨、4939只下跌，确认普跌。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
 
 
 def test_market_guard_accepts_evidenced_breadth_ratios_and_classification_rule():
@@ -2485,6 +3070,10 @@ def test_market_guard_uses_available_turnover_and_distribution_evidence():
         "全市场成交额12340亿元，个股涨跌幅中位数0.72%。成交额不是资金净流入。",
         evidence,
     )
+    direct_boundary = AgentService._validate_model_output(
+        "全市场成交额12340亿元，不能直接证明资金净流入。",
+        evidence,
+    )
 
     assert missing["passed"] is False
     assert set(missing["unsupported_market_inferences"]) == {
@@ -2497,6 +3086,7 @@ def test_market_guard_uses_available_turnover_and_distribution_evidence():
         in false_flow["unsupported_market_inferences"]
     )
     assert safe["passed"] is True
+    assert direct_boundary["passed"] is True
 
 
 def test_market_guard_rejects_invented_windows_thresholds_and_scenario_odds():
@@ -3771,6 +4361,14 @@ def test_relative_event_date_normalizer_prefers_absolute_dates():
     assert "昨日" not in normalized
 
 
+def test_relative_event_date_normalizer_removes_future_label_when_date_exists():
+    normalized = agent_module._normalize_relative_event_dates(
+        "明日（7月24日）收盘后最新报价为35元。"
+    )
+
+    assert normalized == "7月24日收盘后最新报价为35元。"
+
+
 def test_stock_move_preview_understands_why_up_wording_and_stays_concise():
     evidence = {
         "type": "stock_research",
@@ -4509,14 +5107,10 @@ def test_stock_contribution_guard_repair_preserves_model_answer_and_appends_evid
 ):
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "contribution-repair.db",
         workspace_root=tmp_path / "workspaces-contribution-repair",
         hermes_enabled=True,
     )
-    database = Database(
-        guarded_settings.database_path,
-        guarded_settings.workspace_root,
-    )
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     user = database.create_user("Contribution Repair User")
     service = AgentService(database, guarded_settings)
@@ -5024,11 +5618,10 @@ def test_market_guard_falls_back_when_metric_conflicts_dominate(
 ):
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "market-metric-consistency.db",
         workspace_root=tmp_path / "workspaces-market-metric-consistency",
         hermes_enabled=True,
     )
-    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     user = database.create_user("Market Metric Consistency User")
     service = AgentService(database, guarded_settings)
@@ -5205,6 +5798,10 @@ def test_market_downtrend_guard_allows_explicit_negation():
         "整体格局是轻微收跌，而非大幅下行。",
         evidence,
     )
+    direct_boundary = AgentService._validate_model_output(
+        "此前仍为正收益，不能直接确认新下跌趋势已开启。",
+        evidence,
+    )
     overclaim = AgentService._validate_model_output(
         "当前趋势依然向下。",
         evidence,
@@ -5212,6 +5809,7 @@ def test_market_downtrend_guard_allows_explicit_negation():
 
     assert safe["passed"] is True
     assert natural_safe["passed"] is True
+    assert direct_boundary["passed"] is True
     assert overclaim["passed"] is False
     assert overclaim["unsupported_market_inferences"] == [
         "中期偏弱不能直接改写为已确认的下行趋势"
@@ -5660,12 +6258,11 @@ def test_streaming_bridge_publishes_only_guarded_cumulative_sentences(
     python_bin.touch()
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "stream-protocol.db",
         workspace_root=tmp_path / "stream-protocol-workspaces",
         hermes_bin=hermes_bin,
         hermes_enabled=True,
     )
-    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     service = AgentService(database, guarded_settings)
     run_dir = tmp_path / "run"
@@ -5698,9 +6295,14 @@ def test_streaming_bridge_publishes_only_guarded_cumulative_sentences(
         )
         + "\n",
     ]
+    captured = {}
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        return _FakeStreamingProcess(lines)
+
     monkeypatch.setattr(
-        "app.services.agent.subprocess.Popen",
-        lambda *args, **kwargs: _FakeStreamingProcess(lines),
+        "app.services.agent_hermes_execution.subprocess.Popen", fake_popen
     )
     updates = []
 
@@ -5725,6 +6327,15 @@ def test_streaming_bridge_publishes_only_guarded_cumulative_sentences(
     assert usage["streaming"]["raw_delta_events"] == 2
     assert usage["streaming"]["visible_events"] == 2
     assert usage["streaming"]["withheld_segments"] == 1
+    assert usage["streaming"]["max_tokens"] == 900
+    assert usage["streaming"]["max_iterations"] == 4
+    assert usage["streaming"]["reasoning_effort"] == "none"
+    max_tokens_index = captured["command"].index("--max-tokens")
+    assert captured["command"][max_tokens_index + 1] == "900"
+    max_iterations_index = captured["command"].index("--max-iterations")
+    assert captured["command"][max_iterations_index + 1] == "4"
+    reasoning_index = captured["command"].index("--reasoning-effort")
+    assert captured["command"][reasoning_index + 1] == "none"
 
 
 def test_streaming_bridge_defers_whole_answer_completeness_checks(
@@ -5738,12 +6349,11 @@ def test_streaming_bridge_defers_whole_answer_completeness_checks(
     python_bin.touch()
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "stream-completeness.db",
         workspace_root=tmp_path / "stream-completeness-workspaces",
         hermes_bin=hermes_bin,
         hermes_enabled=True,
     )
-    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     service = AgentService(database, guarded_settings)
     run_dir = tmp_path / "run-completeness"
@@ -5777,7 +6387,7 @@ def test_streaming_bridge_defers_whole_answer_completeness_checks(
         + "\n",
     ]
     monkeypatch.setattr(
-        "app.services.agent.subprocess.Popen",
+        "app.services.agent_hermes_execution.subprocess.Popen",
         lambda *args, **kwargs: _FakeStreamingProcess(lines),
     )
     updates = []
@@ -5815,15 +6425,11 @@ def test_streaming_bridge_defers_requested_industry_counts_and_contribution(
     python_bin.touch()
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "stream-stock-completeness.db",
         workspace_root=tmp_path / "stream-stock-completeness-workspaces",
         hermes_bin=hermes_bin,
         hermes_enabled=True,
     )
-    database = Database(
-        guarded_settings.database_path,
-        guarded_settings.workspace_root,
-    )
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     service = AgentService(database, guarded_settings)
     run_dir = tmp_path / "run-stock-completeness"
@@ -5882,7 +6488,7 @@ def test_streaming_bridge_defers_requested_industry_counts_and_contribution(
         + "\n",
     ]
     monkeypatch.setattr(
-        "app.services.agent.subprocess.Popen",
+        "app.services.agent_hermes_execution.subprocess.Popen",
         lambda *args, **kwargs: _FakeStreamingProcess(lines),
     )
     updates = []
@@ -5950,12 +6556,11 @@ def test_streaming_bridge_waits_for_current_quote_then_keeps_growing(
     python_bin.touch()
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "stream-quote.db",
         workspace_root=tmp_path / "stream-quote-workspaces",
         hermes_bin=hermes_bin,
         hermes_enabled=True,
     )
-    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     service = AgentService(database, guarded_settings)
     run_dir = tmp_path / "run-quote"
@@ -5998,7 +6603,7 @@ def test_streaming_bridge_waits_for_current_quote_then_keeps_growing(
         + "\n",
     ]
     monkeypatch.setattr(
-        "app.services.agent.subprocess.Popen",
+        "app.services.agent_hermes_execution.subprocess.Popen",
         lambda *args, **kwargs: _FakeStreamingProcess(lines),
     )
     updates = []
@@ -6042,11 +6647,10 @@ def test_streamed_unverified_draft_is_followed_by_final_guarded_answer(
 ):
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "stream-final-guard.db",
         workspace_root=tmp_path / "stream-final-guard-workspaces",
         hermes_enabled=True,
     )
-    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     user = database.create_user("Stream Final Guard User")
     service = AgentService(database, guarded_settings)
@@ -6117,11 +6721,10 @@ def test_streaming_bridge_failure_falls_back_to_oneshot_cli(
 ):
     guarded_settings = replace(
         settings,
-        database_path=tmp_path / "stream-fallback.db",
         workspace_root=tmp_path / "stream-fallback-workspaces",
         hermes_enabled=True,
     )
-    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database = Database(guarded_settings.workspace_root)
     database.initialize()
     user = database.create_user("Stream Fallback User")
     service = AgentService(database, guarded_settings)

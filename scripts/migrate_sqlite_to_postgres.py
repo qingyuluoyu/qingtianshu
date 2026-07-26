@@ -149,7 +149,7 @@ def migrate(
     if psycopg_url.startswith("postgres://"):
         psycopg_url = "postgresql://" + psycopg_url.removeprefix("postgres://")
 
-    domain = Database(source_path, workspace_root.expanduser().resolve(), database_url)
+    domain = Database(workspace_root.expanduser().resolve(), database_url)
     operations = OperationalDatabase(database_url)
     try:
         domain.initialize()

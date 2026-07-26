@@ -2,18 +2,29 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import os
 from pathlib import Path
 import socket
-import sqlite3
+
+import psycopg
 
 from app.operational_db import OperationalDatabase
 from app.services.background import EventBroker
 
 
 def store_for(tmp_path: Path) -> OperationalDatabase:
-    store = OperationalDatabase(f"sqlite:///{tmp_path / 'operations.db'}")
+    del tmp_path
+    store = OperationalDatabase(os.environ["QINGSHU_DATABASE_URL"])
     store.initialize()
     return store
+
+
+def execute_raw(store: OperationalDatabase, sql: str, parameters: tuple = ()) -> None:
+    url = store.database_url.replace("postgresql+psycopg://", "postgresql://", 1)
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url.removeprefix("postgres://")
+    with psycopg.connect(url) as connection:
+        connection.execute(sql, parameters)
 
 
 def test_enqueue_is_idempotent_and_survives_reopen(tmp_path: Path):
@@ -61,16 +72,16 @@ def test_expired_lease_is_requeued_and_claimed_by_another_worker(tmp_path: Path)
     claimed = store.claim("worker-a", lease_seconds=30)
     assert claimed is not None
 
-    past = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
-    with sqlite3.connect(store.sqlite_path) as connection:
-        connection.execute(
-            """
-            UPDATE persistent_jobs
-            SET lease_expires_at = ?, heartbeat_at = ?
-            WHERE id = ?
-            """,
-            (past, past, job["id"]),
-        )
+    past = datetime.now(timezone.utc) - timedelta(minutes=5)
+    execute_raw(
+        store,
+        """
+        UPDATE persistent_jobs
+        SET lease_expires_at = %s, heartbeat_at = %s
+        WHERE id = %s
+        """,
+        (past, past, job["id"]),
+    )
 
     recovered = store.recover_expired_leases()
     assert recovered == {"requeued": 1, "failed": 0}
@@ -106,24 +117,22 @@ def test_worker_registry_tracks_heartbeat_jobs_and_stale_processes(tmp_path: Pat
     assert worker["status"] == "active"
     assert worker["metadata"]["mode"] == "external"
     assert store.mark_worker_job_started("worker-observable", "job-1") is True
-    assert store.mark_worker_job_finished(
-        "worker-observable", succeeded=True
-    ) is True
+    assert store.mark_worker_job_finished("worker-observable", succeeded=True) is True
     current = store.list_workers()[0]
     assert current["jobs_claimed"] == 1
     assert current["jobs_succeeded"] == 1
     assert current["current_job_id"] is None
 
-    stale = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
-    with sqlite3.connect(store.sqlite_path) as connection:
-        connection.execute(
-            """
-            UPDATE persistent_workers
-            SET last_heartbeat_at = ?
-            WHERE worker_id = 'worker-observable'
-            """,
-            (stale,),
-        )
+    stale = datetime.now(timezone.utc) - timedelta(minutes=5)
+    execute_raw(
+        store,
+        """
+        UPDATE persistent_workers
+        SET last_heartbeat_at = %s
+        WHERE worker_id = 'worker-observable'
+        """,
+        (stale,),
+    )
     assert store.reconcile_stale_workers(stale_after_seconds=30) == 1
     assert store.list_workers()[0]["status"] == "offline"
 
@@ -163,22 +172,22 @@ def test_terminal_job_retention_prunes_by_status_without_touching_active_jobs(
     cancelled = store.enqueue("cancelled")
     assert store.cancel(cancelled["id"])
     active = store.enqueue("active")
-    old = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
-    with sqlite3.connect(store.sqlite_path) as connection:
-        connection.execute(
-            """
-            UPDATE persistent_jobs
-            SET finished_at = ?, updated_at = ?
-            WHERE id IN (?, ?, ?)
-            """,
-            (
-                old,
-                old,
-                succeeded["id"],
-                failed["id"],
-                cancelled["id"],
-            ),
-        )
+    old = datetime.now(timezone.utc) - timedelta(days=60)
+    execute_raw(
+        store,
+        """
+        UPDATE persistent_jobs
+        SET finished_at = %s, updated_at = %s
+        WHERE id IN (%s, %s, %s)
+        """,
+        (
+            old,
+            old,
+            succeeded["id"],
+            failed["id"],
+            cancelled["id"],
+        ),
+    )
     removed = store.prune_terminal_jobs(
         succeeded_retention_hours=1,
         failed_retention_hours=1,
@@ -250,14 +259,11 @@ def test_failure_uses_backoff_then_archives_after_max_attempts(tmp_path: Path):
     assert retried["attempts"] == 1
     assert datetime.fromisoformat(retried["available_at"]) > datetime.now(timezone.utc)
 
-    with sqlite3.connect(store.sqlite_path) as connection:
-        connection.execute(
-            "UPDATE persistent_jobs SET available_at = ? WHERE id = ?",
-            (
-                (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
-                job["id"],
-            ),
-        )
+    execute_raw(
+        store,
+        "UPDATE persistent_jobs SET available_at = %s WHERE id = %s",
+        (datetime.now(timezone.utc) - timedelta(seconds=1), job["id"]),
+    )
     second = store.claim("worker-b", lease_seconds=30)
     assert second is not None
     archived = store.fail(second.id, "worker-b", "still broken")
@@ -280,18 +286,18 @@ def test_persistent_schedule_coalesces_overlapping_runs(tmp_path: Path):
     claimed = store.claim("worker-a", lease_seconds=30)
     assert claimed is not None
 
-    with sqlite3.connect(store.sqlite_path) as connection:
-        connection.execute(
-            "UPDATE persistent_schedules SET next_run_at = ? WHERE name = 'market'",
-            ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),),
-        )
+    execute_raw(
+        store,
+        "UPDATE persistent_schedules SET next_run_at = %s WHERE name = 'market'",
+        (datetime.now(timezone.utc) - timedelta(seconds=1),),
+    )
     assert store.enqueue_due_schedules() == 0
     assert store.complete(claimed.id, "worker-a", {"status": "ok"}) is True
-    with sqlite3.connect(store.sqlite_path) as connection:
-        connection.execute(
-            "UPDATE persistent_schedules SET next_run_at = ? WHERE name = 'market'",
-            ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),),
-        )
+    execute_raw(
+        store,
+        "UPDATE persistent_schedules SET next_run_at = %s WHERE name = 'market'",
+        (datetime.now(timezone.utc) - timedelta(seconds=1),),
+    )
     assert store.enqueue_due_schedules() == 1
     assert store.health()["counts"]["queued"] == 1
 
@@ -371,26 +377,21 @@ def test_admin_api_can_enqueue_inspect_and_cancel_jobs(client):
 
     listing = client.get("/admin/job-queue?status=queued", headers=headers)
     assert listing.status_code == 200
-    assert listing.json()["queue"]["backend"] == "sqlite"
+    assert listing.json()["queue"]["backend"] == "postgresql"
     assert [item["id"] for item in listing.json()["jobs"]] == [job["id"]]
 
-    cancelled = client.post(
-        f"/admin/job-queue/{job['id']}/cancel", headers=headers
-    )
+    cancelled = client.post(f"/admin/job-queue/{job['id']}/cancel", headers=headers)
     assert cancelled.status_code == 200
-    retried = client.post(
-        f"/admin/job-queue/{job['id']}/retry", headers=headers
-    )
+    retried = client.post(f"/admin/job-queue/{job['id']}/retry", headers=headers)
     assert retried.status_code == 202
     operations = client.get("/admin/operations/health", headers=headers)
     assert operations.status_code == 200
     assert operations.json()["queue"]["schema_version"] == 4
-    assert operations.json()["backups"]["status"] == "not_applicable"
+    assert operations.json()["backups"]["status"] == "ok"
     schedules = client.get("/admin/job-schedules", headers=headers)
     assert schedules.status_code == 200
     assert any(
-        item["name"] == "data_quality_audit"
-        for item in schedules.json()["schedules"]
+        item["name"] == "data_quality_audit" for item in schedules.json()["schedules"]
     )
     paused = client.post(
         "/admin/job-schedules/data_quality_audit/pause",
@@ -428,9 +429,7 @@ def test_background_service_executes_registered_job_through_persistent_queue(cli
     )
     assert background.run_once("integration-worker") is True
 
-    completed = {
-        item["id"]: item for item in background.list_jobs(status="succeeded")
-    }
+    completed = {item["id"]: item for item in background.list_jobs(status="succeeded")}
     assert completed[queued["id"]]["result"]["status"] in {
         "healthy",
         "degraded",
@@ -438,8 +437,7 @@ def test_background_service_executes_registered_job_through_persistent_queue(cli
     }
     latest = client.app.state.database.latest_background_jobs()
     assert any(
-        item["job_name"] == "data_quality_audit"
-        and item["status"] == "completed"
+        item["job_name"] == "data_quality_audit" and item["status"] == "completed"
         for item in latest
     )
 

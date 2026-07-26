@@ -33,6 +33,7 @@ from app.services.global_info import GlobalInformationService
 from app.services.us_fundamentals import USEquityFundamentalsService
 from app.services.peer_comparison import PeerComparisonService
 from app.services.research_tracking import ResearchTrackingService
+from app.services.security_master import SecurityMasterService
 from app.services.research_claims import build_research_claim_ledger
 
 
@@ -513,6 +514,7 @@ class ResearchReportService:
         self.evidence_service = evidence_service
         self.agent = agent
         self.settings = settings
+        self.security_master = SecurityMasterService(database)
         self.editor_user = database.ensure_system_editor()
         self.tracking = ResearchTrackingService(database)
         self._ensure_editor_targets()
@@ -538,6 +540,11 @@ class ResearchReportService:
     ) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
         evidence = self.evidence_service.build(self.editor_user["id"], canonical)
+        name = self.security_master.display_name(
+            canonical,
+            evidence.get("display_name"),
+        )
+        evidence["display_name"] = name
         fingerprint = self._fingerprint(evidence)
         latest = self.database.latest_research_report(canonical)
         if not force and latest and latest["fingerprint"] == fingerprint:
@@ -549,8 +556,6 @@ class ResearchReportService:
                 "report": latest,
             }
 
-        target = RESEARCH_TARGETS.get(canonical, {})
-        name = target.get("name") or evidence.get("display_name") or canonical
         run = self.agent.run(
             user=self.editor_user,
             intent="stock_research",
@@ -639,9 +644,20 @@ class ResearchReportService:
             for item in self.database.list_latest_research_reports(limit=limit)
         ]
 
-    @staticmethod
-    def public_report(report: dict[str, Any]) -> dict[str, Any]:
+    def public_report(self, report: dict[str, Any]) -> dict[str, Any]:
         item = dict(report)
+        symbol = normalize_symbol(str(item.get("symbol") or ""))
+        original_name = str(item.get("name") or "")
+        display_name = self.security_master.display_name(
+            symbol,
+            original_name,
+            (item.get("evidence") or {}).get("display_name"),
+        )
+        item["name"] = display_name
+        if original_name and original_name != display_name:
+            for key in ("title", "summary", "body"):
+                if item.get(key):
+                    item[key] = str(item[key]).replace(original_name, display_name)
         for key in ("evidence", "fingerprint", "run_id"):
             item.pop(key, None)
         return item

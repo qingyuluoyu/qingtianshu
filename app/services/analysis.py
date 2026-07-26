@@ -1333,7 +1333,19 @@ class MarketAnalysisService:
                 )
             ]
         index_items = self._fetch_index_items(catalog, range_name="3mo")
-        sector_data = self.hot_sectors(limit=10)
+        sector_data = (
+            self.hot_sectors(limit=10)
+            if market_key in {None, "china"}
+            else {
+                "status": "not_applicable",
+                "market_timestamp": None,
+                "fetched_at": utc_now(),
+                "coverage": {"returned": 0},
+                "warnings": [],
+                "sectors": [],
+                "scope": "a_share_sectors",
+            }
+        )
         breadth_data = (
             self.market_breadth()
             if market_key in {None, "china"}

@@ -5,8 +5,9 @@ import re
 from typing import Any
 from urllib.parse import quote
 
-from app.catalog import RESEARCH_TARGETS, SECURITY_NAME_ALIASES, normalize_symbol
+from app.catalog import SECURITY_NAME_ALIASES, normalize_symbol
 from app.db import Database
+from app.services.security_master import SecurityMasterService
 
 
 class GlobalSearchService:
@@ -24,6 +25,7 @@ class GlobalSearchService:
     def __init__(self, database: Database, trade_workflow: Any):
         self.database = database
         self.trade_workflow = trade_workflow
+        self.security_master = SecurityMasterService(database)
 
     def search(self, user_id: str, query: str, *, limit: int = 8) -> dict[str, Any]:
         raw_query = str(query or "").strip()
@@ -70,14 +72,7 @@ class GlobalSearchService:
         }
 
     def _universe_items(self) -> list[dict[str, Any]]:
-        snapshot = self.database.latest_tushare_dataset_snapshot(
-            "a_share_universe", "all"
-        )
-        items = [
-            dict(item)
-            for item in ((snapshot or {}).get("payload") or {}).get("items", [])
-            if isinstance(item, dict)
-        ]
+        items = self.security_master.universe_items()
         by_symbol: dict[str, dict[str, Any]] = {}
         for item in items:
             try:
@@ -88,18 +83,6 @@ class GlobalSearchService:
                 continue
             by_symbol[symbol] = {**item, "symbol": symbol}
 
-        for symbol, target in RESEARCH_TARGETS.items():
-            canonical = normalize_symbol(symbol)
-            by_symbol.setdefault(
-                canonical,
-                {
-                    "symbol": canonical,
-                    "name": target.get("name") or canonical,
-                    "market": target.get("market"),
-                    "industry": None,
-                    "exchange": None,
-                },
-            )
         for alias, symbol in SECURITY_NAME_ALIASES.items():
             canonical = normalize_symbol(symbol)
             item = by_symbol.setdefault(

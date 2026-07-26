@@ -106,6 +106,7 @@ def test_price_question_uses_scoped_modules_and_private_stock_workspace(
     assert "# Event Timeline" in prompt
     assert "# Shareholder Structure" not in prompt
     assert "# Earnings Quality" not in prompt
+    assert "个股涨跌原因回答合同" in prompt
 
 
 def test_recent_stable_modules_are_reused_while_market_and_quote_refresh(
@@ -248,7 +249,7 @@ def test_price_plan_prompt_compaction_caps_repeated_context():
 
     compact = AgentService._compact_stock_research_evidence(evidence)
 
-    assert len(compact["event_timeline"]["events"]) == 8
+    assert len(compact["event_timeline"]["events"]) == 4
     assert "risk_events" not in compact["event_timeline"]
     assert "supportive_events" not in compact["event_timeline"]
     assert len(compact["knowledge_context"]["items"]) == 2

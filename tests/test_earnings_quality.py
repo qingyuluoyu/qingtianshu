@@ -51,7 +51,7 @@ def financial_period(
 
 
 def test_zte_revenue_profit_and_cashflow_contradictions_are_explicit(settings):
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     database.upsert_financial_periods(
         [
@@ -108,7 +108,7 @@ def test_zte_revenue_profit_and_cashflow_contradictions_are_explicit(settings):
 def test_positive_growth_with_weak_cash_conversion_is_not_called_fully_consistent(
     settings,
 ):
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     database.upsert_financial_periods(
         [
@@ -151,7 +151,7 @@ def test_positive_growth_with_weak_cash_conversion_is_not_called_fully_consisten
 def test_us_quarter_matches_previous_fiscal_quarter_and_snapshot_is_idempotent(
     settings,
 ):
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     database.upsert_financial_periods(
         [
@@ -192,9 +192,12 @@ def test_us_quarter_matches_previous_fiscal_quarter_and_snapshot_is_idempotent(
     assert first["overall_label"] == "增长与盈利兑现较一致"
     assert first["snapshot_id"] == second["snapshot_id"]
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM earnings_quality_snapshots WHERE symbol = 'NVDA'"
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM earnings_quality_snapshots WHERE symbol = 'NVDA'"
+            ).fetchone()["count"]
+            == 1
+        )
     documents = database.list_knowledge_documents(None, include_content=True)
     document = next(
         item for item in documents if item["source_key"] == "earnings-quality:NVDA"

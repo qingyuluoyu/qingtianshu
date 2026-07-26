@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import sys
+import time
 from typing import Any
 from urllib.parse import urljoin, urlparse
 
@@ -38,13 +39,13 @@ CHECKS = (
         "screening",
         "/research?mode=screening",
         "#stockScreenerPanel:not([hidden])",
-        "#stockScreenResults",
+        "#generalScreenerPanel:not([hidden])",
     ),
     Check(
         "stock-overview",
         "/stocks/000063.SZ?tab=overview",
         "#deepStockPanel:not([hidden])",
-        "#deepStockOverview",
+        ".stock-workspace-card.primary",
     ),
     Check(
         "stock-history",
@@ -203,6 +204,42 @@ def stock_overview_mobile_widths(page: Page) -> list[dict[str, Any]]:
     )
 
 
+def screening_section_state(page: Page) -> dict[str, Any]:
+    return page.evaluate(
+        """
+        () => {
+          const general = document.querySelector("#generalScreenerPanel");
+          const strategy = document.querySelector("#liZongPanel");
+          const generalTab = document.querySelector('[data-screening-jump="general"]');
+          const strategyTab = document.querySelector('[data-screening-jump="li_zong"]');
+          const historyPanel = document.querySelector("#liZongHistoryPanel");
+          const historyToggle = document.querySelector("#liZongHistoryToggle");
+          const historyResults = document.querySelector("#liZongHistoryResults");
+          const visible = node => Boolean(
+            node
+            && !node.hidden
+            && node.getBoundingClientRect().width > 0
+            && node.getBoundingClientRect().height > 0
+          );
+          const toggleVisible = visible(historyToggle);
+          return {
+            url: location.pathname + location.search,
+            generalVisible: visible(general),
+            strategyVisible: visible(strategy),
+            loadState: strategy?.dataset.loadState ?? null,
+            generalSelected: generalTab?.getAttribute("aria-selected") ?? null,
+            strategySelected: strategyTab?.getAttribute("aria-selected") ?? null,
+            historyPanelVisible: visible(historyPanel),
+            historyToggleVisible: toggleVisible,
+            historyToggleExpanded:
+              toggleVisible ? historyToggle.getAttribute("aria-expanded") : null,
+            historyDetailsVisible: visible(historyResults),
+          };
+        }
+        """
+    )
+
+
 def wait_for_content(page: Page, selector: str) -> None:
     page.locator(selector).wait_for(state="visible")
     page.wait_for_timeout(900)
@@ -260,8 +297,36 @@ def run_check(
     wait_for_content(page, check.content_selector)
     overflow = visible_overflow(page)
     mobile_widths = []
+    screening_structure = {}
     if viewport.width <= 390 and check.name == "stock-overview":
         mobile_widths = stock_overview_mobile_widths(page)
+    if check.name == "screening":
+        default_state = screening_section_state(page)
+        switch_started = time.perf_counter()
+        page.locator('[data-screening-jump="li_zong"]').click()
+        page.locator("#liZongPanel:not([hidden])").wait_for(state="visible")
+        panel_visible_seconds = time.perf_counter() - switch_started
+        loading_state = screening_section_state(page)
+        page.locator('#liZongPanel[data-load-state="ready"]').wait_for(
+            state="visible",
+            timeout=max(timeout_ms, 30_000),
+        )
+        strategy_ready_seconds = time.perf_counter() - switch_started
+        page.wait_for_timeout(200)
+        strategy_state = screening_section_state(page)
+        page.locator('[data-screening-jump="general"]').click()
+        page.locator("#generalScreenerPanel:not([hidden])").wait_for(state="visible")
+        page.locator("#liZongPanel").wait_for(state="hidden")
+        page.wait_for_timeout(100)
+        restored_state = screening_section_state(page)
+        screening_structure = {
+            "default": default_state,
+            "loading": loading_state,
+            "strategy": strategy_state,
+            "restored": restored_state,
+            "panel_visible_seconds": round(panel_visible_seconds, 3),
+            "strategy_ready_seconds": round(strategy_ready_seconds, 3),
+        }
     unexpected_responses = [
         item for item in error_responses if not expected_boot_response(item)
     ]
@@ -283,6 +348,7 @@ def run_check(
         "title": page.title(),
         "overflow": overflow,
         "mobile_core_widths": mobile_widths,
+        "screening_progressive_disclosure": screening_structure,
         "console_errors": console_errors,
         "page_errors": page_errors,
         "failed_responses": unexpected_responses,
@@ -308,6 +374,47 @@ def run_check(
                 f"{item['selector']}={item['width']}px" for item in too_narrow
             )
         )
+    if screening_structure:
+        default_state = screening_structure["default"]
+        strategy_state = screening_structure["strategy"]
+        restored_state = screening_structure["restored"]
+        panel_visible_seconds = float(
+            screening_structure.get("panel_visible_seconds") or 0
+        )
+        if not (
+            default_state.get("generalVisible")
+            and not default_state.get("strategyVisible")
+            and default_state.get("generalSelected") == "true"
+            and default_state.get("strategySelected") == "false"
+            and "section=li_zong" not in str(default_state.get("url") or "")
+        ):
+            problems.append("透明选股默认分区异常：通用筛选没有独占显示")
+        if not (
+            not strategy_state.get("generalVisible")
+            and strategy_state.get("strategyVisible")
+            and strategy_state.get("loadState") == "ready"
+            and strategy_state.get("generalSelected") == "false"
+            and strategy_state.get("strategySelected") == "true"
+            and "section=li_zong" in str(strategy_state.get("url") or "")
+        ):
+            problems.append("透明选股切换异常：李总策略没有独占显示或 URL 未恢复")
+        if panel_visible_seconds > 1.5:
+            problems.append(
+                f"透明选股切换反馈过慢：策略面板 {panel_visible_seconds:.3f}s 后可见"
+            )
+        if not (
+            restored_state.get("generalVisible")
+            and not restored_state.get("strategyVisible")
+            and restored_state.get("generalSelected") == "true"
+            and restored_state.get("strategySelected") == "false"
+            and "section=li_zong" not in str(restored_state.get("url") or "")
+        ):
+            problems.append("透明选股返回异常：通用筛选状态没有恢复")
+        if strategy_state.get("historyToggleVisible") and (
+            strategy_state.get("historyToggleExpanded") != "false"
+            or strategy_state.get("historyDetailsVisible")
+        ):
+            problems.append("李总策略历史详情没有保持默认折叠")
     if console_errors:
         problems.append("console error: " + " | ".join(console_errors[:3]))
     if page_errors:

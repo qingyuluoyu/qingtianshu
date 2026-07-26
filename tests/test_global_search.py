@@ -4,8 +4,39 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.services.security_master import SecurityMasterService
+
 
 DEMO_HTML = Path(__file__).parents[1] / "app" / "static" / "demo.html"
+FRONTEND_ASSETS = (
+    "demo.css",
+    "qs-format.js",
+    "qs-screening.js",
+    "demo.js",
+    "qs-agent-entry.js",
+    "qs-workspace.js",
+    "qs-reader.js",
+    "qs-agent-ui.js",
+    "qs-knowledge.js",
+    "qs-home.js",
+    "qs-watchlist.js",
+    "qs-market.js",
+    "qs-stock-core.js",
+    "qs-stock-workflow.js",
+    "qs-stock-space.js",
+    "qs-deep-stock.js",
+    "qs-review.js",
+    "qs-chat-runtime.js",
+    "demo-boot.js",
+)
+
+
+def frontend_source() -> str:
+    static = DEMO_HTML.parent
+    return "\n".join(
+        [DEMO_HTML.read_text(encoding="utf-8")]
+        + [(static / name).read_text(encoding="utf-8") for name in FRONTEND_ASSETS]
+    )
 
 
 def _create_user(client: TestClient, name: str) -> dict:
@@ -66,6 +97,35 @@ def _group(payload: dict, key: str) -> list[dict]:
         (group["items"] for group in payload["groups"] if group["key"] == key),
         [],
     )
+
+
+def test_security_master_prefers_local_a_share_chinese_name(app) -> None:
+    _seed_universe(app)
+    resolver = SecurityMasterService(app.state.database)
+
+    assert resolver.display_name(
+        "000063.SZ", "ZTE Corporation"
+    ) == "中兴通讯"
+
+    public = app.state.research_reports.public_report(
+        {
+            "id": "report-english-name",
+            "symbol": "000063.SZ",
+            "name": "ZTE Corporation",
+            "title": "ZTE Corporation研究快照",
+            "summary": "继续研究 ZTE Corporation。",
+            "body": "ZTE Corporation 的证据仍需核验。",
+            "status": "preview",
+            "generated_at": "2026-07-22T15:00:00+08:00",
+            "market_timestamp": "2026-07-22T15:00:00+08:00",
+            "evidence": {"display_name": "ZTE Corporation"},
+            "fingerprint": "english-name",
+            "run_id": None,
+        }
+    )
+    assert public["name"] == "中兴通讯"
+    assert public["title"] == "中兴通讯研究快照"
+    assert "ZTE Corporation" not in str(public)
 
 
 def test_global_search_finds_market_and_private_research_assets(app) -> None:
@@ -136,7 +196,7 @@ def test_human_routes_and_frontend_state_contract_are_refreshable(client) -> Non
         assert response.status_code == 200
         assert "清数智算" in response.text
 
-    page = DEMO_HTML.read_text(encoding="utf-8")
+    page = frontend_source()
     for fragment in (
         'api(`/v1/search?q=${encodeURIComponent(query)}&limit=8`)',
         "function readWorkspaceRoute()",

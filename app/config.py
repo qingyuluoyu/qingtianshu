@@ -67,7 +67,6 @@ def _path_from_env(name: str, default: Path | str, *, command: bool = False) -> 
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
-    database_path: Path
     workspace_root: Path
     hermes_bin: Path
     hermes_enabled: bool
@@ -109,7 +108,7 @@ class Settings:
     job_max_attempts: int = 3
     job_retry_base_seconds: int = 10
     job_retry_max_seconds: int = 600
-    job_worker_concurrency: int = 1
+    job_worker_concurrency: int = 2
     job_worker_heartbeat_seconds: int = 10
     job_worker_stale_seconds: int = 45
     backup_dir: Path = Path("./backups")
@@ -124,8 +123,13 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         data_dir = _path_from_env("QINGSHU_DATA_DIR", DEFAULT_DATA_DIR)
-        database_path = _path_from_env("QINGSHU_DB_PATH", data_dir / "qingshu.db")
         database_url = os.getenv("QINGSHU_DATABASE_URL", "").strip()
+        if not database_url.startswith(
+            ("postgresql://", "postgres://", "postgresql+psycopg://")
+        ):
+            raise ValueError(
+                "QINGSHU_DATABASE_URL is required and must use PostgreSQL"
+            )
         worker_mode = os.getenv("BACKGROUND_WORKER_MODE", "embedded").strip().lower()
         if worker_mode not in {"embedded", "external", "disabled"}:
             raise ValueError(
@@ -133,7 +137,6 @@ class Settings:
             )
         return cls(
             data_dir=data_dir,
-            database_path=database_path,
             workspace_root=_path_from_env(
                 "QINGSHU_WORKSPACE_ROOT", data_dir / "workspaces"
             ),
@@ -230,7 +233,7 @@ class Settings:
                 1, int(os.getenv("JOB_RETRY_MAX_SECONDS", "600"))
             ),
             job_worker_concurrency=max(
-                1, int(os.getenv("JOB_WORKER_CONCURRENCY", "1"))
+                1, int(os.getenv("JOB_WORKER_CONCURRENCY", "2"))
             ),
             job_worker_heartbeat_seconds=max(
                 1, int(os.getenv("JOB_WORKER_HEARTBEAT_SECONDS", "10"))
@@ -276,12 +279,15 @@ class Settings:
 
     @property
     def operational_database_url(self) -> str:
-        if self.database_url:
-            return self.database_url
-        return f"sqlite:///{self.database_path}"
+        if not self.database_url.startswith(
+            ("postgresql://", "postgres://", "postgresql+psycopg://")
+        ):
+            raise ValueError(
+                "QINGSHU_DATABASE_URL is required and must use PostgreSQL"
+            )
+        return self.database_url
 
     def ensure_directories(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.workspace_root.mkdir(parents=True, exist_ok=True)
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
         self.backup_dir.mkdir(parents=True, exist_ok=True)

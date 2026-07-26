@@ -57,6 +57,7 @@ _USAGE_KEYS = (
     "failed",
     "partial",
     "service_tier",
+    "turn_exit_reason",
 )
 
 
@@ -68,7 +69,14 @@ def emit(event: dict[str, Any], output: Any | None = None) -> None:
         target.flush()
 
 
-def run_bridge(prompt: str, model: str | None, provider: str | None) -> int:
+def run_bridge(
+    prompt: str,
+    model: str | None,
+    provider: str | None,
+    max_tokens: int | None,
+    max_iterations: int,
+    reasoning_effort: str | None,
+) -> int:
     os.environ["HERMES_SAFE_MODE"] = "1"
     os.environ["HERMES_IGNORE_USER_CONFIG"] = "1"
     os.environ["HERMES_IGNORE_RULES"] = "1"
@@ -107,6 +115,14 @@ def run_bridge(prompt: str, model: str | None, provider: str | None) -> int:
                 elif text:
                     emit({"type": "delta", "text": text}, real_stdout)
 
+            reasoning_config = None
+            if reasoning_effort:
+                reasoning_config = (
+                    {"enabled": False, "effort": "none"}
+                    if reasoning_effort == "none"
+                    else {"enabled": True, "effort": reasoning_effort}
+                )
+
             agent = AIAgent(
                 api_key=runtime.get("api_key"),
                 base_url=runtime.get("base_url"),
@@ -119,7 +135,9 @@ def run_bridge(prompt: str, model: str | None, provider: str | None) -> int:
                 credential_pool=runtime.get("credential_pool"),
                 fallback_model=fallback_chain or None,
                 clarify_callback=_oneshot_clarify_callback,
-                max_iterations=1,
+                max_iterations=max_iterations,
+                max_tokens=max_tokens,
+                reasoning_config=reasoning_config,
                 skip_context_files=True,
                 skip_memory=True,
                 stream_delta_callback=on_delta,
@@ -129,6 +147,15 @@ def run_bridge(prompt: str, model: str | None, provider: str | None) -> int:
             result = agent.run_conversation(prompt)
 
         answer = str(result.get("final_response") or "").strip()
+        if result.get("completed") is False:
+            emit(
+                {
+                    "type": "error",
+                    "error": "Hermes did not complete the answer within its turn budget",
+                },
+                real_stdout,
+            )
+            return 1
         if not answer:
             emit(
                 {
@@ -162,6 +189,12 @@ def main() -> int:
     parser.add_argument("--prompt-file", type=Path)
     parser.add_argument("--model")
     parser.add_argument("--provider")
+    parser.add_argument("--max-tokens", type=int)
+    parser.add_argument("--max-iterations", type=int, default=4)
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=("none", "low", "medium", "high", "max"),
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
@@ -179,7 +212,18 @@ def main() -> int:
     if args.prompt_file is None:
         parser.error("--prompt-file is required unless --self-test is used")
     prompt = args.prompt_file.read_text(encoding="utf-8")
-    return run_bridge(prompt, args.model, args.provider)
+    if args.max_tokens is not None and args.max_tokens <= 0:
+        parser.error("--max-tokens must be positive")
+    if args.max_iterations <= 0:
+        parser.error("--max-iterations must be positive")
+    return run_bridge(
+        prompt,
+        args.model,
+        args.provider,
+        args.max_tokens,
+        args.max_iterations,
+        args.reasoning_effort,
+    )
 
 
 if __name__ == "__main__":

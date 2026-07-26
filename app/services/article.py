@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import re
 from typing import Any
 
 from app.config import Settings
@@ -126,7 +127,9 @@ class MarketPulseArticleService:
     @staticmethod
     def _public_article(article: dict[str, Any]) -> dict[str, Any]:
         item = dict(article)
-        body = str(item.get("body") or "")
+        body = MarketPulseArticleService._sanitize_public_text(
+            str(item.get("body") or "")
+        )
         marker = "## 数据边界"
         if marker in body:
             body = body.split(marker, 1)[0].rstrip()
@@ -136,9 +139,20 @@ class MarketPulseArticleService:
                 "关键行情可能存在正常传输延迟，阅读时以页面标注时间为准。"
             )
         item["body"] = body
+        item["summary"] = MarketPulseArticleService._sanitize_public_text(
+            str(item.get("summary") or "")
+        )
         for key in ("evidence", "user_id", "fingerprint", "run_id"):
             item.pop(key, None)
         return item
+
+    @staticmethod
+    def _sanitize_public_text(value: str) -> str:
+        return re.sub(
+            r"指数平均单日变化\s*—+%，代表性指数上涨比例\s*—+。",
+            "由于跨市场交易时点不同，暂不计算整体平均涨跌和上涨比例。",
+            value,
+        )
 
     @staticmethod
     def _quality(market_brief: dict[str, Any]) -> dict[str, Any]:

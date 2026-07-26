@@ -9,6 +9,10 @@
 __pycache__/
 *.py[cod]
 data/
+backups/
+output/
+report_assets/
+tmp/
 .qa-*/
 .docx-product-report-assets/
 report_render*/

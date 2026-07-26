@@ -5,6 +5,7 @@ from typing import Any
 from app.catalog import RESEARCH_TARGETS, normalize_symbol
 from app.db import Database
 from app.services.research_claims import build_research_claim_ledger
+from app.services.security_master import SecurityMasterService
 from app.utils import utc_now
 
 
@@ -17,6 +18,16 @@ class DeepStockResearchService:
 
     WORKFLOW_VERSION = "guided_deep_stock_v1"
     STAGE_COMPLETION_GATE_VERSION = "stage_completion_gate_v2"
+    RUN_NOT_ADVANCED_NOTICE = (
+        "本轮没有形成可复核的新结论，研究进度保持不变；"
+        "可重新发起研究或继续核验下一条证据。"
+    )
+    RUN_EVIDENCE_REVIEW_NOTICE = (
+        "本轮结论的证据引用仍需补充核验，研究进度保持不变。"
+    )
+    CORE_EVIDENCE_REVIEW_NOTICE = (
+        "本轮核心证据尚不完整，研究进度保持不变；请先补齐下一条关键证据。"
+    )
     STAGES = (
         {
             "key": "original_thesis",
@@ -114,6 +125,7 @@ class DeepStockResearchService:
 
     def __init__(self, database: Database):
         self.database = database
+        self.security_master = SecurityMasterService(database)
 
     def list_sessions(self, user_id: str, limit: int = 50) -> dict[str, Any]:
         items = [
@@ -175,34 +187,33 @@ class DeepStockResearchService:
             if bound_conversation and bound_conversation.get("status") != "active":
                 bound_conversation = None
         if bound_conversation is None:
-            display_name = str(
-                (research_entry or {}).get("display_name")
-                or self._display_name(user_id, canonical)
+            display_name = self.security_master.display_name(
+                canonical,
+                (research_entry or {}).get("display_name"),
+                self._display_name(user_id, canonical),
             )
             bound_conversation = self.database.create_conversation(
                 user_id, f"个股研究｜{display_name}"
             )
 
         report = self.database.latest_research_report(canonical)
-        name = str(
-            (research_entry or {}).get("display_name")
-            or self._display_name(user_id, canonical)
+        name = self.security_master.display_name(
+            canonical,
+            (research_entry or {}).get("display_name"),
+            self._display_name(user_id, canonical),
         )
         current_title = str(bound_conversation.get("title") or "")
         automatic_titles = {
             f"个股研究｜{canonical}",
             f"个股研究｜{canonical.split('.', 1)[0]}",
+            f"个股研究｜{str((existing or {}).get('name') or '').strip()}",
+            f"个股研究｜{str((report or {}).get('name') or '').strip()}",
         }
+        automatic_titles.discard("个股研究｜")
         desired_title = f"个股研究｜{name}"
         if (
             current_title != desired_title
-            and (
-                conversation_id is not None
-                or (
-                    research_entry is not None
-                    and current_title in automatic_titles
-                )
-            )
+            and (conversation_id is not None or current_title in automatic_titles)
         ):
             bound_conversation = self.database.rename_conversation(
                 user_id,
@@ -417,17 +428,12 @@ class DeepStockResearchService:
             run,
             evidence,
         )
+        unresolved = [
+            item for item in unresolved if not self._is_run_gate_notice(item)
+        ]
         if run_status not in self.EVIDENCE_PERSISTED_RUN_STATUSES:
-            unresolved.append(
-                "最近一轮研究未通过完整模型与输出校验，因此没有推进研究阶段。"
-            )
+            unresolved.append(self.RUN_NOT_ADVANCED_NOTICE)
         else:
-            unresolved = [
-                item
-                for item in unresolved
-                if item
-                != "最近一轮研究未通过完整模型与输出校验，因此没有推进研究阶段。"
-            ]
             coverage = self._coverage_dimensions(evidence, intent=intent)
             if (
                 run_status in self.STAGE_ADVANCING_RUN_STATUSES
@@ -707,20 +713,70 @@ class DeepStockResearchService:
         run: dict[str, Any], evidence: dict[str, Any]
     ) -> tuple[bool, str]:
         if str(run.get("status") or "") != "completed":
-            return False, "最近一轮研究未完成，因此没有推进研究阶段。"
+            return False, DeepStockResearchService.RUN_NOT_ADVANCED_NOTICE
         usage = run.get("usage") or {}
         output_guard = usage.get("output_guard") if isinstance(usage, dict) else None
         if not isinstance(output_guard, dict) or output_guard.get("passed") is not True:
             return (
                 False,
-                "最近一轮研究缺少可验证的最终输出守卫通过记录，因此没有推进研究阶段。",
+                DeepStockResearchService.RUN_EVIDENCE_REVIEW_NOTICE,
             )
         if not DeepStockResearchService._packet_available(evidence):
             return (
                 False,
-                "最近一轮研究的核心证据包缺失或失败，因此没有推进研究阶段。",
+                DeepStockResearchService.CORE_EVIDENCE_REVIEW_NOTICE,
             )
         return True, ""
+
+    @classmethod
+    def _is_run_gate_notice(cls, value: Any) -> bool:
+        text = str(value or "")
+        return text in {
+            cls.RUN_NOT_ADVANCED_NOTICE,
+            cls.RUN_EVIDENCE_REVIEW_NOTICE,
+            cls.CORE_EVIDENCE_REVIEW_NOTICE,
+        } or any(
+            term in text
+            for term in (
+                "完整模型与输出校验",
+                "最终输出守卫",
+                "核心证据包缺失或失败",
+                "最近一轮研究未完成",
+            )
+        )
+
+    @classmethod
+    def _public_issue_text(cls, value: Any) -> str:
+        text = " ".join(str(value or "").split())
+        if not text:
+            return ""
+        if text == cls.CORE_EVIDENCE_REVIEW_NOTICE:
+            return text
+        if "核心证据包缺失或失败" in text:
+            return cls.CORE_EVIDENCE_REVIEW_NOTICE
+        if cls._is_run_gate_notice(text):
+            return cls.RUN_NOT_ADVANCED_NOTICE
+        if any(
+            term in text
+            for term in (
+                "完成 Run",
+                "历史 Run",
+                "当前证据门禁",
+                "更严格的证据门禁",
+                "旧版规则完成",
+            )
+        ):
+            return "部分历史研究阶段需要用当前证据重新核验。"
+        return text
+
+    @classmethod
+    def _public_issue_list(cls, values: list[Any]) -> list[str]:
+        output: list[str] = []
+        for value in values:
+            text = cls._public_issue_text(value)
+            if text and text not in output:
+                output.append(text)
+        return output
 
     def _stage_source_refs(
         self,
@@ -1289,7 +1345,13 @@ class DeepStockResearchService:
     ) -> dict[str, Any]:
         if session is None:
             raise ValueError("个股研究会话不存在")
-        stages = list(session.get("stages") or [])
+        stages = []
+        for raw_stage in session.get("stages") or []:
+            stage = dict(raw_stage)
+            stage["review_reasons"] = self._public_issue_list(
+                list(stage.get("review_reasons") or [])
+            )
+            stages.append(stage)
         completed = sum(item.get("status") == "completed" for item in stages)
         current = next(
             (
@@ -1300,6 +1362,12 @@ class DeepStockResearchService:
             None,
         )
         report = self.database.latest_research_report(str(session["symbol"]))
+        display_name = self.security_master.display_name(
+            str(session["symbol"]),
+            session.get("name"),
+            (report or {}).get("name"),
+            ((report or {}).get("evidence") or {}).get("display_name"),
+        )
         restored_coverage = self._coverage_from_modules(
             dict(session.get("evidence_modules") or {})
         )
@@ -1335,8 +1403,24 @@ class DeepStockResearchService:
         conversation = self.database.get_conversation(
             str(session["user_id"]), str(session["conversation_id"])
         )
+        conversation_title = str((conversation or {}).get("title") or "")
+        automatic_suffixes = {
+            str(session.get("name") or ""),
+            str((report or {}).get("name") or ""),
+            str(session["symbol"]),
+            str(session["symbol"]).split(".", 1)[0],
+        }
+        if conversation_title.startswith("个股研究｜") and conversation_title.split(
+            "｜", 1
+        )[1] in automatic_suffixes:
+            conversation_title = f"个股研究｜{display_name}"
         return {
             **session,
+            "name": display_name,
+            "stages": stages,
+            "unresolved_items": self._public_issue_list(
+                list(session.get("unresolved_items") or [])
+            ),
             "progress": {
                 "completed": completed,
                 "total": len(stages),
@@ -1345,7 +1429,7 @@ class DeepStockResearchService:
             "current_stage": current,
             "conversation": {
                 "id": session["conversation_id"],
-                "title": (conversation or {}).get("title"),
+                "title": conversation_title,
                 "message_count": (conversation or {}).get("message_count", 0),
             },
             "latest_report": self._public_report(report),
@@ -1534,17 +1618,31 @@ class DeepStockResearchService:
             evidence[target_key] = dict(run_evidence)
         return evidence
 
-    @staticmethod
-    def _public_report(report: dict[str, Any] | None) -> dict[str, Any] | None:
+    def _public_report(
+        self, report: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
         if report is None:
             return None
+        symbol = str(report.get("symbol") or "")
+        original_name = str(report.get("name") or "")
+        display_name = self.security_master.display_name(
+            symbol,
+            original_name,
+            (report.get("evidence") or {}).get("display_name"),
+        )
+
+        def localized(value: Any) -> Any:
+            if not value or not original_name or original_name == display_name:
+                return value
+            return str(value).replace(original_name, display_name)
+
         return {
             "id": report.get("id"),
             "symbol": report.get("symbol"),
-            "name": report.get("name"),
-            "title": report.get("title"),
-            "summary": report.get("summary"),
-            "body": report.get("body"),
+            "name": display_name,
+            "title": localized(report.get("title")),
+            "summary": localized(report.get("summary")),
+            "body": localized(report.get("body")),
             "status": report.get("status"),
             "generated_at": report.get("generated_at"),
             "market_timestamp": report.get("market_timestamp"),
@@ -1553,11 +1651,12 @@ class DeepStockResearchService:
     def _display_name(self, user_id: str, symbol: str) -> str:
         watchlist = self.database.get_watchlist_item(user_id, symbol) or {}
         report = self.database.latest_research_report(symbol) or {}
-        return str(
-            watchlist.get("name")
-            or RESEARCH_TARGETS.get(symbol, {}).get("name")
-            or report.get("name")
-            or symbol
+        return self.security_master.display_name(
+            symbol,
+            watchlist.get("name"),
+            RESEARCH_TARGETS.get(symbol, {}).get("name"),
+            report.get("name"),
+            (report.get("evidence") or {}).get("display_name"),
         )
 
     def _next_question(

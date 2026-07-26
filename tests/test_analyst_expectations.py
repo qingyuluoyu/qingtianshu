@@ -105,7 +105,9 @@ def test_provider_parses_consensus_and_reports_without_target_prices():
     report = packet["reports"][0]
     assert report["published_at"] == "2026-07-18"
     assert report["forecast_eps"][0] == {"year": 2026, "value": 1.42}
-    assert not any("target" in key.casefold() or "aim" in key.casefold() for key in report)
+    assert not any(
+        "target" in key.casefold() or "aim" in key.casefold() for key in report
+    )
     report_call = next(params for url, params in calls if "reportapi" in url)
     assert report_call["beginTime"] == "2025-01-17"
     assert report_call["endTime"] == "2026-07-22"
@@ -122,10 +124,13 @@ def test_service_persists_revisions_and_long_term_knowledge(app):
     assert first["revision"]["available"] is False
     assert repeated["revision"]["available"] is False
     with app.state.database.connect() as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM analyst_expectation_snapshots WHERE symbol = ?",
-            ("000063.SZ",),
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM analyst_expectation_snapshots WHERE symbol = ?",
+                ("000063.SZ",),
+            ).fetchone()["count"]
+            == 1
+        )
 
     provider.estimate_2026 = 1.54
     provider.organization_count = 12
@@ -134,9 +139,7 @@ def test_service_persists_revisions_and_long_term_knowledge(app):
     assert second["revision"]["available"] is True
     assert second["revision"]["organization_count_delta"] == 1
     revision = next(
-        item
-        for item in second["revision"]["eps_revisions"]
-        if item["year"] == 2026
+        item for item in second["revision"]["eps_revisions"] if item["year"] == 2026
     )
     assert revision["direction"] == "up"
     assert revision["change"] == pytest.approx(0.14)
@@ -273,9 +276,7 @@ def test_guard_blocks_revision_claim_without_history():
         evidence,
     )
     assert unsafe_rating["passed"] is False
-    assert unsafe_rating["prohibited_patterns"] == [
-        "无研报样本语境的买入或卖出评级"
-    ]
+    assert unsafe_rating["prohibited_patterns"] == ["无研报样本语境的买入或卖出评级"]
 
 
 def test_analysis_board_and_report_fingerprint_include_analyst_expectations():
@@ -288,9 +289,7 @@ def test_analysis_board_and_report_fingerprint_include_analyst_expectations():
             "as_of_date": "2026-07-18",
             "rating_organization_count": 11,
             "rating_counts": {"buy": 9, "add": 2},
-            "forecast_eps": [
-                {"year": 2026, "value": 1.4, "kind": "estimate"}
-            ],
+            "forecast_eps": [{"year": 2026, "value": 1.4, "kind": "estimate"}],
             "latest_reports": [
                 {
                     "title": "算力业务打开新空间",
@@ -306,9 +305,7 @@ def test_analysis_board_and_report_fingerprint_include_analyst_expectations():
         **base,
         "analyst_expectations": {
             **base["analyst_expectations"],
-            "forecast_eps": [
-                {"year": 2026, "value": 1.54, "kind": "estimate"}
-            ],
+            "forecast_eps": [{"year": 2026, "value": 1.54, "kind": "estimate"}],
             "revision": {
                 "available": True,
                 "organization_count_delta": 1,
@@ -331,12 +328,11 @@ def test_analysis_board_and_report_fingerprint_include_analyst_expectations():
     assert module["status"] == "ready"
     assert module["evidence_count"] == 3
     assert any(
-        "同财年EPS一致预期" in item
-        for item in board["tracking_plan"][2]["checks"]
+        "同财年EPS一致预期" in item for item in board["tracking_plan"][2]["checks"]
     )
-    assert ResearchReportService._fingerprint(base) != ResearchReportService._fingerprint(
-        changed
-    )
+    assert ResearchReportService._fingerprint(
+        base
+    ) != ResearchReportService._fingerprint(changed)
 
 
 def test_research_tracking_records_expectation_revision_and_dynamic_module_count():
@@ -348,9 +344,7 @@ def test_research_tracking_records_expectation_revision_and_dynamic_module_count
         "evidence": {
             "metrics": {},
             "analyst_expectations": {
-                "forecast_eps": [
-                    {"year": 2026, "value": 1.4, "kind": "estimate"}
-                ]
+                "forecast_eps": [{"year": 2026, "value": 1.4, "kind": "estimate"}]
             },
             "analysis_board": {
                 "ready_modules": 5,
@@ -367,9 +361,7 @@ def test_research_tracking_records_expectation_revision_and_dynamic_module_count
         "evidence": {
             "metrics": {},
             "analyst_expectations": {
-                "forecast_eps": [
-                    {"year": 2026, "value": 1.54, "kind": "estimate"}
-                ],
+                "forecast_eps": [{"year": 2026, "value": 1.54, "kind": "estimate"}],
                 "revision": {
                     "summary": "2026E EPS较上一快照上修 10.00%",
                     "organization_count_delta": 1,

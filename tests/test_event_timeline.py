@@ -27,7 +27,7 @@ def _item(
 
 
 def test_event_timeline_classifies_persists_and_indexes_knowledge(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     database.upsert_news_items(
         [
@@ -64,9 +64,7 @@ def test_event_timeline_classifies_persists_and_indexes_knowledge(tmp_path: Path
         ]
     )
 
-    packet = EventTimelineService(database).get_packet(
-        "000063", refresh_sources=False
-    )
+    packet = EventTimelineService(database).get_packet("000063", refresh_sources=False)
 
     assert packet["status"] == "available"
     assert packet["coverage"] == {
@@ -126,9 +124,7 @@ def test_stock_research_packet_includes_persisted_event_timeline(app):
 
     assert evidence["event_timeline"]["status"] == "available"
     news_module = next(
-        item
-        for item in evidence["analysis_board"]["modules"]
-        if item["key"] == "news"
+        item for item in evidence["analysis_board"]["modules"] if item["key"] == "news"
     )
     assert news_module["status"] == "ready"
     assert "事件脉络" in news_module["label"]

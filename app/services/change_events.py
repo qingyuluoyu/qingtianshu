@@ -6,6 +6,7 @@ from typing import Any
 
 from app.catalog import RESEARCH_TARGETS, normalize_symbol
 from app.db import Database
+from app.services.security_master import SecurityMasterService
 from app.utils import utc_now
 
 
@@ -49,6 +50,7 @@ class ChangeEventService:
 
     def __init__(self, database: Database) -> None:
         self.database = database
+        self.security_master = SecurityMasterService(database)
 
     def refresh_symbol(self, symbol: str) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
@@ -445,10 +447,25 @@ class ChangeEventService:
             term.casefold() in folded for term in cls._FINANCIAL_DISCLOSURE_TERMS
         )
 
-    @classmethod
-    def _public_link(cls, item: dict[str, Any]) -> dict[str, Any]:
+    def _public_link(self, item: dict[str, Any]) -> dict[str, Any]:
         payload = dict(item.get("payload") or {})
         event_type = str(item.get("event_type") or "")
+        symbol = str(item.get("symbol") or "")
+        original_name = str(payload.get("name") or "").strip()
+        display_name = self.security_master.display_name(symbol, original_name)
+
+        def localized(value: Any) -> Any:
+            if not original_name or original_name == display_name:
+                return value
+            if isinstance(value, str):
+                return value.replace(original_name, display_name)
+            if isinstance(value, list):
+                return [localized(child) for child in value]
+            if isinstance(value, dict):
+                return {key: localized(child) for key, child in value.items()}
+            return value
+
+        payload = localized(payload)
         daily_move = abs(_finite_float(payload.get("return_1d_pct")) or 0)
         severity = (
             "high"
@@ -459,16 +476,14 @@ class ChangeEventService:
             "link_id": item.get("link_id"),
             "event_id": item.get("event_id"),
             "symbol": item.get("symbol"),
-            "name": payload.get("name")
-            or (RESEARCH_TARGETS.get(str(item.get("symbol") or "")) or {}).get("name")
-            or item.get("symbol"),
+            "name": display_name,
             "event_type": event_type,
             "event_type_label": {
                 "official_financial_disclosure": "官方财务披露",
                 "daily_price_anomaly": "完整日线价格异常",
             }.get(event_type, "已验收变化"),
-            "title": item.get("title"),
-            "fact_summary": item.get("fact_summary"),
+            "title": localized(item.get("title")),
+            "fact_summary": localized(item.get("fact_summary")),
             "occurred_at": item.get("occurred_at"),
             "detected_at": item.get("detected_at"),
             "source_name": item.get("source_name"),
@@ -489,7 +504,7 @@ class ChangeEventService:
             "handled_at": item.get("handled_at"),
             "severity": severity,
             "payload": payload,
-            "boundary": cls._event_boundary(event_type),
+            "boundary": self._event_boundary(event_type),
         }
 
     @classmethod

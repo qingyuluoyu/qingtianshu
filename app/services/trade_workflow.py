@@ -358,20 +358,26 @@ class TradeWorkflowService:
             raise TradeWorkflowInvalidState("证券代码不受支持") from exc
         search = str(query or "").strip().casefold()
         safe_limit = max(1, min(int(limit), 200))
+        symbol_clause = (
+            " AND workspace.symbol = ?" if requested_symbol is not None else ""
+        )
+        parameters: list[Any] = [user_id]
+        if requested_symbol is not None:
+            parameters.append(requested_symbol)
         with self.database.connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT review.id
                 FROM trade_reviews AS review
                 JOIN stock_workspaces AS workspace
                   ON workspace.id = review.workspace_id
                  AND workspace.user_id = review.user_id
                 WHERE review.user_id = ?
-                  AND (? IS NULL OR workspace.symbol = ?)
+                  {symbol_clause}
                 ORDER BY review.updated_at DESC, review.rowid DESC
                 LIMIT 500
                 """,
-                (user_id, requested_symbol, requested_symbol),
+                parameters,
             ).fetchall()
 
         refreshed: list[dict[str, Any]] = []
@@ -874,7 +880,7 @@ class TradeWorkflowService:
                 SELECT id, status, reason_text, version_no, created_at, confirmed_at
                 FROM thesis_versions
                 WHERE user_id = ? AND workspace_id = ?
-                  AND instr(reason_text, ?) > 0
+                  AND POSITION(? IN reason_text) > 0
                 ORDER BY version_no DESC LIMIT 1
                 """,
                 (review["user_id"], review["workspace_id"], improvement),

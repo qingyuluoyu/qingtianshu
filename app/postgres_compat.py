@@ -37,26 +37,16 @@ def translate_sql(sql: str) -> str:
         translated,
         flags=re.IGNORECASE,
     ):
+        translated = re.sub(r"\bINTEGER\b", "BIGINT", translated, flags=re.IGNORECASE)
         translated = re.sub(
-            r"\bINTEGER\b", "BIGINT", translated, flags=re.IGNORECASE
+            r"\bREAL\b", "DOUBLE PRECISION", translated, flags=re.IGNORECASE
         )
     translated = re.sub(r"\browid\b", "ctid", translated, flags=re.IGNORECASE)
     translated = translated.replace(
         "MAX(evidence_tasks.priority, excluded.priority)",
         "GREATEST(evidence_tasks.priority, excluded.priority)",
     )
-    if re.search(
-        r"INSERT\s+INTO\s+news_items\b", translated, flags=re.IGNORECASE
-    ):
-        translated = re.sub(
-            r"ON\s+CONFLICT\s+DO\s+UPDATE",
-            "ON CONFLICT(symbol, source, url) DO UPDATE",
-            translated,
-            flags=re.IGNORECASE,
-        )
-    if re.search(
-        r"INSERT\s+OR\s+IGNORE\s+INTO", translated, flags=re.IGNORECASE
-    ):
+    if re.search(r"INSERT\s+OR\s+IGNORE\s+INTO", translated, flags=re.IGNORECASE):
         translated = re.sub(
             r"INSERT\s+OR\s+IGNORE\s+INTO",
             "INSERT INTO",
@@ -103,10 +93,17 @@ class PostgresConnection:
 
     def executemany(self, sql: str, parameters: Iterable[Iterable[Any]]) -> Any:
         assert self.connection is not None
-        return self.connection.executemany(
-            translate_sql(sql),
-            [tuple(values) for values in parameters],
-        )
+        # psycopg 3 exposes ``executemany`` on cursors, not on Connection.
+        # Psycopg 3 requires cursor-level batch execution. Materialize the
+        # iterable before opening the cursor so a
+        # generator is consumed exactly once and an empty batch remains a safe
+        # no-op.
+        rows = [tuple(values) for values in parameters]
+        if not rows:
+            return None
+        with self.connection.cursor() as cursor:
+            cursor.executemany(translate_sql(sql), rows)
+            return cursor.rowcount
 
     def executescript(self, script: str) -> None:
         assert self.connection is not None
@@ -154,9 +151,7 @@ class PostgresConnection:
         unresolved = set(tables)
         while unresolved:
             ready = sorted(
-                name
-                for name in unresolved
-                if not (tables[name][1] & unresolved)
+                name for name in unresolved if not (tables[name][1] & unresolved)
             )
             if not ready:
                 raise RuntimeError(
@@ -208,9 +203,7 @@ def create_postgres_pool(database_url: str) -> Any:
     if url.startswith("postgres://"):
         url = "postgresql://" + url.removeprefix("postgres://")
     min_size = max(1, int(os.getenv("QINGSHU_DB_POOL_MIN_SIZE", "1")))
-    max_size = max(
-        min_size, int(os.getenv("QINGSHU_DB_POOL_MAX_SIZE", "8"))
-    )
+    max_size = max(min_size, int(os.getenv("QINGSHU_DB_POOL_MAX_SIZE", "8")))
     pool = ConnectionPool(
         conninfo=url,
         min_size=min_size,

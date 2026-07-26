@@ -77,10 +77,14 @@ def test_provider_discovers_financial_report_and_fetches_all_text_pages():
     assert reports[0]["report_period"] == "2026-03-31"
     assert document["document_type"] == "first_quarter"
     assert "净利息收入减少" in document["content_text"]
-    assert document["content_hash"] == hashlib.sha256(
-        document["content_text"].encode("utf-8")
-    ).hexdigest()
-    assert [params.get("page_index") for _, params in calls if "content/ann" in _] == [1, 2]
+    assert (
+        document["content_hash"]
+        == hashlib.sha256(document["content_text"].encode("utf-8")).hexdigest()
+    )
+    assert [params.get("page_index") for _, params in calls if "content/ann" in _] == [
+        1,
+        2,
+    ]
 
 
 class StubFilingProvider:
@@ -122,7 +126,7 @@ class StubFilingProvider:
 def test_filing_service_persists_full_text_extracts_causes_and_indexes_knowledge(
     tmp_path: Path,
 ):
-    database = Database(tmp_path / "qingshu.db", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     service = AShareFilingService(database, StubFilingProvider())
 

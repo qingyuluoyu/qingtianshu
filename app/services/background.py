@@ -19,6 +19,7 @@ from app.services.shareholders import ShareholderStructureAnalysisService
 from app.services.analyst_expectations import AnalystExpectationsService
 from app.services.calibration import OutlookCalibrationService
 from app.services.fundamentals import FundamentalsService
+from app.services.global_info import GlobalInformationService
 from app.services.earnings_quality import EarningsQualityService
 from app.services.evidence_tasks import EvidenceTaskService
 from app.services.event_timeline import EventTimelineService
@@ -128,9 +129,7 @@ class EventBroker:
                     event = subscriber.get(timeout=15)
                     public_event = dict(event)
                     public_event.pop("_sequence_id", None)
-                    yield (
-                        f"data: {json.dumps(public_event, ensure_ascii=False)}\n\n"
-                    )
+                    yield (f"data: {json.dumps(public_event, ensure_ascii=False)}\n\n")
                 except Empty:
                     yield ": heartbeat\n\n"
         finally:
@@ -152,6 +151,7 @@ class BackgroundScheduler:
         shareholders: ShareholderStructureAnalysisService,
         analyst_expectations: AnalystExpectationsService,
         fundamentals: FundamentalsService,
+        global_info: GlobalInformationService,
         us_fundamentals: USEquityFundamentalsService,
         earnings_quality: EarningsQualityService,
         financial_drivers: FinancialDriverAnalysisService,
@@ -181,6 +181,7 @@ class BackgroundScheduler:
         self.shareholders = shareholders
         self.analyst_expectations = analyst_expectations
         self.fundamentals = fundamentals
+        self.global_info = global_info
         self.us_fundamentals = us_fundamentals
         self.earnings_quality = earnings_quality
         self.financial_drivers = financial_drivers
@@ -409,9 +410,7 @@ class BackgroundScheduler:
         return functions
 
     def _schedule_specs(self) -> list[tuple[str, int, int, bool]]:
-        fundamentals = max(
-            300, self.settings.background_fundamentals_refresh_seconds
-        )
+        fundamentals = max(300, self.settings.background_fundamentals_refresh_seconds)
         research = max(300, self.settings.background_research_refresh_seconds)
         return [
             (
@@ -529,9 +528,7 @@ class BackgroundScheduler:
                         retry_base_seconds=self.settings.job_retry_base_seconds,
                         retry_max_seconds=self.settings.job_retry_max_seconds,
                     )
-                    self.job_store.mark_worker_job_finished(
-                        worker_id, succeeded=False
-                    )
+                    self.job_store.mark_worker_job_finished(worker_id, succeeded=False)
                     continue
                 self._execute_claimed_job(claimed, function, worker_id)
         finally:
@@ -580,9 +577,7 @@ class BackgroundScheduler:
                     lease_seconds=self.settings.job_lease_seconds,
                 ):
                     return
-                self.job_store.heartbeat_worker(
-                    worker_id, current_job_id=claimed.id
-                )
+                self.job_store.heartbeat_worker(worker_id, current_job_id=claimed.id)
 
         heartbeat = threading.Thread(
             target=keep_lease_alive,
@@ -715,9 +710,15 @@ class BackgroundScheduler:
         symbols = list(self.settings.default_a_share_symbols)
         symbols.extend(
             symbol
+            for symbol in self.settings.default_research_symbols
+            if symbol.endswith((".SS", ".SZ"))
+        )
+        symbols.extend(
+            symbol
             for symbol in self.database.list_distinct_watchlist_symbols()
             if symbol.endswith((".SS", ".SZ"))
         )
+        symbols = sorted(set(symbols))
         result = self.china_info.refresh_symbols(symbols)
         timeline_result = self.event_timeline.refresh_symbols(
             symbols, refresh_sources=False
@@ -739,6 +740,17 @@ class BackgroundScheduler:
             "requested": result["requested"],
             "completed": result["completed"],
             "symbols": [item.get("symbol") for item in result["results"]],
+            "information_results": [
+                {
+                    "symbol": item.get("symbol"),
+                    "status": item.get("status"),
+                    "refreshed_at": item.get("refreshed_at"),
+                    "counts": item.get("counts") or {},
+                    "sources": item.get("sources") or {},
+                    "warning_count": len(item.get("warnings") or []),
+                }
+                for item in result["results"]
+            ],
             "event_timelines": {
                 "requested": timeline_result["requested"],
                 "completed": timeline_result["completed"],
@@ -952,7 +964,44 @@ class BackgroundScheduler:
             for symbol in self.database.list_distinct_watchlist_symbols()
             if not symbol.endswith((".SS", ".SZ"))
         )
+        symbols = sorted(set(symbols))
         result = self.us_fundamentals.refresh_symbols(symbols)
+        fundamentals_by_symbol = {
+            item.get("symbol"): item for item in result["results"]
+        }
+        information_results = []
+        for symbol in symbols:
+            fundamental_result = fundamentals_by_symbol.get(symbol) or {}
+            sources = dict(fundamental_result.get("sources") or {})
+            try:
+                global_result = self.global_info.refresh_symbol(symbol)
+                sources.update(global_result.get("sources") or {})
+            except Exception as exc:
+                sources["global_news"] = {
+                    "status": "failed",
+                    "items": 0,
+                    "polled_at": utc_now(),
+                    "error_type": type(exc).__name__,
+                }
+            source_states = [
+                str((sources.get(key) or {}).get("status") or "missing")
+                for key in ("regulatory_filing", "global_news")
+            ]
+            information_results.append(
+                {
+                    "symbol": symbol,
+                    "status": (
+                        "ok"
+                        if all(state == "ok" for state in source_states)
+                        else "partial"
+                        if any(state == "ok" for state in source_states)
+                        else "failed"
+                    ),
+                    "refreshed_at": utc_now(),
+                    "sources": sources,
+                    "warning_count": sum(state != "ok" for state in source_states),
+                }
+            )
         self.broker.publish(
             {
                 "type": "us_equity_fundamentals_updated",
@@ -965,6 +1014,10 @@ class BackgroundScheduler:
             "requested": result["requested"],
             "completed": result["completed"],
             "symbols": [item.get("symbol") for item in result["results"]],
+            "information_completed": sum(
+                item["status"] == "ok" for item in information_results
+            ),
+            "information_results": information_results,
         }
 
     def _refresh_peer_valuations(self) -> dict[str, Any]:
@@ -1104,7 +1157,10 @@ class BackgroundScheduler:
             "欧洲股市 STOXX 怎么样",
             "伦敦金现在怎么样",
         )
-        packets = [self.market_news.get_packet(query, limit=12) for query in queries]
+        packets = [
+            self.market_news.get_packet(query, limit=12, force_refresh=True)
+            for query in queries
+        ]
         completed = sum(bool(packet.get("items")) for packet in packets)
         self.broker.publish(
             {
@@ -1139,13 +1195,9 @@ class BackgroundScheduler:
         pruned_events = self.job_store.prune_events(retention_hours=48)
         pruned_workers = self.job_store.prune_workers(retention_hours=168)
         pruned_jobs = self.job_store.prune_terminal_jobs(
-            succeeded_retention_hours=(
-                self.settings.job_succeeded_retention_hours
-            ),
+            succeeded_retention_hours=(self.settings.job_succeeded_retention_hours),
             failed_retention_hours=self.settings.job_failed_retention_hours,
-            cancelled_retention_hours=(
-                self.settings.job_cancelled_retention_hours
-            ),
+            cancelled_retention_hours=(self.settings.job_cancelled_retention_hours),
         )
         pruned_domain_history = self.database.prune_background_history(
             completed_retention_hours=(
@@ -1154,9 +1206,7 @@ class BackgroundScheduler:
             failed_retention_hours=(
                 self.settings.background_run_failed_retention_hours
             ),
-            data_health_retention_hours=(
-                self.settings.data_health_retention_hours
-            ),
+            data_health_retention_hours=(self.settings.data_health_retention_hours),
         )
         public = self.data_health.public_summary(snapshot)
         self.broker.publish(

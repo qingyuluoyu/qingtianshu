@@ -9,9 +9,7 @@ def test_a_share_profit_cashflow_and_working_capital_drivers_are_separated(app):
     refreshed = app.state.fundamentals.refresh_symbol("000063.SZ")
     assert refreshed["financial_statement_details_saved"] == 6
 
-    packet = FinancialDriverAnalysisService(app.state.database).get_packet(
-        "000063.SZ"
-    )
+    packet = FinancialDriverAnalysisService(app.state.database).get_packet("000063.SZ")
 
     assert packet["status"] == "available"
     assert packet["overall_label"] == "利润与经营现金流双重承压"
@@ -26,9 +24,7 @@ def test_a_share_profit_cashflow_and_working_capital_drivers_are_separated(app):
         "unexplained_operating_profit_change"
     ] == pytest.approx(-300_000_000.0)
 
-    drivers = {
-        item["key"]: item for item in packet["confirmed_mechanical_drivers"]
-    }
+    drivers = {item["key"]: item for item in packet["confirmed_mechanical_drivers"]}
     assert drivers["gross_profit_revenue_scale_effect"]["amount"] == pytest.approx(
         400_000_000.0
     )
@@ -47,25 +43,27 @@ def test_a_share_profit_cashflow_and_working_capital_drivers_are_separated(app):
     assert packet["cashflow_analysis"][
         "cash_received_from_sales_ratio_change_pp"
     ] == pytest.approx(-6.894, abs=0.001)
-    assert all(
-        item["attribution_level"] == "plausible_clue"
-        for item in clues.values()
-    )
+    assert all(item["attribution_level"] == "plausible_clue" for item in clues.values())
     assert any("尚未由三表科目确认" in item for item in packet["unresolved_causes"])
 
     with app.state.database.connect() as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM financial_statement_details WHERE symbol = ?",
-            ("000063.SZ",),
-        ).fetchone()[0] == 6
-        assert connection.execute(
-            "SELECT COUNT(*) FROM financial_driver_snapshots WHERE symbol = ?",
-            ("000063.SZ",),
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM financial_statement_details WHERE symbol = ?",
+                ("000063.SZ",),
+            ).fetchone()["count"]
+            == 6
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM financial_driver_snapshots WHERE symbol = ?",
+                ("000063.SZ",),
+            ).fetchone()["count"]
+            == 1
+        )
     documents = app.state.database.list_knowledge_documents(None)
     assert any(
-        item["source_key"] == "financial-drivers:000063.SZ"
-        for item in documents
+        item["source_key"] == "financial-drivers:000063.SZ" for item in documents
     )
 
 
@@ -79,9 +77,9 @@ def test_us_companyfacts_details_support_same_driver_framework(app):
     assert packet["overall_label"] == "利润与经营现金流共同改善"
     assert packet["latest_period"]["fiscal_period"] == "Q1"
     assert packet["comparable_period"]["fiscal_period"] == "Q1"
-    assert packet["cashflow_analysis"][
-        "operating_cashflow_change"
-    ] == pytest.approx(22_930_000_000.0)
+    assert packet["cashflow_analysis"]["operating_cashflow_change"] == pytest.approx(
+        22_930_000_000.0
+    )
     expense_keys = {item["key"] for item in packet["expense_analysis"]}
     assert "selling_general_admin_expense" in expense_keys
     assert "research_expense" in expense_keys
@@ -90,7 +88,7 @@ def test_us_companyfacts_details_support_same_driver_framework(app):
 def test_driver_analysis_refuses_to_compare_non_matching_periods(settings):
     from app.db import Database
 
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     database.upsert_financial_statement_details(
         [

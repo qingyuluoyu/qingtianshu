@@ -42,7 +42,7 @@ def test_explicit_configuration_uses_portable_data_and_path_resolved_hermes(
 
     assert settings.hermes_bin == Path("hermes")
     assert settings.data_dir == (tmp_path / "portable-data").resolve()
-    assert settings.database_path.parent == settings.data_dir
+    assert settings.database_url.startswith("postgresql://")
     assert settings.workspace_root.parent == settings.data_dir
 
 
@@ -83,13 +83,9 @@ def test_cli_contract_supports_port_and_no_browser():
 def test_current_directory_and_explicit_env_files_are_portable(tmp_path: Path):
     cwd_data = tmp_path / "cwd-data"
     explicit_data = tmp_path / "explicit-data"
-    (tmp_path / ".env").write_text(
-        f"QINGSHU_DATA_DIR={cwd_data}\n", encoding="utf-8"
-    )
+    (tmp_path / ".env").write_text(f"QINGSHU_DATA_DIR={cwd_data}\n", encoding="utf-8")
     explicit = tmp_path / "portable.env"
-    explicit.write_text(
-        f"QINGSHU_DATA_DIR={explicit_data}\n", encoding="utf-8"
-    )
+    explicit.write_text(f"QINGSHU_DATA_DIR={explicit_data}\n", encoding="utf-8")
     command = [
         sys.executable,
         "-c",
