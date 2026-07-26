@@ -128,16 +128,21 @@ function liZongStatusLabel(value) {
       });
       const result = payload?.result || null; const progress = payload?.progress || {};
       const metrics = $("liZongBacktestMetrics"); const chart = $("liZongBacktestChart"); const legend = $("liZongBacktestLegend"); const list = $("liZongBacktestRebalanceList");
+      const build = $("liZongBacktestBuild"); const buildBar = $("liZongBacktestBuildBar");
       if (!result) {
         metrics.hidden = true; legend.hidden = true; list.hidden = true;
         const marketDays = Number(progress.available_market_days || 0); const requiredDays = Number(progress.required_market_days || 0);
         const evaluated = Number(progress.evaluated_symbols || 0); const eligible = Number(progress.eligible_symbols || 0);
+        const marketRatio = requiredDays ? marketDays / requiredDays : 0; const symbolRatio = eligible ? evaluated / eligible : 0;
+        const ratio = Math.max(0, Math.min(1, marketDays < requiredDays ? marketRatio : symbolRatio)); const percent = Math.round(ratio * 1000) / 10;
+        build.hidden = false; build.setAttribute("aria-valuenow", String(Math.round(ratio * 100))); buildBar.style.width = `${ratio * 100}%`;
         $("liZongBacktestProgress").textContent = marketDays < requiredDays
-          ? `历史市值正在同步：${marketDays}/${requiredDays} 个交易日。完成后再逐日运行同一套策略规则。`
-          : `组合正在核验：${evaluated}/${eligible || "待识别"} 只历史市值达标股票。未完成前不展示有偏收益率。`;
-        chart.innerHTML = '<div class="screener-empty">后台正在构建无前视候选序列和等权换仓净值；页面会自动更新。</div>';
+          ? `历史市值 ${marketDays}/${requiredDays} 个交易日（${percent}%）· 数据完整后自动进入逐股规则核验`
+          : `规则核验 ${evaluated}/${eligible || "待识别"} 只（${percent}%）· 预计剩余 ${Number(progress.estimated_evaluation_batches || 0)} 个计算批次`;
+        chart.innerHTML = `<div class="screener-empty">${marketDays < requiredDays ? "正在补齐历史股票范围和每日市值。" : "正在构建无前视候选序列和等权换仓净值。"}<br>完整覆盖前不会发布可能有样本偏差的收益率。</div>`;
         return;
       }
+      build.hidden = false; build.setAttribute("aria-valuenow", "100"); buildBar.style.width = "100%";
       $("liZongBacktestProgress").textContent = `${result.start_date} 至 ${result.end_date} · ${result.trading_days} 个交易日 · 历史市值达标范围 ${Number(result.eligible_symbol_count || 0).toLocaleString("zh-CN")} 只`;
       metrics.hidden = false;
       $("liZongBacktestReturn").textContent = pct(result.period_return_pct);

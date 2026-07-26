@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+
 from app.services.li_zong_portfolio_backtest import LiZongPortfolioBacktestService
 from app.services.li_zong_strategy_service import LiZongStrategyService
 from app.services.tushare_snapshots import TushareSnapshotService
@@ -136,3 +141,227 @@ def test_backtest_tables_and_long_history_window_are_initialized(app):
     assert database.schema_status()["schema_version"] >= 3
     assert TushareSnapshotService.SYMBOL_HISTORY_MARKET_DAYS >= 1136
     assert LiZongStrategyService.PRICE_HISTORY_WINDOW_VERSION == "market_days_1150_v1"
+
+
+def test_refresh_only_evaluates_the_largest_market_cap_window_that_is_ready(
+    monkeypatch,
+):
+    class FakeDatabase:
+        def start_tushare_sync_run(self, **_kwargs):
+            return {"id": "run-1"}
+
+        def finish_tushare_sync_run(self, *_args, **_kwargs):
+            return None
+
+        def list_strategy_backtest_eligible_symbols(self, **_kwargs):
+            return ["000001.SZ"]
+
+    snapshot_service = type("SnapshotService", (), {"client": object()})()
+    service = LiZongPortfolioBacktestService(
+        FakeDatabase(), snapshot_service, object()
+    )
+    trade_dates = [
+        value.date().isoformat()
+        for value in pd.bdate_range(end="2026-07-24", periods=756)
+    ]
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(service, "_target_trade_dates", lambda _value: trade_dates)
+    monkeypatch.setattr(service, "_save_calendar", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        service, "_refresh_market_cap_days", lambda *_args, **_kwargs: 0
+    )
+    monkeypatch.setattr(
+        service,
+        "_ready_period_windows",
+        lambda _dates: {"3m": (trade_dates[-63], trade_dates[-1])},
+    )
+    monkeypatch.setattr(
+        service, "_market_cap_window_version", lambda _dates: "market-cap-v1"
+    )
+
+    def capture_advance(_symbols, **kwargs):
+        captured.update(kwargs)
+        return [], []
+
+    monkeypatch.setattr(service, "_advance_symbol_states", capture_advance)
+    monkeypatch.setattr(service, "_ensure_benchmark", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        service, "_publish_period_if_complete", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        service,
+        "_progress_packet",
+        lambda: {"periods": {"3m": {"status": "building"}}},
+    )
+
+    result = service.refresh()
+
+    assert result["status"] == "partial"
+    assert captured["required_start"] == trade_dates[-63]
+    assert captured["market_cap_data_version"] == "market-cap-v1"
+    assert captured["trade_dates"] == trade_dates[-63:]
+
+
+def test_backtest_coverage_requires_current_snapshot_and_market_cap_versions():
+    trade_dates = ["2026-07-22", "2026-07-23", "2026-07-24"]
+
+    class FakeDatabase:
+        market_versions = {
+            "2026-07-22": "cap-1",
+            "2026-07-23": "cap-2",
+            "2026-07-24": "cap-3",
+        }
+
+        def latest_tushare_dataset_snapshot(self, *_args, **_kwargs):
+            return {"payload": {"trade_dates": trade_dates}}
+
+        def list_strategy_backtest_market_cap_days(self, **_kwargs):
+            return [
+                {"trade_date": value, "data_version": self.market_versions[value]}
+                for value in trade_dates
+            ]
+
+    database = FakeDatabase()
+    service = LiZongPortfolioBacktestService(database, object(), object())
+    market_version = service._market_cap_window_version(trade_dates)
+    source_version = service._state_source_version(
+        snapshot_data_version="snapshot-v2",
+        market_cap_data_version=market_version,
+        start_date=trade_dates[0],
+        end_date=trade_dates[-1],
+    )
+    coverage = {
+        "start_date": trade_dates[0],
+        "end_date": trade_dates[-1],
+        "source_data_version": source_version,
+    }
+
+    assert service._coverage_is_current(
+        coverage,
+        {"data_version": "snapshot-v2"},
+        market_cap_version_cache={},
+    )
+    assert not service._coverage_is_current(
+        coverage,
+        {"data_version": "snapshot-v3"},
+        market_cap_version_cache={},
+    )
+
+    database.market_versions["2026-07-24"] = "corrected-cap-3"
+    assert not service._coverage_is_current(
+        coverage,
+        {"data_version": "snapshot-v2"},
+        market_cap_version_cache={},
+    )
+
+
+def test_vectorized_historical_states_match_reference_strategy_evaluation():
+    all_dates = [
+        value.date().isoformat()
+        for value in pd.bdate_range(end="2026-07-24", periods=450)
+    ]
+    limit_indices = {250, 300, 350, 400, 442, 443, 449}
+    daily = []
+    for index, trade_date in enumerate(all_dates):
+        close = 11.0 if index in limit_indices else 10.0
+        daily.append(
+            {
+                "trade_date": trade_date,
+                "open": 10.0,
+                "high": 10.5 + index * 0.01,
+                "low": 9.5,
+                "close": close,
+                "pre_close": 10.0,
+                "pct_chg": 10.0 if index in limit_indices else 0.0,
+                "volume": 300.0 if index >= len(all_dates) - 3 else 100.0,
+                "adj_factor": 1.0,
+                "up_limit": 11.0,
+                "down_limit": 9.0,
+                "source": "synthetic point-in-time fixture",
+            }
+        )
+    roe = [
+        {
+            "end_date": f"{year}-12-31",
+            "ann_date": f"{year + 1}-03-31",
+            "roe": 12.0,
+        }
+        for year in range(2019, 2025)
+    ]
+    shareholders = [
+        {
+            "report_period": "2025-12-31",
+            "ann_date": "2026-03-31",
+            "holder_name": f"机构股东{index}",
+            "holder_type": "institution",
+        }
+        for index in range(6)
+    ]
+    strategy_input = {
+        "symbol": "000001.SZ",
+        "as_of_date": all_dates[-1],
+        "daily": pd.DataFrame(daily),
+        "roe_history": pd.DataFrame(roe),
+        "shareholders": pd.DataFrame(shareholders),
+        "daily_basic": pd.DataFrame(),
+    }
+
+    class FakeDatabase:
+        def strategy_backtest_market_caps_for_symbol(self, **kwargs):
+            return {
+                value: 200.0
+                for value in all_dates
+                if kwargs["start_date"] <= value <= kwargs["end_date"]
+            }
+
+        def latest_strategy_candidate_snapshot(self, **_kwargs):
+            return None
+
+    class FakeStrategyService:
+        def _build_input(self, *_args, **_kwargs):
+            return strategy_input
+
+    service = LiZongPortfolioBacktestService(
+        FakeDatabase(), object(), FakeStrategyService()
+    )
+    target = all_dates[-252:]
+    snapshot = {"data_version": "fixture-v1", "payload": {}}
+
+    optimized = service._evaluate_symbol(
+        "000001.SZ", snapshot, trade_dates=target
+    )
+    reference = service._evaluate_symbol_reference(
+        "000001.SZ", snapshot, trade_dates=target
+    )
+
+    assert optimized == reference
+    assert optimized[-1]["candidate_qualified"] is True
+    assert optimized[-1]["status"] == "triggered"
+
+
+def test_backtest_default_as_of_excludes_an_open_session_before_close():
+    shanghai = ZoneInfo("Asia/Shanghai")
+    assert LiZongPortfolioBacktestService._default_as_of_date(
+        datetime(2026, 7, 27, 0, 5, tzinfo=shanghai)
+    ).isoformat() == "2026-07-26"
+    assert LiZongPortfolioBacktestService._default_as_of_date(
+        datetime(2026, 7, 27, 16, 30, tzinfo=shanghai)
+    ).isoformat() == "2026-07-27"
+
+
+def test_backtest_does_not_publish_empty_market_cap_cross_section():
+    class FakeDatabase:
+        def list_strategy_backtest_market_cap_days(self, **_kwargs):
+            return []
+
+        def save_strategy_backtest_market_cap_day(self, **_kwargs):
+            raise AssertionError("empty market data must not be persisted")
+
+    class FakeClient:
+        def daily_basic(self, **_kwargs):
+            return pd.DataFrame()
+
+    snapshot_service = type("SnapshotService", (), {"client": FakeClient()})()
+    service = LiZongPortfolioBacktestService(FakeDatabase(), snapshot_service, object())
+
+    assert service._refresh_market_cap_days(["2026-07-27"], batch_size=1) == 0

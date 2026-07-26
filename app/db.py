@@ -2217,13 +2217,18 @@ class Database:
         *,
         stable_only: bool = True,
     ) -> dict[str, Any] | None:
+        order_by = (
+            "COALESCE(as_of_date, '') DESC, created_at DESC, rowid DESC"
+            if stable_only
+            else "created_at DESC, rowid DESC"
+        )
         with self.connect() as connection:
             row = connection.execute(
                 f"""
                 SELECT * FROM tushare_dataset_snapshots
                 WHERE dataset = ? AND scope_key = ?
                     {"AND data_status = 'stable'" if stable_only else ""}
-                ORDER BY created_at DESC, rowid DESC LIMIT 1
+                ORDER BY {order_by} LIMIT 1
                 """,
                 (dataset, scope_key),
             ).fetchone()
@@ -2237,7 +2242,14 @@ class Database:
         include_payload: bool = True,
         limit: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Return the newest published snapshot for every scope in a dataset."""
+        """Return the newest published snapshot for every scope in a dataset.
+
+        Stable financial snapshots are ordered by their data date before their
+        publication time. This prevents a provider retry that returns an older
+        market date from silently replacing a newer stable fact set. Incomplete
+        snapshots remain ordered by creation time so the latest failure context
+        is still available to operators.
+        """
 
         if data_status not in {None, "stable", "incomplete"}:
             raise ValueError("unsupported Tushare snapshot status")
@@ -2257,6 +2269,11 @@ class Database:
         limit_clause = " LIMIT ?" if size is not None else ""
         if size is not None:
             parameters.append(size)
+        ranked_order = (
+            "COALESCE(as_of_date, '') DESC, created_at DESC, rowid DESC"
+            if data_status == "stable"
+            else "created_at DESC, rowid DESC"
+        )
         with self.connect() as connection:
             rows = connection.execute(
                 f"""
@@ -2264,7 +2281,7 @@ class Database:
                     SELECT {selected},
                            ROW_NUMBER() OVER (
                                PARTITION BY scope_key
-                               ORDER BY created_at DESC, rowid DESC
+                               ORDER BY {ranked_order}
                            ) AS snapshot_rank
                     FROM tushare_dataset_snapshots
                     WHERE dataset = ? {status_clause}

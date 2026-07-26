@@ -266,9 +266,9 @@ class LiZongHistoryRunRequest(BaseModel):
 
 class LiZongBacktestRunRequest(BaseModel):
     as_of_date: str | None = Field(default=None, pattern=r"^\d{4}-?\d{2}-?\d{2}$")
-    market_day_batch_size: int = Field(default=12, ge=1, le=30)
-    symbol_batch_size: int = Field(default=12, ge=1, le=50)
-    input_sync_batch_size: int = Field(default=1, ge=0, le=5)
+    market_day_batch_size: int = Field(default=30, ge=1, le=30)
+    symbol_batch_size: int = Field(default=100, ge=1, le=200)
+    input_sync_batch_size: int = Field(default=4, ge=0, le=12)
 
 
 class ArticleGenerateRequest(BaseModel):

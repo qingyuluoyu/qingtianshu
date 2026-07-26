@@ -584,3 +584,54 @@ def test_legacy_incomplete_snapshot_recovers_issues_from_sync_run(app):
     assert stored["latest_incomplete"]["issues"] == [
         {"dataset": "fina_indicator", "error_type": "TushareProviderError"}
     ]
+
+
+def test_stable_snapshot_selection_never_regresses_to_older_data_date(app):
+    database = app.state.database
+    dataset = "test_stable_snapshot_freshness"
+    scope_key = "all"
+    newer_run = database.start_tushare_sync_run(
+        job_scope="test:newer",
+        as_of_date="2026-07-24",
+        datasets=[dataset],
+    )
+    database.save_tushare_dataset_snapshot(
+        dataset=dataset,
+        scope_key=scope_key,
+        as_of_date="2026-07-24",
+        report_period=None,
+        source_updated_at="2026-07-24T16:00:00+00:00",
+        sync_run_id=str(newer_run["id"]),
+        data_version="fresh-20260724",
+        data_status="stable",
+        payload={"marker": "newer"},
+    )
+    stale_retry_run = database.start_tushare_sync_run(
+        job_scope="test:stale-retry",
+        as_of_date="2026-07-26",
+        datasets=[dataset],
+    )
+    database.save_tushare_dataset_snapshot(
+        dataset=dataset,
+        scope_key=scope_key,
+        as_of_date="2026-07-21",
+        report_period=None,
+        source_updated_at="2026-07-26T08:00:00+00:00",
+        sync_run_id=str(stale_retry_run["id"]),
+        data_version="stale-20260721",
+        data_status="stable",
+        payload={"marker": "stale-retry"},
+    )
+
+    latest = database.latest_tushare_dataset_snapshot(dataset, scope_key)
+    listed = database.list_latest_tushare_dataset_snapshots(
+        dataset,
+        data_status="stable",
+        include_payload=True,
+    )
+
+    assert latest is not None
+    assert latest["as_of_date"] == "2026-07-24"
+    assert latest["payload"]["marker"] == "newer"
+    assert listed[0]["as_of_date"] == "2026-07-24"
+    assert listed[0]["payload"]["marker"] == "newer"
