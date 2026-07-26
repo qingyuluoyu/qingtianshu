@@ -16,7 +16,7 @@ from app.utils import json_dumps, utc_now, write_json
 
 class Database:
     SYSTEM_EDITOR_ID = "system-market-editor"
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(
         self,
@@ -2585,6 +2585,368 @@ class Database:
                 (utc_now(), strategy_id),
             )
         return cursor.rowcount
+
+    def save_strategy_backtest_market_cap_day(
+        self,
+        *,
+        strategy_id: str,
+        backtest_version: str,
+        trade_date: str,
+        universe_count: int,
+        rows: list[dict[str, Any]],
+        data_version: str,
+        source: str,
+    ) -> dict[str, Any]:
+        created_at = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                DELETE FROM strategy_backtest_market_caps
+                WHERE strategy_id = ? AND backtest_version = ? AND trade_date = ?
+                """,
+                (strategy_id, backtest_version, trade_date),
+            )
+            connection.executemany(
+                """
+                INSERT INTO strategy_backtest_market_caps(
+                    strategy_id, backtest_version, trade_date, symbol,
+                    total_mv_yi, data_version, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(
+                    strategy_id, backtest_version, trade_date, symbol
+                ) DO UPDATE SET
+                    total_mv_yi = excluded.total_mv_yi,
+                    data_version = excluded.data_version,
+                    created_at = excluded.created_at
+                """,
+                [
+                    (
+                        strategy_id,
+                        backtest_version,
+                        trade_date,
+                        str(item["symbol"]),
+                        float(item["total_mv_yi"]),
+                        data_version,
+                        created_at,
+                    )
+                    for item in rows
+                ],
+            )
+            connection.execute(
+                """
+                INSERT INTO strategy_backtest_market_cap_days(
+                    strategy_id, backtest_version, trade_date,
+                    universe_count, eligible_count, data_version,
+                    source, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(strategy_id, backtest_version, trade_date)
+                DO UPDATE SET
+                    universe_count = excluded.universe_count,
+                    eligible_count = excluded.eligible_count,
+                    data_version = excluded.data_version,
+                    source = excluded.source,
+                    created_at = excluded.created_at
+                """,
+                (
+                    strategy_id,
+                    backtest_version,
+                    trade_date,
+                    max(0, int(universe_count)),
+                    len(rows),
+                    data_version,
+                    source,
+                    created_at,
+                ),
+            )
+        return {
+            "strategy_id": strategy_id,
+            "backtest_version": backtest_version,
+            "trade_date": trade_date,
+            "universe_count": max(0, int(universe_count)),
+            "eligible_count": len(rows),
+            "data_version": data_version,
+            "source": source,
+            "created_at": created_at,
+        }
+
+    def list_strategy_backtest_market_cap_days(
+        self,
+        *,
+        strategy_id: str,
+        backtest_version: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["strategy_id = ?", "backtest_version = ?"]
+        params: list[Any] = [strategy_id, backtest_version]
+        if start_date is not None:
+            clauses.append("trade_date >= ?")
+            params.append(start_date)
+        if end_date is not None:
+            clauses.append("trade_date <= ?")
+            params.append(end_date)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM strategy_backtest_market_cap_days
+                WHERE {" AND ".join(clauses)}
+                ORDER BY trade_date ASC
+                """,
+                tuple(params),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_strategy_backtest_eligible_symbols(
+        self,
+        *,
+        strategy_id: str,
+        backtest_version: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT symbol
+                FROM strategy_backtest_market_caps
+                WHERE strategy_id = ? AND backtest_version = ?
+                    AND trade_date >= ? AND trade_date <= ?
+                ORDER BY symbol ASC
+                """,
+                (strategy_id, backtest_version, start_date, end_date),
+            ).fetchall()
+        return [str(row["symbol"]) for row in rows]
+
+    def strategy_backtest_market_caps_for_symbol(
+        self,
+        *,
+        strategy_id: str,
+        backtest_version: str,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> dict[str, float]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT trade_date, total_mv_yi
+                FROM strategy_backtest_market_caps
+                WHERE strategy_id = ? AND backtest_version = ?
+                    AND symbol = ? AND trade_date >= ? AND trade_date <= ?
+                ORDER BY trade_date ASC
+                """,
+                (
+                    strategy_id,
+                    backtest_version,
+                    symbol,
+                    start_date,
+                    end_date,
+                ),
+            ).fetchall()
+        return {str(row["trade_date"]): float(row["total_mv_yi"]) for row in rows}
+
+    def save_strategy_backtest_symbol_states(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+        backtest_version: str,
+        symbol: str,
+        source_data_version: str,
+        data_version: str,
+        rows: list[dict[str, Any]],
+        status: str,
+    ) -> dict[str, Any]:
+        created_at = utc_now()
+        dates = sorted(str(item["trade_date"]) for item in rows)
+        start_date = dates[0] if dates else None
+        end_date = dates[-1] if dates else None
+        with self.connect() as connection:
+            connection.execute(
+                """
+                DELETE FROM strategy_backtest_symbol_states
+                WHERE strategy_id = ? AND strategy_version = ?
+                    AND parameter_version = ? AND backtest_version = ?
+                    AND symbol = ?
+                """,
+                (
+                    strategy_id,
+                    strategy_version,
+                    parameter_version,
+                    backtest_version,
+                    symbol,
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO strategy_backtest_symbol_states(
+                    strategy_id, strategy_version, parameter_version,
+                    backtest_version, symbol, trade_date, status,
+                    candidate_qualified, adjusted_open, adjusted_close,
+                    raw_open, raw_close, source_data_version,
+                    data_version, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        strategy_id,
+                        strategy_version,
+                        parameter_version,
+                        backtest_version,
+                        symbol,
+                        str(item["trade_date"]),
+                        str(item.get("status") or "data_incomplete"),
+                        int(bool(item.get("candidate_qualified"))),
+                        item.get("adjusted_open"),
+                        item.get("adjusted_close"),
+                        item.get("raw_open"),
+                        item.get("raw_close"),
+                        source_data_version,
+                        data_version,
+                        created_at,
+                    )
+                    for item in rows
+                ],
+            )
+            connection.execute(
+                """
+                INSERT INTO strategy_backtest_symbol_coverage(
+                    strategy_id, strategy_version, parameter_version,
+                    backtest_version, symbol, start_date, end_date,
+                    evaluated_days, source_data_version, data_version,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(
+                    strategy_id, strategy_version, parameter_version,
+                    backtest_version, symbol
+                ) DO UPDATE SET
+                    start_date = excluded.start_date,
+                    end_date = excluded.end_date,
+                    evaluated_days = excluded.evaluated_days,
+                    source_data_version = excluded.source_data_version,
+                    data_version = excluded.data_version,
+                    status = excluded.status,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    strategy_id,
+                    strategy_version,
+                    parameter_version,
+                    backtest_version,
+                    symbol,
+                    start_date,
+                    end_date,
+                    len(rows),
+                    source_data_version,
+                    data_version,
+                    status,
+                    created_at,
+                    created_at,
+                ),
+            )
+        return {
+            "symbol": symbol,
+            "start_date": start_date,
+            "end_date": end_date,
+            "evaluated_days": len(rows),
+            "source_data_version": source_data_version,
+            "data_version": data_version,
+            "status": status,
+            "updated_at": created_at,
+        }
+
+    def list_strategy_backtest_symbol_coverage(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+        backtest_version: str,
+    ) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM strategy_backtest_symbol_coverage
+                WHERE strategy_id = ? AND strategy_version = ?
+                    AND parameter_version = ? AND backtest_version = ?
+                ORDER BY symbol ASC
+                """,
+                (
+                    strategy_id,
+                    strategy_version,
+                    parameter_version,
+                    backtest_version,
+                ),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_strategy_backtest_candidate_states(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+        backtest_version: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM strategy_backtest_symbol_states
+                WHERE strategy_id = ? AND strategy_version = ?
+                    AND parameter_version = ? AND backtest_version = ?
+                    AND trade_date >= ? AND trade_date <= ?
+                    AND candidate_qualified = 1
+                ORDER BY trade_date ASC, symbol ASC
+                """,
+                (
+                    strategy_id,
+                    strategy_version,
+                    parameter_version,
+                    backtest_version,
+                    start_date,
+                    end_date,
+                ),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_strategy_backtest_symbol_states(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+        backtest_version: str,
+        symbols: list[str],
+        start_date: str,
+        end_date: str,
+    ) -> list[dict[str, Any]]:
+        if not symbols:
+            return []
+        placeholders = ", ".join("?" for _ in symbols)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM strategy_backtest_symbol_states
+                WHERE strategy_id = ? AND strategy_version = ?
+                    AND parameter_version = ? AND backtest_version = ?
+                    AND symbol IN ({placeholders})
+                    AND trade_date >= ? AND trade_date <= ?
+                ORDER BY trade_date ASC, symbol ASC
+                """,
+                (
+                    strategy_id,
+                    strategy_version,
+                    parameter_version,
+                    backtest_version,
+                    *symbols,
+                    start_date,
+                    end_date,
+                ),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def save_strategy_candidate_snapshot(
         self,

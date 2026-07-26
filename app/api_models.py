@@ -264,6 +264,13 @@ class LiZongHistoryRunRequest(BaseModel):
     lookback_days: int = Field(default=80, ge=20, le=160)
 
 
+class LiZongBacktestRunRequest(BaseModel):
+    as_of_date: str | None = Field(default=None, pattern=r"^\d{4}-?\d{2}-?\d{2}$")
+    market_day_batch_size: int = Field(default=12, ge=1, le=30)
+    symbol_batch_size: int = Field(default=12, ge=1, le=50)
+    input_sync_batch_size: int = Field(default=1, ge=0, le=5)
+
+
 class ArticleGenerateRequest(BaseModel):
     model_tier: Literal["economy", "deep"] = "economy"
     execute_agent: bool = False

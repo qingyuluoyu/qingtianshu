@@ -38,6 +38,10 @@ $("agentResumeOpen").addEventListener("click", async event => {
       state.liZongHistoryExpanded = !state.liZongHistoryExpanded;
       if (state.liZongHistory) renderLiZongHistory(state.liZongHistory);
     });
+    document.querySelectorAll("[data-li-zong-backtest-period]").forEach(button => button.addEventListener("click", () => {
+      state.liZongBacktestPeriod = button.dataset.liZongBacktestPeriod || "1y";
+      void loadLiZongBacktest();
+    }));
     document.querySelectorAll("[data-screening-jump]").forEach(button => button.addEventListener("click", () => {
       openScreeningSection(button.dataset.screeningJump || "general");
     }));

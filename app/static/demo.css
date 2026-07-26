@@ -246,6 +246,30 @@
     .li-zong-limitations { margin-top: 9px; color: #8e6b31; font-size: 10px; line-height: 1.55; }
     .li-zong-actions { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 11px; }
     .li-zong-history { margin: 0 18px 18px; padding: 15px; border: 1px solid #dbe6f4; border-radius: 14px; background: #f8fbff; }
+    .li-zong-backtest { margin: 0 18px 14px; padding: 15px; border-top: 1px solid #e1e9f4; background: rgba(255,255,255,.78); }
+    .li-zong-backtest-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+    .li-zong-backtest-periods { display: flex; flex-shrink: 0; gap: 4px; padding: 3px; border-radius: 999px; background: #edf2f8; }
+    .li-zong-backtest-periods button { border: 0; border-radius: 999px; padding: 6px 10px; color: #6f7e91; background: transparent; font-size: 9px; font-weight: 700; }
+    .li-zong-backtest-periods button.active { color: #245eb3; background: #fff; box-shadow: 0 2px 8px rgba(43,79,128,.1); }
+    .li-zong-backtest-progress { margin-top: 10px; color: #657991; font-size: 9px; }
+    .li-zong-backtest-metrics { display: grid; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 7px; margin-top: 10px; }
+    .li-zong-backtest-metrics div { padding: 9px; border-radius: 9px; background: #f3f6fa; }
+    .li-zong-backtest-metrics span { display: block; color: #8090a4; font-size: 8px; }
+    .li-zong-backtest-metrics strong { display: block; margin-top: 4px; color: #2e425e; font-size: 12px; }
+    .li-zong-backtest-chart { min-height: 126px; margin-top: 10px; }
+    .li-zong-backtest-chart svg { width: 100%; height: auto; max-height: 210px; overflow: visible; }
+    .li-zong-backtest-chart text { fill: #8290a2; font-size: 9px; }
+    .li-zong-backtest-chart .zero-line { stroke: #d9e2ed; stroke-width: 1; }
+    .li-zong-backtest-chart .benchmark-line { fill: none; stroke: #94a4b7; stroke-width: 2; }
+    .li-zong-backtest-chart .strategy-line { fill: none; stroke: #3673d9; stroke-width: 2.6; }
+    .li-zong-history-legend i.strategy { background: #3673d9; }
+    .li-zong-history-legend i.benchmark { background: #94a4b7; }
+    .li-zong-backtest-rebalances { display: grid; gap: 5px; max-height: 210px; margin-top: 10px; overflow-y: auto; }
+    .li-zong-backtest-rebalance { display: grid; grid-template-columns: 82px 1fr auto; align-items: center; gap: 8px; padding: 8px 0; border-top: 1px solid #edf1f6; }
+    .li-zong-backtest-rebalance strong { color: #344a67; font-size: 9px; }
+    .li-zong-backtest-rebalance span { color: #52677f; font-size: 9px; }
+    .li-zong-backtest-rebalance small { color: #8896a8; font-size: 8px; text-align: right; }
+    .li-zong-backtest-boundary { margin-top: 9px; color: #8794a5; font-size: 8px; line-height: 1.55; }
     .li-zong-history-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
     .li-zong-history-title { color: #293c58; font-size: 14px; font-weight: 790; }
     .li-zong-history-copy { max-width: 720px; margin-top: 4px; color: #728198; font-size: 10px; line-height: 1.6; }
@@ -1589,6 +1613,11 @@
       .li-zong-tabs, .li-zong-list { padding-left: 12px; padding-right: 12px; }
       .li-zong-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
       .li-zong-history { margin-left: 12px; margin-right: 12px; }
+      .li-zong-backtest { margin-left: 12px; margin-right: 12px; }
+      .li-zong-backtest-head { flex-direction: column; }
+      .li-zong-backtest-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }
+      .li-zong-backtest-rebalance { grid-template-columns: 72px 1fr; }
+      .li-zong-backtest-rebalance small { grid-column: 2; text-align: left; }
       .li-zong-history-head { flex-direction: column; }
       .li-zong-history-actions { width: 100%; justify-content: space-between; }
       .li-zong-history-grid { grid-template-columns: 1fr; }

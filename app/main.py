@@ -29,6 +29,7 @@ from app.api_models import (
     ConversationPatch,
     DeepStockStart,
     LegacySessionClaim,
+    LiZongBacktestRunRequest,
     LiZongHistoryRunRequest,
     LiZongRunRequest,
     LiZongUniverseRunRequest,
@@ -202,6 +203,7 @@ from app.services.trade_workflow import (
 )
 from app.services.tushare_snapshots import TushareSnapshotService
 from app.services.li_zong_history import LiZongHistoryService
+from app.services.li_zong_portfolio_backtest import LiZongPortfolioBacktestService
 from app.services.li_zong_presentation import (
     external_ts_code as _external_ts_code,
     public_li_zong_candidate as _public_li_zong_candidate,
@@ -465,6 +467,11 @@ def create_app(
         tushare_snapshots,
         li_zong_strategy,
     )
+    li_zong_backtest = LiZongPortfolioBacktestService(
+        database,
+        tushare_snapshots,
+        li_zong_strategy,
+    )
     chat_screening_evidence = ChatScreeningEvidenceService(
         stock_screener=stock_screener,
         li_zong_strategy=li_zong_strategy,
@@ -581,6 +588,7 @@ def create_app(
         tushare_snapshots=tushare_snapshots,
         li_zong_strategy=li_zong_strategy,
         li_zong_history=li_zong_history,
+        li_zong_backtest=li_zong_backtest,
         trade_workflow=trade_workflow,
         change_events=change_events,
     )
@@ -658,6 +666,7 @@ def create_app(
     app.state.tushare_snapshots = tushare_snapshots
     app.state.li_zong_strategy = li_zong_strategy
     app.state.li_zong_history = li_zong_history
+    app.state.li_zong_backtest = li_zong_backtest
     app.state.chat_screening_evidence = chat_screening_evidence
     app.state.today_overview = today_overview
     app.state.event_broker = event_broker
@@ -1494,6 +1503,26 @@ def create_app(
             batch_size=payload.batch_size,
             symbols=payload.symbols,
             lookback_days=payload.lookback_days,
+        )
+
+    @app.get("/v1/stock-strategies/li-zong/backtest")
+    def get_li_zong_backtest(
+        request: Request,
+        period: Literal["3m", "1y", "3y"] = Query(default="1y"),
+    ) -> dict[str, Any]:
+        require_session_user(request)
+        return li_zong_backtest.packet(period=period)
+
+    @app.post("/v1/stock-strategies/li-zong/backtest/runs")
+    def run_li_zong_backtest(
+        payload: LiZongBacktestRunRequest, request: Request
+    ) -> dict[str, Any]:
+        require_admin_api(request)
+        return li_zong_backtest.refresh(
+            market_day_batch_size=payload.market_day_batch_size,
+            symbol_batch_size=payload.symbol_batch_size,
+            input_sync_batch_size=payload.input_sync_batch_size,
+            as_of_date=payload.as_of_date,
         )
 
     @app.get("/v1/stock-strategies/li-zong/triggers")

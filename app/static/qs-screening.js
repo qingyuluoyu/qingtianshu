@@ -91,6 +91,89 @@ function liZongStatusLabel(value) {
       svg.append(zero, benchmark, stock); return svg;
     }
 
+    function createLiZongBacktestChart(points) {
+      const rows = (points || []).filter(item => Number.isFinite(Number(item.return_pct)) && Number.isFinite(Number(item.benchmark_return_pct)));
+      if (rows.length < 2) return null;
+      const sampled = rows.length > 380 ? rows.filter((_, index) => index % Math.ceil(rows.length / 380) === 0 || index === rows.length - 1) : rows;
+      const values = sampled.flatMap(item => [Number(item.return_pct), Number(item.benchmark_return_pct), 0]);
+      const min = Math.min(...values); const max = Math.max(...values); const span = Math.max(1, max - min);
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 720 190"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "李总策略等权组合与沪深300历史累计收益曲线");
+      const coordinates = key => sampled.map((item, index) => {
+        const x = 42 + index * (650 / Math.max(1, sampled.length - 1));
+        const y = 166 - ((Number(item[key]) - min) / span) * 138;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(" ");
+      const zero = document.createElementNS("http://www.w3.org/2000/svg", "line");
+      const zeroY = 166 - ((0 - min) / span) * 138;
+      zero.setAttribute("x1", "42"); zero.setAttribute("x2", "692"); zero.setAttribute("y1", zeroY.toFixed(1)); zero.setAttribute("y2", zeroY.toFixed(1)); zero.setAttribute("class", "zero-line");
+      const benchmark = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      benchmark.setAttribute("points", coordinates("benchmark_return_pct")); benchmark.setAttribute("class", "benchmark-line");
+      const strategy = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+      strategy.setAttribute("points", coordinates("return_pct")); strategy.setAttribute("class", "strategy-line");
+      const start = document.createElementNS("http://www.w3.org/2000/svg", "text"); start.setAttribute("x", "42"); start.setAttribute("y", "184"); start.textContent = sampled[0].trade_date || "";
+      const end = document.createElementNS("http://www.w3.org/2000/svg", "text"); end.setAttribute("x", "692"); end.setAttribute("y", "184"); end.setAttribute("text-anchor", "end"); end.textContent = sampled.at(-1).trade_date || "";
+      const high = document.createElementNS("http://www.w3.org/2000/svg", "text"); high.setAttribute("x", "36"); high.setAttribute("y", "31"); high.setAttribute("text-anchor", "end"); high.textContent = `${max.toFixed(1)}%`;
+      const low = document.createElementNS("http://www.w3.org/2000/svg", "text"); low.setAttribute("x", "36"); low.setAttribute("y", "169"); low.setAttribute("text-anchor", "end"); low.textContent = `${min.toFixed(1)}%`;
+      svg.append(zero, benchmark, strategy, start, end, high, low); return svg;
+    }
+
+    function renderLiZongBacktest(payload) {
+      state.liZongBacktest = payload;
+      const period = payload?.selected_period || state.liZongBacktestPeriod || "1y";
+      state.liZongBacktestPeriod = period;
+      document.querySelectorAll("[data-li-zong-backtest-period]").forEach(button => {
+        const active = button.dataset.liZongBacktestPeriod === period;
+        button.classList.toggle("active", active); button.setAttribute("aria-selected", String(active));
+      });
+      const result = payload?.result || null; const progress = payload?.progress || {};
+      const metrics = $("liZongBacktestMetrics"); const chart = $("liZongBacktestChart"); const legend = $("liZongBacktestLegend"); const list = $("liZongBacktestRebalanceList");
+      if (!result) {
+        metrics.hidden = true; legend.hidden = true; list.hidden = true;
+        const marketDays = Number(progress.available_market_days || 0); const requiredDays = Number(progress.required_market_days || 0);
+        const evaluated = Number(progress.evaluated_symbols || 0); const eligible = Number(progress.eligible_symbols || 0);
+        $("liZongBacktestProgress").textContent = marketDays < requiredDays
+          ? `历史市值正在同步：${marketDays}/${requiredDays} 个交易日。完成后再逐日运行同一套策略规则。`
+          : `组合正在核验：${evaluated}/${eligible || "待识别"} 只历史市值达标股票。未完成前不展示有偏收益率。`;
+        chart.innerHTML = '<div class="screener-empty">后台正在构建无前视候选序列和等权换仓净值；页面会自动更新。</div>';
+        return;
+      }
+      $("liZongBacktestProgress").textContent = `${result.start_date} 至 ${result.end_date} · ${result.trading_days} 个交易日 · 历史市值达标范围 ${Number(result.eligible_symbol_count || 0).toLocaleString("zh-CN")} 只`;
+      metrics.hidden = false;
+      $("liZongBacktestReturn").textContent = pct(result.period_return_pct);
+      $("liZongBacktestAnnualized").textContent = pct(result.annualized_return_pct);
+      $("liZongBacktestBenchmark").textContent = pct(result.benchmark_return_pct);
+      $("liZongBacktestExcess").textContent = pct(result.excess_return_pct);
+      $("liZongBacktestDrawdown").textContent = pct(result.max_drawdown_pct);
+      $("liZongBacktestRebalances").textContent = `${Number(result.selection_update_count || 0)} 次`;
+      chart.innerHTML = ""; const svg = createLiZongBacktestChart(result.points || []);
+      if (svg) { chart.appendChild(svg); legend.hidden = false; }
+      else { chart.innerHTML = '<div class="screener-empty">区间内没有形成足够的组合净值点。</div>'; legend.hidden = true; }
+      list.innerHTML = ""; const rebalances = (result.rebalances || []).slice(-8).reverse(); list.hidden = !rebalances.length;
+      rebalances.forEach(item => {
+        const row = document.createElement("div"); row.className = "li-zong-backtest-rebalance";
+        const date = document.createElement("strong"); date.textContent = item.trade_date || "—";
+        const detail = document.createElement("span"); detail.textContent = item.holding_count
+          ? `${item.holding_count}只等权 · ${item.names?.slice(0, 4).join("、") || item.symbols?.slice(0, 4).join("、") || "组合更新"}${item.holding_count > 4 ? "等" : ""}`
+          : "候选清空，转为现金观察";
+        const turnover = document.createElement("small"); turnover.textContent = `由 ${item.signal_date || "前一交易日"} 信号触发 · 换手 ${numeric(item.turnover_pct)}%`;
+        row.append(date, detail, turnover); list.appendChild(row);
+      });
+    }
+
+    async function loadLiZongBacktest() {
+      if (state.liZongBacktestLoading) return;
+      state.liZongBacktestLoading = true;
+      try {
+        const payload = await api(`/v1/stock-strategies/li-zong/backtest?period=${encodeURIComponent(state.liZongBacktestPeriod || "1y")}`);
+        renderLiZongBacktest(payload);
+      } catch {
+        if (!state.liZongBacktest) $("liZongBacktestProgress").textContent = "回测结果暂时没有加载完成，后台数据仍会继续保留。";
+      } finally {
+        state.liZongBacktestLoading = false;
+      }
+    }
+
     function showLiZongHistoryDetail(item) {
       const performance = item.performance || {}; const horizons = performance.horizons || {};
       const lines = [
@@ -378,6 +461,7 @@ function liZongStatusLabel(value) {
     }
 
     async function loadLiZongStrategy() {
+      if (!state.liZongBacktestLoading) void loadLiZongBacktest();
       const filter = state.liZongFilter || "qualified";
       const observationFilter = ["near_8_of_9", "watch_6_7_of_9"].includes(filter);
       const loadToken = ++state.liZongLoadToken;

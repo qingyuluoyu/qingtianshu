@@ -35,6 +35,7 @@ from app.services.research_reports import ResearchReportService
 from app.services.research_outcomes import ResearchOutcomeService
 from app.services.tushare_snapshots import TushareSnapshotService
 from app.services.li_zong_history import LiZongHistoryService
+from app.services.li_zong_portfolio_backtest import LiZongPortfolioBacktestService
 from app.services.li_zong_strategy_service import LiZongStrategyService
 from app.utils import utc_now
 
@@ -167,6 +168,7 @@ class BackgroundScheduler:
         tushare_snapshots: TushareSnapshotService | None = None,
         li_zong_strategy: LiZongStrategyService | None = None,
         li_zong_history: LiZongHistoryService | None = None,
+        li_zong_backtest: LiZongPortfolioBacktestService | None = None,
         trade_workflow: Any | None = None,
         change_events: Any | None = None,
     ):
@@ -197,6 +199,7 @@ class BackgroundScheduler:
         self.tushare_snapshots = tushare_snapshots
         self.li_zong_strategy = li_zong_strategy
         self.li_zong_history = li_zong_history
+        self.li_zong_backtest = li_zong_backtest
         self.trade_workflow = trade_workflow
         self.change_events = change_events
         self._stop = threading.Event()
@@ -402,6 +405,7 @@ class BackgroundScheduler:
             "evidence_tasks_process": self._process_evidence_tasks,
             "data_quality_audit": self._refresh_data_health,
             "li_zong_strategy_refresh": self._refresh_li_zong_strategy,
+            "li_zong_backtest_refresh": self._refresh_li_zong_backtest,
         }
         if self.trade_workflow is not None:
             functions["trade_reviews_readiness_refresh"] = (
@@ -477,6 +481,12 @@ class BackgroundScheduler:
                 max(10, self.settings.li_zong_refresh_seconds),
                 80,
                 self._li_zong_enabled,
+            ),
+            (
+                "li_zong_backtest_refresh",
+                max(30, self.settings.li_zong_refresh_seconds * 2),
+                35,
+                self._li_zong_enabled and self.li_zong_backtest is not None,
             ),
         ]
 
@@ -678,6 +688,21 @@ class BackgroundScheduler:
             "sync_results": strategy.get("sync_results") or [],
             "history": history,
         }
+
+    def _refresh_li_zong_backtest(self) -> dict[str, Any]:
+        if self.li_zong_backtest is None:
+            return {"status": "disabled"}
+        result = self.li_zong_backtest.refresh()
+        self.broker.publish(
+            {
+                "type": "stock_strategy_backtest_updated",
+                "strategy_id": "li_zong",
+                "time": utc_now(),
+                "status": result.get("status"),
+                "periods": result.get("periods") or {},
+            }
+        )
+        return result
 
     def _refresh_article(self) -> dict[str, Any]:
         result = self.articles.generate(

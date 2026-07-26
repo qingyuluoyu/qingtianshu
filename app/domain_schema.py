@@ -756,6 +756,80 @@ DOMAIN_SCHEMA_SQL = r"""
                     )
                 );
 
+                CREATE TABLE IF NOT EXISTS strategy_backtest_market_cap_days (
+                    strategy_id TEXT NOT NULL
+                        REFERENCES strategy_definitions(strategy_id) ON DELETE CASCADE,
+                    backtest_version TEXT NOT NULL,
+                    trade_date TEXT NOT NULL,
+                    universe_count INTEGER NOT NULL,
+                    eligible_count INTEGER NOT NULL,
+                    data_version TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(strategy_id, backtest_version, trade_date)
+                );
+
+                CREATE TABLE IF NOT EXISTS strategy_backtest_market_caps (
+                    strategy_id TEXT NOT NULL
+                        REFERENCES strategy_definitions(strategy_id) ON DELETE CASCADE,
+                    backtest_version TEXT NOT NULL,
+                    trade_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    total_mv_yi REAL NOT NULL,
+                    data_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(
+                        strategy_id, backtest_version, trade_date, symbol
+                    )
+                );
+
+                CREATE TABLE IF NOT EXISTS strategy_backtest_symbol_states (
+                    strategy_id TEXT NOT NULL
+                        REFERENCES strategy_definitions(strategy_id) ON DELETE CASCADE,
+                    strategy_version TEXT NOT NULL,
+                    parameter_version TEXT NOT NULL,
+                    backtest_version TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    trade_date TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN (
+                        'qualified', 'triggered', 'not_qualified',
+                        'data_incomplete'
+                    )),
+                    candidate_qualified INTEGER NOT NULL DEFAULT 0,
+                    adjusted_open REAL,
+                    adjusted_close REAL,
+                    raw_open REAL,
+                    raw_close REAL,
+                    source_data_version TEXT NOT NULL,
+                    data_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(
+                        strategy_id, strategy_version, parameter_version,
+                        backtest_version, symbol, trade_date
+                    )
+                );
+
+                CREATE TABLE IF NOT EXISTS strategy_backtest_symbol_coverage (
+                    strategy_id TEXT NOT NULL
+                        REFERENCES strategy_definitions(strategy_id) ON DELETE CASCADE,
+                    strategy_version TEXT NOT NULL,
+                    parameter_version TEXT NOT NULL,
+                    backtest_version TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    start_date TEXT,
+                    end_date TEXT,
+                    evaluated_days INTEGER NOT NULL DEFAULT 0,
+                    source_data_version TEXT NOT NULL,
+                    data_version TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('stable', 'incomplete')),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(
+                        strategy_id, strategy_version, parameter_version,
+                        backtest_version, symbol
+                    )
+                );
+
                 CREATE TABLE IF NOT EXISTS news_items (
                     id TEXT PRIMARY KEY,
                     symbol TEXT NOT NULL,
@@ -1266,6 +1340,24 @@ DOMAIN_SCHEMA_SQL = r"""
                 CREATE INDEX IF NOT EXISTS idx_strategy_triggers_time
                     ON strategy_trigger_events(
                         strategy_id, evidence_date DESC, created_at DESC
+                    );
+                CREATE INDEX IF NOT EXISTS idx_strategy_backtest_cap_date
+                    ON strategy_backtest_market_caps(
+                        strategy_id, backtest_version, trade_date, symbol
+                    );
+                CREATE INDEX IF NOT EXISTS idx_strategy_backtest_cap_symbol
+                    ON strategy_backtest_market_caps(
+                        strategy_id, backtest_version, symbol, trade_date
+                    );
+                CREATE INDEX IF NOT EXISTS idx_strategy_backtest_states_date
+                    ON strategy_backtest_symbol_states(
+                        strategy_id, strategy_version, parameter_version,
+                        backtest_version, trade_date, candidate_qualified
+                    );
+                CREATE INDEX IF NOT EXISTS idx_strategy_backtest_coverage
+                    ON strategy_backtest_symbol_coverage(
+                        strategy_id, strategy_version, parameter_version,
+                        backtest_version, status, start_date, end_date
                     );
                 CREATE INDEX IF NOT EXISTS idx_news_symbol_time
                     ON news_items(symbol, published_at DESC, fetched_at DESC);

@@ -468,6 +468,32 @@
               <button class="li-zong-tab" type="button" data-li-zong-filter="not_qualified">未满足</button>
             </div>
             <div id="liZongResults" class="li-zong-list"><div class="screener-empty">当前没有可展示的策略候选。</div></div>
+            <section id="liZongBacktestPanel" class="li-zong-backtest" aria-labelledby="liZongBacktestTitle">
+              <div class="li-zong-backtest-head">
+                <div>
+                  <div id="liZongBacktestTitle" class="li-zong-history-title">等权换仓历史验证</div>
+                  <div class="li-zong-history-copy">在每个历史交易日按当时可得数据运行同一套规则；候选组合变化后，于下一交易日开盘等资金换仓，并对照沪深300。</div>
+                </div>
+                <div class="li-zong-backtest-periods" role="tablist" aria-label="回测区间">
+                  <button type="button" role="tab" data-li-zong-backtest-period="3m">近3个月</button>
+                  <button class="active" type="button" role="tab" data-li-zong-backtest-period="1y">近1年</button>
+                  <button type="button" role="tab" data-li-zong-backtest-period="3y">近3年</button>
+                </div>
+              </div>
+              <div id="liZongBacktestProgress" class="li-zong-backtest-progress">正在核验历史数据覆盖和组合换仓序列…</div>
+              <div id="liZongBacktestMetrics" class="li-zong-backtest-metrics" hidden>
+                <div><span>区间收益</span><strong id="liZongBacktestReturn">—</strong></div>
+                <div><span>年化收益</span><strong id="liZongBacktestAnnualized">—</strong></div>
+                <div><span>沪深300</span><strong id="liZongBacktestBenchmark">—</strong></div>
+                <div><span>区间超额</span><strong id="liZongBacktestExcess">—</strong></div>
+                <div><span>最大回撤</span><strong id="liZongBacktestDrawdown">—</strong></div>
+                <div><span>组合更新</span><strong id="liZongBacktestRebalances">—</strong></div>
+              </div>
+              <div id="liZongBacktestChart" class="li-zong-backtest-chart"><div class="screener-empty">长期回测数据正在由后台分批生成。</div></div>
+              <div id="liZongBacktestLegend" class="li-zong-history-legend" hidden><span><i class="strategy"></i>李总策略等权组合</span><span><i class="benchmark"></i>沪深300</span><span>主净值计入统一交易摩擦成本</span></div>
+              <div id="liZongBacktestRebalanceList" class="li-zong-backtest-rebalances" hidden></div>
+              <div class="li-zong-backtest-boundary">历史表现用于检验策略，不代表未来收益；涨跌停排队、停牌后实际成交和冲击成本仍需进一步模拟。</div>
+            </section>
             <section id="liZongHistoryPanel" class="li-zong-history" aria-labelledby="liZongHistoryTitle" hidden>
               <div class="li-zong-history-head">
                 <div>

@@ -23,7 +23,10 @@ class TushareSnapshotService:
     """Publish traceable per-symbol Tushare snapshots without replacing stable data."""
 
     METHOD = "tushare_symbol_snapshot_v1"
-    SYMBOL_HISTORY_MARKET_DAYS = 700
+    # Three years of point-in-time validation needs roughly 756 evaluation
+    # sessions plus the strategy's 380-session warm-up window. Keep a small
+    # buffer for suspensions and calendar differences.
+    SYMBOL_HISTORY_MARKET_DAYS = 1150
     DATASETS = (
         "trade_cal",
         "stock_basic",
@@ -95,7 +98,7 @@ class TushareSnapshotService:
         canonical = normalize_symbol(symbol)
         as_of = self._parse_as_of_date(as_of_date)
         requested_as_of = as_of.strftime("%Y%m%d")
-        calendar_start = (as_of - timedelta(days=1100)).strftime("%Y%m%d")
+        calendar_start = (as_of - timedelta(days=1800)).strftime("%Y%m%d")
         queried_datasets = tuple(
             dataset
             for dataset in self.DATASETS
@@ -192,7 +195,7 @@ class TushareSnapshotService:
                 },
                 "top10_holders": {
                     "ts_code": ts_code,
-                    "start_date": (as_of - timedelta(days=3 * 366)).strftime("%Y%m%d"),
+                    "start_date": (as_of - timedelta(days=5 * 366)).strftime("%Y%m%d"),
                     "end_date": requested_as_of,
                     "fields": (
                         "ts_code,ann_date,end_date,holder_name,hold_amount,hold_ratio"
@@ -200,7 +203,7 @@ class TushareSnapshotService:
                 },
                 "top10_floatholders": {
                     "ts_code": ts_code,
-                    "start_date": (as_of - timedelta(days=3 * 366)).strftime("%Y%m%d"),
+                    "start_date": (as_of - timedelta(days=5 * 366)).strftime("%Y%m%d"),
                     "end_date": requested_as_of,
                     "fields": (
                         "ts_code,ann_date,end_date,holder_name,hold_amount,hold_ratio"

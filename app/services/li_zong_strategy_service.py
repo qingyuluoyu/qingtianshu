@@ -70,7 +70,7 @@ class LiZongStrategyService:
     """Run Li Zong v1 on published snapshots with traceable data fallbacks."""
 
     ROE_FALLBACK_VERSION = "eastmoney_reported_roe_v1"
-    PRICE_HISTORY_WINDOW_VERSION = "market_days_700_v1"
+    PRICE_HISTORY_WINDOW_VERSION = "market_days_1150_v1"
     INCOMPLETE_BOUNDARY_VERSION = "data_incomplete_v2"
     MAX_DEEP_SYNC_WORKERS = 2
     MAX_TRANSIENT_SYNC_RETRIES = 3

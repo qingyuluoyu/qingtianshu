@@ -20,6 +20,9 @@ function connectServerEvents() {
           if (data.type === "stock_strategy_updated" && data.strategy_id === "li_zong") {
             if (state.workspacePage === "screening") void loadLiZongStrategy();
           }
+          if (data.type === "stock_strategy_backtest_updated" && data.strategy_id === "li_zong") {
+            if (state.workspacePage === "screening") void loadLiZongBacktest();
+          }
           if (data.type === "agent_progress" && data.request_id) {
             const request = state.pendingAgentRequests.get(data.request_id);
             const pending = request?.node || request;
