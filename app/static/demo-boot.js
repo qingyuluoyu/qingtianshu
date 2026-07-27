@@ -160,6 +160,26 @@ $("agentResumeOpen").addEventListener("click", async event => {
           ]);
           return;
         }
+        if (initialRoute.page === "screening") {
+          if (initialRoute.screeningSection === "li_zong") {
+            await loadLiZongStrategy();
+          }
+          if (state.workspaceNavigationVersion === bootNavigationVersion) {
+            await restoreWorkspaceRoute(initialRoute, "replace");
+          }
+          void Promise.allSettled([
+            loadWatchlist(),
+            loadTodayOverview(),
+            loadMarketDashboard(),
+            loadSectors(),
+            loadLiveMarkets(),
+            loadArticles(),
+            loadKnowledge(),
+            loadDeepStock(),
+            loadConversations(false, false)
+          ]);
+          return;
+        }
         if (initialRoute.page === "review") {
           activateReviewTab(initialRoute.reviewTab || "trades", {historyMode: "none"});
           await loadReviewCenter();

@@ -16,7 +16,7 @@ from app.utils import json_dumps, utc_now, write_json
 
 class Database:
     SYSTEM_EDITOR_ID = "system-market-editor"
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = 4
 
     def __init__(
         self,
@@ -119,6 +119,25 @@ class Database:
                 "background_job_runs",
                 "worker_id",
                 "TEXT",
+            )
+            self._ensure_column(
+                connection,
+                "tushare_dataset_snapshots",
+                "requested_as_of_date",
+                "TEXT",
+            )
+            connection.execute(
+                r"""
+                UPDATE tushare_dataset_snapshots
+                SET requested_as_of_date = substring(
+                    payload_json FROM
+                    '"requested_as_of_date"[[:space:]]*:[[:space:]]*"([^"]+)"'
+                )
+                WHERE dataset IN ('li_zong_inputs', 'li_zong_inputs_incomplete')
+                    AND requested_as_of_date IS NULL
+                    AND payload_json LIKE ?
+                """,
+                ('%"requested_as_of_date"%',),
             )
             self._upgrade_postgres_real_columns(connection)
             connection.execute(
@@ -2178,20 +2197,23 @@ class Database:
     ) -> dict[str, Any]:
         snapshot_id = str(uuid4())
         created_at = utc_now()
+        requested_as_of_date = str(payload.get("requested_as_of_date") or "").strip()
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO tushare_dataset_snapshots(
-                    id, dataset, scope_key, as_of_date, report_period,
+                    id, dataset, scope_key, as_of_date, requested_as_of_date,
+                    report_period,
                     source_updated_at, sync_run_id, data_version, data_status,
                     payload_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     snapshot_id,
                     dataset,
                     scope_key,
                     as_of_date,
+                    requested_as_of_date or None,
                     report_period,
                     source_updated_at,
                     sync_run_id,
@@ -2258,7 +2280,8 @@ class Database:
             "*"
             if include_payload
             else (
-                "id, dataset, scope_key, as_of_date, report_period, "
+                "id, dataset, scope_key, as_of_date, requested_as_of_date, "
+                "report_period, "
                 "source_updated_at, sync_run_id, data_version, data_status, created_at"
             )
         )

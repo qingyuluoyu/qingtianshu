@@ -90,6 +90,30 @@ def test_backtest_holds_cash_when_strategy_never_selects_a_stock():
     assert result["benchmark_return_pct"] == 2.0
 
 
+def test_backtest_result_discloses_incomplete_input_coverage():
+    dates = ["2026-01-05", "2026-01-06", "2026-01-07"]
+    result = LiZongPortfolioBacktestService.calculate_portfolio(
+        period="3m",
+        candidate_rows=[],
+        price_rows=[],
+        benchmark_rows=[
+            {"trade_date": dates[0], "close": 100.0},
+            {"trade_date": dates[1], "close": 101.0},
+            {"trade_date": dates[2], "close": 102.0},
+        ],
+        names={},
+        eligible_symbol_count=8,
+        complete_symbol_count=7,
+        incomplete_symbols=["000008.SZ"],
+    )
+
+    assert result["complete_symbol_count"] == 7
+    assert result["incomplete_symbol_count"] == 1
+    assert result["data_coverage_ratio"] == 0.875
+    assert result["incomplete_symbols"] == ["000008.SZ"]
+    assert "不会被当作候选" in result["data_coverage_boundary"]
+
+
 def test_backtest_api_and_frontend_expose_three_periods(app, client, monkeypatch):
     assert client.post("/users", json={"name": "Backtest User"}).status_code == 201
     monkeypatch.setattr(
@@ -200,6 +224,67 @@ def test_refresh_only_evaluates_the_largest_market_cap_window_that_is_ready(
     assert captured["required_start"] == trade_dates[-63]
     assert captured["market_cap_data_version"] == "market-cap-v1"
     assert captured["trade_dates"] == trade_dates[-63:]
+    assert captured["priority_windows"] == [
+        {
+            "period": "3m",
+            "start_date": trade_dates[-63],
+            "end_date": trade_dates[-1],
+            "symbols": {"000001.SZ"},
+        }
+    ]
+
+
+def test_backtest_prioritizes_the_earliest_incomplete_visible_period():
+    symbols = ["000003.SZ", "000004.SZ", "000001.SZ", "000002.SZ"]
+    coverage = {
+        "000001.SZ": {
+            "start_date": "2026-04-23",
+            "end_date": "2026-07-24",
+        },
+        "000003.SZ": {
+            "start_date": "2025-07-11",
+            "end_date": "2026-07-24",
+        },
+    }
+    windows = [
+        {
+            "period": "3m",
+            "start_date": "2026-04-23",
+            "end_date": "2026-07-24",
+            "symbols": {"000001.SZ", "000002.SZ"},
+        },
+        {
+            "period": "1y",
+            "start_date": "2025-07-11",
+            "end_date": "2026-07-24",
+            "symbols": {"000001.SZ", "000002.SZ", "000003.SZ"},
+        },
+        {
+            "period": "3y",
+            "start_date": "2023-06-12",
+            "end_date": "2026-07-24",
+            "symbols": set(symbols),
+        },
+    ]
+
+    ordered = LiZongPortfolioBacktestService._prioritize_symbols_for_windows(
+        symbols,
+        coverage=coverage,
+        current_symbols={"000001.SZ", "000003.SZ"},
+        priority_windows=windows,
+    )
+
+    assert ordered == ["000002.SZ", "000001.SZ", "000003.SZ", "000004.SZ"]
+
+
+def test_backtest_reapplies_period_priority_to_late_sync_queue_entries():
+    batch = LiZongPortfolioBacktestService._ordered_sync_batch(
+        ["000003.SZ", "000004.SZ", "000001.SZ", "000002.SZ", "000001.SZ"],
+        ordered_symbols=["000001.SZ", "000002.SZ", "000003.SZ", "000004.SZ"],
+        limit=3,
+    )
+
+    assert batch == ["000001.SZ", "000002.SZ", "000003.SZ"]
 
 
 def test_backtest_coverage_requires_current_snapshot_and_market_cap_versions():
@@ -253,6 +338,127 @@ def test_backtest_coverage_requires_current_snapshot_and_market_cap_versions():
         {"data_version": "snapshot-v2"},
         market_cap_version_cache={},
     )
+
+
+def test_backtest_accepts_an_inactive_stock_snapshot_queried_through_window_end():
+    snapshot = {
+        "as_of_date": "2024-02-05",
+        "payload": {
+            "as_of_date": "2024-02-05",
+            "requested_as_of_date": "2026-07-24",
+        },
+    }
+
+    assert LiZongPortfolioBacktestService._snapshot_requested_through(
+        snapshot, "2026-07-24"
+    )
+    assert not LiZongPortfolioBacktestService._snapshot_requested_through(
+        snapshot, "2026-07-25"
+    )
+
+    metadata_only_snapshot = {
+        "as_of_date": "2024-02-05",
+        "requested_as_of_date": "2026-07-24",
+    }
+    assert LiZongPortfolioBacktestService._snapshot_requested_through(
+        metadata_only_snapshot, "2026-07-24"
+    )
+
+
+def test_backtest_uses_best_available_history_after_current_extension_attempt():
+    snapshot = {
+        "as_of_date": "2026-07-24",
+        "payload": {
+            "requested_as_of_date": "2026-07-24",
+            "sync_profile": "market_history_extension_v1",
+        },
+    }
+
+    assert LiZongPortfolioBacktestService._history_extension_attempted(
+        snapshot, end_date="2026-07-24"
+    )
+    assert not LiZongPortfolioBacktestService._history_extension_attempted(
+        snapshot, end_date="2026-07-25"
+    )
+
+
+def test_backtest_prefers_current_incomplete_input_over_stale_stable_input():
+    class FakeDatabase:
+        def list_latest_tushare_dataset_snapshots(
+            self, dataset, **_kwargs
+        ):
+            if dataset == "li_zong_inputs":
+                return [
+                    {
+                        "dataset": dataset,
+                        "scope_key": "000001.SZ",
+                        "as_of_date": "2026-07-21",
+                        "requested_as_of_date": "2026-07-21",
+                        "created_at": "2026-07-21T16:00:00+00:00",
+                    },
+                    {
+                        "dataset": dataset,
+                        "scope_key": "000002.SZ",
+                        "as_of_date": "2026-07-24",
+                        "requested_as_of_date": "2026-07-24",
+                        "created_at": "2026-07-24T16:00:00+00:00",
+                    },
+                ]
+            return [
+                {
+                    "dataset": dataset,
+                    "scope_key": "000001.SZ",
+                    "as_of_date": "2026-07-24",
+                    "requested_as_of_date": "2026-07-24",
+                    "created_at": "2026-07-24T17:00:00+00:00",
+                },
+                {
+                    "dataset": dataset,
+                    "scope_key": "000002.SZ",
+                    "as_of_date": "2026-07-24",
+                    "requested_as_of_date": "2026-07-24",
+                    "created_at": "2026-07-24T17:00:00+00:00",
+                },
+            ]
+
+    service = LiZongPortfolioBacktestService(FakeDatabase(), object(), object())
+    metadata = service._snapshot_metadata()
+
+    assert metadata["000001.SZ"]["dataset"] == "li_zong_inputs_incomplete"
+    assert metadata["000002.SZ"]["dataset"] == "li_zong_inputs"
+
+
+def test_backtest_creates_explicit_incomplete_states_for_unusable_input():
+    states = LiZongPortfolioBacktestService._incomplete_states(
+        ["2026-07-23", "2026-07-24"]
+    )
+
+    assert [item["trade_date"] for item in states] == ["2026-07-23", "2026-07-24"]
+    assert all(item["status"] == "data_incomplete" for item in states)
+    assert all(item["candidate_qualified"] is False for item in states)
+
+
+def test_backtest_forces_delisted_candidate_out_at_last_available_close_proxy():
+    previous = {
+        "trade_date": "2024-02-05",
+        "status": "qualified",
+        "candidate_qualified": True,
+        "adjusted_open": 1.42,
+        "adjusted_close": 1.38,
+        "raw_open": 1.42,
+        "raw_close": 1.38,
+    }
+
+    carried = LiZongPortfolioBacktestService._carried_state(
+        previous,
+        trade_date="2024-02-06",
+        forced_exit=True,
+    )
+
+    assert carried["status"] == "not_qualified"
+    assert carried["candidate_qualified"] is False
+    assert carried["adjusted_open"] == 1.38
+    assert carried["adjusted_close"] == 1.38
 
 
 def test_vectorized_historical_states_match_reference_strategy_evaluation():

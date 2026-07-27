@@ -650,7 +650,10 @@ class LiZongStrategyService:
         }
 
     def coverage_packet(
-        self, universe_packet: dict[str, Any] | None = None
+        self,
+        universe_packet: dict[str, Any] | None = None,
+        *,
+        candidate_states: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         getter = getattr(self.snapshot_service, "get_a_share_universe", None)
         packet = (
@@ -696,15 +699,19 @@ class LiZongStrategyService:
             for item in eligible_items
             if str(item.get("symbol")) not in history_insufficient_symbols
         }
-        candidate_states = self.database.latest_strategy_candidate_states(
-            strategy_id=STRATEGY_ID,
-            strategy_version=STRATEGY_VERSION,
-            parameter_version=params.parameter_version,
+        resolved_candidate_states = (
+            candidate_states
+            if candidate_states is not None
+            else self.database.latest_strategy_candidate_states(
+                strategy_id=STRATEGY_ID,
+                strategy_version=STRATEGY_VERSION,
+                parameter_version=params.parameter_version,
+            )
         )
         evaluated_states = (
             {
                 symbol: state
-                for symbol, state in candidate_states.items()
+                for symbol, state in resolved_candidate_states.items()
                 if symbol in universe_symbols
                 and (
                     not as_of_date
@@ -1435,16 +1442,41 @@ class LiZongStrategyService:
             ),
         }
 
-    def funnel_packet(self) -> dict[str, Any]:
-        """Explain how the current full-market intersection narrows by rule."""
+    def coverage_and_funnel_packet(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Build user-facing coverage and funnel from one candidate-state read."""
 
-        coverage = self.coverage_packet()
-        as_of_date = str(coverage.get("as_of_date") or "")
         states = self.database.latest_strategy_candidate_states(
             strategy_id=STRATEGY_ID,
             strategy_version=STRATEGY_VERSION,
             parameter_version=LiZongParameters().parameter_version,
         )
+        coverage = self.coverage_packet(candidate_states=states)
+        funnel = self.funnel_packet(coverage=coverage, candidate_states=states)
+        return coverage, funnel
+
+    def funnel_packet(
+        self,
+        *,
+        coverage: Mapping[str, Any] | None = None,
+        candidate_states: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Explain how the current full-market intersection narrows by rule."""
+
+        states = (
+            candidate_states
+            if candidate_states is not None
+            else self.database.latest_strategy_candidate_states(
+                strategy_id=STRATEGY_ID,
+                strategy_version=STRATEGY_VERSION,
+                parameter_version=LiZongParameters().parameter_version,
+            )
+        )
+        resolved_coverage = (
+            coverage
+            if coverage is not None
+            else self.coverage_packet(candidate_states=states)
+        )
+        as_of_date = str(resolved_coverage.get("as_of_date") or "")
         current = [
             state
             for state in states.values()

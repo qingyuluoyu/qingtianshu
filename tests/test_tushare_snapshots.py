@@ -487,6 +487,61 @@ def test_strategy_symbol_sync_reuses_trade_calendar_within_same_market_date(app)
     assert fake.calls["trade_cal"] == 1
 
 
+def test_strategy_symbol_sync_accepts_historical_market_cap_hint_for_inactive_stock(
+    app,
+):
+    fake = FakeSnapshotTushareClient()
+    service = TushareSnapshotService(app.state.database, fake)
+    historical_trade_date = fake.trade_dates[-20]
+    fake.empty_daily_basic_dates.update(fake.trade_dates[-5:])
+
+    result = service.sync_strategy_symbol(
+        "000063.SZ",
+        as_of_date="2026-07-21",
+        universe_item={
+            "symbol": "000063.SZ",
+            "trade_date": historical_trade_date,
+            "total_mv_yi": 220.0,
+        },
+    )
+
+    assert result["published"] is True
+    assert result["snapshot"]["as_of_date"] == TushareSnapshotService._iso_date(
+        historical_trade_date
+    )
+    assert result["snapshot"]["requested_as_of_date"] == "2026-07-21"
+    assert result["snapshot"]["datasets"]["daily_basic"]["rows"][0][
+        "trade_date"
+    ] == historical_trade_date
+    assert fake.calls["daily_basic"] == 0
+    assert fake.calls["stock_basic"] == 1
+
+
+def test_strategy_history_extension_reuses_existing_financial_and_holder_inputs(app):
+    fake = FakeSnapshotTushareClient()
+    service = TushareSnapshotService(app.state.database, fake)
+    initial = service.sync_strategy_symbol("000063.SZ", as_of_date="2026-07-21")
+    assert initial["published"] is True
+    fake.calls.clear()
+
+    extended = service.sync_strategy_symbol(
+        "000063.SZ",
+        as_of_date="2026-07-21",
+        extend_market_history_only=True,
+    )
+
+    assert extended["published"] is True
+    assert extended["snapshot"]["sync_profile"] == "market_history_extension_v1"
+    assert fake.calls["daily"] == 1
+    assert fake.calls["adj_factor"] == 1
+    assert fake.calls["stk_limit"] == 1
+    assert fake.calls["stock_basic"] == 1
+    assert fake.calls["daily_basic"] == 0
+    assert fake.calls["fina_indicator"] == 0
+    assert fake.calls["top10_holders"] == 0
+    assert fake.calls["top10_floatholders"] == 0
+
+
 def test_same_snapshot_content_keeps_same_data_version(app):
     fake = FakeSnapshotTushareClient()
     service = TushareSnapshotService(app.state.database, fake)
@@ -635,3 +690,50 @@ def test_stable_snapshot_selection_never_regresses_to_older_data_date(app):
     assert latest["payload"]["marker"] == "newer"
     assert listed[0]["as_of_date"] == "2026-07-24"
     assert listed[0]["payload"]["marker"] == "newer"
+
+
+def test_snapshot_metadata_exposes_requested_as_of_without_loading_payload(app):
+    database = app.state.database
+    dataset = "test_snapshot_metadata_requested_as_of"
+    sync_run = database.start_tushare_sync_run(
+        job_scope="test:metadata-requested-as-of",
+        as_of_date="2026-07-24",
+        datasets=[dataset],
+    )
+    database.save_tushare_dataset_snapshot(
+        dataset=dataset,
+        scope_key="inactive-stock",
+        as_of_date="2024-02-05",
+        report_period=None,
+        source_updated_at="2026-07-24T16:00:00+00:00",
+        sync_run_id=str(sync_run["id"]),
+        data_version="inactive-stock-v1",
+        data_status="stable",
+        payload={
+            "requested_as_of_date": "2026-07-24",
+            "large_payload_marker": ["not loaded"],
+        },
+    )
+
+    listed = database.list_latest_tushare_dataset_snapshots(
+        dataset,
+        data_status="stable",
+        include_payload=False,
+    )
+
+    assert listed == [
+        {
+            "id": listed[0]["id"],
+            "dataset": dataset,
+            "scope_key": "inactive-stock",
+            "as_of_date": "2024-02-05",
+            "requested_as_of_date": "2026-07-24",
+            "report_period": None,
+            "source_updated_at": "2026-07-24T16:00:00+00:00",
+            "sync_run_id": str(sync_run["id"]),
+            "data_version": "inactive-stock-v1",
+            "data_status": "stable",
+            "created_at": listed[0]["created_at"],
+        }
+    ]
+    assert "payload" not in listed[0]

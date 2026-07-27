@@ -233,6 +233,33 @@ def test_demo_restores_agent_route_before_loading_unrelated_dashboards() -> None
     )
 
 
+def test_demo_loads_li_zong_route_before_unrelated_dashboards() -> None:
+    page = frontend_source()
+    boot_section = page[page.index("state.workspaceBootPromise =") :]
+
+    first_screening_branch = boot_section.index(
+        'if (initialRoute.page === "screening")'
+    )
+    route_screening_branch = boot_section.index(
+        'if (initialRoute.page === "screening")', first_screening_branch + 1
+    )
+    screening_branch = boot_section[
+        route_screening_branch : boot_section.index(
+            'if (initialRoute.page === "review")', route_screening_branch
+        )
+    ]
+    assert 'initialRoute.screeningSection === "li_zong"' in screening_branch
+    assert "await loadLiZongStrategy();" in screening_branch
+    assert 'await restoreWorkspaceRoute(initialRoute, "replace");' in screening_branch
+    assert "void Promise.allSettled([" in screening_branch
+    assert screening_branch.index("await loadLiZongStrategy") < screening_branch.index(
+        "loadWatchlist(),"
+    )
+    assert screening_branch.index("await restoreWorkspaceRoute") < screening_branch.index(
+        "void Promise.allSettled"
+    )
+
+
 def test_demo_filters_saved_conversations_by_explicit_stock_target() -> None:
     page = frontend_source()
 

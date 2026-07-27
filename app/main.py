@@ -243,6 +243,45 @@ Image.MAX_IMAGE_PIXELS = 25_000_000
 logger = logging.getLogger(__name__)
 
 
+def _public_strategy_screen_run(run: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return the small run summary needed by user-facing strategy APIs.
+
+    Full screen runs retain a per-symbol ``data_versions`` map for deterministic
+    invalidation and audit.  That map can contain several thousand entries and
+    is internal worker state, so sending it to the browser adds latency without
+    improving the user-visible progress display.
+    """
+
+    if not run:
+        return None
+    return {
+        key: run.get(key)
+        for key in (
+            "id",
+            "strategy_id",
+            "strategy_version",
+            "parameter_version",
+            "data_version",
+            "as_of_date",
+            "run_scope",
+            "universe_count",
+            "prefiltered_count",
+            "coverage_ratio",
+            "status",
+            "requested_count",
+            "processed_count",
+            "qualified_count",
+            "triggered_count",
+            "incomplete_count",
+            "invalidated_count",
+            "error",
+            "started_at",
+            "finished_at",
+            "warnings",
+        )
+    }
+
+
 def create_app(
     settings: Settings | None = None,
     market_provider: Any | None = None,
@@ -1313,10 +1352,14 @@ def create_app(
     def get_latest_li_zong_run(request: Request) -> dict[str, Any]:
         require_session_user(request)
         coverage = li_zong_strategy.coverage_packet()
+        public_coverage = {
+            **coverage,
+            "latest_run": _public_strategy_screen_run(coverage.get("latest_run")),
+        }
         return {
             "strategy_id": "li_zong",
-            "run": coverage.get("latest_run"),
-            "coverage": coverage,
+            "run": public_coverage.get("latest_run"),
+            "coverage": public_coverage,
             "boundary": (
                 "普通用户只能读取后台批任务状态；"
                 "不能从页面触发全市场或逐股多年数据重算。"
@@ -1355,8 +1398,7 @@ def create_app(
             {str(item.get("as_of_date")) for item in items if item.get("as_of_date")},
             reverse=True,
         )
-        coverage = li_zong_strategy.coverage_packet()
-        funnel = li_zong_strategy.funnel_packet()
+        coverage, funnel = li_zong_strategy.coverage_and_funnel_packet()
         has_universe = bool(coverage.get("universe_count"))
         counts = coverage.get("counts") if has_universe else visible_counts
         published_status = (
@@ -1415,7 +1457,9 @@ def create_app(
                 ),
                 "full_market_coverage": bool(coverage.get("full_market_coverage")),
                 "deep_check_complete": bool(coverage.get("deep_check_complete")),
-                "latest_run": coverage.get("latest_run"),
+                "latest_run": _public_strategy_screen_run(
+                    coverage.get("latest_run")
+                ),
             },
             "boundary": (
                 "当前页面只读取后台已发布快照；全市场名单先执行市值与上市历史"

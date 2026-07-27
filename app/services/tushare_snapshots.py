@@ -69,6 +69,7 @@ class TushareSnapshotService:
         *,
         as_of_date: str | None = None,
         universe_item: dict[str, Any] | None = None,
+        extend_market_history_only: bool = False,
     ) -> dict[str, Any]:
         """Sync only the datasets required by the deterministic strategy.
 
@@ -83,6 +84,7 @@ class TushareSnapshotService:
             as_of_date=as_of_date,
             include_optional=False,
             universe_item=universe_item,
+            extend_market_history_only=extend_market_history_only,
         )
 
     def sync_symbol(
@@ -92,6 +94,7 @@ class TushareSnapshotService:
         as_of_date: str | None = None,
         include_optional: bool = True,
         universe_item: dict[str, Any] | None = None,
+        extend_market_history_only: bool = False,
     ) -> dict[str, Any]:
         if self.client is None:
             raise TushareSnapshotUnavailable("Tushare 数据同步尚未配置")
@@ -99,13 +102,28 @@ class TushareSnapshotService:
         as_of = self._parse_as_of_date(as_of_date)
         requested_as_of = as_of.strftime("%Y%m%d")
         calendar_start = (as_of - timedelta(days=1800)).strftime("%Y%m%d")
+        previous_stable = self.database.latest_tushare_dataset_snapshot(
+            "li_zong_inputs", canonical
+        )
+        previous_datasets = (
+            ((previous_stable or {}).get("payload") or {}).get("datasets") or {}
+        )
+        reusable_required = {
+            dataset
+            for dataset in (
+                "daily_basic",
+                "fina_indicator",
+                "top10_holders",
+                "top10_floatholders",
+            )
+            if extend_market_history_only
+            and (previous_datasets.get(dataset) or {}).get("rows")
+        }
         queried_datasets = tuple(
             dataset
             for dataset in self.DATASETS
-            if include_optional or dataset in self.REQUIRED_DATASETS
-        )
-        previous_stable = self.database.latest_tushare_dataset_snapshot(
-            "li_zong_inputs", canonical
+            if (include_optional or dataset in self.REQUIRED_DATASETS)
+            and dataset not in reusable_required
         )
         sync_run = self.database.start_tushare_sync_run(
             job_scope=f"symbol:{canonical}",
@@ -132,11 +150,25 @@ class TushareSnapshotService:
             )
             frames.update(hint_frames)
             reused_universe_datasets.update(hint_frames)
+            if "daily_basic" in reusable_required and "daily_basic" not in frames:
+                frames["daily_basic"] = pd.DataFrame(
+                    (previous_datasets.get("daily_basic") or {}).get("rows") or []
+                )
             if "daily_basic" in frames:
-                latest_trade_date = str(
-                    frames["daily_basic"].iloc[0].get("trade_date")
-                ).replace("-", "")
-                daily_basic_error = None
+                daily_basic_dates = [
+                    str(value).replace("-", "")
+                    for value in frames["daily_basic"].get("trade_date", [])
+                    if value not in (None, "")
+                ]
+                if daily_basic_dates:
+                    latest_trade_date = max(daily_basic_dates)
+                    daily_basic_error = None
+                else:
+                    (
+                        latest_trade_date,
+                        frames["daily_basic"],
+                        daily_basic_error,
+                    ) = self._latest_daily_basic(trade_dates, ts_code=ts_code)
             else:
                 (
                     latest_trade_date,
@@ -163,7 +195,7 @@ class TushareSnapshotService:
                     "ts_code": ts_code,
                     "fields": (
                         "ts_code,symbol,name,area,industry,market,list_date,"
-                        "exchange,list_status"
+                        "exchange,list_status,delist_date"
                     ),
                 },
                 "daily": {
@@ -281,13 +313,11 @@ class TushareSnapshotService:
             generated_at = utc_now()
             dataset_packets: dict[str, dict[str, Any]] = {}
             missing_required: list[str] = []
-            previous_datasets = (
-                ((previous_stable or {}).get("payload") or {}).get("datasets") or {}
-            )
             for dataset in self.DATASETS:
                 previous_packet = previous_datasets.get(dataset) or {}
                 if (
                     dataset not in queried_datasets
+                    and dataset not in reused_universe_datasets
                     and previous_packet.get("rows")
                 ):
                     payload = dict(previous_packet)
@@ -333,13 +363,16 @@ class TushareSnapshotService:
             combined = {
                 "method": self.METHOD,
                 "sync_profile": (
-                    "full_symbol_snapshot_v1"
+                    "market_history_extension_v1"
+                    if extend_market_history_only
+                    else "full_symbol_snapshot_v1"
                     if include_optional
                     else "strategy_required_only_v1"
                 ),
                 "symbol": canonical,
                 "tushare_ts_code": self._to_tushare_symbol(canonical),
                 "as_of_date": self._iso_date(latest_trade_date),
+                "requested_as_of_date": as_of.isoformat(),
                 "generated_at": generated_at,
                 "datasets": dataset_packets,
                 "coverage": {
@@ -380,6 +413,7 @@ class TushareSnapshotService:
                     "method": self.METHOD,
                     "symbol": canonical,
                     "as_of_date": combined["as_of_date"],
+                    "requested_as_of_date": combined["requested_as_of_date"],
                     "datasets": {
                         dataset: {
                             "report_period": packet.get("report_period"),
@@ -528,10 +562,16 @@ class TushareSnapshotService:
                     ),
                     "exchange": universe_item.get("exchange"),
                     "list_status": "L",
+                    "delist_date": universe_item.get("delist_date"),
                 }
             ]
         )
-        frames = {"stock_basic": stock_basic}
+        frames: dict[str, pd.DataFrame] = {}
+        if any(
+            universe_item.get(key) not in (None, "")
+            for key in ("name", "industry", "market", "list_date", "exchange")
+        ):
+            frames["stock_basic"] = stock_basic
         trade_date = str(universe_item.get("trade_date") or "").replace("-", "")
         if (
             trade_date

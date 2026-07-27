@@ -34,6 +34,8 @@ class LiZongPortfolioBacktestService:
     CALENDAR_DATASET = "li_zong_backtest_calendar"
     BENCHMARK_DATASET = "li_zong_backtest_benchmark"
     RESULT_DATASET = "li_zong_portfolio_backtest"
+    STABLE_INPUT_DATASET = "li_zong_inputs"
+    INCOMPLETE_INPUT_DATASET = "li_zong_inputs_incomplete"
     BENCHMARK_SYMBOL = "000300.SS"
     BENCHMARK_NAME = "沪深300"
     PERIOD_DAYS = {"3m": 63, "1y": 252, "3y": 756}
@@ -45,7 +47,7 @@ class LiZongPortfolioBacktestService:
     STATE_INPUT_VERSION = "ready_market_window_v2"
     DEFAULT_MARKET_DAY_BATCH_SIZE = 30
     DEFAULT_SYMBOL_BATCH_SIZE = 100
-    DEFAULT_INPUT_SYNC_BATCH_SIZE = 4
+    DEFAULT_INPUT_SYNC_BATCH_SIZE = 12
     MAX_INPUT_SYNC_WORKERS = 4
     COMPLETE_SESSION_CUTOFF = time(16, 30)
     MIN_MARKET_CAP_UNIVERSE_COUNT = 1_000
@@ -56,8 +58,9 @@ class LiZongPortfolioBacktestService:
         "回测严格使用每个历史交易日当时已公告的财务与股东数据、当日历史市值，"
         "以及当日及以前的量价数据。候选集合发生变化后，在下一完整交易日开盘按"
         "等权组合换仓；主净值计入单边10个基点的统一摩擦成本。尚未模拟涨跌停"
-        "排队、停牌后的实际成交、冲击成本、分红税和真实佣金阶梯，结果只用于"
-        "验证规则历史表现，不构成收益承诺或投资建议。"
+        "排队、停牌后的实际成交、冲击成本、分红税和真实佣金阶梯；已明确退市"
+        "的股票使用最后可得复权收盘价作为强制退出代理。结果只用于验证规则历史"
+        "表现，不构成收益承诺或投资建议。"
     )
 
     def __init__(
@@ -127,12 +130,34 @@ class LiZongPortfolioBacktestService:
                 market_cap_data_version = self._market_cap_window_version(
                     evaluation_trade_dates
                 )
-                required_symbols = self.database.list_strategy_backtest_eligible_symbols(
-                    strategy_id=STRATEGY_ID,
-                    backtest_version=self.BACKTEST_VERSION,
-                    start_date=required_start,
-                    end_date=required_end,
-                )
+                priority_windows: list[dict[str, Any]] = []
+                required_symbols: list[str] = []
+                seen_symbols: set[str] = set()
+                for period in self.PERIOD_DAYS:
+                    window = ready_windows.get(period)
+                    if window is None:
+                        continue
+                    window_symbols = (
+                        self.database.list_strategy_backtest_eligible_symbols(
+                            strategy_id=STRATEGY_ID,
+                            backtest_version=self.BACKTEST_VERSION,
+                            start_date=window[0],
+                            end_date=window[1],
+                        )
+                    )
+                    priority_windows.append(
+                        {
+                            "period": period,
+                            "start_date": window[0],
+                            "end_date": window[1],
+                            "symbols": set(window_symbols),
+                        }
+                    )
+                    for symbol in window_symbols:
+                        if symbol in seen_symbols:
+                            continue
+                        seen_symbols.add(symbol)
+                        required_symbols.append(symbol)
                 evaluated, synced = self._advance_symbol_states(
                     required_symbols,
                     trade_dates=evaluation_trade_dates,
@@ -140,6 +165,7 @@ class LiZongPortfolioBacktestService:
                     market_cap_data_version=market_cap_data_version,
                     symbol_batch_size=symbol_batch,
                     input_sync_batch_size=sync_batch,
+                    priority_windows=priority_windows,
                 )
                 summary["symbols_evaluated"] = evaluated
                 summary["symbols_synced"] = synced
@@ -288,15 +314,9 @@ class LiZongPortfolioBacktestService:
         market_cap_data_version: str,
         symbol_batch_size: int,
         input_sync_batch_size: int,
+        priority_windows: Sequence[Mapping[str, Any]] = (),
     ) -> tuple[list[str], list[str]]:
-        snapshot_metadata = {
-            str(item["scope_key"]): item
-            for item in self.database.list_latest_tushare_dataset_snapshots(
-                "li_zong_inputs",
-                data_status="stable",
-                include_payload=False,
-            )
-        }
+        snapshot_metadata = self._snapshot_metadata()
         coverage = {
             str(item["symbol"]): item
             for item in self.database.list_strategy_backtest_symbol_coverage(
@@ -306,18 +326,39 @@ class LiZongPortfolioBacktestService:
                 backtest_version=self.BACKTEST_VERSION,
             )
         }
+        end_date = trade_dates[-1]
+        current_symbols: set[str] = set()
+        market_cap_version_cache: dict[tuple[str, str], str] = {}
+        for symbol, state in coverage.items():
+            base = snapshot_metadata.get(symbol)
+            if (
+                base is not None
+                and self._snapshot_requested_through(base, end_date)
+                and state.get("status") in {"stable", "incomplete"}
+                and self._coverage_is_current(
+                    state,
+                    base,
+                    market_cap_version_cache=market_cap_version_cache,
+                )
+            ):
+                current_symbols.add(symbol)
+        ordered_symbols = self._prioritize_symbols_for_windows(
+            symbols,
+            coverage=coverage,
+            current_symbols=current_symbols,
+            priority_windows=priority_windows,
+        )
         evaluated: list[str] = []
         synced: list[str] = []
         evaluate_queue: list[str] = []
         sync_queue: list[str] = []
-        end_date = trade_dates[-1]
-        for symbol in symbols:
+        for symbol in ordered_symbols:
             base = snapshot_metadata.get(symbol)
             state = coverage.get(symbol)
             if base is None:
                 sync_queue.append(symbol)
                 continue
-            if str(base.get("as_of_date") or "") < end_date:
+            if not self._snapshot_requested_through(base, end_date):
                 sync_queue.append(symbol)
                 continue
             source_version = self._state_source_version(
@@ -338,23 +379,35 @@ class LiZongPortfolioBacktestService:
         for symbol in evaluate_queue:
             if len(evaluated) >= symbol_batch_size:
                 break
-            base = self.database.latest_tushare_dataset_snapshot(
-                "li_zong_inputs",
-                symbol,
-                stable_only=True,
-            )
-            if base is None or not self._snapshot_can_cover(
-                base, required_start, end_date
-            ):
+            base = self._load_input_snapshot(snapshot_metadata.get(symbol), symbol)
+            if base is None:
                 sync_queue.append(symbol)
                 continue
+            input_complete = str(base.get("dataset") or "") == self.STABLE_INPUT_DATASET
+            best_available_history = False
+            if input_complete and not self._snapshot_can_cover(
+                base, required_start, end_date
+            ):
+                if not self._history_extension_attempted(base, end_date=end_date):
+                    sync_queue.append(symbol)
+                    continue
+                best_available_history = True
             source_version = self._state_source_version(
                 snapshot_data_version=str(base.get("data_version") or ""),
                 market_cap_data_version=market_cap_data_version,
                 start_date=required_start,
                 end_date=end_date,
             )
-            states = self._evaluate_symbol(symbol, base, trade_dates=trade_dates)
+            try:
+                states = self._evaluate_symbol(symbol, base, trade_dates=trade_dates)
+            except Exception:
+                if input_complete:
+                    raise
+                states = []
+            forced_incomplete = False
+            if not states and (not input_complete or best_available_history):
+                states = self._incomplete_states(trade_dates)
+                forced_incomplete = True
             version = self._fingerprint(
                 {
                     "backtest_version": self.BACKTEST_VERSION,
@@ -371,17 +424,44 @@ class LiZongPortfolioBacktestService:
                 source_data_version=source_version,
                 data_version=version,
                 rows=states,
-                status="stable" if states else "incomplete",
+                status=(
+                    "stable"
+                    if states and input_complete and not forced_incomplete
+                    else "incomplete"
+                ),
             )
             evaluated.append(symbol)
 
-        sync_symbols = list(dict.fromkeys(sync_queue))[:input_sync_batch_size]
+        sync_symbols = self._ordered_sync_batch(
+            sync_queue,
+            ordered_symbols=ordered_symbols,
+            limit=input_sync_batch_size,
+        )
 
         def sync_symbol(symbol: str) -> str | None:
+            market_caps = self.database.strategy_backtest_market_caps_for_symbol(
+                strategy_id=STRATEGY_ID,
+                backtest_version=self.BACKTEST_VERSION,
+                symbol=symbol,
+                start_date=trade_dates[0],
+                end_date=end_date,
+            )
+            latest_market_cap_date = max(market_caps) if market_caps else None
+            universe_item = (
+                {
+                    "symbol": symbol,
+                    "trade_date": latest_market_cap_date,
+                    "total_mv_yi": market_caps[latest_market_cap_date],
+                }
+                if latest_market_cap_date
+                else None
+            )
             try:
                 result = self.snapshot_service.sync_strategy_symbol(
                     symbol,
                     as_of_date=end_date,
+                    universe_item=universe_item,
+                    extend_market_history_only=True,
                 )
             except Exception:
                 return None
@@ -402,6 +482,69 @@ class LiZongPortfolioBacktestService:
                 if symbol is not None
             ]
         return evaluated, synced
+
+    @staticmethod
+    def _prioritize_symbols_for_windows(
+        symbols: Sequence[str],
+        *,
+        coverage: Mapping[str, Mapping[str, Any]],
+        current_symbols: set[str],
+        priority_windows: Sequence[Mapping[str, Any]],
+    ) -> list[str]:
+        """Prioritize the earliest incomplete user-visible period.
+
+        A stock that only needs a three-year expansion must not delay another
+        stock that still blocks publication of the three-month result. Python's
+        stable sort preserves deterministic symbol order inside each group.
+        """
+
+        window_symbol_sets = [
+            set(window.get("symbols") or ()) for window in priority_windows
+        ]
+
+        def priority(symbol: str) -> int:
+            state = coverage.get(symbol) or {}
+            is_current = symbol in current_symbols
+            for index, window in enumerate(priority_windows):
+                if symbol not in window_symbol_sets[index]:
+                    continue
+                if (
+                    not is_current
+                    or str(state.get("start_date") or "9999-12-31")
+                    > str(window.get("start_date") or "")
+                    or str(state.get("end_date") or "")
+                    < str(window.get("end_date") or "")
+                ):
+                    return index
+            return len(priority_windows)
+
+        return sorted(symbols, key=priority)
+
+    @staticmethod
+    def _ordered_sync_batch(
+        sync_queue: Sequence[str],
+        *,
+        ordered_symbols: Sequence[str],
+        limit: int,
+    ) -> list[str]:
+        """Preserve period priority after coverage checks add late sync work.
+
+        Some stable snapshots are only discovered to have an insufficient
+        warm-up window during the evaluation pass.  Those symbols are appended
+        after the initial sync queue, so deduplicating by insertion order alone
+        could let one- or three-year work run ahead of a three-month blocker.
+        Reapply the already computed user-visible period order before taking the
+        external-data batch.
+        """
+
+        if limit <= 0:
+            return []
+        order = {symbol: index for index, symbol in enumerate(ordered_symbols)}
+        unique = dict.fromkeys(sync_queue)
+        return sorted(
+            unique,
+            key=lambda symbol: (order.get(symbol, len(order)), symbol),
+        )[:limit]
 
     def _evaluate_symbol(
         self,
@@ -433,7 +576,9 @@ class LiZongPortfolioBacktestService:
             )
         date_to_index = {str(row["_date"]): index for index, row in daily.iterrows()}
         target = [value for value in trade_dates if value <= str(daily.iloc[-1]["_date"])]
-        if not target:
+        delist_date = self._snapshot_delist_date(base_snapshot)
+        target = list(trade_dates)
+        if not target or str(daily.iloc[0]["_date"]) > target[-1]:
             return []
         market_caps = self.database.strategy_backtest_market_caps_for_symbol(
             strategy_id=STRATEGY_ID,
@@ -521,12 +666,13 @@ class LiZongPortfolioBacktestService:
             daily_index = date_to_index.get(trade_date)
             if daily_index is None:
                 if previous is not None:
-                    carried = {
-                        **previous,
-                        "trade_date": trade_date,
-                        "adjusted_open": previous.get("adjusted_close"),
-                        "raw_open": previous.get("raw_close"),
-                    }
+                    carried = self._carried_state(
+                        previous,
+                        trade_date=trade_date,
+                        forced_exit=bool(
+                            delist_date and trade_date >= delist_date
+                        ),
+                    )
                     states.append(carried)
                     previous = carried
                 else:
@@ -761,8 +907,9 @@ class LiZongPortfolioBacktestService:
             return []
         daily = daily.reset_index(drop=True)
         date_to_index = {str(row["_date"]): index for index, row in daily.iterrows()}
-        target = [value for value in trade_dates if value <= str(daily.iloc[-1]["_date"])]
-        if not target:
+        delist_date = self._snapshot_delist_date(base_snapshot)
+        target = list(trade_dates)
+        if not target or str(daily.iloc[0]["_date"]) > target[-1]:
             return []
         market_caps = self.database.strategy_backtest_market_caps_for_symbol(
             strategy_id=STRATEGY_ID,
@@ -778,12 +925,13 @@ class LiZongPortfolioBacktestService:
             daily_index = date_to_index.get(trade_date)
             if daily_index is None:
                 if previous is not None:
-                    carried = {
-                        **previous,
-                        "trade_date": trade_date,
-                        "adjusted_open": previous.get("adjusted_close"),
-                        "raw_open": previous.get("raw_close"),
-                    }
+                    carried = self._carried_state(
+                        previous,
+                        trade_date=trade_date,
+                        forced_exit=bool(
+                            delist_date and trade_date >= delist_date
+                        ),
+                    )
                     states.append(carried)
                     previous = carried
                 else:
@@ -896,11 +1044,11 @@ class LiZongPortfolioBacktestService:
         }
         snapshot_metadata = self._snapshot_metadata()
         market_cap_version_cache: dict[tuple[str, str], str] = {}
-        completed = [
+        processed = [
             symbol
             for symbol in symbols
             if symbol in coverage
-            and coverage[symbol].get("status") == "stable"
+            and coverage[symbol].get("status") in {"stable", "incomplete"}
             and str(coverage[symbol].get("start_date") or "9999-12-31") <= start_date
             and str(coverage[symbol].get("end_date") or "") >= end_date
             and self._coverage_is_current(
@@ -909,8 +1057,13 @@ class LiZongPortfolioBacktestService:
                 market_cap_version_cache=market_cap_version_cache,
             )
         ]
-        if not symbols or len(completed) != len(symbols):
+        if not symbols or len(processed) != len(symbols):
             return None
+        incomplete_symbols = [
+            symbol
+            for symbol in symbols
+            if coverage[symbol].get("status") == "incomplete"
+        ]
         candidate_rows = self.database.list_strategy_backtest_candidate_states(
             strategy_id=STRATEGY_ID,
             strategy_version=STRATEGY_VERSION,
@@ -938,6 +1091,8 @@ class LiZongPortfolioBacktestService:
             benchmark_rows=benchmark,
             names=names,
             eligible_symbol_count=len(symbols),
+            complete_symbol_count=len(symbols) - len(incomplete_symbols),
+            incomplete_symbols=incomplete_symbols,
         )
         result["state_input_version"] = self.STATE_INPUT_VERSION
         coverage_versions = [coverage[symbol].get("data_version") for symbol in symbols]
@@ -983,6 +1138,8 @@ class LiZongPortfolioBacktestService:
         benchmark_rows: Sequence[Mapping[str, Any]],
         names: Mapping[str, str] | None = None,
         eligible_symbol_count: int,
+        complete_symbol_count: int | None = None,
+        incomplete_symbols: Sequence[str] = (),
     ) -> dict[str, Any]:
         resolved = cls._period(period)
         benchmark_by_date = {
@@ -1131,6 +1288,12 @@ class LiZongPortfolioBacktestService:
             else 0.0
         )
         max_drawdown = cls._max_drawdown([float(item["nav"]) for item in points])
+        complete_count = (
+            int(complete_symbol_count)
+            if complete_symbol_count is not None
+            else int(eligible_symbol_count) - len(incomplete_symbols)
+        )
+        incomplete_count = max(0, int(eligible_symbol_count) - complete_count)
         return {
             "period": resolved,
             "period_label": cls.PERIOD_LABELS[resolved],
@@ -1138,6 +1301,18 @@ class LiZongPortfolioBacktestService:
             "end_date": dates[-1],
             "trading_days": len(dates),
             "eligible_symbol_count": int(eligible_symbol_count),
+            "complete_symbol_count": complete_count,
+            "incomplete_symbol_count": incomplete_count,
+            "data_coverage_ratio": round(
+                complete_count / int(eligible_symbol_count), 6
+            )
+            if eligible_symbol_count
+            else 0.0,
+            "incomplete_symbols": sorted(set(incomplete_symbols)),
+            "data_coverage_boundary": (
+                "数据缺口股票的逐日状态按数据不完整保存，不会被当作候选；"
+                "收益率代表当前可判定历史范围，页面同时披露完整数据覆盖率。"
+            ),
             "ever_selected_symbol_count": len({
                 str(item["symbol"]) for item in candidate_rows
             }),
@@ -1199,8 +1374,10 @@ class LiZongPortfolioBacktestService:
                 if start_date and end_date
                 else []
             )
-            completed = sum(
-                item.get("status") == "stable"
+            completed_items = [
+                item
+                for item in coverage
+                if item.get("status") in {"stable", "incomplete"}
                 and str(item.get("start_date") or "9999-12-31") <= str(start_date)
                 and str(item.get("end_date") or "") >= str(end_date)
                 and str(item.get("symbol")) in eligible
@@ -1209,7 +1386,10 @@ class LiZongPortfolioBacktestService:
                     snapshot_metadata.get(str(item.get("symbol") or "")),
                     market_cap_version_cache=market_cap_version_cache,
                 )
-                for item in coverage
+            ]
+            completed = len(completed_items)
+            incomplete = sum(
+                item.get("status") == "incomplete" for item in completed_items
             )
             snapshot = self.database.latest_tushare_dataset_snapshot(
                 self.RESULT_DATASET,
@@ -1239,6 +1419,8 @@ class LiZongPortfolioBacktestService:
                 "market_data_ratio": round(available_market_days / days, 6),
                 "eligible_symbols": len(eligible),
                 "evaluated_symbols": completed,
+                "complete_symbols": completed - incomplete,
+                "incomplete_symbols": incomplete,
                 "remaining_symbols": remaining_symbols,
                 "estimated_evaluation_batches": math.ceil(
                     remaining_symbols / self.DEFAULT_SYMBOL_BATCH_SIZE
@@ -1274,14 +1456,48 @@ class LiZongPortfolioBacktestService:
         return result
 
     def _snapshot_metadata(self) -> dict[str, dict[str, Any]]:
-        return {
-            str(item["scope_key"]): item
-            for item in self.database.list_latest_tushare_dataset_snapshots(
-                "li_zong_inputs",
+        candidates = [
+            *self.database.list_latest_tushare_dataset_snapshots(
+                self.STABLE_INPUT_DATASET,
                 data_status="stable",
                 include_payload=False,
-            )
-        }
+            ),
+            *self.database.list_latest_tushare_dataset_snapshots(
+                self.INCOMPLETE_INPUT_DATASET,
+                data_status="incomplete",
+                include_payload=False,
+            ),
+        ]
+        selected: dict[str, dict[str, Any]] = {}
+        for item in candidates:
+            symbol = str(item["scope_key"])
+            current = selected.get(symbol)
+            if current is None or self._input_metadata_rank(item) > self._input_metadata_rank(
+                current
+            ):
+                selected[symbol] = item
+        return selected
+
+    def _load_input_snapshot(
+        self, metadata: Mapping[str, Any] | None, symbol: str
+    ) -> dict[str, Any] | None:
+        if metadata is None:
+            return None
+        dataset = str(metadata.get("dataset") or self.STABLE_INPUT_DATASET)
+        return self.database.latest_tushare_dataset_snapshot(
+            dataset,
+            symbol,
+            stable_only=dataset == self.STABLE_INPUT_DATASET,
+        )
+
+    @classmethod
+    def _input_metadata_rank(cls, item: Mapping[str, Any]) -> tuple[str, int, str, str]:
+        requested = cls._iso_date(
+            item.get("requested_as_of_date") or item.get("as_of_date")
+        ) or ""
+        complete = int(str(item.get("dataset") or "") == cls.STABLE_INPUT_DATASET)
+        actual = cls._iso_date(item.get("as_of_date")) or ""
+        return requested, complete, actual, str(item.get("created_at") or "")
 
     def _market_cap_window_version(self, trade_dates: Sequence[str]) -> str:
         dates = list(trade_dates)
@@ -1520,7 +1736,11 @@ class LiZongPortfolioBacktestService:
             for value in (self._iso_date(item.get("trade_date")) for item in rows)
             if value is not None
         )
-        if dates[-1] < end_date:
+        if not dates:
+            return False
+        if dates[-1] < end_date and not self._snapshot_requested_through(
+            snapshot, end_date
+        ):
             return False
         stock_rows = (
             (((snapshot.get("payload") or {}).get("datasets") or {}).get("stock_basic") or {})
@@ -1536,6 +1756,72 @@ class LiZongPortfolioBacktestService:
             return False
         first_valid = dates[self.WARMUP_TRADING_DAYS - 1]
         return first_valid <= required_start
+
+    @classmethod
+    def _history_extension_attempted(
+        cls, snapshot: Mapping[str, Any], *, end_date: str
+    ) -> bool:
+        payload = snapshot.get("payload") or {}
+        return bool(
+            payload.get("sync_profile") == "market_history_extension_v1"
+            and cls._snapshot_requested_through(snapshot, end_date)
+        )
+
+    @classmethod
+    def _snapshot_requested_through(
+        cls, snapshot: Mapping[str, Any], end_date: str
+    ) -> bool:
+        payload = snapshot.get("payload") or {}
+        requested = cls._iso_date(
+            snapshot.get("requested_as_of_date")
+            or payload.get("requested_as_of_date")
+        )
+        actual = cls._iso_date(snapshot.get("as_of_date") or payload.get("as_of_date"))
+        return bool((requested and requested >= end_date) or (actual and actual >= end_date))
+
+    @classmethod
+    def _snapshot_delist_date(cls, snapshot: Mapping[str, Any]) -> str | None:
+        rows = (
+            (((snapshot.get("payload") or {}).get("datasets") or {}).get("stock_basic") or {})
+            .get("rows")
+            or []
+        )
+        values = sorted(
+            value
+            for value in (cls._iso_date(item.get("delist_date")) for item in rows)
+            if value is not None
+        )
+        return values[-1] if values else None
+
+    @staticmethod
+    def _carried_state(
+        previous: Mapping[str, Any], *, trade_date: str, forced_exit: bool
+    ) -> dict[str, Any]:
+        return {
+            **previous,
+            "trade_date": trade_date,
+            "status": "not_qualified" if forced_exit else previous.get("status"),
+            "candidate_qualified": (
+                False if forced_exit else bool(previous.get("candidate_qualified"))
+            ),
+            "adjusted_open": previous.get("adjusted_close"),
+            "raw_open": previous.get("raw_close"),
+        }
+
+    @staticmethod
+    def _incomplete_states(trade_dates: Sequence[str]) -> list[dict[str, Any]]:
+        return [
+            {
+                "trade_date": trade_date,
+                "status": "data_incomplete",
+                "candidate_qualified": False,
+                "adjusted_open": None,
+                "adjusted_close": None,
+                "raw_open": None,
+                "raw_close": None,
+            }
+            for trade_date in trade_dates
+        ]
 
     def _published_supplemental_roe(self, symbol: str) -> list[dict[str, Any]]:
         candidate = self.database.latest_strategy_candidate_snapshot(
@@ -1600,6 +1886,10 @@ class LiZongPortfolioBacktestService:
             "benchmark": cls.BENCHMARK_NAME,
             "price_basis": "复权因子调整后的开盘价和收盘价。",
             "cash_policy": "候选为空时持有现金，现金收益按0计。",
+            "delisting_policy": (
+                "已明确退市且不再有交易日数据时，于候选状态退出后的下一市场日，"
+                "按最后可得复权收盘价作为强制退出代理并计入统一摩擦成本。"
+            ),
         }
 
     @staticmethod

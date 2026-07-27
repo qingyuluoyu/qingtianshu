@@ -613,6 +613,7 @@ DOMAIN_SCHEMA_SQL = r"""
                     dataset TEXT NOT NULL,
                     scope_key TEXT NOT NULL,
                     as_of_date TEXT,
+                    requested_as_of_date TEXT,
                     report_period TEXT,
                     source_updated_at TEXT,
                     sync_run_id TEXT NOT NULL

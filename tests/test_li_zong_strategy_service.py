@@ -1307,6 +1307,7 @@ def test_strategy_api_exposes_published_candidates_rules_and_triggers(app, clien
     assert payload["funnel"]["starting_count"] == 1
     assert payload["funnel"]["steps"][-1]["remaining_count"] == 1
     assert payload["data_meta"]["full_market_coverage"] is False
+    assert "data_versions" not in (payload["data_meta"].get("latest_run") or {})
     item = payload["items"][0]
     assert item["symbol"] == "000063.SZ"
     assert item["name"] == "中兴通讯"
@@ -1320,6 +1321,27 @@ def test_strategy_api_exposes_published_candidates_rules_and_triggers(app, clien
     triggers = client.get("/v1/stock-strategies/li-zong/triggers")
     assert triggers.status_code == 200
     assert len(triggers.json()["items"]) == 1
+
+
+def test_strategy_coverage_and_funnel_share_one_candidate_state_read(
+    app, monkeypatch
+):
+    database = app.state.database
+    original = database.latest_strategy_candidate_states
+    calls = 0
+
+    def counted(**kwargs):
+        nonlocal calls
+        calls += 1
+        return original(**kwargs)
+
+    monkeypatch.setattr(database, "latest_strategy_candidate_states", counted)
+
+    coverage, funnel = app.state.li_zong_strategy.coverage_and_funnel_packet()
+
+    assert calls == 1
+    assert "counts" in coverage
+    assert "steps" in funnel
 
 
 def test_strategy_api_uses_snapshot_name_for_unconfigured_symbol(app, client):
@@ -1398,6 +1420,7 @@ def test_strategy_run_api_requires_admin_token_and_versions_custom_roe(app, clie
     latest = client.get("/v1/stock-strategies/li-zong/runs/latest")
     assert latest.status_code == 200
     assert latest.json()["coverage"]["full_market_coverage"] is False
+    assert "data_versions" not in (latest.json().get("run") or {})
 
     object.__setattr__(app.state.settings, "admin_api_token", "test-admin-token")
     wrong = client.post(
@@ -1449,7 +1472,7 @@ def test_empty_li_zong_filter_is_ready_after_stable_universe_publish(
     monkeypatch.setattr(
         app.state.li_zong_strategy,
         "coverage_packet",
-        lambda: {
+        lambda **_: {
             "status": "stable",
             "as_of_date": "2026-07-22",
             "universe_count": 5530,
