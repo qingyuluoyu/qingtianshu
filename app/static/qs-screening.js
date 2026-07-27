@@ -98,7 +98,7 @@ function liZongStatusLabel(value) {
       const values = sampled.flatMap(item => [Number(item.return_pct), Number(item.benchmark_return_pct), 0]);
       const min = Math.min(...values); const max = Math.max(...values); const span = Math.max(1, max - min);
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      svg.setAttribute("viewBox", "0 0 720 190"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "李总策略等权组合与沪深300历史累计收益曲线");
+      svg.setAttribute("viewBox", "0 0 720 190"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "李总策略双周等权组合与沪深300同暴露历史累计收益曲线");
       const coordinates = key => sampled.map((item, index) => {
         const x = 42 + index * (650 / Math.max(1, sampled.length - 1));
         const y = 166 - ((Number(item[key]) - min) / span) * 138;
@@ -140,7 +140,7 @@ function liZongStatusLabel(value) {
         $("liZongBacktestProgress").textContent = marketDays < requiredDays
           ? `历史市值 ${marketDays}/${requiredDays} 个交易日（${percent}%）· 数据完整后自动进入逐股规则核验`
           : `规则核验 ${evaluated}/${eligible || "待识别"} 只（${percent}%）${incomplete ? ` · 其中 ${incomplete} 只存在明确数据缺口` : ""} · 至少剩余 ${Number(progress.estimated_evaluation_batches || 0)} 个计算批次`;
-        chart.innerHTML = `<div class="screener-empty">${marketDays < requiredDays ? "正在补齐历史股票范围和每日市值。" : "正在构建无前视候选序列和等权换仓净值。"}<br>完整覆盖前不会发布可能有样本偏差的收益率。</div>`;
+        chart.innerHTML = `<div class="screener-empty">${marketDays < requiredDays ? "正在补齐历史股票范围和每日市值。" : "正在构建无前视候选序列和双周等权换仓净值。"}<br>完整覆盖前不会发布可能有样本偏差的收益率。</div>`;
         return;
       }
       build.hidden = false; build.setAttribute("aria-valuenow", "100"); buildBar.style.width = "100%";
@@ -153,7 +153,7 @@ function liZongStatusLabel(value) {
       $("liZongBacktestBenchmark").textContent = pct(result.benchmark_return_pct);
       $("liZongBacktestExcess").textContent = pct(result.excess_return_pct);
       $("liZongBacktestDrawdown").textContent = pct(result.max_drawdown_pct);
-      $("liZongBacktestRebalances").textContent = `${Number(result.selection_update_count || 0)} 次`;
+      $("liZongBacktestRebalances").textContent = `${Number(result.selection_update_count || 0)} 次（≥${Number(result.minimum_rebalance_trading_days || 10)}日）`;
       chart.innerHTML = ""; const svg = createLiZongBacktestChart(result.points || []);
       if (svg) { chart.appendChild(svg); legend.hidden = false; }
       else { chart.innerHTML = '<div class="screener-empty">区间内没有形成足够的组合净值点。</div>'; legend.hidden = true; }

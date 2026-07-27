@@ -15,6 +15,7 @@ from app.catalog import normalize_symbol
 from app.db import Database
 from app.providers.tushare import TushareClient
 from app.services.li_zong_strategy_service import LiZongStrategyService
+from app.services.tushare_snapshots import TushareSnapshotService
 from app.services.strategies.li_zong import (
     STRATEGY_ID,
     STRATEGY_VERSION,
@@ -42,9 +43,11 @@ class LiZongPortfolioBacktestService:
     PERIOD_LABELS = {"3m": "近3个月", "1y": "近1年", "3y": "近3年"}
     WARMUP_TRADING_DAYS = 380
     MARKET_CAP_MIN_YI = LiZongParameters().market_cap_min_yi
-    COST_BPS_PER_SIDE = 10.0
+    COST_BPS_PER_SIDE = 0.0
+    MIN_REBALANCE_TRADING_DAYS = 10
+    PORTFOLIO_VERSION = "li_zong_2w_no_cost_v2"
     TARGET_HISTORY_MARKET_DAYS = 1150
-    STATE_INPUT_VERSION = "ready_market_window_v2"
+    STATE_INPUT_VERSION = "ready_market_window_v3_tail_gap_strict"
     DEFAULT_MARKET_DAY_BATCH_SIZE = 30
     DEFAULT_SYMBOL_BATCH_SIZE = 100
     DEFAULT_INPUT_SYNC_BATCH_SIZE = 12
@@ -56,11 +59,12 @@ class LiZongPortfolioBacktestService:
 
     BOUNDARY = (
         "回测严格使用每个历史交易日当时已公告的财务与股东数据、当日历史市值，"
-        "以及当日及以前的量价数据。候选集合发生变化后，在下一完整交易日开盘按"
-        "等权组合换仓；主净值计入单边10个基点的统一摩擦成本。尚未模拟涨跌停"
-        "排队、停牌后的实际成交、冲击成本、分红税和真实佣金阶梯；已明确退市"
-        "的股票使用最后可得复权收盘价作为强制退出代理。结果只用于验证规则历史"
-        "表现，不构成收益承诺或投资建议。"
+        "以及当日及以前的量价数据。候选集合变化后，最早在下一完整交易日开盘"
+        "执行，但任意两次实际换仓至少间隔10个交易日；冷却期内只保留最新候选"
+        "集合。本版不计交易成本。沪深300仅在策略持仓期间保持同等市场暴露，"
+        "策略空仓时基准同步空仓。尚未模拟涨跌停排队、停牌后的实际成交、冲击"
+        "成本、分红税和真实佣金阶梯；已明确退市的股票使用最后可得复权收盘价"
+        "作为强制退出代理。结果只用于验证规则历史表现，不构成收益承诺或投资建议。"
     )
 
     def __init__(
@@ -224,6 +228,7 @@ class LiZongPortfolioBacktestService:
             stored_result
             if stored_result
             and stored_result.get("state_input_version") == self.STATE_INPUT_VERSION
+            and stored_result.get("portfolio_version") == self.PORTFOLIO_VERSION
             else None
         )
         period_progress = (progress.get("periods") or {}).get(resolved) or {}
@@ -234,6 +239,7 @@ class LiZongPortfolioBacktestService:
             "strategy_version": STRATEGY_VERSION,
             "parameter_version": LiZongParameters().parameter_version,
             "backtest_version": self.BACKTEST_VERSION,
+            "portfolio_version": self.PORTFOLIO_VERSION,
             "selected_period": resolved,
             "period_label": self.PERIOD_LABELS[resolved],
             "status": "ready" if result is not None else "building",
@@ -408,6 +414,7 @@ class LiZongPortfolioBacktestService:
             if not states and (not input_complete or best_available_history):
                 states = self._incomplete_states(trade_dates)
                 forced_incomplete = True
+            post_listing_gap = self._states_have_post_listing_gap(states)
             version = self._fingerprint(
                 {
                     "backtest_version": self.BACKTEST_VERSION,
@@ -426,7 +433,11 @@ class LiZongPortfolioBacktestService:
                 rows=states,
                 status=(
                     "stable"
-                    if states and input_complete and not forced_incomplete
+                    if states
+                    and input_complete
+                    and not forced_incomplete
+                    and not best_available_history
+                    and not post_listing_gap
                     else "incomplete"
                 ),
             )
@@ -575,7 +586,7 @@ class LiZongPortfolioBacktestService:
                 trade_dates=trade_dates,
             )
         date_to_index = {str(row["_date"]): index for index, row in daily.iterrows()}
-        target = [value for value in trade_dates if value <= str(daily.iloc[-1]["_date"])]
+        actual_latest_daily_date = str(daily.iloc[-1]["_date"])
         delist_date = self._snapshot_delist_date(base_snapshot)
         target = list(trade_dates)
         if not target or str(daily.iloc[0]["_date"]) > target[-1]:
@@ -665,28 +676,20 @@ class LiZongPortfolioBacktestService:
         for trade_date in target:
             daily_index = date_to_index.get(trade_date)
             if daily_index is None:
-                if previous is not None:
+                is_trailing_gap = trade_date > actual_latest_daily_date
+                forced_exit = bool(delist_date and trade_date >= delist_date)
+                if previous is not None and (not is_trailing_gap or forced_exit):
                     carried = self._carried_state(
                         previous,
                         trade_date=trade_date,
-                        forced_exit=bool(
-                            delist_date and trade_date >= delist_date
-                        ),
+                        forced_exit=forced_exit,
                     )
                     states.append(carried)
                     previous = carried
                 else:
-                    states.append(
-                        {
-                            "trade_date": trade_date,
-                            "status": "data_incomplete",
-                            "candidate_qualified": False,
-                            "adjusted_open": None,
-                            "adjusted_close": None,
-                            "raw_open": None,
-                            "raw_close": None,
-                        }
-                    )
+                    incomplete = self._incomplete_state(trade_date)
+                    states.append(incomplete)
+                    previous = incomplete
                 continue
             row = daily.iloc[daily_index]
             raw_open = self._number(row.get("open"))
@@ -907,6 +910,7 @@ class LiZongPortfolioBacktestService:
             return []
         daily = daily.reset_index(drop=True)
         date_to_index = {str(row["_date"]): index for index, row in daily.iterrows()}
+        actual_latest_daily_date = str(daily.iloc[-1]["_date"])
         delist_date = self._snapshot_delist_date(base_snapshot)
         target = list(trade_dates)
         if not target or str(daily.iloc[0]["_date"]) > target[-1]:
@@ -924,28 +928,20 @@ class LiZongPortfolioBacktestService:
         for trade_date in target:
             daily_index = date_to_index.get(trade_date)
             if daily_index is None:
-                if previous is not None:
+                is_trailing_gap = trade_date > actual_latest_daily_date
+                forced_exit = bool(delist_date and trade_date >= delist_date)
+                if previous is not None and (not is_trailing_gap or forced_exit):
                     carried = self._carried_state(
                         previous,
                         trade_date=trade_date,
-                        forced_exit=bool(
-                            delist_date and trade_date >= delist_date
-                        ),
+                        forced_exit=forced_exit,
                     )
                     states.append(carried)
                     previous = carried
                 else:
-                    states.append(
-                        {
-                            "trade_date": trade_date,
-                            "status": "data_incomplete",
-                            "candidate_qualified": False,
-                            "adjusted_open": None,
-                            "adjusted_close": None,
-                            "raw_open": None,
-                            "raw_close": None,
-                        }
-                    )
+                    incomplete = self._incomplete_state(trade_date)
+                    states.append(incomplete)
+                    previous = incomplete
                 continue
             if daily_index + 1 < self.WARMUP_TRADING_DAYS:
                 row = daily.iloc[daily_index]
@@ -1083,6 +1079,19 @@ class LiZongPortfolioBacktestService:
             end_date=end_date,
         )
         benchmark = self._benchmark_rows(start_date=start_date, end_date=end_date)
+        benchmark_dates = sorted(
+            {
+                str(item.get("trade_date") or "")
+                for item in benchmark
+                if item.get("trade_date")
+            }
+        )
+        if (
+            len(benchmark_dates) != self.PERIOD_DAYS[period]
+            or benchmark_dates[0] != start_date
+            or benchmark_dates[-1] != end_date
+        ):
+            return None
         names = self._stock_names(candidate_symbols)
         result = self.calculate_portfolio(
             period=period,
@@ -1142,11 +1151,15 @@ class LiZongPortfolioBacktestService:
         incomplete_symbols: Sequence[str] = (),
     ) -> dict[str, Any]:
         resolved = cls._period(period)
-        benchmark_by_date = {
-            str(item["trade_date"]): float(item["close"])
-            for item in benchmark_rows
-            if cls._number(item.get("close")) is not None
-        }
+        benchmark_by_date: dict[str, dict[str, float | None]] = {}
+        for item in benchmark_rows:
+            close = cls._number(item.get("close"))
+            if close is None:
+                continue
+            benchmark_by_date[str(item["trade_date"])] = {
+                "open": cls._number(item.get("open")),
+                "close": close,
+            }
         dates = sorted(benchmark_by_date)
         if not dates:
             raise ValueError("benchmark rows are empty")
@@ -1160,101 +1173,129 @@ class LiZongPortfolioBacktestService:
                 "close": cls._number(item.get("adjusted_close")),
             }
 
-        pending_rebalances: dict[str, dict[str, Any]] = {}
-        prior_selection: set[str] = set()
-        for index, trade_date in enumerate(dates[:-1]):
-            selection = candidates.get(trade_date, set())
-            if selection != prior_selection:
-                pending_rebalances[dates[index + 1]] = {
-                    "signal_date": trade_date,
-                    "symbols": set(selection),
-                }
-            prior_selection = set(selection)
-
         units: dict[str, float] = {}
         cash = 1.0
-        previous_close: dict[str, float] = {}
         points: list[dict[str, Any]] = []
         rebalances: list[dict[str, Any]] = []
         deferred = 0
+        cooldown_deferred = 0
         total_cost = 0.0
         total_turnover = 0.0
-        benchmark_base = benchmark_by_date[dates[0]]
+        benchmark_units = 0.0
+        benchmark_cash = 1.0
         pending: dict[str, Any] | None = None
+        last_rebalance_index: int | None = None
 
-        for trade_date in dates:
-            if trade_date in pending_rebalances:
-                pending = pending_rebalances[trade_date]
-            if pending is not None:
-                desired = set(pending["symbols"])
-                involved = set(units) | desired
-                day_prices = {symbol: prices.get((trade_date, symbol)) for symbol in involved}
-                tradable = all(
-                    item is not None
-                    and cls._number(item.get("open")) is not None
-                    and cls._number(item.get("close")) is not None
-                    for item in day_prices.values()
-                )
-                if tradable:
-                    values_at_open = {
-                        symbol: units[symbol] * float(day_prices[symbol]["open"])
-                        for symbol in units
-                    }
-                    pre_trade_nav = cash + sum(values_at_open.values())
-                    target_weight = 1.0 / len(desired) if desired else 0.0
-                    target_values = {
-                        symbol: pre_trade_nav * target_weight for symbol in desired
-                    }
-                    turnover_amount = sum(
-                        abs(target_values.get(symbol, 0.0) - values_at_open.get(symbol, 0.0))
-                        for symbol in involved
-                    )
-                    cost = turnover_amount * cls.COST_BPS_PER_SIDE / 10_000.0
-                    investable_nav = max(0.0, pre_trade_nav - cost)
-                    target_value = investable_nav / len(desired) if desired else 0.0
-                    old_symbols = set(units)
-                    units = {
-                        symbol: target_value / float(day_prices[symbol]["open"])
-                        for symbol in desired
-                    }
-                    cash = investable_nav - target_value * len(desired)
-                    turnover_ratio = (
-                        turnover_amount / pre_trade_nav if pre_trade_nav else 0.0
-                    )
-                    total_cost += cost
-                    total_turnover += turnover_ratio
-                    rebalances.append(
-                        {
-                            "signal_date": pending["signal_date"],
-                            "trade_date": trade_date,
-                            "symbols": sorted(desired),
-                            "names": [
-                                (names or {}).get(symbol, symbol)
-                                for symbol in sorted(desired)
-                            ],
-                            "added": sorted(desired - old_symbols),
-                            "removed": sorted(old_symbols - desired),
-                            "holding_count": len(desired),
-                            "turnover_pct": round(turnover_ratio * 100.0, 4),
-                            "cost_pct_of_nav": round(
-                                cost / pre_trade_nav * 100.0 if pre_trade_nav else 0.0,
-                                4,
-                            ),
-                        }
-                    )
+        for index, trade_date in enumerate(dates):
+            if index > 0:
+                signal_date = dates[index - 1]
+                latest_selection = set(candidates.get(signal_date, set()))
+                if latest_selection == set(units):
                     pending = None
                 else:
-                    deferred += 1
+                    # During the minimum holding period, newer signals replace
+                    # older pending targets instead of forming a stale queue.
+                    pending = {
+                        "signal_date": signal_date,
+                        "symbols": latest_selection,
+                    }
+            if pending is not None:
+                desired = set(pending["symbols"])
+                cooldown_ready = (
+                    last_rebalance_index is None
+                    or index - last_rebalance_index
+                    >= cls.MIN_REBALANCE_TRADING_DAYS
+                )
+                if not cooldown_ready:
+                    cooldown_deferred += 1
+                else:
+                    involved = set(units) | desired
+                    day_prices = {
+                        symbol: prices.get((trade_date, symbol)) for symbol in involved
+                    }
+                    tradable = all(
+                        item is not None
+                        and cls._number(item.get("open")) is not None
+                        and cls._number(item.get("close")) is not None
+                        for item in day_prices.values()
+                    )
+                    if tradable:
+                        old_symbols = set(units)
+                        old_exposed = bool(old_symbols)
+                        values_at_open = {
+                            symbol: units[symbol] * float(day_prices[symbol]["open"])
+                            for symbol in old_symbols
+                        }
+                        pre_trade_nav = cash + sum(values_at_open.values())
+                        target_weight = 1.0 / len(desired) if desired else 0.0
+                        target_values = {
+                            symbol: pre_trade_nav * target_weight for symbol in desired
+                        }
+                        turnover_amount = sum(
+                            abs(
+                                target_values.get(symbol, 0.0)
+                                - values_at_open.get(symbol, 0.0)
+                            )
+                            for symbol in involved
+                        )
+                        cost = 0.0
+                        target_value = pre_trade_nav / len(desired) if desired else 0.0
+                        units = {
+                            symbol: target_value / float(day_prices[symbol]["open"])
+                            for symbol in desired
+                        }
+                        cash = pre_trade_nav - target_value * len(desired)
+                        turnover_ratio = (
+                            turnover_amount / pre_trade_nav if pre_trade_nav else 0.0
+                        )
+                        new_exposed = bool(desired)
+                        benchmark_open = benchmark_by_date[trade_date]["open"]
+                        if benchmark_open is None:
+                            raise ValueError(
+                                f"benchmark has no open price on {trade_date}"
+                            )
+                        if not old_exposed and new_exposed:
+                            benchmark_units = benchmark_cash / benchmark_open
+                            benchmark_cash = 0.0
+                        elif old_exposed and not new_exposed:
+                            benchmark_cash += benchmark_units * benchmark_open
+                            benchmark_units = 0.0
+                        total_cost += cost
+                        total_turnover += turnover_ratio
+                        rebalances.append(
+                            {
+                                "signal_date": pending["signal_date"],
+                                "trade_date": trade_date,
+                                "symbols": sorted(desired),
+                                "names": [
+                                    (names or {}).get(symbol, symbol)
+                                    for symbol in sorted(desired)
+                                ],
+                                "added": sorted(desired - old_symbols),
+                                "removed": sorted(old_symbols - desired),
+                                "holding_count": len(desired),
+                                "turnover_pct": round(turnover_ratio * 100.0, 4),
+                                "cost_pct_of_nav": 0.0,
+                            }
+                        )
+                        last_rebalance_index = index
+                        pending = None
+                    else:
+                        deferred += 1
 
             nav = cash
             for symbol, quantity in units.items():
                 item = prices.get((trade_date, symbol)) or {}
-                close = cls._number(item.get("close")) or previous_close.get(symbol)
+                close = cls._number(item.get("close"))
                 if close is None:
-                    continue
-                previous_close[symbol] = close
+                    raise ValueError(
+                        f"held symbol {symbol} has no close price on {trade_date}"
+                    )
                 nav += quantity * close
-            benchmark_nav = benchmark_by_date[trade_date] / benchmark_base
+            benchmark_nav = (
+                benchmark_cash
+                + benchmark_units * benchmark_by_date[trade_date]["close"]
+            )
             points.append(
                 {
                     "trade_date": trade_date,
@@ -1263,6 +1304,7 @@ class LiZongPortfolioBacktestService:
                     "benchmark_nav": round(benchmark_nav, 8),
                     "benchmark_return_pct": round((benchmark_nav - 1.0) * 100.0, 4),
                     "holding_count": len(units),
+                    "benchmark_exposed": bool(benchmark_units),
                 }
             )
 
@@ -1294,7 +1336,11 @@ class LiZongPortfolioBacktestService:
             else int(eligible_symbol_count) - len(incomplete_symbols)
         )
         incomplete_count = max(0, int(eligible_symbol_count) - complete_count)
+        exposure_trading_days = sum(
+            int(item.get("holding_count") or 0) > 0 for item in points
+        )
         return {
+            "portfolio_version": cls.PORTFOLIO_VERSION,
             "period": resolved,
             "period_label": cls.PERIOD_LABELS[resolved],
             "start_date": dates[0],
@@ -1327,12 +1373,20 @@ class LiZongPortfolioBacktestService:
             "total_turnover_pct": round(total_turnover * 100.0, 4),
             "total_cost_pct_of_initial_nav": round(total_cost * 100.0, 4),
             "deferred_rebalance_days": deferred,
+            "cooldown_deferred_days": cooldown_deferred,
+            "minimum_rebalance_trading_days": cls.MIN_REBALANCE_TRADING_DAYS,
+            "exposure_trading_days": exposure_trading_days,
+            "benchmark_policy": "same_exposure_only",
+            "trading_cost_bps_per_side": cls.COST_BPS_PER_SIDE,
             "points": points,
             "rebalances": rebalances,
             "generated_at": utc_now(),
             "assumptions": cls._assumptions(),
             "boundary": cls.BOUNDARY,
-            "debug": {"return_observation_count": len(returns)},
+            "debug": {
+                "return_observation_count": len(returns),
+                "benchmark_policy": "same_exposure_only",
+            },
         }
 
     def _progress_packet(self) -> dict[str, Any]:
@@ -1401,6 +1455,8 @@ class LiZongPortfolioBacktestService:
                 snapshot
                 and result_payload.get("state_input_version")
                 == self.STATE_INPUT_VERSION
+                and result_payload.get("portfolio_version")
+                == self.PORTFOLIO_VERSION
                 and (end_date is None or snapshot.get("as_of_date") == end_date)
             )
             remaining_symbols = max(0, len(eligible) - completed)
@@ -1605,11 +1661,13 @@ class LiZongPortfolioBacktestService:
             stable_only=True,
         )
         payload = (cached or {}).get("payload") or {}
-        if (
-            payload.get("rows")
-            and str(payload.get("start_date") or "") <= start_date
-            and str(payload.get("end_date") or "") >= end_date
-        ):
+        cached_dates = {
+            str(item.get("trade_date") or "")
+            for item in (payload.get("rows") or [])
+            if item.get("trade_date")
+        }
+        required_dates = set(trade_dates)
+        if required_dates and required_dates.issubset(cached_dates):
             return
         frame = self.client.index_daily(
             ts_code=TushareClient.to_tushare_symbol(self.BENCHMARK_SYMBOL),
@@ -1624,11 +1682,15 @@ class LiZongPortfolioBacktestService:
             [item for item in rows if item.get("trade_date")],
             key=lambda item: str(item["trade_date"]),
         )
+        actual_dates = {str(item["trade_date"]) for item in rows}
+        complete = bool(required_dates) and required_dates.issubset(actual_dates)
         benchmark_payload = {
             "symbol": self.BENCHMARK_SYMBOL,
             "name": self.BENCHMARK_NAME,
-            "start_date": start_date,
-            "end_date": end_date,
+            "start_date": rows[0]["trade_date"] if rows else None,
+            "end_date": rows[-1]["trade_date"] if rows else None,
+            "requested_start_date": start_date,
+            "requested_end_date": end_date,
             "rows": rows,
             "source": "Tushare Pro:index_daily",
             "generated_at": utc_now(),
@@ -1636,12 +1698,12 @@ class LiZongPortfolioBacktestService:
         self.database.save_tushare_dataset_snapshot(
             dataset=self.BENCHMARK_DATASET,
             scope_key=self.BENCHMARK_SYMBOL,
-            as_of_date=end_date,
+            as_of_date=(rows[-1]["trade_date"] if rows else None),
             report_period=None,
             source_updated_at=benchmark_payload["generated_at"],
             sync_run_id=sync_run_id,
             data_version=self._fingerprint(benchmark_payload),
-            data_status="stable" if rows else "incomplete",
+            data_status="stable" if complete else "incomplete",
             payload=benchmark_payload,
         )
 
@@ -1738,10 +1800,10 @@ class LiZongPortfolioBacktestService:
         )
         if not dates:
             return False
-        if dates[-1] < end_date and not self._snapshot_requested_through(
-            snapshot, end_date
-        ):
-            return False
+        if dates[-1] < end_date:
+            delist_date = self._snapshot_delist_date(snapshot)
+            if delist_date is None or delist_date > end_date:
+                return False
         stock_rows = (
             (((snapshot.get("payload") or {}).get("datasets") or {}).get("stock_basic") or {})
             .get("rows")
@@ -1763,7 +1825,8 @@ class LiZongPortfolioBacktestService:
     ) -> bool:
         payload = snapshot.get("payload") or {}
         return bool(
-            payload.get("sync_profile") == "market_history_extension_v1"
+            payload.get("market_history_version")
+            == TushareSnapshotService.MARKET_HISTORY_VERSION
             and cls._snapshot_requested_through(snapshot, end_date)
         )
 
@@ -1809,17 +1872,41 @@ class LiZongPortfolioBacktestService:
         }
 
     @staticmethod
+    def _incomplete_state(trade_date: str) -> dict[str, Any]:
+        return {
+            "trade_date": trade_date,
+            "status": "data_incomplete",
+            "candidate_qualified": False,
+            "adjusted_open": None,
+            "adjusted_close": None,
+            "raw_open": None,
+            "raw_close": None,
+        }
+
+    @classmethod
+    def _states_have_post_listing_gap(
+        cls, states: Sequence[Mapping[str, Any]]
+    ) -> bool:
+        """Distinguish pre-listing calendar days from real input gaps.
+
+        A stock that lists inside the backtest window naturally has no price
+        before its first trading day.  Once a real adjusted close has appeared,
+        however, any later ``data_incomplete`` state means the rule or market
+        input was not decisive and the symbol must be disclosed as incomplete.
+        """
+
+        observed_price = False
+        for state in states:
+            if cls._number(state.get("adjusted_close")) is not None:
+                observed_price = True
+            if observed_price and state.get("status") == "data_incomplete":
+                return True
+        return False
+
+    @staticmethod
     def _incomplete_states(trade_dates: Sequence[str]) -> list[dict[str, Any]]:
         return [
-            {
-                "trade_date": trade_date,
-                "status": "data_incomplete",
-                "candidate_qualified": False,
-                "adjusted_open": None,
-                "adjusted_close": None,
-                "raw_open": None,
-                "raw_close": None,
-            }
+            LiZongPortfolioBacktestService._incomplete_state(trade_date)
             for trade_date in trade_dates
         ]
 
@@ -1880,15 +1967,18 @@ class LiZongPortfolioBacktestService:
     def _assumptions(cls) -> dict[str, Any]:
         return {
             "selection": "李总策略9条候选规则全部通过；触发规则只改变人工复核层级，不改变持仓资格。",
-            "rebalance": "候选集合变化后，下一完整交易日开盘换仓。",
+            "rebalance": (
+                "候选集合变化后，最早于下一完整交易日开盘换仓；任意两次实际"
+                "换仓至少间隔10个交易日，冷却期内只执行最新候选集合。"
+            ),
             "weighting": "每次换仓后对可成交候选等资金配置。",
             "cost_bps_per_side": cls.COST_BPS_PER_SIDE,
-            "benchmark": cls.BENCHMARK_NAME,
+            "benchmark": f"{cls.BENCHMARK_NAME}（仅在策略持仓期保持同等市场暴露）",
             "price_basis": "复权因子调整后的开盘价和收盘价。",
             "cash_policy": "候选为空时持有现金，现金收益按0计。",
             "delisting_policy": (
                 "已明确退市且不再有交易日数据时，于候选状态退出后的下一市场日，"
-                "按最后可得复权收盘价作为强制退出代理并计入统一摩擦成本。"
+                "按最后可得复权收盘价作为强制退出代理。"
             ),
         }
 

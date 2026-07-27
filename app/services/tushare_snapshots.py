@@ -27,6 +27,7 @@ class TushareSnapshotService:
     # sessions plus the strategy's 380-session warm-up window. Keep a small
     # buffer for suspensions and calendar differences.
     SYMBOL_HISTORY_MARKET_DAYS = 1150
+    MARKET_HISTORY_VERSION = "requested_trade_date_v2"
     DATASETS = (
         "trade_cal",
         "stock_basic",
@@ -101,7 +102,10 @@ class TushareSnapshotService:
         canonical = normalize_symbol(symbol)
         as_of = self._parse_as_of_date(as_of_date)
         requested_as_of = as_of.strftime("%Y%m%d")
-        calendar_start = (as_of - timedelta(days=1800)).strftime("%Y%m%d")
+        # A historical market-cap hint can belong to a stock that stopped
+        # trading long before the requested backtest end date. Keep enough
+        # calendar history for a full warm-up window around either date.
+        calendar_start = (as_of - timedelta(days=8 * 366)).strftime("%Y%m%d")
         previous_stable = self.database.latest_tushare_dataset_snapshot(
             "li_zong_inputs", canonical
         )
@@ -141,6 +145,7 @@ class TushareSnapshotService:
             trade_dates = self._open_trade_dates(frames["trade_cal"], requested_as_of)
             if not trade_dates:
                 raise ValueError("没有可用的完整交易日")
+            requested_trade_date = trade_dates[-1]
             ts_code = self._to_tushare_symbol(canonical)
             hint_frames = self._universe_hint_frames(
                 canonical=canonical,
@@ -179,17 +184,24 @@ class TushareSnapshotService:
                 issues.append(
                     {"dataset": "daily_basic", "error_type": daily_basic_error}
                 )
-            completed_trade_dates = [
-                value for value in trade_dates if value <= latest_trade_date
-            ]
             # The strategy needs up to 380 actual stock observations. Request a
             # substantially wider market-calendar buffer so a mature listing
             # with a long suspension can still contribute enough tradable rows
             # without adding another Tushare call.
-            history_dates = completed_trade_dates[
-                -self.SYMBOL_HISTORY_MARKET_DAYS :
-            ]
-            history_start = history_dates[0]
+            requested_history = trade_dates[-self.SYMBOL_HISTORY_MARKET_DAYS :]
+            history_starts = [requested_history[0]]
+            market_cap_hint_date = (
+                latest_trade_date
+                if not frames.get("daily_basic", pd.DataFrame()).empty
+                else None
+            )
+            if market_cap_hint_date:
+                hint_history = [
+                    value for value in trade_dates if value <= market_cap_hint_date
+                ][-self.SYMBOL_HISTORY_MARKET_DAYS :]
+                if hint_history:
+                    history_starts.append(hint_history[0])
+            history_start = min(history_starts)
             query_specs = {
                 "stock_basic": {
                     "ts_code": ts_code,
@@ -201,7 +213,7 @@ class TushareSnapshotService:
                 "daily": {
                     "ts_code": ts_code,
                     "start_date": history_start,
-                    "end_date": latest_trade_date,
+                    "end_date": requested_trade_date,
                     "fields": (
                         "ts_code,trade_date,open,high,low,close,pre_close,"
                         "change,pct_chg,vol,amount"
@@ -216,13 +228,13 @@ class TushareSnapshotService:
                 "adj_factor": {
                     "ts_code": ts_code,
                     "start_date": history_start,
-                    "end_date": latest_trade_date,
+                    "end_date": requested_trade_date,
                     "fields": "ts_code,trade_date,adj_factor",
                 },
                 "stk_limit": {
                     "ts_code": ts_code,
                     "start_date": history_start,
-                    "end_date": latest_trade_date,
+                    "end_date": requested_trade_date,
                     "fields": "ts_code,trade_date,pre_close,up_limit,down_limit",
                 },
                 "top10_holders": {
@@ -310,6 +322,15 @@ class TushareSnapshotService:
                         {"dataset": dataset, "error_type": type(exc).__name__}
                     )
 
+            daily_dates = [
+                str(value).replace("-", "")
+                for value in frames.get("daily", pd.DataFrame()).get("trade_date", [])
+                if value not in (None, "")
+            ]
+            actual_latest_daily_date = (
+                max(daily_dates) if daily_dates else requested_trade_date
+            )
+
             generated_at = utc_now()
             dataset_packets: dict[str, dict[str, Any]] = {}
             missing_required: list[str] = []
@@ -328,7 +349,7 @@ class TushareSnapshotService:
                         dataset=dataset,
                         frame=frame,
                         canonical=canonical,
-                        latest_trade_date=latest_trade_date,
+                        latest_trade_date=actual_latest_daily_date,
                         generated_at=generated_at,
                     )
                     if dataset in reused_universe_datasets:
@@ -344,14 +365,14 @@ class TushareSnapshotService:
                         "method": self.METHOD,
                         "dataset": dataset,
                         "scope": canonical,
-                        "as_of": latest_trade_date,
+                        "as_of": actual_latest_daily_date,
                         "rows": payload["rows"],
                     }
                 )
                 self.database.save_tushare_dataset_snapshot(
                     dataset=dataset,
                     scope_key=canonical,
-                    as_of_date=self._iso_date(latest_trade_date),
+                    as_of_date=self._iso_date(actual_latest_daily_date),
                     report_period=payload.get("report_period"),
                     source_updated_at=generated_at,
                     sync_run_id=str(sync_run["id"]),
@@ -371,8 +392,11 @@ class TushareSnapshotService:
                 ),
                 "symbol": canonical,
                 "tushare_ts_code": self._to_tushare_symbol(canonical),
-                "as_of_date": self._iso_date(latest_trade_date),
+                "as_of_date": self._iso_date(actual_latest_daily_date),
                 "requested_as_of_date": as_of.isoformat(),
+                "requested_trade_date": self._iso_date(requested_trade_date),
+                "market_cap_hint_date": self._iso_date(market_cap_hint_date),
+                "market_history_version": self.MARKET_HISTORY_VERSION,
                 "generated_at": generated_at,
                 "datasets": dataset_packets,
                 "coverage": {

@@ -11,6 +11,7 @@ from app.services.tushare_snapshots import TushareSnapshotService
 class FakeSnapshotTushareClient:
     def __init__(self) -> None:
         self.calls: dict[str, int] = defaultdict(int)
+        self.query_params: dict[str, list[dict[str, object]]] = defaultdict(list)
         self.missing: set[str] = set()
         self.errors: set[str] = set()
         self.fail_trade_cal = False
@@ -51,6 +52,7 @@ class FakeSnapshotTushareClient:
 
     def query(self, api_name: str, **params):
         self.calls[api_name] += 1
+        self.query_params[api_name].append(dict(params))
         if api_name in self.errors:
             raise RuntimeError(f"temporary {api_name} error")
         if api_name in self.missing:
@@ -387,12 +389,10 @@ def test_preopen_sync_falls_back_to_latest_date_with_daily_basic_data(app):
         previous_completed_date
     )
     assert symbol["published"] is True
-    assert symbol["snapshot"]["as_of_date"] == service._iso_date(
-        previous_completed_date
-    )
+    assert symbol["snapshot"]["as_of_date"] == service._iso_date(latest_calendar_date)
     assert (
         symbol["snapshot"]["datasets"]["daily"]["rows"][-1]["trade_date"]
-        == previous_completed_date
+        == latest_calendar_date
     )
     assert fake.calls["daily_basic"] == 4
 
@@ -506,15 +506,22 @@ def test_strategy_symbol_sync_accepts_historical_market_cap_hint_for_inactive_st
     )
 
     assert result["published"] is True
-    assert result["snapshot"]["as_of_date"] == TushareSnapshotService._iso_date(
-        historical_trade_date
-    )
+    assert result["snapshot"]["as_of_date"] == "2026-07-21"
     assert result["snapshot"]["requested_as_of_date"] == "2026-07-21"
+    assert result["snapshot"]["market_cap_hint_date"] == (
+        TushareSnapshotService._iso_date(historical_trade_date)
+    )
+    assert result["snapshot"]["market_history_version"] == (
+        TushareSnapshotService.MARKET_HISTORY_VERSION
+    )
     assert result["snapshot"]["datasets"]["daily_basic"]["rows"][0][
         "trade_date"
     ] == historical_trade_date
     assert fake.calls["daily_basic"] == 0
     assert fake.calls["stock_basic"] == 1
+    assert fake.query_params["daily"][-1]["end_date"] == fake.trade_dates[-1]
+    assert fake.query_params["adj_factor"][-1]["end_date"] == fake.trade_dates[-1]
+    assert fake.query_params["stk_limit"][-1]["end_date"] == fake.trade_dates[-1]
 
 
 def test_strategy_history_extension_reuses_existing_financial_and_holder_inputs(app):

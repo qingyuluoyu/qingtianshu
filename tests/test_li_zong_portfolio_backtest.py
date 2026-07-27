@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
+import pytest
 
 from app.services.li_zong_portfolio_backtest import LiZongPortfolioBacktestService
 from app.services.li_zong_strategy_service import LiZongStrategyService
@@ -12,8 +13,8 @@ from app.services.tushare_snapshots import TushareSnapshotService
 
 def _price_rows(dates: list[str]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    a_prices = [100.0, 100.0, 110.0, 121.0, 121.0, 121.0]
-    b_prices = [50.0, 50.0, 50.0, 50.0, 55.0, 60.5]
+    a_prices = [100.0 + index for index in range(len(dates))]
+    b_prices = [50.0 + index * 0.5 for index in range(len(dates))]
     for index, trade_date in enumerate(dates):
         for symbol, prices in (("000001.SZ", a_prices), ("000002.SZ", b_prices)):
             rows.append(
@@ -28,23 +29,31 @@ def _price_rows(dates: list[str]) -> list[dict[str, object]]:
 
 
 def test_equal_weight_backtest_rebalances_on_next_open_without_lookahead():
-    dates = [
-        "2026-01-05",
-        "2026-01-06",
-        "2026-01-07",
-        "2026-01-08",
-        "2026-01-09",
-        "2026-01-12",
+    dates = [value.date().isoformat() for value in pd.bdate_range("2026-01-05", periods=14)]
+    selections = [
+        "000001.SZ",
+        "000002.SZ",
+        "000002.SZ",
+        "000002.SZ",
+        "000001.SZ",
+        "000001.SZ",
+        "000001.SZ",
+        "000002.SZ",
+        "000002.SZ",
+        "000002.SZ",
+        "000002.SZ",
+        "000002.SZ",
+        "000002.SZ",
+        "000002.SZ",
     ]
     candidate_rows = [
-        {"trade_date": dates[0], "symbol": "000001.SZ"},
-        {"trade_date": dates[1], "symbol": "000001.SZ"},
-        {"trade_date": dates[2], "symbol": "000002.SZ"},
-        {"trade_date": dates[3], "symbol": "000002.SZ"},
-        {"trade_date": dates[4], "symbol": "000002.SZ"},
-        {"trade_date": dates[5], "symbol": "000002.SZ"},
+        {"trade_date": trade_date, "symbol": selections[index]}
+        for index, trade_date in enumerate(dates)
     ]
-    benchmark = [{"trade_date": value, "close": 100.0} for value in dates]
+    benchmark = [
+        {"trade_date": value, "open": 100.0, "close": 100.0}
+        for value in dates
+    ]
 
     result = LiZongPortfolioBacktestService.calculate_portfolio(
         period="3m",
@@ -59,13 +68,19 @@ def test_equal_weight_backtest_rebalances_on_next_open_without_lookahead():
     assert result["rebalances"][0]["signal_date"] == dates[0]
     assert result["rebalances"][0]["trade_date"] == dates[1]
     assert result["rebalances"][0]["symbols"] == ["000001.SZ"]
-    assert result["rebalances"][1]["signal_date"] == dates[2]
-    assert result["rebalances"][1]["trade_date"] == dates[3]
+    assert result["rebalances"][1]["signal_date"] == dates[10]
+    assert result["rebalances"][1]["trade_date"] == dates[11]
     assert result["rebalances"][1]["symbols"] == ["000002.SZ"]
+    assert result["minimum_rebalance_trading_days"] == 10
+    assert result["cooldown_deferred_days"] > 0
     assert result["points"][0]["return_pct"] == 0.0
-    assert result["period_return_pct"] > 20.0
-    assert result["total_cost_pct_of_initial_nav"] > 0.0
+    assert result["period_return_pct"] > 0.0
+    assert result["total_cost_pct_of_initial_nav"] == 0.0
+    assert result["trading_cost_bps_per_side"] == 0.0
+    assert result["benchmark_policy"] == "same_exposure_only"
+    assert all(item["cost_pct_of_nav"] == 0.0 for item in result["rebalances"])
     assert result["benchmark_return_pct"] == 0.0
+    assert result["portfolio_version"] == "li_zong_2w_no_cost_v2"
 
 
 def test_backtest_holds_cash_when_strategy_never_selects_a_stock():
@@ -87,7 +102,121 @@ def test_backtest_holds_cash_when_strategy_never_selects_a_stock():
     assert result["annualized_return_pct"] == 0.0
     assert result["selection_update_count"] == 0
     assert result["ever_selected_symbol_count"] == 0
-    assert result["benchmark_return_pct"] == 2.0
+    assert result["benchmark_return_pct"] == 0.0
+    assert all(item["benchmark_exposed"] is False for item in result["points"])
+
+
+def test_backtest_freezes_benchmark_after_strategy_returns_to_cash():
+    dates = [value.date().isoformat() for value in pd.bdate_range("2026-01-05", periods=14)]
+    candidate_rows = [
+        {"trade_date": trade_date, "symbol": "000001.SZ"}
+        for trade_date in dates[:3]
+    ]
+    price_rows = [
+        {
+            "trade_date": trade_date,
+            "symbol": "000001.SZ",
+            "adjusted_open": 100.0,
+            "adjusted_close": 100.0,
+        }
+        for trade_date in dates
+    ]
+    benchmark_rows = [
+        {
+            "trade_date": trade_date,
+            "open": 100.0 + index,
+            "close": 100.0 + index,
+        }
+        for index, trade_date in enumerate(dates)
+    ]
+
+    result = LiZongPortfolioBacktestService.calculate_portfolio(
+        period="3m",
+        candidate_rows=candidate_rows,
+        price_rows=price_rows,
+        benchmark_rows=benchmark_rows,
+        eligible_symbol_count=1,
+    )
+
+    assert [item["trade_date"] for item in result["rebalances"]] == [
+        dates[1],
+        dates[11],
+    ]
+    assert result["rebalances"][1]["holding_count"] == 0
+    assert result["points"][11]["benchmark_exposed"] is False
+    assert result["points"][11]["benchmark_nav"] == result["points"][-1][
+        "benchmark_nav"
+    ]
+    assert result["benchmark_return_pct"] == 9.901
+
+
+def test_backtest_reenters_benchmark_at_the_same_open_as_the_strategy():
+    dates = [value.date().isoformat() for value in pd.bdate_range("2026-01-05", periods=24)]
+    candidate_dates = [*dates[:3], *dates[13:]]
+    candidate_rows = [
+        {"trade_date": trade_date, "symbol": "000001.SZ"}
+        for trade_date in candidate_dates
+    ]
+    price_rows = [
+        {
+            "trade_date": trade_date,
+            "symbol": "000001.SZ",
+            "adjusted_open": 100.0,
+            "adjusted_close": 100.0,
+        }
+        for trade_date in dates
+    ]
+    benchmark_rows = [
+        {
+            "trade_date": trade_date,
+            "open": 100.0 + index,
+            "close": 100.0 + index,
+        }
+        for index, trade_date in enumerate(dates)
+    ]
+
+    result = LiZongPortfolioBacktestService.calculate_portfolio(
+        period="3m",
+        candidate_rows=candidate_rows,
+        price_rows=price_rows,
+        benchmark_rows=benchmark_rows,
+        eligible_symbol_count=1,
+    )
+
+    assert [item["trade_date"] for item in result["rebalances"]] == [
+        dates[1],
+        dates[11],
+        dates[21],
+    ]
+    expected_benchmark_nav = (111.0 / 101.0) * (123.0 / 121.0)
+    assert result["points"][20]["benchmark_exposed"] is False
+    assert result["points"][21]["benchmark_exposed"] is True
+    assert result["points"][-1]["benchmark_nav"] == round(
+        expected_benchmark_nav, 8
+    )
+
+
+def test_backtest_rejects_missing_benchmark_open_on_exposure_entry():
+    dates = ["2026-01-05", "2026-01-06"]
+
+    with pytest.raises(ValueError, match="benchmark has no open price"):
+        LiZongPortfolioBacktestService.calculate_portfolio(
+            period="3m",
+            candidate_rows=[{"trade_date": dates[0], "symbol": "000001.SZ"}],
+            price_rows=[
+                {
+                    "trade_date": dates[1],
+                    "symbol": "000001.SZ",
+                    "adjusted_open": 10.0,
+                    "adjusted_close": 10.0,
+                }
+            ],
+            benchmark_rows=[
+                {"trade_date": dates[0], "close": 100.0},
+                {"trade_date": dates[1], "close": 101.0},
+            ],
+            eligible_symbol_count=1,
+        )
 
 
 def test_backtest_result_discloses_incomplete_input_coverage():
@@ -112,6 +241,86 @@ def test_backtest_result_discloses_incomplete_input_coverage():
     assert result["data_coverage_ratio"] == 0.875
     assert result["incomplete_symbols"] == ["000008.SZ"]
     assert "不会被当作候选" in result["data_coverage_boundary"]
+
+
+def test_backtest_rejects_a_held_symbol_with_a_trailing_price_gap():
+    dates = [value.date().isoformat() for value in pd.bdate_range("2026-01-05", periods=3)]
+    with pytest.raises(ValueError, match="has no close price"):
+        LiZongPortfolioBacktestService.calculate_portfolio(
+            period="3m",
+            candidate_rows=[
+                {"trade_date": dates[0], "symbol": "000001.SZ"},
+                {"trade_date": dates[1], "symbol": "000001.SZ"},
+            ],
+            price_rows=[
+                {
+                    "trade_date": dates[1],
+                    "symbol": "000001.SZ",
+                    "adjusted_open": 10.0,
+                    "adjusted_close": 10.0,
+                }
+            ],
+            benchmark_rows=[
+                {"trade_date": trade_date, "open": 100.0, "close": 100.0}
+                for trade_date in dates
+            ],
+            eligible_symbol_count=1,
+        )
+
+
+def test_coverage_gap_ignores_prelisting_days_and_flags_postlisting_gaps():
+    service = LiZongPortfolioBacktestService
+    prelisting = service._incomplete_state("2026-01-05")
+    first_trade = {
+        "trade_date": "2026-01-06",
+        "status": "not_qualified",
+        "adjusted_close": 10.0,
+    }
+
+    assert not service._states_have_post_listing_gap([prelisting, first_trade])
+    assert service._states_have_post_listing_gap(
+        [
+            prelisting,
+            first_trade,
+            service._incomplete_state("2026-01-07"),
+        ]
+    )
+    assert service._states_have_post_listing_gap(
+        [
+            prelisting,
+            {
+                "trade_date": "2026-01-06",
+                "status": "data_incomplete",
+                "adjusted_close": 10.0,
+            },
+        ]
+    )
+
+
+def test_packet_does_not_expose_an_old_portfolio_model(monkeypatch):
+    class FakeDatabase:
+        def latest_tushare_dataset_snapshot(self, *_args, **_kwargs):
+            return {
+                "payload": {
+                    "state_input_version": (
+                        LiZongPortfolioBacktestService.STATE_INPUT_VERSION
+                    ),
+                    "portfolio_version": "li_zong_equal_weight_legacy",
+                }
+            }
+
+    service = LiZongPortfolioBacktestService(FakeDatabase(), object(), object())
+    monkeypatch.setattr(
+        service,
+        "_progress_packet",
+        lambda: {"periods": {"1y": {"status": "building"}}},
+    )
+
+    packet = service.packet(period="1y")
+
+    assert packet["status"] == "building"
+    assert packet["result"] is None
+    assert packet["portfolio_version"] == service.PORTFOLIO_VERSION
 
 
 def test_backtest_api_and_frontend_expose_three_periods(app, client, monkeypatch):
@@ -165,6 +374,68 @@ def test_backtest_tables_and_long_history_window_are_initialized(app):
     assert database.schema_status()["schema_version"] >= 3
     assert TushareSnapshotService.SYMBOL_HISTORY_MARKET_DAYS >= 1136
     assert LiZongStrategyService.PRICE_HISTORY_WINDOW_VERSION == "market_days_1150_v1"
+
+
+def test_benchmark_cache_must_contain_the_claimed_last_trade_date():
+    class FakeDatabase:
+        def __init__(self):
+            self.saved = None
+
+        def latest_tushare_dataset_snapshot(self, *_args, **_kwargs):
+            return {
+                "payload": {
+                    "start_date": "2026-01-05",
+                    "end_date": "2026-01-06",
+                    "rows": [
+                        {
+                            "trade_date": "2026-01-05",
+                            "open": 100.0,
+                            "close": 101.0,
+                        }
+                    ],
+                }
+            }
+
+        def save_tushare_dataset_snapshot(self, **kwargs):
+            self.saved = kwargs
+
+    class FakeClient:
+        def __init__(self):
+            self.calls = 0
+
+        def index_daily(self, **_kwargs):
+            self.calls += 1
+            return pd.DataFrame(
+                [
+                    {
+                        "ts_code": "000300.SH",
+                        "trade_date": "20260105",
+                        "open": 100.0,
+                        "close": 101.0,
+                    },
+                    {
+                        "ts_code": "000300.SH",
+                        "trade_date": "20260106",
+                        "open": 102.0,
+                        "close": 103.0,
+                    },
+                ]
+            )
+
+    database = FakeDatabase()
+    snapshot_service = type("SnapshotService", (), {"client": FakeClient()})()
+    service = LiZongPortfolioBacktestService(database, snapshot_service, object())
+
+    service._ensure_benchmark(
+        ["2026-01-05", "2026-01-06"],
+        sync_run_id="run-1",
+    )
+
+    assert snapshot_service.client.calls == 1
+    assert database.saved["as_of_date"] == "2026-01-06"
+    assert database.saved["data_status"] == "stable"
+    assert database.saved["payload"]["requested_end_date"] == "2026-01-06"
+    assert database.saved["payload"]["end_date"] == "2026-01-06"
 
 
 def test_refresh_only_evaluates_the_largest_market_cap_window_that_is_ready(
@@ -371,6 +642,7 @@ def test_backtest_uses_best_available_history_after_current_extension_attempt():
         "payload": {
             "requested_as_of_date": "2026-07-24",
             "sync_profile": "market_history_extension_v1",
+            "market_history_version": TushareSnapshotService.MARKET_HISTORY_VERSION,
         },
     }
 
@@ -379,6 +651,16 @@ def test_backtest_uses_best_available_history_after_current_extension_attempt():
     )
     assert not LiZongPortfolioBacktestService._history_extension_attempted(
         snapshot, end_date="2026-07-25"
+    )
+
+    snapshot["payload"]["sync_profile"] = "strategy_required_only_v1"
+    assert LiZongPortfolioBacktestService._history_extension_attempted(
+        snapshot, end_date="2026-07-24"
+    )
+
+    snapshot["payload"].pop("market_history_version")
+    assert not LiZongPortfolioBacktestService._history_extension_attempted(
+        snapshot, end_date="2026-07-24"
     )
 
 
@@ -530,7 +812,8 @@ def test_vectorized_historical_states_match_reference_strategy_evaluation():
     service = LiZongPortfolioBacktestService(
         FakeDatabase(), object(), FakeStrategyService()
     )
-    target = all_dates[-252:]
+    next_market_date = pd.bdate_range(start=all_dates[-1], periods=2)[-1].date().isoformat()
+    target = [*all_dates[-251:], next_market_date]
     snapshot = {"data_version": "fixture-v1", "payload": {}}
 
     optimized = service._evaluate_symbol(
@@ -541,8 +824,11 @@ def test_vectorized_historical_states_match_reference_strategy_evaluation():
     )
 
     assert optimized == reference
-    assert optimized[-1]["candidate_qualified"] is True
-    assert optimized[-1]["status"] == "triggered"
+    assert optimized[-2]["candidate_qualified"] is True
+    assert optimized[-2]["status"] == "triggered"
+    assert optimized[-1]["candidate_qualified"] is False
+    assert optimized[-1]["status"] == "data_incomplete"
+    assert optimized[-1]["adjusted_close"] is None
 
 
 def test_backtest_default_as_of_excludes_an_open_session_before_close():
