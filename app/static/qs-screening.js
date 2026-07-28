@@ -98,7 +98,7 @@ function liZongStatusLabel(value) {
       const values = sampled.flatMap(item => [Number(item.return_pct), Number(item.benchmark_return_pct), 0]);
       const min = Math.min(...values); const max = Math.max(...values); const span = Math.max(1, max - min);
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      svg.setAttribute("viewBox", "0 0 720 190"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "李总策略双周等权组合与沪深300同暴露历史累计收益曲线");
+      svg.setAttribute("viewBox", "0 0 720 190"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "李总策略双周等权组合与沪深300同暴露累计收益曲线");
       const coordinates = key => sampled.map((item, index) => {
         const x = 42 + index * (650 / Math.max(1, sampled.length - 1));
         const y = 166 - ((Number(item[key]) - min) / span) * 138;
@@ -527,6 +527,25 @@ function liZongStatusLabel(value) {
       }[key] || key;
     }
 
+    function stockScreenProfileExplanation(profile = {}) {
+      const explanations = {
+        trend: "这些股票只是近20日相对所属行业表现更强，可能已经积累较大涨幅。下一步先核验上涨是否有业绩和公告支撑，以及一旦行业转弱时的回撤风险。",
+        quality: "这些股票只是近期经营指标出现改善线索。下一步要核对改善是否连续、现金流是否同步，以及是否来自一次性项目。",
+        value: "这些股票只是满足当前估值约束，估值较低不等于风险较小。下一步要核对盈利质量、负债、行业景气和估值下降的原因。",
+        pullback: "这些股票只是经历回撤后进入待复核范围。下一步要区分正常波动与基本面恶化，并核对公告、财务和行业变化。"
+      };
+      return explanations[profile.key] || "这些结果只是满足当前筛选条件的研究对象，不是推荐名单。下一步仍需核验财务、公告、行业变化和反方证据。";
+    }
+
+    function renderStockScreenExplanation(profile = {}) {
+      const container = $("stockScreenExplanation");
+      container.innerHTML = "";
+      const title = document.createElement("strong"); title.textContent = "这批结果怎么用";
+      const copy = document.createElement("span"); copy.textContent = stockScreenProfileExplanation(profile);
+      container.append(title, copy);
+      container.hidden = false;
+    }
+
     function renderStockScreener(payload) {
       state.stockScreener = payload;
       const profile = payload?.profile || {};
@@ -553,13 +572,21 @@ function liZongStatusLabel(value) {
       ].filter(Boolean).join(" / ");
       const dataVersion = String(contract.data_version || meta.data_version || "");
       $("stockScreenMeta").textContent = [
+        meta.latest_completed_trade_date ? `行情截至 ${meta.latest_completed_trade_date}` : "行情日期待确认",
+        periods.length ? `财务数据逐只标注，最新报告期 ${periods[0]}` : "财务报告期逐只展示",
+        profile.sort_rule || ""
+      ].filter(Boolean).join(" · ");
+      renderStockScreenExplanation(profile);
+      const details = $("stockScreenDataDetails");
+      details.hidden = false;
+      details.open = false;
+      $("stockScreenDataDetail").textContent = [
         meta.latest_completed_trade_date ? `行情交易日 ${meta.latest_completed_trade_date}` : "行情日期待确认",
         meta.return_20d_base_date ? `20日比较基准 ${meta.return_20d_base_date}` : "",
         periods.length ? `财务报告期 ${periods.slice(0, 3).join("、")}` : "财务报告期逐只展示",
         snapshotCoverageText,
         coverageSummary ? `数据覆盖 ${coverageSummary}` : "",
-        dataVersion ? `数据版本 ${dataVersion.slice(-8)}` : "",
-        profile.sort_rule || ""
+        dataVersion ? `数据版本 ${dataVersion.slice(-8)}` : ""
       ].filter(Boolean).join(" · ");
       $("stockScreenBoundary").textContent = payload?.boundary || "这是可解释的研究候选筛选，不构成推荐、评级、目标价或交易建议。";
 
@@ -610,6 +637,8 @@ function liZongStatusLabel(value) {
         });
         card.appendChild(metrics);
 
+        const reasonsTitle = document.createElement("div"); reasonsTitle.className = "screener-reasons-title"; reasonsTitle.textContent = "为什么出现在这里";
+        card.appendChild(reasonsTitle);
         const reasons = document.createElement("ul"); reasons.className = "screener-reasons";
         (item.matched_reasons || []).slice(0, 4).forEach(value => { const li = document.createElement("li"); li.textContent = value; reasons.appendChild(li); });
         card.appendChild(reasons);
@@ -633,13 +662,11 @@ function liZongStatusLabel(value) {
           missing_fields: (item.missing_fields || []).map(stockScreenFieldLabel)
         };
         const actions = document.createElement("div"); actions.className = "screener-actions";
-        const follow = document.createElement("button"); follow.type = "button"; follow.className = "btn"; follow.textContent = "加入关注";
+        const follow = document.createElement("button"); follow.type = "button"; follow.className = "btn"; follow.textContent = "加入我的关注";
         follow.addEventListener("click", () => { void addScreenCandidateToWatchlist(item, follow); });
-        const research = document.createElement("button"); research.type = "button"; research.className = "btn primary"; research.textContent = "保存线索并研究";
+        const research = document.createElement("button"); research.type = "button"; research.className = "btn primary"; research.textContent = "研究这只股票";
         research.addEventListener("click", () => { void enterScreenCandidateResearch(item, research, entryContext); });
-        const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn"; ask.textContent = "让 Agent 继续研究";
-        ask.addEventListener("click", () => { void researchCandidateWithAgent(item, ask, entryContext, `请继续研究${item.name}（${item.internal_symbol}）。它命中了“${profile.label || "研究候选"}”筛选，请核验最新财务、公告、反方证据、失效条件和当前仍缺失的信息。`); });
-        actions.append(follow, research, ask); card.appendChild(actions); container.appendChild(card);
+        actions.append(follow, research); card.appendChild(actions); container.appendChild(card);
       });
     }
 
@@ -647,6 +674,8 @@ function liZongStatusLabel(value) {
       if (state.stockScreenerLoading) return;
       state.stockScreenerLoading = true;
       const button = $("runStockScreener"); button.disabled = true; button.textContent = "筛选中…";
+      $("stockScreenExplanation").hidden = true;
+      $("stockScreenDataDetails").hidden = true;
       $("stockScreenResults").innerHTML = '<div class="screener-empty">正在应用已选研究条件…</div>';
       const filters = {};
       const industry = $("stockScreenIndustry").value.trim();
@@ -668,6 +697,8 @@ function liZongStatusLabel(value) {
         renderStockScreener(payload);
       } catch (error) {
         state.stockScreener = null;
+        $("stockScreenExplanation").hidden = true;
+        $("stockScreenDataDetails").hidden = true;
         const unavailable = error?.status === 503;
         $("stockScreenTitle").textContent = unavailable ? "智能选股数据正在准备" : "本次筛选暂未完成";
         $("stockScreenMeta").textContent = unavailable

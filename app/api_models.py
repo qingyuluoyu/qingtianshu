@@ -58,6 +58,15 @@ class ConversationPatch(BaseModel):
     quality_scope: Literal["user", "evaluation"] | None = None
 
 
+class RiskProfileDraft(BaseModel):
+    base_version: int = Field(default=0, ge=0)
+    answers: dict[str, str]
+
+
+class RiskProfileConfirm(BaseModel):
+    version_no: int = Field(ge=1)
+
+
 class DeepStockEntryContext(BaseModel):
     source_kind: Literal["stock_screen", "li_zong_strategy"]
     source_label: str = Field(min_length=1, max_length=80)

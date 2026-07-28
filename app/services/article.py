@@ -127,6 +127,7 @@ class MarketPulseArticleService:
     @staticmethod
     def _public_article(article: dict[str, Any]) -> dict[str, Any]:
         item = dict(article)
+        market_brief = MarketPulseArticleService._article_market_brief(item)
         body = MarketPulseArticleService._sanitize_public_text(
             str(item.get("body") or "")
         )
@@ -139,12 +140,30 @@ class MarketPulseArticleService:
                 "关键行情可能存在正常传输延迟，阅读时以页面标注时间为准。"
             )
         item["body"] = body
-        item["summary"] = MarketPulseArticleService._sanitize_public_text(
-            str(item.get("summary") or "")
+        if market_brief:
+            item["title"] = MarketPulseArticleService._title(market_brief)
+        item["summary"] = (
+            MarketPulseArticleService._market_structure_summary(market_brief)
+            or MarketPulseArticleService._sanitize_public_text(
+                str(item.get("summary") or "")
+            )
         )
         for key in ("evidence", "user_id", "fingerprint", "run_id"):
             item.pop(key, None)
         return item
+
+    @staticmethod
+    def _article_market_brief(article: dict[str, Any]) -> dict[str, Any]:
+        evidence = article.get("evidence") or {}
+        if isinstance(evidence, str):
+            try:
+                evidence = json.loads(evidence)
+            except json.JSONDecodeError:
+                return {}
+        if not isinstance(evidence, dict):
+            return {}
+        market_brief = evidence.get("market_brief") or {}
+        return market_brief if isinstance(market_brief, dict) else {}
 
     @staticmethod
     def _sanitize_public_text(value: str) -> str:
@@ -205,13 +224,64 @@ class MarketPulseArticleService:
 
     @staticmethod
     def _title(market_brief: dict[str, Any]) -> str:
-        state = market_brief.get("market_state", {}).get("label", "数据待确认")
+        breadth_packet = market_brief.get("market_breadth") or {}
+        breadth = breadth_packet.get("breadth") or {}
         sectors = market_brief.get("hot_sectors", {}).get("sectors", [])
+        if breadth_packet.get("status") == "available" and breadth.get("state"):
+            state = breadth["state"]
+            if sectors:
+                name = sectors[0]["name"]
+                label = name if name.endswith(("行业", "板块", "概念")) else f"{name}板块"
+                return f"市场脉冲｜A股{state}，{label}涨幅靠前"
+            return f"市场脉冲｜A股{state}，市场结构已更新"
+        state = market_brief.get("market_state", {}).get("label", "数据待确认")
         if sectors:
             name = sectors[0]["name"]
             label = name if name.endswith(("行业", "板块", "概念")) else f"{name}板块"
             return f"市场脉冲｜主要指数{state}，{label}涨幅靠前"
         return f"市场脉冲｜主要指数{state}，结构变化仍需确认"
+
+    @staticmethod
+    def _market_structure_summary(market_brief: dict[str, Any]) -> str | None:
+        breadth_packet = market_brief.get("market_breadth") or {}
+        breadth = breadth_packet.get("breadth") or {}
+        if breadth_packet.get("status") != "available" or not breadth.get("total"):
+            return None
+
+        market_date = str(breadth_packet.get("market_date") or "").strip()
+        total = int(breadth.get("total") or 0)
+        advancers = int(breadth.get("advancers") or 0)
+        decliners = int(breadth.get("decliners") or 0)
+        unchanged = int(breadth.get("unchanged") or 0)
+        clauses = [
+            (
+                f"{market_date}，" if market_date else ""
+            )
+            + f"沪深京 {total:,} 只股票中，上涨 {advancers:,} 只、"
+            f"下跌 {decliners:,} 只、平盘 {unchanged:,} 只"
+        ]
+
+        distribution = breadth_packet.get("distribution") or {}
+        median = distribution.get("median_pct_change")
+        if isinstance(median, (int, float)):
+            clauses.append(f"涨跌幅中位数 {median:+.2f}%")
+
+        turnover = breadth_packet.get("turnover") or {}
+        turnover_yi = turnover.get("total_amount_100m_cny")
+        if isinstance(turnover_yi, (int, float)):
+            clauses.append(f"当日累计成交额 {turnover_yi:,.0f} 亿元")
+
+        sectors = market_brief.get("hot_sectors", {}).get("sectors", [])
+        if sectors:
+            sector = sectors[0]
+            name = str(sector.get("name") or "领先板块")
+            change = sector.get("pct_change")
+            if isinstance(change, (int, float)):
+                clauses.append(f"{name}板块涨幅 {change:+.2f}%")
+            else:
+                clauses.append(f"{name}板块涨幅靠前")
+
+        return "；".join(clauses) + "。以上只描述已发生的市场结构。"
 
     @staticmethod
     def _summary(body: str) -> str:

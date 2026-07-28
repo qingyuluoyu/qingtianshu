@@ -23,6 +23,8 @@ function researchStatusMeta(status) {
       const container = $("sectors");
       container.innerHTML = "";
       const sectors = data.sectors || [];
+      state.marketSectors = sectors;
+      if (typeof renderMarketQuickRead === "function") renderMarketQuickRead();
       if (sectors.length) {
         const head = document.createElement("div"); head.className = "sector-table-head";
         for (const label of ["排名", "板块", "涨跌幅", "内部上涨", "主力净流入"]) {
@@ -113,7 +115,7 @@ function researchStatusMeta(status) {
         const completeBarDate = report?.market_timestamp
           ? marketDateLabel(report.market_timestamp, timezoneName)
           : "待确认";
-        const question = `请用最新可验证数据复核${item.name || item.symbol}（${item.symbol}）的服务器预生成研究快照。快照生成于${readableTime(report?.generated_at)}，其中完整日线截至${completeBarDate}。请先说明本轮相较快照有哪些事实更新，再分别列出仍成立的判断、反方证据、失效条件和下一条最值得核验的证据；行情时间与财务报告期必须分开写。不要直接复述快照原文，不要给目标价或买卖建议。`;
+        const question = `请用最新可验证数据复核${item.name || item.symbol}（${item.symbol}）的已有研究报告。报告更新于${readableTime(report?.generated_at)}，其中完整日线截至${completeBarDate}。请先说明本轮相较报告有哪些事实更新，再分别列出仍成立的判断、反方证据、失效条件和下一条最值得核验的证据；行情时间与财务报告期必须分开写。不要直接复述报告原文，不要给目标价或买卖建议。`;
         await continueDeepStockConversation(question, session);
         $("chatInput").value = "";
         await sendChat(question);
@@ -121,7 +123,7 @@ function researchStatusMeta(status) {
         openReader(
           "即时复核暂未开始",
           error?.message || "股票研究空间暂时无法打开，请稍后重试。",
-          "预生成报告仍保留，可先阅读报告"
+          "已有研究报告仍保留，可以先阅读"
         );
       } finally {
         button.disabled = false;
@@ -180,18 +182,18 @@ function researchStatusMeta(status) {
         const title = document.createElement("div"); title.className = "watchlist-report-item-title"; title.textContent = `${item.name || item.symbol} · ${item.symbol}`;
         const badge = document.createElement("span"); badge.className = "watchlist-report-badge";
         const freshness = item.report_freshness || {};
-        badge.textContent = freshness.label || (report ? "已有快照" : "等待生成");
+        badge.textContent = freshness.label || (report ? "报告可读" : "准备中");
         if (freshness.status === "today") badge.classList.add("fresh");
         head.append(title, badge);
         const timezoneName = /\.(?:SS|SZ)$/i.test(item.symbol || "") ? "Asia/Shanghai" : "America/New_York";
         const meta = document.createElement("div"); meta.className = "watchlist-report-item-meta";
         meta.textContent = report
-          ? `${report.source_scope_label || "服务器公共证据快照"} · 生成 ${readableTime(report.generated_at)} · 完整日线截至 ${marketDateLabel(report.market_timestamp, timezoneName)}`
-          : "后台尚未形成这只股票的最新研究快照";
+          ? `公开证据研究底稿 · 更新 ${readableTime(report.generated_at)} · 完整日线截至 ${marketDateLabel(report.market_timestamp, timezoneName)}`
+          : "这只股票的研究报告正在准备";
         const copy = document.createElement("div"); copy.className = "watchlist-report-item-copy";
         copy.textContent = report
           ? readableResearchPreview(report.summary)
-          : (item.next_action?.next_step || item.thesis || "进入股票空间后可继续研究；报告生成前不会展示虚构摘要。");
+          : (item.next_action?.next_step || item.thesis || "可以先查看行情或进入个股研究，Agent 会结合最新资料继续分析。");
         const change = item.latest_change;
         let changeNode = null;
         if (change?.summary) {
@@ -238,12 +240,12 @@ function researchStatusMeta(status) {
         card.appendChild(actions); container.appendChild(card);
       }
       if (!items.length) {
-        container.innerHTML = '<div class="empty">添加关注后，后台研究报告与即时复核入口会出现在这里。</div>';
+        container.innerHTML = '<div class="empty">添加关注后，最近生成的研究报告会按更新时间显示在这里。</div>';
       }
       const hiddenCount = Math.max(0, activeAssets.length - items.length);
       $("watchlistReportSummary").textContent = activeAssets.length
-        ? `${availableCount}/${items.length} 只股票已有研究快照${hiddenCount ? ` · 另有 ${hiddenCount} 项可在下方列表查看` : ""}${newestGeneratedAt ? ` · 最近更新 ${readableTime(newestGeneratedAt)}` : ""}。快照用于快速阅读，点击复核会基于最新数据重新研究。`
-        : "添加关注后，系统会按可用数据生成研究快照；不会用虚构报告填充空状态。";
+        ? `${availableCount}/${items.length} 只股票已有报告${hiddenCount ? ` · 另有 ${hiddenCount} 只股票等待浏览` : ""}${newestGeneratedAt ? ` · 最近更新 ${readableTime(newestGeneratedAt)}` : ""}。Agent 会结合报告与最新数据重新分析，不会直接照搬。`
+        : "添加关注后，系统会根据可用行情和公开资料准备研究报告。";
     }
 
     async function runWatchlistAgentBrief() {
@@ -253,7 +255,7 @@ function researchStatusMeta(status) {
       button.textContent = "正在建立即时汇总…";
       try {
         startNewConversation(true, "push");
-        await sendChat("请生成我的自选股每日研究摘要。基于当前持续跟踪的关注与持仓股票，以及最新可验证行情、重要变化、正式判断、观察任务和服务器研究快照，按优先级说明今天最值得先核验什么。每只股票必须区分最新报价时间、完整日线日期与财务报告期，并给出反方证据、失效条件和下一步研究任务。预生成报告只能作为证据，不能直接复述成当前回答；不要给目标价或买卖建议。");
+        await sendChat("请汇总我正在关注和持有的股票，结合最新可验证行情、重要变化、已有研究底稿和待核验事项，按优先级告诉我今天最值得先看什么。请区分最新报价时间、完整日线日期与财务报告期，说明支持依据、反方证据和下一步需要核验什么。已有报告只能作为参考，请根据当前问题重新分析；不要给目标价或买卖建议。");
       } finally {
         button.disabled = false;
         button.textContent = original;
@@ -516,8 +518,10 @@ function researchStatusMeta(status) {
         container.appendChild(row);
       }
       if (!state.stockAssets.length) {
+        state.watchlistKlineExplorer?.destroy?.();
+        state.watchlistKlineExplorer = null;
         container.innerHTML = '<div class="empty">还没有股票研究资产。点击右上角“添加关注”，或从透明选股保存一条候选线索。</div>';
-        $("watchlistDetail").innerHTML = '<div class="empty">添加股票后可查看分时、日线和周线</div>';
+        $("watchlistDetail").innerHTML = '<div class="empty">添加股票后可查看分时、日K、周K和月K</div>';
         state.selectedWatchlistSymbol = null;
       } else if (!visibleItems.length) {
         container.innerHTML = '<div class="empty">当前关系和状态筛选下没有研究资产。</div>';
@@ -533,52 +537,14 @@ function researchStatusMeta(status) {
       renderAccountCenter();
       const coverage = data.coverage || {};
       const summary = assetsPacket?.summary || {};
-      $("watchlistSource").textContent = `共 ${summary.total ?? state.stockAssets.length} 项研究资产；持仓 ${summary.holding ?? state.stockAssets.filter(item => item.relation_type === "holding").length}、关注 ${summary.watching ?? state.stockAssets.filter(item => item.relation_type === "watching").length}、已结束 ${summary.ended ?? state.stockAssets.filter(item => item.relation_type === "ended").length}。当前跟踪行情可用 ${coverage.available || 0}/${coverage.requested || state.watchlist.length}；结束跟踪不会删除判断和历史。`;
-    }
-
-    function aggregateWeekly(points = []) {
-      const weeks = new Map();
-      for (const point of points) {
-        const date = new Date(point.timestamp);
-        if (Number.isNaN(date.getTime())) continue;
-        const day = date.getUTCDay() || 7;
-        date.setUTCDate(date.getUTCDate() - day + 1);
-        const key = date.toISOString().slice(0, 10);
-        const current = weeks.get(key);
-        const close = Number(point.close);
-        if (!Number.isFinite(close)) continue;
-        if (!current) {
-          weeks.set(key, {
-            timestamp: key,
-            open: Number(point.open ?? close),
-            high: Number(point.high ?? close),
-            low: Number(point.low ?? close),
-            close,
-            volume: Number(point.volume || 0)
-          });
-        } else {
-          current.high = Math.max(current.high, Number(point.high ?? close));
-          current.low = Math.min(current.low, Number(point.low ?? close));
-          current.close = close;
-          current.volume += Number(point.volume || 0);
-        }
-      }
-      return [...weeks.values()];
-    }
-
-    function periodMetrics(points = [], payload = {}) {
-      if (!points.length) return {};
-      const first = Number(points[0].open ?? points[0].close);
-      const last = Number(points.at(-1).close);
-      const highs = points.map(item => Number(item.high ?? item.close)).filter(Number.isFinite);
-      const lows = points.map(item => Number(item.low ?? item.close)).filter(Number.isFinite);
-      return {
-        latest: payload.latest_price ?? payload.metrics?.latest_close ?? last,
-        change: payload.pct_change ?? payload.metrics?.return_1d_pct ?? (first ? (last / first - 1) * 100 : null),
-        high: highs.length ? Math.max(...highs) : null,
-        low: lows.length ? Math.min(...lows) : null,
-        volume: points.reduce((sum, item) => sum + Number(item.volume || 0), 0)
-      };
+      const totalCount = summary.total ?? state.stockAssets.length;
+      const holdingCount = summary.holding ?? state.stockAssets.filter(item => item.relation_type === "holding").length;
+      const watchingCount = summary.watching ?? state.stockAssets.filter(item => item.relation_type === "watching").length;
+      const endedCount = summary.ended ?? state.stockAssets.filter(item => item.relation_type === "ended").length;
+      const availableCount = coverage.available || 0;
+      const requestedCount = coverage.requested || state.watchlist.length;
+      $("watchlistTableSummary").textContent = `共 ${totalCount} 只股票 · 持仓 ${holdingCount} · 关注 ${watchingCount} · 行情可用 ${availableCount}/${requestedCount}。点击任意股票，在下方查看详细行情。`;
+      $("watchlistSource").textContent = `已结束的 ${endedCount} 只股票仍保留原有判断和历史记录；重新关注后可以继续研究。`;
     }
 
     async function loadWatchlistDetail(item, timeframe = "intraday") {
@@ -589,60 +555,27 @@ function researchStatusMeta(status) {
         row.classList.toggle("active", row.dataset.symbol === item.symbol);
       });
       const detail = $("watchlistDetail");
-      detail.innerHTML = '<div class="empty">正在整理行情图表…</div>';
-      let payload;
-      let actualTimeframe = timeframe;
-      try {
-        if (timeframe === "intraday") payload = await api(`/stocks/${encodeURIComponent(item.symbol)}/intraday`);
-        else if (timeframe === "weekly") {
-          payload = await api(`/stocks/${encodeURIComponent(item.symbol)}/history?range=2y`);
-          payload = {...payload, points: aggregateWeekly(payload.points || [])};
-        } else payload = await api(`/stocks/${encodeURIComponent(item.symbol)}/history?range=6mo`);
-      } catch {
-        payload = await api(`/stocks/${encodeURIComponent(item.symbol)}/history?range=1mo`);
-        actualTimeframe = "daily";
-        state.watchlistTimeframe = "daily";
-      }
       if (state.selectedWatchlistSymbol !== item.symbol) return;
-      const points = payload.points || [];
-      const metrics = periodMetrics(points, payload);
+      state.watchlistKlineExplorer?.destroy?.();
+      state.watchlistKlineExplorer = null;
       detail.innerHTML = "";
-      const head = document.createElement("div"); head.className = "stock-detail-head";
-      const identity = document.createElement("div");
-      const name = document.createElement("div"); name.className = "stock-detail-name"; name.textContent = item.name || payload.display_name || item.symbol;
-      const symbol = document.createElement("div"); symbol.className = "stock-detail-symbol"; symbol.textContent = `${item.symbol} · 更新于 ${readableTime(payload.market_timestamp || points.at(-1)?.timestamp)}`;
-      identity.append(name, symbol);
-      const quote = document.createElement("div");
-      const price = document.createElement("div"); price.className = "stock-detail-price"; price.textContent = numeric(metrics.latest);
-      const change = document.createElement("div"); change.className = `stock-detail-change ${tone(metrics.change)}`; change.textContent = pct(metrics.change);
-      quote.append(price, change); head.append(identity, quote);
-
-      const tabs = document.createElement("div"); tabs.className = "chart-tabs";
-      for (const [key, label] of [["intraday", "分时"], ["daily", "日线"], ["weekly", "周线"]]) {
-        const button = document.createElement("button"); button.type = "button"; button.className = `chart-tab${actualTimeframe === key ? " active" : ""}`; button.textContent = label;
-        button.addEventListener("click", () => { if (state.watchlistTimeframe !== key) void loadWatchlistDetail(item, key); });
-        tabs.appendChild(button);
-      }
-      const canvas = document.createElement("canvas"); canvas.className = "stock-detail-chart"; canvas.setAttribute("aria-label", `${item.name || item.symbol}${actualTimeframe}行情`);
-      const cards = document.createElement("div"); cards.className = "stock-detail-metrics";
-      const metricItems = [
-        ["区间最高", numeric(metrics.high)], ["区间最低", numeric(metrics.low)],
-        ["区间成交量", compactNumber(metrics.volume)], ["趋势状态", payload.metrics?.trend_state || payload.metrics?.technical_state || "按图表观察"]
-      ];
-      for (const [label, value] of metricItems) {
-        const card = document.createElement("div"); card.className = "stock-detail-metric";
-        const labelNode = document.createElement("span"); labelNode.textContent = label;
-        const valueNode = document.createElement("strong"); valueNode.textContent = value;
-        card.append(labelNode, valueNode); cards.appendChild(card);
-      }
+      const chartHost = document.createElement("div"); chartHost.className = "watchlist-kline-host";
       const actions = document.createElement("div"); actions.className = "stock-detail-actions";
       const deep = document.createElement("button"); deep.type = "button"; deep.className = "btn primary"; deep.textContent = "进入股票研究空间"; deep.addEventListener("click", () => { void openDeepStockSymbol(item.symbol); });
       const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn"; ask.textContent = "向 Agent 提问"; ask.addEventListener("click", () => {
         activateWorkspace("agent"); $("chatInput").value = `分析${item.name || item.symbol}最近的行情、基本面变化和需要复核的风险。`; $("chatInput").focus();
       });
       actions.append(deep, ask);
-      detail.append(head, tabs, canvas, cards, actions);
-      requestAnimationFrame(() => drawCandles(canvas, points));
+      detail.append(chartHost, actions);
+      state.watchlistKlineExplorer = window.QSKlineExplorer?.createExplorer(chartHost, {
+        symbol: item.symbol,
+        name: item.name || item.symbol,
+        request: api,
+        initialPeriod: timeframe,
+        initialRange: "6mo",
+        storageKey: `watchlist:${item.symbol}`,
+        onSelectionChange(selection) { state.watchlistTimeframe = selection.period; }
+      }) || null;
     }
 
     async function deleteWatchlistItem(item) {
@@ -664,32 +597,5 @@ function researchStatusMeta(status) {
 
     function drawCandles(canvas, points) {
       if (window.QSCharts?.drawCandles) return window.QSCharts.drawCandles(canvas, points);
-      if (!points || !points.length) return;
-      const rect = canvas.getBoundingClientRect();
-      const ratio = window.devicePixelRatio || 1;
-      const width = Math.max(180, rect.width);
-      const height = Math.max(92, Math.round(rect.height || 92));
-      canvas.width = width * ratio;
-      canvas.height = height * ratio;
-      const ctx = canvas.getContext("2d");
-      ctx.scale(ratio, ratio);
-      ctx.clearRect(0, 0, width, height);
-      const sample = points.length > 180 ? points.filter((_, index) => index % Math.ceil(points.length / 180) === 0) : points;
-      const values = sample.flatMap(point => [point.high, point.low, point.open, point.close]).filter(value => Number.isFinite(Number(value))).map(Number);
-      if (!values.length) return;
-      const min = Math.min(...values); const max = Math.max(...values); const span = max - min || 1;
-      const top = 7; const bottom = height - 8; const plotHeight = bottom - top;
-      ctx.strokeStyle = "rgba(82,105,139,.12)"; ctx.lineWidth = 1;
-      for (let grid = 1; grid < 3; grid++) { const y = top + plotHeight * grid / 3; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(width,y); ctx.stroke(); }
-      const slot = width / sample.length; const bodyWidth = Math.max(1, Math.min(4, slot * .62));
-      const y = value => top + (max - Number(value)) / span * plotHeight;
-      sample.forEach((point, index) => {
-        const open = Number(point.open ?? point.close); const close = Number(point.close);
-        const high = Number(point.high ?? Math.max(open, close)); const low = Number(point.low ?? Math.min(open, close));
-        const x = slot * index + slot / 2; const rising = close >= open;
-        ctx.strokeStyle = rising ? "#ff7185" : "#55dbb6"; ctx.fillStyle = ctx.strokeStyle;
-        ctx.beginPath(); ctx.moveTo(x, y(high)); ctx.lineTo(x, y(low)); ctx.stroke();
-        const bodyTop = Math.min(y(open), y(close)); const bodyHeight = Math.max(1, Math.abs(y(open) - y(close)));
-        ctx.fillRect(x - bodyWidth / 2, bodyTop, bodyWidth, bodyHeight);
-      });
+      return null;
     }

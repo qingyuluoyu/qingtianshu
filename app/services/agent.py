@@ -32,6 +32,7 @@ from app.services.agent_evidence_compaction import (
     prompt_local_time,
     prompt_market_date,
 )
+from app.services.agent_financial_advisor import normalize_financial_advisor_answer
 from app.services.agent_prompt_contracts import append_prompt_contracts
 from app.services.agent_preview import render_preview
 from app.services.agent_output_guard import AgentOutputGuard
@@ -46,6 +47,7 @@ from app.services.agent_output_guard_market import (
 from app.services.agent_output_guard_stock import (
     _STOCK_OBSERVATION_WINDOW_LABEL,
     _LI_ZONG_RULE_BOTTLENECK_LABEL,
+    _STOCK_COMPONENT_SOURCE_BOUNDARY_LABEL,
     _STOCK_CURRENT_QUOTE_REQUIRED_LABEL,
     _STOCK_CONTRIBUTION_REQUIRED_LABEL,
     _STOCK_INDUSTRY_COUNTS_REQUIRED_LABEL,
@@ -221,6 +223,9 @@ class AgentService:
                 "image_attached": image_path is not None,
                 "conversation_id": conversation_id,
                 "research_plan": evidence.get("research_plan"),
+                "research_evidence_contract": evidence.get(
+                    "research_evidence_contract"
+                ),
             },
             workspace_path=workspace,
         )
@@ -251,11 +256,17 @@ class AgentService:
             extra_skills.insert(0, "us-regulatory-evidence")
         if image_path and skill_name != "visual-research":
             extra_skills.insert(0, "visual-research")
+        memories = self.database.list_memories(user["id"], status="confirmed")
         skill_names = list(
-            dict.fromkeys(["user-memory-context", skill_name, *extra_skills])
+            dict.fromkeys(
+                [
+                    *(["user-memory-context"] if memories else []),
+                    skill_name,
+                    *extra_skills,
+                ]
+            )
         )
         skill_text = "\n\n".join(self._load_skill(name) for name in skill_names)
-        memories = self.database.list_memories(user["id"], status="confirmed")
         prompt_evidence = self._evidence_for_prompt(evidence)
         prompt_knowledge_context = self._evidence_for_prompt(knowledge_context or {})
         prompt_history = conversation_history or []
@@ -372,6 +383,7 @@ class AgentService:
                 )
                 guard_started = time.perf_counter()
                 answer = self._clean_user_facing_model_language(answer)
+                answer = normalize_financial_advisor_answer(answer, prompt_evidence)
                 answer = _normalize_current_quote_semantics(
                     answer,
                     prompt_evidence,
@@ -751,8 +763,14 @@ class AgentService:
         ]
         return f"""# 任务
 
-你是清数智算金融研究 Agent。严格执行下方 Skill，并只使用证据包中的市场数字。
-不调用工具，不补写缺失数据，不给出确定性收益承诺。用简洁中文回答。
+你是清数智算的金融顾问、研究助手和教育者。你的首要任务是先解决用户当前问题，帮助用户理解
+金融产品、证据和风险，而不是展示内部研究流程或堆砌固定栏目。严格执行下方 Skill，并只使用
+证据包中的市场数字。不调用工具，不补写缺失数据，不给出确定性收益承诺。用清楚、自然的中文回答。
+面向新手或中老年用户时，用一句短解释说明必要术语、产品如何赚钱以及可能怎样亏钱；面向已经
+明确使用专业术语的用户则保持简洁，不重复基础课。用户询问“适不适合我、该怎么配置”时，
+只能使用本轮明确说明和已确认记忆中的资金期限、流动性、负债、已有资产与回撤承受能力；信息不足
+时给条件化选择逻辑，并最多追问两个真正会改变结论的问题。不得只凭年龄、资金金额或历史收益替
+用户做决定，也不得把金融教育包装成买卖指令。
 你只负责返回本轮研究文本：不得写入或修改文件、数据库、记忆、任务或用户状态，
 也不得声称已经完成这些操作。用户要求“保存、创建、写入、记住”时，只能整理出待确认的内容，
 并明确说明需由用户在界面中确认后才会生效；真正的写入由宿主系统处理。
@@ -842,7 +860,9 @@ class AgentService:
             trusted_context=trusted_context,
             stream_callback=stream_callback,
             callbacks=GuardedStreamCallbacks(
-                clean_user_facing=self._clean_user_facing_model_language,
+                clean_user_facing=lambda text: normalize_financial_advisor_answer(
+                    self._clean_user_facing_model_language(text), evidence
+                ),
                 validate_output=self._validate_model_output,
                 partial_has_blocker=self._stream_partial_guard_has_blocker,
                 waits_for_required_context=(
@@ -867,7 +887,11 @@ class AgentService:
         semantic_conflicts = [
             item
             for item in (guard.get("semantic_conflicts") or [])
-            if item not in _STREAM_DEFERRED_COMPLETENESS_CONFLICTS
+            if item
+            not in (
+                _STREAM_DEFERRED_COMPLETENESS_CONFLICTS
+                | {_STOCK_COMPONENT_SOURCE_BOUNDARY_LABEL}
+            )
         ]
         if semantic_conflicts:
             return True

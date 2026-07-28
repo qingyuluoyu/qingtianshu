@@ -98,7 +98,7 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
       const conversation = document.createElement("article"); conversation.className = "stock-history-card";
       const conversationTitle = document.createElement("div"); conversationTitle.className = "stock-history-title"; conversationTitle.textContent = session ? "绑定的研究对话" : "尚未建立绑定对话";
       const conversationCopy = document.createElement("div"); conversationCopy.className = "stock-history-copy";
-      conversationCopy.textContent = session ? `${session.conversation?.message_count || 0} 条消息，七阶段问题会进入同一历史会话，方便连续追问和复核。` : "建立研究空间后，AI研究会绑定一个可长期保存的历史对话。";
+      conversationCopy.textContent = session ? `${session.conversation?.message_count || 0} 条消息，七阶段问题会进入同一历史会话，方便连续追问和复核。` : "建立研究空间后，AI投研对话会绑定一个可长期保存的历史对话。";
       conversation.append(conversationTitle, conversationCopy);
       if (session) {
         const actions = document.createElement("div"); actions.className = "stock-workspace-actions";
@@ -295,7 +295,7 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
       const pendingActions = [...(workspace?.pending_actions || actionItem?.actions || [])].sort((a, b) => {
         const rank = {triggered: 3, pending_data: 2, watching: 1};
         return (rank[b.status] || 0) - (rank[a.status] || 0);
-      }).slice(0, 3);
+      });
       const normalizeResearchItems = items => [...new Set((items || []).map(structuredItemText).filter(Boolean))];
       const counterevidenceText = item => {
         if (!item) return "";
@@ -339,13 +339,6 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
         ...(earnings?.review_points || []).slice(0, 3)
       ]);
       const invalidationItems = normalizeResearchItems((claimLedger?.invalidation_conditions || workspace?.invalidation_conditions || []).map(invalidationConditionText));
-      const nextEvidenceItems = normalizeResearchItems((workspace?.next_evidence || []).map(item => item.description));
-      if (!nextEvidenceItems.length) {
-        nextEvidenceItems.push(...normalizeResearchItems([
-          ...pendingActions.map(item => item.next_step),
-          session?.next_question
-        ]));
-      }
       const moduleAvailability = [
         Boolean(points.length), Boolean(fundamentals), earnings?.status === "available",
         drivers?.status === "available", Boolean(shareholders), Boolean(expectations),
@@ -360,7 +353,7 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
         const copy = document.createElement("div"); copy.className = "stock-load-alert-copy";
         const title = document.createElement("div"); title.className = "stock-load-alert-title"; title.textContent = "股票研究空间未完整加载";
         const detail = document.createElement("div"); detail.className = "stock-load-alert-detail";
-        detail.textContent = "当前判断、关系、任务和证据地图暂未返回。下方只展示本次已经取得的行情与分析模块，不会把缺失内容显示成“没有数据”。";
+        detail.textContent = "当前判断、关系、任务和证据资料暂未返回。下方只展示本次已经取得的行情与分析模块，不会把缺失内容显示成“没有数据”。";
         const meta = document.createElement("div"); meta.className = "stock-load-alert-meta";
         meta.textContent = "重新加载不会清空已保存的判断、任务、持仓或历史对话。";
         copy.append(title, detail, meta);
@@ -413,74 +406,19 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
 
       const primaryGrid = document.createElement("div"); primaryGrid.className = "stock-primary-grid";
       const chartCard = document.createElement("section"); chartCard.className = "deep-chart-card stock-primary-chart";
-      const chartHead = document.createElement("div"); chartHead.className = "stock-chart-head";
-      const chartHeadCopy = document.createElement("div"); chartHeadCopy.className = "stock-chart-head-copy";
-      const chartTitle = document.createElement("div"); chartTitle.className = "stock-chart-title"; chartTitle.textContent = "股价走势";
-      const chartMeta = document.createElement("div"); chartMeta.className = "stock-chart-meta";
-      chartMeta.id = `stockChartMeta-${symbol.replace(/[^A-Za-z0-9_-]/g, "-")}`;
-      chartMeta.textContent = points.length
-        ? `数据至 ${marketDateLabel(history.market_timestamp || latest.timestamp, history?.timezone || "Asia/Shanghai")} · 可拖拽查看历史，滚轮缩放`
-        : "完整日线正在同步";
-      chartHeadCopy.append(chartTitle, chartMeta);
-      const chartPeriods = document.createElement("div"); chartPeriods.className = "stock-chart-periods"; chartPeriods.setAttribute("aria-label", "K线区间");
-      const canvas = document.createElement("canvas"); canvas.className = "deep-chart-canvas";
-      canvas.setAttribute("aria-label", `${name}日K线。左右方向键查看历史，加减键缩放，Home键或双击复位。`);
-      canvas.setAttribute("aria-describedby", chartMeta.id);
-      const periodOptions = [["3月", 66], ["6月", 132], ["1年", null]];
-      const periodButtons = [];
-      let currentPeriodLabel = "1年";
-      let currentPeriodLimit = null;
-      let chartController = null;
-      const chartAsOf = marketDateLabel(history.market_timestamp || latest.timestamp, history?.timezone || "Asia/Shanghai");
-      const updateChartMeta = viewport => {
-        const expected = currentPeriodLimit === null ? points.length : Math.min(currentPeriodLimit, points.length);
-        if (viewport && viewport.visibleBars === points.length && !viewport.historical) {
-          currentPeriodLabel = "1年";
-          currentPeriodLimit = null;
-          periodButtons.forEach(item => item.classList.toggle("active", item.dataset.periodLimit === "all"));
-        } else if (viewport && viewport.visibleBars !== expected) {
-          currentPeriodLabel = "自定义区间";
-          periodButtons.forEach(item => item.classList.remove("active"));
-        }
-        const countLabel = viewport?.visibleBars ? `显示 ${viewport.visibleBars} 根` : "";
-        const historyLabel = viewport?.historical ? "历史视图，双击复位" : "最新区间";
-        chartMeta.textContent = points.length
-          ? [`数据至 ${chartAsOf}`, currentPeriodLabel, countLabel, historyLabel, "拖拽平移 · 滚轮缩放"].filter(Boolean).join(" · ")
-          : "完整日线正在同步";
-      };
-      periodOptions.forEach(([label, limit]) => {
-        const button = document.createElement("button"); button.type = "button"; button.className = `stock-chart-period${limit === null ? " active" : ""}`; button.textContent = label;
-        button.dataset.periodLimit = limit === null ? "all" : String(limit);
-        button.addEventListener("click", () => {
-          periodButtons.forEach(item => item.classList.remove("active")); button.classList.add("active");
-          currentPeriodLabel = label;
-          currentPeriodLimit = limit;
-          chartController?.setVisibleBars(limit);
-        });
-        periodButtons.push(button); chartPeriods.appendChild(button);
+      const chartHost = document.createElement("div"); chartHost.className = "stock-space-kline-host"; chartCard.appendChild(chartHost);
+      requestAnimationFrame(() => {
+        if (!chartHost.isConnected || state.deepStockOverviewSymbol !== symbol) return;
+        state.deepStockKlineController?.destroy?.();
+        state.deepStockKlineController = window.QSKlineExplorer?.createExplorer(chartHost, {
+          symbol,
+          name,
+          request: api,
+          initialPeriod: "daily",
+          initialRange: "1y",
+          storageKey: `stock-space:${symbol}`
+        }) || null;
       });
-      chartHead.append(chartHeadCopy, chartPeriods); chartCard.append(chartHead, canvas);
-      if (points.length) {
-        requestAnimationFrame(() => {
-          if (!canvas.isConnected || state.deepStockOverviewSymbol !== symbol) return;
-          if (!window.QSCharts?.createInteractiveKline) {
-            drawCandles(canvas, points);
-            return;
-          }
-          state.deepStockKlineController?.destroy?.();
-          chartController = window.QSCharts.createInteractiveKline(canvas, points, {
-            visibleBars: points.length,
-            storageKey: symbol,
-            showMovingAverages: true,
-            showVolume: true,
-            onStateChange: updateChartMeta
-          });
-          state.deepStockKlineController = chartController;
-        });
-      }
-      else {
-        const emptyChart = document.createElement("div"); emptyChart.className = "empty"; emptyChart.textContent = "日线数据正在同步"; chartCard.replaceChild(emptyChart, canvas);
-      }
       const chartMetrics = document.createElement("div"); chartMetrics.className = "stock-chart-metrics";
       for (const [label, value] of [
         ["趋势结构", historyMetrics.trend_state || "待确认"],
@@ -495,13 +433,13 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
       }
       chartCard.appendChild(chartMetrics);
 
-      const digest = document.createElement("aside"); digest.className = "stock-research-digest"; digest.setAttribute("aria-label", "当前研究摘要");
+      const digest = document.createElement("aside"); digest.className = "stock-research-digest"; digest.setAttribute("aria-label", "当前研究重点");
       const digestHead = document.createElement("div"); digestHead.className = "stock-digest-head";
-      const digestTitle = document.createElement("div"); digestTitle.className = "stock-digest-title"; digestTitle.textContent = "当前研究摘要";
+      const digestTitle = document.createElement("div"); digestTitle.className = "stock-digest-title"; digestTitle.textContent = "当前研究重点";
       const digestPriority = document.createElement("span"); digestPriority.className = "stock-digest-priority"; digestPriority.textContent = priorityLabel;
       digestHead.append(digestTitle, digestPriority);
       const digestSummary = document.createElement("div"); digestSummary.className = "stock-digest-summary";
-      const digestSummaryLabel = document.createElement("span"); digestSummaryLabel.textContent = "当前最需要复核";
+      const digestSummaryLabel = document.createElement("span"); digestSummaryLabel.textContent = "先核验这件事";
       const digestSummaryCopy = document.createElement("strong");
       digestSummaryCopy.textContent = claimLedger?.strongest_counterevidence?.claim
         || (earnings?.contradictions || [])[0]
@@ -618,8 +556,8 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
         const pill = document.createElement("span"); pill.className = "stock-digest-status-pill"; pill.textContent = text; digestStatusRow.appendChild(pill);
       }
       const digestActions = document.createElement("div"); digestActions.className = "stock-digest-actions";
-      const viewEvidence = document.createElement("button"); viewEvidence.type = "button"; viewEvidence.className = "btn"; viewEvidence.textContent = "查看证据"; viewEvidence.addEventListener("click", () => activateStockSpaceTab("evidence"));
-      const digestAgent = document.createElement("button"); digestAgent.type = "button"; digestAgent.className = "btn primary"; digestAgent.textContent = "与 Agent 研究"; digestAgent.addEventListener("click", () => { void continueDeepStockConversation(pendingActions[0]?.next_step || session?.next_question || `请基于当前证据复核${name}的研究判断。`); });
+      const viewEvidence = document.createElement("button"); viewEvidence.type = "button"; viewEvidence.className = "btn"; viewEvidence.textContent = "查看完整依据"; viewEvidence.addEventListener("click", () => activateStockSpaceTab("evidence"));
+      const digestAgent = document.createElement("button"); digestAgent.type = "button"; digestAgent.className = "btn primary"; digestAgent.textContent = "继续问 Agent"; digestAgent.addEventListener("click", () => { void continueDeepStockConversation(pendingActions[0]?.next_step || session?.next_question || `请基于当前证据复核${name}的研究判断。`); });
       digestActions.append(viewEvidence, digestAgent);
       digest.append(digestHead, digestSummary, dimensions, digestStatusRow, digestActions);
       primaryGrid.append(chartCard, digest); shell.appendChild(primaryGrid);
@@ -645,7 +583,7 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
         : "还没有记录为什么关注这只股票、主要观察什么以及何时重新判断。补充后，Agent 会把它作为最高优先级私人上下文。");
       judgmentMain.append(judgmentLabel, thesisCopy);
       const systemObservation = document.createElement("aside"); systemObservation.className = "stock-system-observation";
-      const systemTitle = document.createElement("strong"); systemTitle.textContent = "系统观察（基于当前确定性数据）";
+      const systemTitle = document.createElement("strong"); systemTitle.textContent = "最新数据提示";
       const observationList = document.createElement("ul"); observationList.className = "stock-system-observation-list";
       const observations = [
         ["价格", [historyMetrics.trend_state ? `结构为“${historyMetrics.trend_state}”` : "结构待确认", historyMetrics.return_20d_pct != null ? `近20日 ${pct(historyMetrics.return_20d_pct)}` : ""].filter(Boolean).join("；")],
@@ -725,45 +663,30 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
         textarea.focus();
       });
       thesisActions.className = "stock-workspace-head-actions";
-      thesisActions.append(thesisMeta, editThesis);
+      const openThesisEvidence = document.createElement("button"); openThesisEvidence.type = "button"; openThesisEvidence.className = "btn"; openThesisEvidence.textContent = "查看完整证据"; openThesisEvidence.addEventListener("click", () => activateStockSpaceTab("evidence"));
+      thesisActions.append(thesisMeta, openThesisEvidence, editThesis);
       thesisHead.replaceChildren(thesisTitle, thesisActions);
       thesisCard.append(thesisHead, judgmentLayout);
 
-      const researchMap = document.createElement("section"); researchMap.className = "stock-research-map";
-      const researchMapHead = document.createElement("div"); researchMapHead.className = "stock-research-map-head";
-      const researchMapIdentity = document.createElement("div");
-      const researchMapTitle = document.createElement("div"); researchMapTitle.className = "stock-workspace-card-title"; researchMapTitle.textContent = "研究证据地图";
-      const researchMapCopy = document.createElement("div"); researchMapCopy.className = "stock-research-map-copy"; researchMapCopy.textContent = "把当前判断拆成支持、反证、风险与失效、信息缺口和下一证据；证据覆盖不等于投资评分。";
-      researchMapIdentity.append(researchMapTitle, researchMapCopy);
-      const researchMapActions = document.createElement("div"); researchMapActions.className = "stock-research-map-actions";
-      const openAllEvidence = document.createElement("button"); openAllEvidence.type = "button"; openAllEvidence.className = "btn"; openAllEvidence.textContent = "查看完整证据"; openAllEvidence.addEventListener("click", () => activateStockSpaceTab("evidence"));
-      const verifyNextEvidence = document.createElement("button"); verifyNextEvidence.type = "button"; verifyNextEvidence.className = "btn primary"; verifyNextEvidence.textContent = "让 Agent 核验下一证据"; verifyNextEvidence.addEventListener("click", () => { void continueDeepStockConversation(nextEvidenceItems[0] || session?.next_question || `请基于当前资料说明${name}下一条最值得核验的证据。`); });
-      researchMapActions.append(openAllEvidence, verifyNextEvidence); researchMapHead.append(researchMapIdentity, researchMapActions);
-      const researchMapGrid = document.createElement("div"); researchMapGrid.className = "stock-research-map-grid";
-      appendDeepBoardCard(researchMapGrid, {kind: "confirmed", title: "支持证据", items: supportedEvidenceItems, previewLimit: 2});
-      appendDeepBoardCard(researchMapGrid, {kind: "counter", title: "反方证据", items: counterEvidenceItems, previewLimit: 2});
-      appendDeepBoardCard(researchMapGrid, {kind: "risk", title: "风险与失效条件", items: normalizeResearchItems([...riskEvidenceItems, ...invalidationItems]), previewLimit: 2});
-      appendDeepBoardCard(researchMapGrid, {kind: "gaps", title: "信息缺口", items: informationGapItems, previewLimit: 2});
-      appendDeepBoardCard(researchMapGrid, {kind: "next", title: "下一证据", items: nextEvidenceItems, previewLimit: 2});
-      researchMap.append(researchMapHead, researchMapGrid);
-
       const changesCard = document.createElement("section"); changesCard.className = "stock-workspace-card changes";
       const changesHead = document.createElement("div"); changesHead.className = "stock-workspace-card-head";
-      const changesTitle = document.createElement("div"); changesTitle.className = "stock-workspace-card-title"; changesTitle.textContent = "最新重要变化";
+      const changesTitle = document.createElement("div"); changesTitle.className = "stock-workspace-card-title"; changesTitle.textContent = "最近发生了什么";
       const changesMeta = document.createElement("span"); changesMeta.className = "stock-workspace-card-meta"; changesMeta.textContent = `${changeItems.length} 项`;
       changesHead.append(changesTitle, changesMeta);
       const changesList = document.createElement("div"); changesList.className = "stock-workspace-list";
-      if (changeItems.length) changeItems.forEach(item => appendStockWorkspaceItem(changesList, item.title, item.meta, {body: item.detail, meta: item.meta, url: item.url, linkId: item.linkId}));
+      if (changeItems.length) changeItems.slice(0, 2).forEach(item => appendStockWorkspaceItem(changesList, item.title, item.meta, {body: item.detail, meta: item.meta, url: item.url, linkId: item.linkId}));
       else appendStockWorkspaceItem(changesList, "当前没有需要优先处理的新变化", "继续按当前判断观察；新增公告和事件会进入这里。 ");
-      changesCard.append(changesHead, changesList);
+      const changeActions = document.createElement("div"); changeActions.className = "stock-workspace-actions";
+      const openChanges = document.createElement("button"); openChanges.type = "button"; openChanges.className = "btn"; openChanges.textContent = changeItems.length > 2 ? `查看全部 ${changeItems.length} 项变化` : "查看数据与事件"; openChanges.addEventListener("click", () => activateStockSpaceTab("evidence"));
+      changeActions.appendChild(openChanges); changesCard.append(changesHead, changesList, changeActions);
 
       const tasksCard = document.createElement("section"); tasksCard.className = "stock-workspace-card tasks";
       const tasksHead = document.createElement("div"); tasksHead.className = "stock-workspace-card-head";
-      const tasksTitle = document.createElement("div"); tasksTitle.className = "stock-workspace-card-title"; tasksTitle.textContent = "今日待处理";
+      const tasksTitle = document.createElement("div"); tasksTitle.className = "stock-workspace-card-title"; tasksTitle.textContent = "下一步研究";
       const tasksMeta = document.createElement("span"); tasksMeta.className = "stock-workspace-card-meta"; tasksMeta.textContent = pendingActions.length ? `${pendingActions.length} 项` : session ? "1 项" : "未启动";
       tasksHead.append(tasksTitle, tasksMeta);
       const taskList = document.createElement("div"); taskList.className = "stock-workspace-list";
-      if (pendingActions.length) pendingActions.forEach(action => appendStockWorkspaceItem(
+      if (pendingActions.length) pendingActions.slice(0, 2).forEach(action => appendStockWorkspaceItem(
         taskList,
         action.title || "继续研究",
         action.next_step || action.current_evidence || "继续核验相关证据。",
@@ -771,10 +694,10 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
       ));
       else appendStockWorkspaceItem(taskList, session?.current_stage?.label || "开始 AI 深度研究", session?.next_question || "启动后会持续保存研究阶段、未决问题和下一条需要核验的证据。 ");
       const taskActions = document.createElement("div"); taskActions.className = "stock-workspace-actions";
-      const openTasks = document.createElement("button"); openTasks.type = "button"; openTasks.className = "btn"; openTasks.textContent = "查看全部任务"; openTasks.addEventListener("click", () => activateStockSpaceTab("tasks"));
-      const askAgent = document.createElement("button"); askAgent.type = "button"; askAgent.className = "btn primary"; askAgent.textContent = "与 Agent 研究"; askAgent.addEventListener("click", () => { void continueDeepStockConversation(pendingActions[0]?.next_step || session?.next_question); });
+      const openTasks = document.createElement("button"); openTasks.type = "button"; openTasks.className = "btn"; openTasks.textContent = "管理全部任务"; openTasks.addEventListener("click", () => activateStockSpaceTab("tasks"));
+      const askAgent = document.createElement("button"); askAgent.type = "button"; askAgent.className = "btn primary"; askAgent.textContent = "请 Agent 继续核验"; askAgent.addEventListener("click", () => { void continueDeepStockConversation(pendingActions[0]?.next_step || session?.next_question); });
       taskActions.append(openTasks, askAgent); tasksCard.append(tasksHead, taskList, taskActions);
-      workspaceSummary.append(thesisCard, researchMap, changesCard, tasksCard); shell.appendChild(workspaceSummary);
+      workspaceSummary.append(thesisCard, changesCard, tasksCard); shell.appendChild(workspaceSummary);
 
       const evidenceContainer = $("deepStockEvidence"); evidenceContainer.innerHTML = "";
       const evidenceHead = document.createElement("div"); evidenceHead.className = "stock-space-section-head";

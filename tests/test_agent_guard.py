@@ -242,6 +242,23 @@ def test_numeric_guard_accepts_evidence_rounding_and_rejects_new_targets():
     assert invalid["prohibited_patterns"]
 
 
+def test_numeric_guard_ignores_markdown_bold_list_ordinals() -> None:
+    answer = (
+        "跟你有直接关系的三点：\n\n"
+        "**1. 购买渠道**\n场外基金通过销售渠道申赎。\n\n"
+        "**2. 价格形成**\n场内ETF在交易时段有连续成交报价。\n\n"
+        "- **3. 交易规则**\n到账与交收取决于具体产品和渠道。"
+    )
+
+    guard = AgentService._validate_model_output(
+        answer,
+        {"type": "general_research"},
+    )
+
+    assert guard["passed"] is True
+    assert guard["unsupported_numbers"] == []
+
+
 def test_stock_research_number_precision_is_limited_to_two_decimals():
     answer = (
         "2026-04-25 中兴通讯 000063.SZ：营收同比 +6.126696%，"
@@ -1316,6 +1333,40 @@ def test_stock_cause_prompt_limits_headlines_without_changing_full_ui_evidence()
     assert len(evidence["a_share_information"]["news"]) == 5
 
 
+def test_stock_cause_prompt_excludes_low_signal_financing_and_record_date_headlines():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯今天为什么跌？",
+        "stock_market_context": {
+            "analysis_target": {"market_date": "2026-07-28"}
+        },
+        "a_share_information": {
+            "news": [
+                {
+                    "title": "中兴通讯7月27日获融资买入5.41亿元，融资余额处于高位",
+                    "published_at": "2026-07-28T09:06:00+08:00",
+                    "source": "媒体甲",
+                },
+                {
+                    "title": "12股今日股权登记，中兴通讯分红力度居前",
+                    "published_at": "2026-07-28T08:05:00+08:00",
+                    "source": "媒体甲",
+                },
+            ]
+        },
+    }
+
+    compact = AgentService._compact_stock_research_evidence(evidence)
+    packet = compact["price_move_event_evidence"]
+
+    assert packet["same_date_media_clues"] == []
+    assert packet["same_date_media_source_count"] == 0
+    assert packet["same_date_low_signal_background_count"] == 2
+    assert packet["coverage_status"] == "same_date_low_signal_background_only"
+    assert len(evidence["a_share_information"]["news"]) == 2
+
+
 def test_stock_cause_preview_uses_aligned_events_and_omits_unasked_bulk():
     evidence = {
         "type": "stock_research",
@@ -1912,6 +1963,37 @@ def test_guard_repair_renumbers_lists_after_dropping_unsupported_lines():
     assert "2. 继续保留10" in repaired_answer
     assert "3. 继续保留10" not in repaired_answer
     assert repaired_guard["passed"] is True
+
+
+def test_general_research_guard_keeps_common_named_index_label():
+    guard = AgentService._validate_model_output(
+        "可以比较宽基指数ETF，例如沪深 300 等产品，但不能据此承诺收益。",
+        {
+            "type": "general_research",
+            "financial_advisor_context": {
+                "status": "ready_for_conditional_guidance"
+            },
+        },
+    )
+
+    assert guard["passed"] is True
+    assert guard["unsupported_numbers"] == []
+
+
+def test_general_research_guard_keeps_explicit_no_guarantee_boundary():
+    safe = AgentService._validate_model_output(
+        "这些产品都不是存款，净值会波动，不能保证收益，也不建议买入任何具体产品。",
+        {"type": "general_research"},
+    )
+    unsafe = AgentService._validate_model_output(
+        "这类产品保证收益，建议买入。",
+        {"type": "general_research"},
+    )
+
+    assert safe["passed"] is True
+    assert safe["prohibited_patterns"] == []
+    assert unsafe["passed"] is False
+    assert unsafe["prohibited_patterns"]
 
 
 def test_market_sector_prompt_keeps_breadth_evidence_but_drops_unrelated_metrics():
@@ -4199,6 +4281,29 @@ def test_current_quote_semantics_preserves_intraday_boundary_language():
     assert guard["passed"] is True
 
 
+def test_current_quote_close_guard_accepts_comparison_with_previous_close():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯今天为什么跌？",
+        "metrics": {"latest_close": 35.25, "return_1d_pct": 0.71},
+        "provenance": {"market_timestamp": "2026-07-27T01:30:00+00:00"},
+        "current_quote": {
+            "price": 34.2,
+            "previous_close": 35.25,
+            "pct_change": -2.98,
+            "market_timestamp": "2026-07-28T12:57:00+08:00",
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "最新报价34.20元，比上一交易日收盘价35.25元下跌约2.98%，今天还没收盘。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
 def test_post_close_quote_semantics_remove_false_intraday_boundary():
     evidence = {
         "type": "stock_research",
@@ -4276,6 +4381,8 @@ def test_history_close_mislabeled_as_latest_quote_is_normalized():
         "A股已收盘，当前为2026年7月22日收盘后最新报价。"
         "中兴通讯最新报价37.50元，较前一交易日最新报价34.88元上涨7.51%。"
         "最新完整日线截止7月21日，最新报价34.88元。"
+        "盘中报价下跌2.98%，相对于此前最新报价34.88元，这是盘中价格，还没收盘。"
+        "盘中报价下跌2.98%，比此前最新报价34.88元走低。"
     )
 
     normalized = agent_module._normalize_history_price_mislabeled_as_current_quote(
@@ -4287,8 +4394,76 @@ def test_history_close_mislabeled_as_latest_quote_is_normalized():
 
     assert "收盘价34.88元" in normalized
     assert "最新报价34.88元" not in normalized
+    assert "相对于上一交易日收盘价34.88元" in normalized
+    assert "比上一交易日收盘价34.88元" in normalized
+    assert "还没收盘" in normalized
     assert "A股已收盘" in normalized
     assert session_guard["passed"] is True
+
+
+def test_numeric_guard_accepts_rounded_whole_market_count_with_over_wording():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "stock_market_context": {
+            "market_breadth": {
+                "same_date_as_target": True,
+                "breadth": {"total": 5532, "advancers": 2835, "decliners": 2521},
+            }
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "今天上午超过5500只A股有涨跌数据，上涨家数略多于下跌家数。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
+def test_numeric_guard_accepts_chinese_plus_rounded_whole_market_count():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "stock_market_context": {
+            "market_breadth": {
+                "same_date_as_target": True,
+                "breadth": {"total": 5532, "advancers": 2835, "decliners": 2521},
+            }
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "今天全市场5000多只股票里，上涨2835家、下跌2521家。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
+def test_numeric_guard_accepts_rounded_whole_market_breadth_shares():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "stock_market_context": {
+            "market_breadth": {
+                "same_date_as_target": True,
+                "breadth": {
+                    "total": 5532,
+                    "advancers": 2835,
+                    "decliners": 2521,
+                    "unchanged": 176,
+                },
+            }
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "今天上涨的股票比下跌的略多（约51%涨、46%跌）。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
 
 
 def test_current_quote_ma20_relation_is_normalized_and_guarded():
@@ -4529,6 +4704,50 @@ def test_stock_guard_accepts_unsigned_quote_change_with_matching_direction():
 
     guard = AgentService._validate_model_output(
         "盘中最新报价35.91元，下跌4.24%；最近完整日线属于上一交易日。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
+def test_stock_guard_accepts_rounded_current_quote_change():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯今天为什么跌？",
+        "metrics": {"latest_close": 35.25, "return_1d_pct": 0.71},
+        "provenance": {"market_timestamp": "2026-07-27T01:30:00+00:00"},
+        "current_quote": {
+            "price": 34.2,
+            "pct_change": -2.98,
+            "market_timestamp": "2026-07-28T12:05:03+08:00",
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "中兴通讯今天盘中跌了大约3%，最新报价34.20元；最近完整日线属于上一交易日。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
+def test_stock_guard_accepts_micro_move_wording_for_unsigned_quote_change():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "600519.SS",
+        "user_question": "贵州茅台现在最需要关注什么？",
+        "metrics": {"latest_close": 1297.41, "return_1d_pct": 0.42},
+        "provenance": {"market_timestamp": "2026-07-24T01:30:00+00:00"},
+        "current_quote": {
+            "price": 1289.5,
+            "pct_change": -0.61,
+            "market_timestamp": "2026-07-27T16:14:56+08:00",
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "最新报价1289.5元，当天微跌0.61%；最近完整日线属于上一交易日。",
         evidence,
     )
 
@@ -4861,6 +5080,16 @@ def test_stock_guard_does_not_let_indices_alone_exclude_systemic_drag():
     assert (
         "公告或媒体线索不能在缺少事件研究时评为正面负面或催化"
         in (event_sentiment_guard["unsupported_market_inferences"])
+    )
+
+    indirect_sentiment_guard = AgentService._validate_model_output(
+        "这些都属于中性信息线索，暂时看不出明显催化。",
+        evidence,
+    )
+    assert indirect_sentiment_guard["passed"] is False
+    assert (
+        "公告或媒体线索不能在缺少事件研究时评为正面负面或催化"
+        in indirect_sentiment_guard["unsupported_market_inferences"]
     )
 
 
@@ -5403,6 +5632,11 @@ def test_stock_guard_rejects_self_factor_and_resonance_claims():
 
     for answer in (
         "中兴通讯下跌主要来自个股自身因素。",
+        "它今天的跌幅更多是自身因素主导的。",
+        "中兴通讯下跌更像跟公司当天自己的情况有关，而不是被市场整体拖累。",
+        "中兴通讯下跌更可能是公司自身或通信设备板块的因素。",
+        "中兴通讯跌的原因主要得看公司自身或者通信设备板块的情况。",
+        "中兴通讯今天属于个股层面的独立走弱。",
         "今日下跌更多体现为高波动下的获利回吐和基本面隐忧共振。",
     ):
         guard = AgentService._validate_model_output(answer, evidence)
@@ -5411,6 +5645,105 @@ def test_stock_guard_rejects_self_factor_and_resonance_claims():
             "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
             in guard["unsupported_market_inferences"]
         )
+
+
+def test_stock_guard_removes_speculative_fund_flow_and_timing_explanations():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯今天为什么跌？",
+    }
+    answer = (
+        "中兴通讯相对市场偏弱，但市场与行业对比本身只能确认同步或分化，不能证明具体因果。"
+        "当前能确认的是价格方向与相对表现，不能从横截面对比直接推出公司发生了什么。"
+        "如果没有日期对齐的公司材料，回答就应该停在具体驱动仍未确认这一层。"
+        "当天也没有取得能够直接确认公司特定驱动的正式披露，现有媒体标题只能作为待核验线索。"
+        "这种格局说明相对弱势更可能是短期资金行为或前期强势后的节奏变化，"
+        "而非公司基本面出了问题。具体驱动仍未确认。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert guard["passed"] is False
+    assert (
+        "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
+        in guard["unsupported_market_inferences"]
+    )
+    assert repaired is not None
+    assert "短期资金行为" not in repaired[0]
+    assert "节奏变化" not in repaired[0]
+    assert "基本面出了问题" not in repaired[0]
+    assert repaired[1]["passed"] is True
+
+
+def test_stock_guard_repairs_price_cause_story_from_financing_and_dividend_clues():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯今天为什么跌？",
+        "research_plan": {"focus": "price_cause"},
+        "metrics": {"latest_close": 35.25, "return_1d_pct": 0.71},
+        "provenance": {"market_timestamp": "2026-07-27T01:30:00+00:00"},
+        "current_quote": {
+            "price": 34.2,
+            "pct_change": -2.98,
+            "market_timestamp": "2026-07-28T12:05:03+08:00",
+        },
+    }
+    answer = (
+        "中兴通讯今天盘中跌了大约3%，最新报价34.20元。"
+        "融资余额处于相对高位，意味着借钱买入的资金对价格波动往往更敏感；"
+        "股权登记日前后，部分短线资金也可能因为拿完分红就走而选择卖出。"
+        "股权登记日在技术上会使当日参考价自动扣除分红金额，这可能是额外的技术性因素。"
+        "等今天收盘后的除权除息公告出来，再判断股权登记除息对价格的具体影响。"
+        "可以等收盘后看公司有没有发权益分派实施公告。"
+        "现阶段能确认的是盘中价格下跌，并没有同日公司公告能把这次价格变化锁定到"
+        "某个公司级事件；这些媒体标题只能帮助定位后续核验方向，具体驱动仍未确认。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert guard["passed"] is False
+    assert (
+        "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
+        in guard["unsupported_market_inferences"]
+    )
+    assert repaired is not None
+    assert "最新报价34.20元" in repaired[0]
+    assert "资金对价格波动往往更敏感" not in repaired[0]
+    assert "拿完分红就走" not in repaired[0]
+    assert "当日参考价自动扣除分红金额" not in repaired[0]
+    assert "收盘后的除权除息公告" not in repaired[0]
+    assert "具体驱动仍未确认" in repaired[0]
+    assert repaired[1]["passed"] is True
+
+
+def test_stock_guard_removes_financing_sensitivity_and_undisclosed_factor_story():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯今天为什么跌？",
+        "research_plan": {"focus": "price_cause"},
+    }
+    answer = (
+        "融资余额占流通市值比例不算低，这类资金对价格波动往往更敏感。"
+        "换句话说，借钱买这只股票的资金比例不算低，这类资金对价格波动更敏感。"
+        "这条媒体线索不能直接解释今天为什么跌。"
+        "如果不是，就要进一步留意公司是否有其他尚未被正式披露的事项。"
+        "接下来值得留意成交量，这可以帮助判断是否有什么还未披露的重要变化。"
+        "目前只能等公司可能发布的正式公告。"
+        "目前没有同日公司公告，具体驱动仍未确认。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is False
+    assert (
+        "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
+        in guard["unsupported_market_inferences"]
+    )
 
 
 def test_model_language_cleanup_removes_duplicate_chinese_punctuation():
@@ -6324,6 +6657,7 @@ def test_streaming_bridge_publishes_only_guarded_cumulative_sentences(
         "上证综指当日下跌1.23%。现有证据不能确认唯一原因。",
     ]
     assert all("9999" not in item["draft"] for item in updates)
+    assert all(item["is_guarded_partial"] is True for item in updates)
     assert usage["streaming"]["raw_delta_events"] == 2
     assert usage["streaming"]["visible_events"] == 2
     assert usage["streaming"]["withheld_segments"] == 1
@@ -6640,6 +6974,149 @@ def test_streaming_bridge_waits_for_current_quote_then_keeps_growing(
     assert usage["streaming"]["visible_events"] == 2
     assert usage["streaming"]["withheld_segments"] == 1
     assert usage["streaming"]["deferred_segments"] == 1
+
+
+def test_streaming_bridge_does_not_wait_for_component_source_appendix(
+    tmp_path: Path, settings, monkeypatch
+):
+    bin_dir = tmp_path / "hermes" / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    hermes_bin = bin_dir / "hermes"
+    python_bin = bin_dir / "python"
+    hermes_bin.touch()
+    python_bin.touch()
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "stream-component-boundary-workspaces",
+        hermes_bin=hermes_bin,
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    service = AgentService(database, guarded_settings)
+    run_dir = tmp_path / "run-component-boundary"
+    run_dir.mkdir()
+    (run_dir / "prompt.md").write_text("测试成分口径不阻塞首屏", encoding="utf-8")
+    lines = [
+        json.dumps(
+            {
+                "type": "delta",
+                "text": "中兴通讯收盘后最新报价34.03元，跌3.46%。",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        json.dumps(
+            {
+                "type": "delta",
+                "text": "行业50只成分中上涨12只、下跌38只、平盘0只。",
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        json.dumps(
+            {
+                "type": "final",
+                "answer": (
+                    "中兴通讯收盘后最新报价34.03元，跌3.46%。"
+                    "行业50只成分中上涨12只、下跌38只、平盘0只。"
+                ),
+                "usage": {"model": "fake-stream"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+    ]
+    monkeypatch.setattr(
+        "app.services.agent_hermes_execution.subprocess.Popen",
+        lambda *args, **kwargs: _FakeStreamingProcess(lines),
+    )
+    updates = []
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "display_name": "中兴通讯",
+        "user_question": "中兴通讯为什么跌？",
+        "current_quote": {
+            "market_timestamp": "2026-07-28T16:14:00+08:00",
+            "price": 34.03,
+            "pct_change": -3.46,
+            "quote_basis": "post_close_snapshot",
+        },
+        "stock_market_context": {
+            "exact_industry_index": {
+                "status": "same_market_date",
+                "component_breadth": {
+                    "status": "available",
+                    "total_constituents": 50,
+                    "advancers": 12,
+                    "decliners": 38,
+                    "unchanged": 0,
+                    "coverage": {
+                        "fallback_unadjusted_returns": 1,
+                        "primary_adjusted_returns": 49,
+                    },
+                    "source_fallbacks": [
+                        {"symbol": "000063.SZ", "name": "中兴通讯"}
+                    ],
+                },
+            }
+        },
+    }
+
+    _, usage = service._execute_hermes_streaming(
+        model_tier="economy",
+        run_dir=run_dir,
+        user_workspace=tmp_path,
+        evidence=evidence,
+        trusted_context=None,
+        stream_callback=updates.append,
+    )
+
+    assert updates[0]["draft"] == "中兴通讯收盘后最新报价34.03元，跌3.46%。"
+    assert "上涨12只、下跌38只、平盘0只" in updates[-1]["draft"]
+    assert usage["streaming"]["visible_events"] == 2
+
+
+def test_stock_repair_keeps_safe_first_sentence_when_industry_cause_is_removed():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "display_name": "中兴通讯",
+        "user_question": "中兴通讯为什么跌？",
+        "current_quote": {
+            "market_timestamp": "2026-07-28T16:14:00+08:00",
+            "price": 34.03,
+            "pct_change": -3.46,
+        },
+        "stock_market_context": {
+            "exact_industry_index": {
+                "status": "same_market_date",
+                "component_breadth": {
+                    "status": "available",
+                    "advancers": 12,
+                    "decliners": 38,
+                    "unchanged": 0,
+                },
+            }
+        },
+    }
+    answer = (
+        "中兴通讯收盘后最新报价34.03元，跌了3.46%。"
+        "行业多数成分下跌，因此更像行业普跌中的跟随，而非公司事件驱动。\n\n"
+        "当前可确认的是价格事实；行业同步只说明背景一致，不能证明行业下跌就是个股原因。\n\n"
+        "交易时段内没有取得能够直接说明这次价格变化的公司公告或监管披露原文。\n\n"
+        "目前没有取得能解释当日价格波动的公司正式披露，具体驱动仍未确认。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert repaired is not None
+    assert repaired[0].startswith("中兴通讯收盘后最新报价34.03元，跌了3.46%。")
+    assert "更像行业普跌中的跟随" not in repaired[0]
+    assert "具体驱动仍未确认" in repaired[0]
+    assert repaired[1]["passed"] is True
 
 
 def test_streamed_unverified_draft_is_followed_by_final_guarded_answer(

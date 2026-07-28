@@ -134,10 +134,14 @@ def _install_completed_agent_stub(app, monkeypatch) -> None:
                 {
                     "logic_result": (
                         "即时复盘认为原判断仅部分成立，经营现金流证据仍需继续核验。"
+                        "操作价低于持仓成本，本次属于亏损卖出。"
                     ),
                     "plan_deviation": "本次减仓数量与已记录事实一致。",
-                    "bias_tags": ["证据确认偏慢"],
-                    "improvement_text": "下次操作前先完成现金流与订单兑现的交叉核验。",
+                    "bias_tags": ["确认偏差", "可得性启发"],
+                    "improvement_text": (
+                        "下次操作前先完成现金流与订单兑现的交叉核验，"
+                        "并加入thesis的watch_items。"
+                    ),
                 },
                 ensure_ascii=False,
             )
@@ -335,6 +339,10 @@ def test_r1_complete_research_to_archived_review_is_refreshable_and_isolated(
     review_candidate = generated.json()
     assert review_candidate["candidate_type"] == "review_draft"
     assert review_candidate["status"] == "pending_confirmation"
+    assert "亏损卖出" not in review_candidate["payload"]["logic_result"]
+    assert review_candidate["payload"]["bias_tags"] == ["未关联操作计划"]
+    assert "thesis" not in review_candidate["payload"]["improvement_text"]
+    assert "watch_items" not in review_candidate["payload"]["improvement_text"]
     assert owner.get(f"/v1/trade-reviews/{review_id}").json()[
         "current_version"
     ] is None

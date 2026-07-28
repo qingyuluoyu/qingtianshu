@@ -98,6 +98,43 @@ class ChatResponsePersistence:
             )
         return targets
 
+    @staticmethod
+    def _conversation_scope(
+        *,
+        response_intent: str,
+        response_symbol: str | None,
+        evidence_payload: dict[str, Any],
+    ) -> str:
+        """Persist a stable history category without adding a database column."""
+
+        if evidence_payload.get("fund_product_context") is not None or evidence_payload.get(
+            "financial_advisor_context"
+        ) is not None:
+            return "funds"
+        if response_intent == "stock_screen":
+            return "screening"
+        if response_intent in {"market_brief", "market_pulse_article"}:
+            return "market"
+        if response_intent in {"watchlist_brief", "watchlist_update"}:
+            return "portfolio"
+        if response_symbol or response_intent in {
+            "stock_research",
+            "stock_comparison",
+            "analyst_expectations",
+            "event_timeline",
+            "shareholder_structure",
+            "business_structure",
+            "financial_drivers",
+            "earnings_quality",
+            "research_priority",
+            "research_actions",
+            "research_outcome",
+            "research_tracking",
+            "visual_research",
+        }:
+            return "stock"
+        return "other"
+
     def persist(
         self,
         response_payload: dict[str, Any],
@@ -134,6 +171,11 @@ class ChatResponsePersistence:
             response_symbol=response_symbol,
             evidence_payload=evidence,
         )
+        conversation_scope = self._conversation_scope(
+            response_intent=response_intent,
+            response_symbol=response_symbol,
+            evidence_payload=evidence,
+        )
         evidence_sources = build_visible_evidence_sources(evidence_payload)
         assistant_message = self.database.add_conversation_message(
             user_id=user_id,
@@ -150,6 +192,7 @@ class ChatResponsePersistence:
                 "market_sources": market_sources,
                 "evidence_sources": evidence_sources,
                 "research_targets": research_targets,
+                "conversation_scope": conversation_scope,
                 "structured_answer": structured_answer,
                 "model_tier": model_tier,
                 "stock_screen_profile": (

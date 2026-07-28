@@ -307,13 +307,13 @@ async function openDeepStockSymbol(symbol, tabKey = "overview", options = {}) {
         if (!report) throw new Error("研究报告尚未生成");
         const timezoneName = /\.(?:SS|SZ)$/i.test(symbol || "") ? "Asia/Shanghai" : "America/New_York";
         openReader(
-          report.title || `${symbol}研究快照`,
+          report.title || `${symbol}研究报告`,
           workspaceReportReaderBody(workspace),
-          `服务器公共证据快照 · 生成于 ${readableTime(report.generated_at)} · 完整日线截至 ${marketDateLabel(report.market_timestamp, timezoneName)}`
+          `公开证据研究底稿 · 更新于 ${readableTime(report.generated_at)} · 完整日线截至 ${marketDateLabel(report.market_timestamp, timezoneName)}`
         );
         button.textContent = "阅读分析";
       } catch (error) {
-        openReader(`${symbol}研究快照`, error?.message || "研究证据正在更新，请稍后重试。", "尚未生成可阅读版本；读取不会触发同步生成");
+        openReader(`${symbol}研究报告`, error?.message || "研究资料正在更新，请稍后重试。", "这份研究报告正在准备，请稍后再看");
         button.textContent = original;
       } finally { button.disabled = false; }
     }

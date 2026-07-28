@@ -86,6 +86,15 @@ class Settings:
     background_use_hermes: bool
     default_a_share_symbols: tuple[str, ...]
     default_research_symbols: tuple[str, ...]
+    default_fund_product_codes: tuple[str, ...] = (
+        "510300",
+        "510500",
+        "159915",
+        "110022",
+        "000011",
+        "000198",
+    )
+    background_fund_product_refresh_seconds: int = 1800
     sec_user_agent: str = "QingshuFinancialResearch/0.1 research@example.com"
     background_data_quality_seconds: int = 60
     session_ttl_days: int = 365
@@ -183,6 +192,18 @@ class Settings:
                     "DEFAULT_RESEARCH_SYMBOLS", "000063.SZ,300308.SZ,NVDA"
                 ).split(",")
                 if symbol.strip()
+            ),
+            default_fund_product_codes=tuple(
+                code.strip()
+                for code in os.getenv(
+                    "DEFAULT_FUND_PRODUCT_CODES",
+                    "510300,510500,159915,110022,000011,000198",
+                ).split(",")
+                if code.strip()
+            ),
+            background_fund_product_refresh_seconds=max(
+                300,
+                int(os.getenv("BACKGROUND_FUND_PRODUCT_REFRESH_SECONDS", "1800")),
             ),
             sec_user_agent=os.getenv(
                 "SEC_USER_AGENT",

@@ -372,7 +372,11 @@ class StructuredAIService:
         workspace = self.database.get_stock_workspace(user_id, str(review["symbol"]))
         if workspace is None:
             raise StructuredAINotFound("股票研究空间不存在")
-        logic_result = str(draft.get("logic_result") or "").strip()
+        normalized_draft = self.trade_workflow.normalize_review_agent_draft(
+            review,
+            draft,
+        )
+        logic_result = str(normalized_draft.get("logic_result") or "").strip()
         if not logic_result:
             raise StructuredAIInvalidState("Agent 未返回可确认的逻辑复盘")
         citations = self._persist_review_citations(
@@ -387,11 +391,13 @@ class StructuredAIService:
             "price_result": (review.get("price_observation") or {}).get("summary"),
             "logic_result": logic_result[:6000],
             "plan_deviation": self._clean_optional_text(
-                draft.get("plan_deviation"), 4000
+                normalized_draft.get("plan_deviation"), 4000
             ),
-            "bias_tags": self._unique_text(draft.get("bias_tags") or [], limit=12),
+            "bias_tags": self._unique_text(
+                normalized_draft.get("bias_tags") or [], limit=3
+            ),
             "improvement_text": self._clean_optional_text(
-                draft.get("improvement_text"), 4000
+                normalized_draft.get("improvement_text"), 4000
             ),
         }
         now = utc_now()

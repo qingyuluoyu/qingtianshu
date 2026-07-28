@@ -19,18 +19,24 @@ def test_research_plan_routes_price_financial_shareholder_and_comprehensive():
     service = ResearchPlanService()
 
     price = service.build("中兴通讯今天为什么大跌")
+    common_price_wording = service.build("中兴通讯最近为什么下跌")
     financial = service.build("中兴通讯的利润和现金流怎么变了")
     shareholder = service.build("中兴通讯股东户数有什么变化")
     comprehensive = service.build("全面分析中兴通讯")
     research_priority = service.build("中兴通讯现在值得继续研究什么？")
 
-    assert price["focus"] == "price_action"
+    assert price["focus"] == "price_cause"
     assert price["required_modules"] == [
         "market",
-        "fundamentals",
         "company_information",
         "event_timeline",
     ]
+    assert price["optional_modules"] == []
+    assert price["selected_skills"] == [
+        "a-share-information",
+        "event-timeline",
+    ]
+    assert common_price_wording["focus"] == "price_cause"
     assert "earnings_quality" not in price["selected_modules"]
     assert "analyst_expectations" not in price["selected_modules"]
     assert financial["focus"] == "financial"
@@ -63,6 +69,36 @@ def test_price_question_uses_scoped_modules_and_private_stock_workspace(
 ):
     user = _create_user(client)
 
+    for index, (source_key, title, content) in enumerate(
+        (
+            (
+                "peer-operating:000063.SZ",
+                "中兴通讯同行经营比较",
+                "中兴通讯 固定同行经营比较 旧财务数字 123456",
+            ),
+            (
+                "shareholder-structure:000063.SZ",
+                "中兴通讯股东结构",
+                "中兴通讯 股东结构 股东户数 旧快照 654321",
+            ),
+            (
+                "event-timeline:000063.SZ",
+                "中兴通讯旧事件脉络",
+                "中兴通讯 旧事件脉络 历史事件 2025-01-01",
+            ),
+        )
+    ):
+        app.state.database.upsert_knowledge_document(
+            document_id=f"price-cause-stale-{index}",
+            owner_user_id=None,
+            scope="common",
+            title=title,
+            original_name=f"price-cause-stale-{index}.md",
+            mime_type="text/markdown",
+            content=content,
+            source_key=source_key,
+        )
+
     def unexpected_heavy_module(*args, **kwargs):
         raise AssertionError("price plan must not call unrelated heavy module")
 
@@ -91,12 +127,13 @@ def test_price_question_uses_scoped_modules_and_private_stock_workspace(
     payload = response.json()
     evidence = payload["evidence"]
     assert payload["intent"] == "stock_research"
-    assert evidence["research_plan"]["focus"] == "price_action"
+    assert evidence["research_plan"]["focus"] == "price_cause"
+    assert "fundamentals" not in evidence["module_statuses"]
     assert "earnings_quality" not in evidence["module_statuses"]
     assert evidence["stock_workspace_context"]["symbol"] == "000063.SZ"
     assert evidence["stock_workspace_context"]["formal_thesis"]["summary"]
     run = app.state.database.get_run(payload["run_id"], user["id"])
-    assert run["input"]["research_plan"]["focus"] == "price_action"
+    assert run["input"]["research_plan"]["focus"] == "price_cause"
     prompt = (
         Path(app.state.database.get_user(user["id"])["workspace_path"])
         / "runs"
@@ -104,9 +141,50 @@ def test_price_question_uses_scoped_modules_and_private_stock_workspace(
         / "prompt.md"
     ).read_text(encoding="utf-8")
     assert "# Event Timeline" in prompt
+    assert "# Fundamental Evidence" not in prompt
+    assert "# Evidence Debate" not in prompt
+    assert "# Conditional Outlook" not in prompt
     assert "# Shareholder Structure" not in prompt
     assert "# Earnings Quality" not in prompt
     assert "个股涨跌原因回答合同" in prompt
+    assert "中兴通讯同行经营比较" not in prompt
+    assert "中兴通讯股东结构" not in prompt
+    assert "中兴通讯旧事件脉络" not in prompt
+    assert "# User Memory Context" not in prompt
+    assert len(prompt) < 20_000
+
+
+def test_stock_research_uses_compact_runtime_skill_without_removing_full_rules():
+    skill_dir = Path(__file__).parents[1] / "app" / "skills" / "stock-research"
+    runtime_path = skill_dir / "PROMPT.md"
+    full_path = skill_dir / "SKILL.md"
+
+    assert runtime_path.exists()
+    assert full_path.exists()
+    assert AgentService._load_skill("stock-research") == runtime_path.read_text(
+        encoding="utf-8"
+    )
+    assert runtime_path.stat().st_size < full_path.stat().st_size * 0.6
+
+
+def test_price_cause_supporting_skills_use_compact_runtime_prompts():
+    skills_root = Path(__file__).parents[1] / "app" / "skills"
+
+    for skill_name in (
+        "a-share-information",
+        "event-timeline",
+        "online-stock-research",
+        "watchlist-stock-research",
+    ):
+        skill_dir = skills_root / skill_name
+        runtime_path = skill_dir / "PROMPT.md"
+        full_path = skill_dir / "SKILL.md"
+        assert runtime_path.exists()
+        assert full_path.exists()
+        assert AgentService._load_skill(skill_name) == runtime_path.read_text(
+            encoding="utf-8"
+        )
+        assert runtime_path.stat().st_size < full_path.stat().st_size * 0.75
 
 
 def test_recent_stable_modules_are_reused_while_market_and_quote_refresh(

@@ -80,6 +80,7 @@ class ChatStreamPublisher:
                     "event_index": update.get("event_index"),
                     "withheld_segments": update.get("withheld_segments", 0),
                     "is_unverified": update.get("is_unverified", True),
+                    "is_guarded_partial": update.get("is_guarded_partial", False),
                     "is_final": update.get("is_final", False),
                 },
             )

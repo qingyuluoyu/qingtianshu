@@ -316,7 +316,9 @@ def test_review_flow_uses_frozen_context_hermes_draft_and_version_conflicts(
     assert draft["status"] == "draft"
     assert draft["current_version"]["created_source"] == "ai"
     assert draft["current_version"]["source_run_id"] == run["id"]
-    assert draft["current_version"]["bias_tags"] == ["结果偏差待核对"]
+    assert draft["current_version"]["bias_tags"] == ["证据未留档"]
+    assert "价格路径" not in draft["current_version"]["logic_result"]
+    assert "冻结" not in draft["current_version"]["logic_result"]
     premature_followup = client.post(
         f"/v1/trade-reviews/{review['id']}/followups",
         json={"target": "observation_task"},

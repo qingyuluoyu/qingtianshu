@@ -171,6 +171,7 @@ class BackgroundScheduler:
         li_zong_backtest: LiZongPortfolioBacktestService | None = None,
         trade_workflow: Any | None = None,
         change_events: Any | None = None,
+        fund_products: Any | None = None,
     ):
         self.database = database
         self.live_markets = live_markets
@@ -202,6 +203,7 @@ class BackgroundScheduler:
         self.li_zong_backtest = li_zong_backtest
         self.trade_workflow = trade_workflow
         self.change_events = change_events
+        self.fund_products = fund_products
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._threads: list[threading.Thread] = []
@@ -371,6 +373,7 @@ class BackgroundScheduler:
             "trade_review_refresh_seconds": self.settings.background_research_refresh_seconds,
             "change_event_refresh_seconds": self.settings.background_research_refresh_seconds,
             "market_news_refresh_seconds": self.settings.background_market_news_refresh_seconds,
+            "fund_product_refresh_seconds": self.settings.background_fund_product_refresh_seconds,
             "evidence_task_refresh_seconds": self.settings.background_research_refresh_seconds,
             "calibration_refresh_seconds": self.settings.background_calibration_refresh_seconds,
             "data_quality_seconds": self.settings.background_data_quality_seconds,
@@ -411,6 +414,8 @@ class BackgroundScheduler:
             functions["trade_reviews_readiness_refresh"] = (
                 self.trade_workflow.refresh_pending_reviews
             )
+        if self.fund_products is not None:
+            functions["fund_product_refresh"] = self._refresh_fund_products
         return functions
 
     def _schedule_specs(self) -> list[tuple[str, int, int, bool]]:
@@ -463,6 +468,12 @@ class BackgroundScheduler:
                 max(300, self.settings.background_market_news_refresh_seconds),
                 75,
                 True,
+            ),
+            (
+                "fund_product_refresh",
+                max(300, self.settings.background_fund_product_refresh_seconds),
+                50,
+                self.fund_products is not None,
             ),
             (
                 "evidence_tasks_process",
@@ -653,6 +664,22 @@ class BackgroundScheduler:
             "a_share_turnover": breadth.get("turnover") or {},
             "a_share_distribution": breadth.get("distribution") or {},
         }
+
+    def _refresh_fund_products(self) -> dict[str, Any]:
+        if self.fund_products is None:
+            return {"status": "disabled"}
+        result = self.fund_products.refresh_codes(
+            list(self.settings.default_fund_product_codes)
+        )
+        self.broker.publish(
+            {
+                "type": "fund_products_updated",
+                "time": utc_now(),
+                "completed": result.get("completed", 0),
+                "failed": result.get("failed", 0),
+            }
+        )
+        return result
 
     def _refresh_li_zong_strategy(self) -> dict[str, Any]:
         if self.tushare_snapshots is None or self.li_zong_strategy is None:

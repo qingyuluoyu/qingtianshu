@@ -706,7 +706,7 @@ def test_stock_market_context_does_not_treat_partial_daily_bars_as_intraday_brea
     assert industry["component_contribution"]["status"] == "intraday_not_supported"
 
 
-def test_time_sensitive_stock_question_excludes_stale_snapshot_documents():
+def test_price_cause_stock_question_excludes_generated_stock_archives():
     filtered = _filter_knowledge_context(
         {
             "items": [
@@ -731,6 +731,21 @@ def test_time_sensitive_stock_question_excludes_stale_snapshot_documents():
                     "title": "中兴通讯最新财报质量分析",
                 },
                 {
+                    "scope": "common",
+                    "source_key": "peer-operating:000063.SZ",
+                    "title": "中兴通讯同行经营比较",
+                },
+                {
+                    "scope": "common",
+                    "source_key": "shareholder-structure:000063.SZ",
+                    "title": "中兴通讯股东结构",
+                },
+                {
+                    "scope": "common",
+                    "source_key": "event-timeline:000063.SZ",
+                    "title": "中兴通讯旧事件脉络",
+                },
+                {
                     "scope": "user",
                     "source_key": "upload:user-note",
                     "title": "我的中兴通讯调研笔记",
@@ -741,6 +756,7 @@ def test_time_sensitive_stock_question_excludes_stale_snapshot_documents():
         symbol="000063.SZ",
         evidence={
             "user_question": "中兴通讯今天为什么上涨？",
+            "research_plan": {"focus": "price_cause"},
             "current_quote": {"price": 38.37},
         },
     )
@@ -749,8 +765,55 @@ def test_time_sensitive_stock_question_excludes_stale_snapshot_documents():
     assert "research-report:000063.SZ" not in source_keys
     assert "research-outcome:000063.SZ" not in source_keys
     assert "research-actions:user-1" not in source_keys
-    assert "earnings-quality:000063.SZ" in source_keys
+    assert "earnings-quality:000063.SZ" not in source_keys
+    assert "peer-operating:000063.SZ" not in source_keys
+    assert "shareholder-structure:000063.SZ" not in source_keys
+    assert "event-timeline:000063.SZ" not in source_keys
     assert "upload:user-note" in source_keys
+
+
+def test_financial_advisor_knowledge_excludes_unrelated_stock_archives():
+    filtered = _filter_knowledge_context(
+        {
+            "items": [
+                {
+                    "scope": "common",
+                    "source_key": "builtin:fund-etf-practical-guide.md",
+                    "title": "基金与ETF实用指南",
+                },
+                {
+                    "scope": "common",
+                    "source_key": "filing-evidence:600519.SS:2025-12-31",
+                    "title": "贵州茅台财报原文原因证据",
+                },
+                {
+                    "scope": "user",
+                    "source_key": "upload:retirement-note",
+                    "title": "我的退休资金安排",
+                },
+                {
+                    "scope": "user",
+                    "source_key": "research-report:000063.SZ",
+                    "title": "中兴通讯长期研究档案",
+                },
+            ],
+            "coverage": {"matched_documents": 4},
+        },
+        intent="general_research",
+        symbol=None,
+        evidence={
+            "financial_advisor_context": {
+                "required_sources": ["builtin:fund-etf-practical-guide.md"]
+            }
+        },
+    )
+
+    source_keys = {item["source_key"] for item in filtered["items"]}
+    assert source_keys == {
+        "builtin:fund-etf-practical-guide.md",
+        "upload:retirement-note",
+    }
+    assert filtered["coverage"]["matched_documents"] == 2
 
 
 def test_demo_page_is_the_default_human_facing_entry(client):
@@ -762,6 +825,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
         client.get(path)
         for path in (
             "/static/demo.css",
+            "/static/qs-kline-explorer.js",
             "/static/qs-format.js",
             "/static/qs-screening.js",
             "/static/demo.js",
@@ -771,6 +835,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
             "/static/qs-agent-ui.js",
             "/static/qs-knowledge.js",
             "/static/qs-home.js",
+            "/static/qs-funds.js",
             "/static/qs-watchlist.js",
             "/static/qs-market.js",
             "/static/qs-stock-core.js",
@@ -789,7 +854,12 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert page.headers["pragma"] == "no-cache"
     assert "清数智算" in frontend
     assert "金融研究 Agent" in frontend
+    assert "基金与 ETF" in frontend
+    assert 'id="fundComparisonForm"' in frontend
+    assert 'id="riskProfileForm"' in frontend
+    assert "确认让 AI 使用" in frontend
     assert '<script src="/static/qs-charts.js"></script>' in frontend
+    assert '<script src="/static/qs-kline-explorer.js"></script>' in frontend
     chart_asset = client.get("/static/qs-charts.js")
     assert chart_asset.status_code == 200
     assert chart_asset.headers["cache-control"] == "no-store, max-age=0"
@@ -818,8 +888,8 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert (
         frontend.index('id="liveSection"')
         < frontend.index('id="marketDashboard"')
-        < frontend.index('id="insightSection"')
         < frontend.index('id="insightAsk"')
+        < frontend.index('id="insightSection"')
         < frontend.index('id="todayOverviewGrid"')
     )
     assert "我的研究待办" in frontend
@@ -868,12 +938,21 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "function conversationTopicKey(item)" in frontend
     assert "function conversationScopeKey(item)" in frontend
     assert "function filteredConversationItems(items = [])" in frontend
+    assert "const RECENT_CONVERSATION_TOPIC_LIMIT = 8" in frontend
+    assert "function recentConversationItems(items = []" in frontend
+    assert "function appendConversationHistoryToggle" in frontend
+    assert "查看全部历史（${total}）" in frontend
+    assert "只看最近对话" in frontend
+    assert ".conversation-history-toggle { position: sticky;" in frontend
     assert "function appendConversationGroups(container, items)" in frontend
     assert 'id="conversationSearch"' in frontend
     assert 'id="conversationScopeFilter"' in frontend
     assert 'id="conversationMobileSearch"' in frontend
     assert 'id="conversationMobileScopeFilter"' in frontend
+    assert '<option value="funds">基金理财</option>' in frontend
     assert '<option value="portfolio">关注</option>' in frontend
+    assert 'item?.conversation_scope || ""' in frontend
+    assert 'funds: "基金理财"' in frontend
     assert "没有匹配的历史对话" in frontend
     assert "conversationScopeLabel(item)" in frontend
     assert "当前对话 ·" in frontend
@@ -888,20 +967,49 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'window.confirm(`归档“${title.textContent}”？对话会从最近列表移除。`)' in frontend
     assert 'api("/me/knowledge")' in frontend
     assert "conversation_id: state.conversationId" in frontend
-    assert "研究类型" in frontend
+    assert 'aria-label="快捷研究入口"' in frontend
+    assert "常用问题" in frontend
+    assert "专项工具" in frontend
+    assert "大盘解读" in frontend
+    assert "基金与 ETF" in frontend
+    assert "基金、ETF、财报或理财常识" in frontend
     assert "个股分析" in frontend
-    assert "行业研究" in frontend
-    assert "关注组合" in frontend
-    assert "公告财报" in frontend
+    assert "行业板块" in frontend
+    assert "自选股变化" in frontend
+    assert "财报公告" in frontend
     assert "操作前检查" in frontend
-    assert "公司对比" in frontend
-    assert "市场环境" in frontend
-    assert 'aria-label="今日观察"' in frontend
-    assert 'aria-label="AI研究"' in frontend
+    assert "市场与持仓" in frontend
+    assert "公司对比" not in frontend
+    assert "跟踪变化" not in frontend
+    assert 'aria-label="市场总览"' in frontend
+    assert 'aria-label="AI投研对话"' in frontend
+    assert 'aria-label="金融资料库"' in frontend
     assert 'aria-label="我的关注"' in frontend
     assert 'aria-label="个股研究"' in frontend
     assert 'aria-label="复盘中心"' in frontend
     assert 'aria-label="个人中心"' in frontend
+    assert '<div class="method-eyebrow">研究复盘</div>' in frontend
+    assert 'data-screening-jump="general">按条件选股</button>' in frontend
+    assert 'aria-label="按条件选股"' in frontend
+    assert "规则公开 · 每项可核验" in frontend
+    assert "DETERMINISTIC STRATEGY" not in frontend
+    assert "当前 MVP 先使用已保存的市场短文" not in frontend
+    assert "历史短文不代表当前行情" in frontend
+    assert 'action.textContent = "去记录一次真实操作"' in frontend
+    assert 'workspace?.classList.add("empty-onboarding")' in frontend
+    assert 'title.textContent = "完成 3 步，交易复盘会自动出现在这里"' in frontend
+    assert '"选择一只关注股票"' in frontend
+    assert '"记录减仓或卖出"' in frontend
+    assert '"等待后续交易日"' in frontend
+    assert 'action.textContent = "清除筛选"' in frontend
+    assert 'title.textContent = "后续价格事实"' in frontend
+    assert 'summary.textContent = "查看价格计算口径"' in frontend
+    assert 'appendTradeReviewSection(container, "当时为什么操作"' in frontend
+    assert 'appendTradeReviewSection(container, "判断依据复盘"' in frontend
+    assert 'appendTradeReviewSection(container, "与原计划的差异"' in frontend
+    assert 'appendTradeReviewSection(container, "下次怎么做得更好"' in frontend
+    assert 'tagTitle.textContent = "待你确认的记录问题"' in frontend
+    assert 'appendTradeReviewSection(container, "确定性价格结果"' not in frontend
     assert 'id="todayOverviewGrid"' in frontend
     assert "#todayOverviewGrid[hidden]" in frontend
     assert 'api("/v1/today/overview")' in frontend
@@ -929,7 +1037,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     thesis_editor = frontend[
         frontend.index(
             'const editThesis = document.createElement("button")'
-        ) : frontend.index('const researchMap = document.createElement("section")')
+        ) : frontend.index('const changesCard = document.createElement("section")')
     ]
     assert "/v1/stocks/${encodeURIComponent(symbol)}/theses" in thesis_editor
     assert "base_version: editBaseVersion" in thesis_editor
@@ -943,17 +1051,31 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'data-page="screening" aria-label="选股研究"' not in frontend
     assert 'data-open-page="screening"' in frontend
     assert 'id="accountPanel"' in frontend
+    assert '<div class="panel-title">我的研究空间</div>' in frontend
+    assert '<details class="account-service-details">' in frontend
+    assert "需要排查账户或数据状态时再展开" in frontend
     assert 'data-watchlist-filter="holding"' in frontend
     assert 'data-watchlist-filter="watching"' in frontend
     assert 'data-watchlist-filter="ended"' in frontend
     assert 'id="watchlistSecondaryFilter"' in frontend
+    assert 'id="watchlistTableSummary"' in frontend
     assert 'id="watchlistReports"' in frontend
     assert 'id="watchlistAgentBrief"' in frontend
+    assert (
+        frontend.index('class="watchlist-table-card"')
+        < frontend.index('id="watchlistDetail"')
+        < frontend.index('class="watchlist-task-card"')
+        < frontend.index('class="watchlist-report-digest"')
+    )
     assert "function renderWatchlistReports(reportMap)" in frontend
     assert "async function reviewWatchlistReportWithAgent(" in frontend
     assert "async function runWatchlistAgentBrief()" in frontend
-    assert "只股票已有研究快照" in frontend
-    assert "点击复核会基于最新数据重新研究" in frontend
+    assert "只股票已有报告" in frontend
+    assert "Agent 会结合报告与最新数据重新分析" in frontend
+    assert "服务器公共证据快照" not in frontend
+    assert "后台尚未形成这只股票" not in frontend
+    assert "max-height: 430px" in frontend
+    assert "overflow-y: auto" in frontend
     assert "workspaceNavigationVersion" in frontend
     assert "bootNavigationVersion" in frontend
     assert "workspaceBootPromise" in frontend
@@ -967,7 +1089,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "async function updateWatchlistChange(" in frontend
     assert "async function updateStockAssetRelation(" in frontend
     assert "base_version: item.version" in frontend
-    assert "结束跟踪不会删除判断和历史" in frontend
+    assert "仍保留原有判断和历史记录" in frontend
     assert 'deleteButton.textContent = "删除"' not in frontend
     assert "function renderAccountCenter()" in frontend
     assert 'year: "numeric", month: "2-digit", day: "2-digit"' in frontend
@@ -976,7 +1098,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "财务历史待实查" in frontend
     assert ".sidebar .nav-text { display: inline; }" in frontend
     assert 'data-page="knowledge"' in frontend
-    assert 'aria-label="资料库"' in frontend
+    assert 'aria-label="金融资料库"' in frontend
     assert 'id="knowledgePanel"' in frontend
     assert "研究资料库" in frontend
     assert '<div class="nav-label">资料库</div>' not in frontend
@@ -997,10 +1119,24 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "event.keyCode !== 229" in frontend
     assert '$("chatForm").requestSubmit()' in frontend
     assert "function finalizeStreamingMessage(" in frontend
+    assert "async function renderVerifiedAnswerProgressively(" in frontend
+    assert "function renderGuardedPartialAnswer(" in frontend
+    assert "function splitAnswerFootnotes(" in frontend
+    assert 'summary.textContent = "数据口径"' in frontend
+    assert 'details.className = "answer-footnotes"' in frontend
+    assert "context.finalRenderPromise = pending.dataset.finalAnswerVisible" in frontend
+    assert 'node?.dataset.userNavigatedDuringRun === "true"' in frontend
+    assert "function scrollAgentMessage(" in frontend
+    assert "scrollAgentMessage(node, {anchorStart: longAnswer})" in frontend
+    assert '$("messages").addEventListener("wheel", markActiveAgentScrollIntent' in frontend
+    assert '$("messages").addEventListener("pointerdown", markActiveAgentScrollIntent' in frontend
+    assert '["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]' in frontend
     assert "function appendFinalMessageMetadata(" in frontend
     assert "function renderStreamingProgress(" in frontend
     assert "回答草稿已生成，正在核对行情、数字和证据" in frontend
     assert "data.is_unverified === false && data.is_final === true" in frontend
+    assert "data.is_guarded_partial === true" in frontend
+    assert 'node.dataset.guardedPartialVisible === "true"' in frontend
     assert 'node.dataset.finalAnswerVisible === "true"' in frontend
     assert (
         "if (pending?.isConnected && data.label) renderStreamingProgress(pending, data.label, data.evidence_progress);"
@@ -1015,8 +1151,11 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "pending.remove();\n        state.conversationId" not in frontend
     assert "responseNode = finalizeStreamingMessage(pending, data.answer" in frontend
     assert 'id="agentEntryHub"' in frontend
-    assert "诊大盘" in frontend
-    assert "诊个股" in frontend
+    assert "你现在想了解什么？" in frontend
+    assert "看今天大盘" in frontend
+    assert "研究一只股票" in frontend
+    assert "按规则选股" in frontend
+    assert "比较基金与 ETF" in frontend
     assert 'id="agentMarketDiagnosis"' in frontend
     assert 'id="agentStockDiagnosisForm"' in frontend
     assert "async function runMarketDiagnosisEntry()" in frontend
@@ -1025,7 +1164,8 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "await sendChat(marketDiagnosisPrompt)" in frontend
     assert "await continueDeepStockConversation(question, session)" in frontend
     assert "await sendChat(question)" in frontend
-    assert "歧义结果不会被静默选中" in frontend
+    assert 'classList.toggle("entry-active", entryActive)' in frontend
+    assert '$("diagnosisContext").hidden = true' in frontend
     assert 'data-page="insights"' in frontend
     assert 'data-page="agent"' in frontend
     assert 'data-page="deep_stock"' in frontend
@@ -1064,11 +1204,13 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "七阶段研究进度" in frontend
     assert 'data-page="watchlist"' in frontend
     assert 'id="watchlistAddForm"' in frontend
-    assert "api(`/stocks/${encodeURIComponent(item.symbol)}/intraday`)" in frontend
+    assert "`/stocks/${encodeURIComponent(symbol)}/intraday`" in frontend
     assert "api(`/me/watchlist/${encodeURIComponent(item.symbol)}`" in frontend
-    assert "function aggregateWeekly(points = [])" in frontend
+    assert "charts.aggregateCandles(payload.points || [], selection.period)" in frontend
     assert "分时" in frontend
-    assert "周线" in frontend
+    assert "周K" in frontend
+    assert "月K" in frontend
+    assert "放大查看" in frontend
     assert 'data-page="review"' in frontend
     assert 'id="homeFocus"' in frontend
     assert 'data-home-focus="markets"' in frontend
@@ -1080,9 +1222,25 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "function dedupeInsightItems(items = [])" in frontend
     assert 'id="insightAskForm"' in frontend
     assert 'id="insightQuestion"' in frontend
-    assert 'data-insight-filter="market"' in frontend
-    assert 'data-insight-filter="stock"' in frontend
-    assert 'data-insight-filter="opportunity"' in frontend
+    assert 'id="marketQuickRead"' in frontend
+    assert 'id="marketQuickGrid"' in frontend
+    assert "function renderMarketQuickRead()" in frontend
+    assert "A 股今天怎么样" in frontend
+    assert "问 Agent：今天市场发生了什么？" in frontend
+    assert "市场复盘文章" in frontend
+    assert 'data-review-target="market"' in frontend
+    assert 'data-insight-filter="stock"' not in frontend
+    assert 'data-insight-filter="opportunity"' not in frontend
+    assert 'id="watchlistPulse"' not in frontend
+    assert 'id="stockScreenExplanation"' in frontend
+    assert 'id="stockScreenDataDetails"' in frontend
+    assert "这批结果怎么用" in frontend
+    assert "为什么出现在这里" in frontend
+    assert "加入我的关注" in frontend
+    assert "研究这只股票" in frontend
+    assert "让 Agent 继续研究" not in frontend
+    assert ".screener-explanation span { color: #596b83; font-size: 13px;" in frontend
+    assert ".screener-reasons { margin: 6px 0 0; padding-left: 18px; color: #4e6078; font-size: 13px;" in frontend
     assert 'id="agentHistoryList"' in frontend
     assert 'id="conversationSwitcher"' in frontend
     assert 'id="agentProcessToggle"' in frontend
@@ -1102,9 +1260,22 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "api(`/a-share/${encodeURIComponent(symbol)}/fundamentals`)" in frontend
     assert "async function loadDeepStockOverview(symbol)" in frontend
     assert 'className = "stock-primary-grid"' in frontend
-    assert 'setAttribute("aria-label", "K线区间")' in frontend
+    assert 'setAttribute("aria-label", "K线周期")' in frontend
+    assert 'setAttribute("aria-label", "K线查看范围")' in frontend
     assert "function readableResearchPreview(value)" in frontend
-    assert "当前研究摘要" in frontend
+    assert "当前研究重点" in frontend
+    assert 'openThesisEvidence.textContent = "查看完整证据"' in frontend
+    assert 'workspaceSummary.append(thesisCard, changesCard, tasksCard)' in frontend
+    assert 'changeItems.slice(0, 2)' in frontend
+    assert 'pendingActions.slice(0, 2)' in frontend
+    assert "stock-research-map" not in frontend
+    assert "已确认的证据" in frontend
+    assert "关键反证与压力" in frontend
+    assert "仍需补证" in frontend
+    assert "判断失效条件" in frontend
+    assert "下一步研究" in frontend
+    assert frontend.index('id="stockSpaceAiPane"') < frontend.index('id="deepStockJourney"') < frontend.index('id="stockSpaceEvidencePane"')
+    assert 'aiPane.insertBefore(agent, journey)' in frontend
     assert "apiResult(`/v1/stocks/${encoded}/page?range=1y`)" in frontend
     assert 'const shareholders = moduleData("shareholders")' in frontend
     assert 'const expectations = moduleData("analyst_expectations")' in frontend
@@ -1112,6 +1283,9 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'const information = moduleData("information")' in frontend
     assert "const quoteLabel = quote?.quote_label" in frontend
     assert "maybeUpdateDiagnosis" in frontend
+    assert "fundProductDiagnosisContext" in frontend
+    assert "renderFundProductDiagnosis" in frontend
+    assert "基金净值与 ETF 场内成交价分开呈现" in frontend
     assert "const symbol = inferDiagnosisSymbol(data, question)" in frontend
     assert "const marketKey = inferDiagnosisMarketKey(data, question)" in frontend
     assert 'const marketTerms = new Set(["A", "AI", "ETF"' in frontend
@@ -1140,6 +1314,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'id="toggleQuickActions"' in frontend
     assert "data-quick-secondary" in frontend
     assert 'container.classList.toggle("expanded", expanded)' in frontend
+    assert 'expanded ? "收起工具" : "全部工具"' in frontend
     assert "研究行动与结果回填" in frontend
     assert 'id="conversationQualitySummary"' in frontend
     assert 'id="conversationQualityIssues"' in frontend
@@ -1150,6 +1325,8 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "首个安全可见" in frontend
     assert 'new URLSearchParams(window.location.search).get("qa") === "1"' in frontend
     assert 'quality_scope: state.evaluationMode ? "evaluation" : "user"' in frontend
+    assert 'const nextEvaluationMode = data.quality_scope === "evaluation"' in frontend
+    assert "state.evaluationMode = nextEvaluationMode" in frontend
     send_chat = frontend[
         frontend.index("async function sendChat(message, options = {})") :
     ]
@@ -2567,6 +2744,66 @@ def test_user_and_common_knowledge_are_retrieved_and_written_to_prompt(client, a
     assert not stored.exists()
 
 
+def test_financial_education_question_uses_builtin_guides_and_advisor_prompt(
+    client, app
+):
+    user = create_user(client, "Financial Education User")
+
+    response = client.post(
+        "/me/chat",
+        json={"message": "基金和ETF有什么区别，哪个更适合长期持有？"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "general_research"
+    assert payload["research_targets"] == []
+    assert payload["evidence"]["financial_advisor_context"]["status"] == (
+        "needs_profile"
+    )
+    titles = {item["title"] for item in payload["knowledge"]["items"]}
+    assert "基金与ETF实用指南" in titles
+    assert "金融产品基础：先看用途、风险、流动性和成本" in titles
+
+    run = app.state.database.get_run(payload["run_id"], user["id"])
+    prompt_path = (
+        Path(app.state.database.get_user(user["id"])["workspace_path"])
+        / "runs"
+        / run["id"]
+        / "prompt.md"
+    )
+    prompt = prompt_path.read_text(encoding="utf-8")
+    assert "金融顾问、研究助手和教育者" in prompt
+    assert "金融顾问与教育者回答要求" in prompt
+    assert "基金与ETF实用指南" in prompt
+    assert "最多追问两个" in prompt
+    assert "基金与ETF概念精度合同" in prompt
+    assert "ETF是基金的一种" in prompt
+    assert "不得写成卖出后一定更快到账" in prompt
+
+
+def test_retirement_fund_choice_routes_to_advisor_not_stock_screen(client):
+    create_user(client, "Retirement Suitability User")
+
+    response = client.post(
+        "/me/chat",
+        json={
+            "message": (
+                "我快退休了，有一笔闲钱，不知道该选股票基金还是债券基金。"
+                "如果信息不足，请先问关键问题。"
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "general_research"
+    assert payload["evidence"]["financial_advisor_context"]["status"] == (
+        "needs_profile"
+    )
+    assert "profile" not in payload["evidence"]
+
+
 def test_stock_chat_uses_latest_server_report_when_live_price_refresh_fails(
     client, app, monkeypatch
 ):
@@ -2595,16 +2832,26 @@ def test_stock_chat_uses_latest_server_report_when_live_price_refresh_fails(
         / payload["run_id"]
         / "prompt.md"
     ).read_text()
-    assert "不能机械输出一份全景研究报告" in prompt
-    assert "最多四个小标题" in prompt
-    assert "不得解释内部行情为何未返回" in prompt
-    assert "独立于大盘/行业" in prompt
+    assert "即时涨跌问答，不是完整研究报告" in prompt
+    assert "最多三个" in prompt
+    assert "不展示内部字段或取数过程" in prompt
+    assert "不能据此排除个股独立因素" in prompt
 
 
 def test_stock_chat_uses_saved_report_only_as_evidence_for_live_hermes_answer(
     client, app, monkeypatch
 ):
     create_user(client, "即时研究用户")
+    watchlist = client.post(
+        "/me/watchlist",
+        json={
+            "symbol": "000063",
+            "name": "中兴通讯",
+            "market": "A股",
+            "thesis": "持续跟踪价格、基本面与风险证据变化",
+        },
+    )
+    assert watchlist.status_code == 200
     report = client.get("/research-reports/000063")
     assert report.status_code == 200
 
@@ -3078,6 +3325,49 @@ def test_market_pulse_public_copy_hides_missing_metric_placeholders(app):
     assert "—%" not in public["summary"]
     assert "—%" not in public["body"]
     assert "跨市场交易时点不同" in public["body"]
+
+
+def test_market_pulse_public_copy_uses_saved_a_share_structure(app):
+    public = app.state.articles._public_article(
+        {
+            "id": "a-share-market-pulse",
+            "title": "市场脉冲｜主要指数跨市场分时，通信设备板块涨幅靠前",
+            "summary": "截至证据包所列市场时间，代表性指数状态为跨市场分时。",
+            "body": "# 市场脉冲\n\n旧市场摘要。",
+            "status": "completed",
+            "evidence": {
+                "market_brief": {
+                    "market_state": {"label": "跨市场分时"},
+                    "market_breadth": {
+                        "status": "available",
+                        "market_date": "2026-07-27",
+                        "breadth": {
+                            "total": 5532,
+                            "advancers": 5194,
+                            "decliners": 286,
+                            "unchanged": 52,
+                            "state": "普涨",
+                        },
+                        "distribution": {"median_pct_change": 2.7245},
+                        "turnover": {"total_amount_100m_cny": 20883.4},
+                    },
+                    "hot_sectors": {
+                        "sectors": [
+                            {"name": "通信设备", "pct_change": 4.36}
+                        ]
+                    },
+                }
+            },
+        }
+    )
+
+    assert public["title"] == "市场脉冲｜A股普涨，通信设备板块涨幅靠前"
+    assert "上涨 5,194 只" in public["summary"]
+    assert "下跌 286 只" in public["summary"]
+    assert "涨跌幅中位数 +2.72%" in public["summary"]
+    assert "当日累计成交额 20,883 亿元" in public["summary"]
+    assert "通信设备板块涨幅 +4.36%" in public["summary"]
+    assert "跨市场分时" not in public["summary"]
 
 
 def test_market_pulse_is_withheld_when_index_evidence_is_missing(settings):

@@ -66,6 +66,7 @@ def test_focused_price_move_persists_evidence_not_generic_library_sources() -> N
     assert metadata["research_targets"] == [
         {"symbol": "000063.SZ", "name": "中兴通讯"}
     ]
+    assert metadata["conversation_scope"] == "stock"
     assert result["assistant_message_id"] == "message-1"
     assert result["knowledge"]["coverage"] == {"matched_documents": 1}
     assert quality.user_ids == ["user-1"]
@@ -95,4 +96,24 @@ def test_comparison_persists_all_structured_research_targets() -> None:
         {"symbol": "NVDA", "name": "英伟达"},
     ]
     assert database.messages[0]["metadata"]["research_targets"] == expected
+    assert database.messages[0]["metadata"]["conversation_scope"] == "stock"
     assert result["research_targets"] == expected
+
+
+def test_fund_context_persists_a_dedicated_conversation_scope() -> None:
+    service, database, _ = build_service()
+    service.persist(
+        {"answer": "基金回答"},
+        user_id="user-fund",
+        conversation={"title": "股票基金还是债券基金"},
+        conversation_id="conversation-fund",
+        knowledge_context={"items": [], "coverage": {}},
+        model_tier="economy",
+        assistant_content="基金回答",
+        response_intent="general_research",
+        evidence_payload={
+            "financial_advisor_context": {"status": "needs_profile"},
+        },
+    )
+
+    assert database.messages[0]["metadata"]["conversation_scope"] == "funds"

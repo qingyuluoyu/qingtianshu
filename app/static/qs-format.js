@@ -19,3 +19,36 @@ function pct(value) {
       if (absolute >= 1e4) return `${(number / 1e4).toFixed(2)}万${suffix}`;
       return `${numeric(number)}${suffix}`;
     }
+
+    function splitAnswerFootnotes(text) {
+      const value = String(text || "");
+      const marker = /^###\s+成分行情口径补充\s*$/m;
+      const match = marker.exec(value);
+      if (!match || match.index <= 0) return {main: value, footnotes: ""};
+      return {
+        main: value.slice(0, match.index).trim(),
+        footnotes: value.slice(match.index + match[0].length).trim()
+      };
+    }
+
+    function appendAnswerFootnotes(node, text) {
+      if (!text) return;
+      const details = document.createElement("details");
+      details.className = "answer-footnotes";
+      const summary = document.createElement("summary");
+      summary.textContent = "数据口径";
+      const body = document.createElement("div");
+      body.className = "answer-footnotes-body";
+      body.appendChild(renderMarkdown(text));
+      details.append(summary, body);
+      node.appendChild(details);
+    }
+
+    function renderFinalAnswerBody(node, text) {
+      const sections = splitAnswerFootnotes(text);
+      const body = document.createElement("div");
+      body.className = "message-body";
+      body.appendChild(renderMarkdown(sections.main));
+      node.appendChild(body);
+      appendAnswerFootnotes(node, sections.footnotes);
+    }

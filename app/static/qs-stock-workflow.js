@@ -540,6 +540,20 @@ function positionIdempotencyKey(prefix) {
       section.append(title, copy); container.appendChild(section);
     }
 
+    function appendTradeReviewPriceFacts(container, observation) {
+      const section = document.createElement("section"); section.className = "review-detail-section trade-review-price-facts";
+      const title = document.createElement("div"); title.className = "review-detail-section-title"; title.textContent = "后续价格事实";
+      const metrics = document.createElement("div"); metrics.className = "review-detail-metrics";
+      appendTradeReviewMetric(metrics, "操作价", observation.operation_price == null ? "—" : numeric(observation.operation_price));
+      appendTradeReviewMetric(metrics, `第 ${observation.required_sessions || 3} 日收盘`, observation.end_price == null ? "等待数据" : numeric(observation.end_price));
+      appendTradeReviewMetric(metrics, "价格变化", observation.price_change_pct == null ? "等待数据" : pct(observation.price_change_pct));
+      appendTradeReviewMetric(metrics, "数据截至", observation.end_date || "等待数据");
+      const details = document.createElement("details"); details.className = "trade-review-data-details";
+      const summary = document.createElement("summary"); summary.textContent = "查看价格计算口径";
+      const copy = document.createElement("div"); copy.className = "trade-center-detail-copy"; copy.textContent = observation.summary || "后续交易日数据仍在积累。";
+      details.append(summary, copy); section.append(title, metrics, details); container.appendChild(section);
+    }
+
     function appendTradeReviewFollowup(container, review, refreshCallback = null) {
       const version = tradeReviewVersion(review) || {};
       const improvement = String(version.improvement_text || "").trim();
@@ -629,7 +643,34 @@ function positionIdempotencyKey(prefix) {
     function renderTradeReviewCenterDetail(review, packet = null) {
       const container = $("tradeReviewDetail"); container.innerHTML = "";
       if (!review) {
-        container.innerHTML = '<div class="review-detail-empty"><div class="review-detail-empty-icon">◇</div><strong>选择一条真实操作</strong><span>价格结果、操作时上下文和逻辑复盘会分开显示。</span></div>';
+        if (packet?.emptyMode === "onboarding") {
+          const onboarding = document.createElement("section"); onboarding.className = "trade-review-onboarding";
+          const intro = document.createElement("div"); intro.className = "trade-review-onboarding-intro";
+          const kicker = document.createElement("span"); kicker.className = "trade-review-onboarding-kicker"; kicker.textContent = "第一次使用";
+          const title = document.createElement("strong"); title.className = "trade-review-onboarding-title"; title.textContent = "完成 3 步，交易复盘会自动出现在这里";
+          const copy = document.createElement("p"); copy.textContent = "复盘不是让系统替你评价输赢，而是把操作前计划、实际执行和后续价格事实放在一起，帮助你修正下一次判断。";
+          intro.append(kicker, title, copy);
+          const steps = document.createElement("ol"); steps.className = "trade-review-onboarding-steps";
+          for (const [index, stepTitle, stepCopy] of [
+            [1, "选择一只关注股票", "从“我的关注”进入对应股票研究空间。"],
+            [2, "记录减仓或卖出", "在“任务与操作”保存真实操作，可关联原操作计划。"],
+            [3, "等待后续交易日", "三个完整交易日后，价格结果与逻辑复盘会分开呈现。"]
+          ]) {
+            const step = document.createElement("li");
+            const marker = document.createElement("span"); marker.textContent = String(index);
+            const body = document.createElement("div");
+            const heading = document.createElement("strong"); heading.textContent = stepTitle;
+            const detail = document.createElement("small"); detail.textContent = stepCopy;
+            body.append(heading, detail); step.append(marker, body); steps.appendChild(step);
+          }
+          const action = document.createElement("button"); action.type = "button"; action.className = "btn primary"; action.textContent = "去记录一次真实操作";
+          action.addEventListener("click", () => activateWorkspace("watchlist"));
+          onboarding.append(intro, steps, action); container.appendChild(onboarding);
+          return;
+        }
+        const empty = document.createElement("div"); empty.className = "review-detail-empty review-empty-action";
+        empty.innerHTML = '<div class="review-detail-empty-icon">◇</div><strong>没有匹配的交易复盘</strong><span>清除搜索词或更换状态后，再从左侧选择一条记录。</span>';
+        container.appendChild(empty);
         return;
       }
       const operation = review.operation || {};
@@ -644,23 +685,19 @@ function positionIdempotencyKey(prefix) {
       const badge = document.createElement("span"); badge.className = `review-status ${review.status}`; badge.textContent = tradeReviewStatusLabel(review.status);
       head.append(identity, badge); container.appendChild(head);
 
-      const metrics = document.createElement("div"); metrics.className = "review-detail-metrics";
-      appendTradeReviewMetric(metrics, "操作方向", actionPlanTypeLabel(operation.operation_type));
-      appendTradeReviewMetric(metrics, "操作价格", operation.price ? numeric(operation.price) : "—");
-      appendTradeReviewMetric(metrics, "操作数量", operation.quantity ? numeric(operation.quantity) : "—");
-      appendTradeReviewMetric(metrics, "价格变化", observation.price_change_pct == null ? "等待数据" : pct(observation.price_change_pct));
-      container.appendChild(metrics);
-
-      appendTradeReviewSection(container, "确定性价格结果", observation.summary || version.price_result || "后续交易日数据仍在积累。", observation.end_date ? `数据截至 ${observation.end_date}` : "来自已落库日线");
-      appendTradeReviewSection(container, "操作时记录", operation.reason_text || "没有填写操作理由。", plan.id ? "已关联用户操作计划" : "未关联操作计划");
-      if (plan.trigger_text) appendTradeReviewSection(container, "原操作计划", plan.trigger_text, actionPlanTargetText(plan));
-      if (version.logic_result) appendTradeReviewSection(container, "逻辑复盘", version.logic_result, `版本 ${version.version_no || 1} · ${version.created_source === "ai" ? "AI草稿" : "用户版本"}`);
-      if (version.plan_deviation) appendTradeReviewSection(container, "计划偏离", version.plan_deviation);
-      if (version.improvement_text) appendTradeReviewSection(container, "下一次改进", version.improvement_text);
+      appendTradeReviewPriceFacts(container, observation);
+      const operationCopy = `实际记录：${actionPlanTypeLabel(operation.operation_type)} ${operation.quantity ? `${numeric(operation.quantity)} 股` : ""}。${operation.reason_text || "没有填写操作理由。"}`;
+      const planCopy = plan.trigger_text ? `\n原计划：${plan.trigger_text}${actionPlanTargetText(plan) ? `（${actionPlanTargetText(plan)}）` : ""}` : "\n原计划：没有关联已保存计划。";
+      appendTradeReviewSection(container, "当时为什么操作", `${operationCopy}${planCopy}`, readableTime(operation.operated_at || review.created_at));
+      if (version.logic_result) appendTradeReviewSection(container, "判断依据复盘", version.logic_result, `版本 ${version.version_no || 1} · ${version.created_source === "ai" ? "AI草稿" : "用户版本"}`);
+      if (version.plan_deviation) appendTradeReviewSection(container, "与原计划的差异", version.plan_deviation);
+      if (version.improvement_text) appendTradeReviewSection(container, "下次怎么做得更好", version.improvement_text);
       if (version.bias_tags?.length) {
+        const tagSection = document.createElement("section"); tagSection.className = "review-detail-section";
+        const tagTitle = document.createElement("div"); tagTitle.className = "review-detail-section-title"; tagTitle.textContent = "待你确认的记录问题";
         const tags = document.createElement("div"); tags.className = "trade-center-tags";
         version.bias_tags.forEach(value => { const tag = document.createElement("span"); tag.className = "trade-center-tag"; tag.textContent = value; tags.appendChild(tag); });
-        container.appendChild(tags);
+        tagSection.append(tagTitle, tags); container.appendChild(tagSection);
       }
       appendTradeReviewFollowup(container, review, async () => { await loadTradeReviewCenter(review.id); void loadTodayOverview(); });
 
@@ -698,6 +735,8 @@ function positionIdempotencyKey(prefix) {
       const summary = state.tradeReviewCenterSummary;
       $("tradeReviewSummary").textContent = `显示 ${summary.filtered || 0} / ${summary.total || 0} 条 · ${summary.actionable || 0} 条待处理`;
       const container = $("tradeReviewList"); container.innerHTML = "";
+      const workspace = container.closest(".review-run-workspace");
+      workspace?.classList.remove("empty-onboarding");
       for (const review of state.tradeReviewCenter) {
         const operation = review.operation || {};
         const observation = review.price_observation || {};
@@ -712,7 +751,22 @@ function positionIdempotencyKey(prefix) {
         row.append(head, detail, price, meta); row.addEventListener("click", () => openTradeReviewCenterItem(review.id)); container.appendChild(row);
       }
       if (!container.children.length) {
-        container.innerHTML = '<div class="empty">当前筛选条件下没有交易复盘。真实操作完成后会自动进入这里。</div>';
+        const hasActiveFilter = Boolean($("tradeReviewStatus").value || $("tradeReviewSearch").value.trim());
+        const hasAnyReview = Number(summary.total || 0) > 0;
+        if (!hasActiveFilter && !hasAnyReview) {
+          workspace?.classList.add("empty-onboarding");
+          renderTradeReviewCenterDetail(null, {emptyMode: "onboarding"});
+          return;
+        }
+        const empty = document.createElement("div"); empty.className = "review-list-empty";
+        const copy = document.createElement("span"); copy.textContent = "当前筛选条件下没有交易复盘。";
+        const action = document.createElement("button"); action.type = "button"; action.className = "btn"; action.textContent = "清除筛选";
+        action.addEventListener("click", () => {
+          $("tradeReviewStatus").value = "";
+          $("tradeReviewSearch").value = "";
+          void loadTradeReviewCenter().catch(() => { $("tradeReviewSummary").textContent = "筛选结果暂时无法读取"; });
+        });
+        empty.append(copy, action); container.appendChild(empty);
         renderTradeReviewCenterDetail(null);
         return;
       }

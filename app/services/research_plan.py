@@ -100,19 +100,32 @@ class ResearchPlanService:
             ),
         ),
         (
-            "price_action",
-            "行情变化与可能驱动",
+            "price_cause",
+            "行情涨跌原因",
             (
                 "为什么跌",
                 "为什么涨",
+                "为什么下跌",
+                "为什么上涨",
                 "为何跌",
                 "为何涨",
+                "为何下跌",
+                "为何上涨",
+                "怎么跌了",
+                "怎么涨了",
                 "大跌",
                 "大涨",
-                "下跌",
-                "上涨",
                 "涨停",
                 "跌停",
+                "涨跌原因",
+            ),
+        ),
+        (
+            "price_action",
+            "价格与技术状态",
+            (
+                "下跌",
+                "上涨",
                 "走势",
                 "技术面",
                 "盘中",
@@ -131,6 +144,18 @@ class ResearchPlanService:
     )
 
     _FOCUS_MODULES = {
+        "price_cause": {
+            "required": (
+                "market",
+                "company_information",
+                "event_timeline",
+            ),
+            "optional": (),
+            "skills": (
+                "a-share-information",
+                "event-timeline",
+            ),
+        },
         "price_action": {
             "required": (
                 "market",
@@ -252,6 +277,8 @@ class ResearchPlanService:
             for key, label, terms in self._FOCUS_RULES
             if any(term.lower() in effective_text.lower() for term in terms)
         ]
+        if any(key == "price_cause" for key, _ in matched):
+            matched = [item for item in matched if item[0] != "price_action"]
         comprehensive = any(
             term in effective_text
             for term in (

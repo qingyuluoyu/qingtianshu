@@ -17,10 +17,10 @@
         </div>
       </div>
       <nav class="sidebar-nav">
-        <button class="nav-item primary-entry active" data-page="insights" aria-label="今日观察" title="今日观察"><span class="nav-icon">◈</span><span class="nav-text">今日观察</span></button>
+        <button class="nav-item primary-entry active" data-page="insights" aria-label="市场总览" title="市场总览"><span class="nav-icon">◈</span><span class="nav-text">市场总览</span></button>
         <button class="nav-item primary-entry" data-page="watchlist" aria-label="我的关注" title="我的关注"><span class="nav-icon">☆</span><span class="nav-text">我的关注</span></button>
         <button class="nav-item primary-entry" data-page="deep_stock" aria-label="个股研究" title="个股研究"><span class="nav-icon">◎</span><span class="nav-text">个股研究</span></button>
-        <button class="nav-item primary-entry" data-page="agent" aria-label="AI研究" title="AI研究"><span class="nav-icon">✦</span><span class="nav-text">AI研究</span></button>
+        <button class="nav-item primary-entry" data-page="agent" aria-label="AI投研对话" title="AI投研对话"><span class="nav-icon">✦</span><span class="nav-text">AI投研对话</span></button>
         <button class="nav-item" data-page="review" aria-label="复盘中心" title="复盘中心"><span class="nav-icon">◇</span><span class="nav-text">复盘中心</span></button>
         <button class="nav-item" data-page="account" aria-label="个人中心" title="个人中心"><span class="nav-icon">○</span><span class="nav-text">个人中心</span></button>
       </nav>
@@ -35,6 +35,7 @@
               <option value="stock">个股</option>
               <option value="market">大盘</option>
               <option value="screening">选股</option>
+              <option value="funds">基金理财</option>
               <option value="portfolio">关注</option>
               <option value="other">其他</option>
             </select>
@@ -46,7 +47,7 @@
         </div>
       </div>
       <div class="sidebar-spacer"></div>
-      <button class="sidebar-resource-btn" data-page="knowledge" type="button" aria-label="资料库"><span>▤</span> 全部资料</button>
+      <button class="sidebar-resource-btn" data-page="knowledge" type="button" aria-label="金融资料库"><span>▤</span> 金融资料库</button>
       <div class="sidebar-foot">
         行情事实由确定性工具提供<br>
         Agent 负责解释、质疑与记忆
@@ -64,7 +65,7 @@
           <div class="notification-wrap">
             <button id="notificationButton" class="header-icon-button notification-button" type="button" aria-label="打开提醒" aria-expanded="false">◷<span id="notificationCount" class="notification-count" hidden>0</span></button>
             <div id="notificationPanel" class="notification-panel" hidden>
-              <div class="notification-head"><strong>今日提醒</strong><button id="notificationOpenAll" type="button">查看今日观察</button></div>
+              <div class="notification-head"><strong>今日提醒</strong><button id="notificationOpenAll" type="button">查看市场总览</button></div>
               <div id="notificationList" class="notification-list"><div class="notification-empty">正在读取个人研究事项…</div></div>
             </div>
           </div>
@@ -79,7 +80,7 @@
         <section id="methodSection" class="method-review" hidden>
           <section class="panel review-hero">
             <div class="review-hero-main">
-              <div class="method-eyebrow">REVIEW</div>
+              <div class="method-eyebrow">研究复盘</div>
               <div class="method-heading">复盘自己的判断、操作与市场变化。</div>
               <div class="method-copy">个人操作与市场环境分开复盘：先还原当时计划和实际发生，再记录哪些判断需要修正。价格事实由数据计算，逻辑结论仍由用户确认。</div>
             </div>
@@ -133,7 +134,7 @@
                 </div>
               </div>
               <div id="marketReviewList" class="market-review-list"><div class="empty">正在整理市场复盘…</div></div>
-              <div class="market-review-boundary">当前 MVP 先使用已保存的市场短文形成复盘档案，不展示胜率或纪律评分；后续将继续补齐“原预期—实际发生—判断修正—下一步观察”的结构化记录。</div>
+              <div class="market-review-boundary">这里保存的是当时可见的市场事实，便于之后回看判断是否需要修正。历史短文不代表当前行情，也不提供胜率、纪律评分或下一交易日预测。</div>
             </div>
           </section>
 
@@ -295,14 +296,29 @@
         <section id="marketDashboard" class="market-section">
           <div class="market-section-heading">
             <div>
-              <div class="market-section-title">A 股市场全景</div>
-              <div class="market-section-copy">先看核心指数；需要时再展开市场广度、成交和行业结构</div>
+              <div class="market-section-title">A 股今天怎么样</div>
+              <div class="market-section-copy">先看大多数股票的涨跌、成交和领涨方向，再看四个核心指数</div>
             </div>
             <div class="market-section-actions">
               <div id="marketDashboardDate" class="market-date">正在对齐市场数据…</div>
-              <button id="marketDetailToggle" class="btn market-detail-toggle" type="button" aria-expanded="false">展开市场结构</button>
+              <button id="marketDetailToggle" class="btn market-detail-toggle" type="button" aria-expanded="false">查看行业与涨跌明细</button>
             </div>
           </div>
+          <section id="marketQuickRead" class="market-quick-read" aria-label="A股一眼看懂">
+            <div class="market-quick-head">
+              <div>
+                <strong id="marketQuickTitle">A股一眼看懂</strong>
+                <span id="marketQuickMeta">正在汇总全市场涨跌、成交和领涨方向</span>
+              </div>
+            </div>
+            <div id="marketQuickGrid" class="market-quick-grid">
+              <div class="market-quick-card"><span>市场状态</span><strong>更新中</strong><small>正在读取涨跌家数</small></div>
+              <div class="market-quick-card"><span>大多数股票</span><strong>—</strong><small>正在计算涨跌中位数</small></div>
+              <div class="market-quick-card"><span>市场成交</span><strong>—</strong><small>正在汇总当日成交额</small></div>
+              <div class="market-quick-card"><span>领涨方向</span><strong>—</strong><small>正在读取板块表现</small></div>
+            </div>
+          </section>
+          <div class="market-index-heading"><strong>四个核心指数</strong><span>点击任一指数，可交给 Agent 继续解释</span></div>
           <div id="aShareIndexCards" class="ashare-index-grid"><div class="empty">正在读取 A 股指数…</div></div>
 
           <div class="market-dashboard-grid">
@@ -338,43 +354,30 @@
               <div id="sectors" class="sector-table"><div class="empty">正在加载板块轮动…</div></div>
               <div id="sectorSource" class="source-note"></div>
             </article>
-            <article class="market-card">
-              <div class="market-card-head">
-                <div><div class="market-card-title">我的研究脉冲</div><div class="market-card-subtitle">自选股行情变化与下一步复核动作</div></div>
-                <button class="btn" type="button" data-open-page="watchlist">查看全部</button>
-              </div>
-              <div id="watchlistPulse" class="watchlist-pulse"><div class="empty">正在读取个人关注…</div></div>
-              <div id="watchlistPulseSource" class="source-note">只显示当前用户空间中的关注与研究状态。</div>
-            </article>
           </div>
+        </section>
+
+        <section id="insightAsk" class="panel insight-ask">
+          <div class="panel-title">问 Agent：今天市场发生了什么？</div>
+          <div class="insight-ask-copy">可以直接问 A 股大盘、行业轮动、海外市场或新闻影响；Agent 会使用当前页面同一份行情与市场证据回答。</div>
+          <form id="insightAskForm" class="insight-ask-form">
+            <input id="insightQuestion" class="insight-question" type="text" autocomplete="off" placeholder="例如：今天A股为什么普涨？哪些行业在领涨？">
+            <button id="insightAskButton" class="btn primary" type="submit">分析市场</button>
+          </form>
         </section>
 
         <div id="insightSection" class="insight-layout">
           <section class="panel pulse">
             <div class="panel-head">
               <div>
-                <div class="panel-title">研究与市场洞察</div>
-                <div class="panel-subtitle">大盘、个股与研究机会按时间从新到旧汇总，可滚轮连续翻阅</div>
+                <div class="panel-title">市场复盘文章</div>
+                <div class="panel-subtitle">只展示已经保存的大盘事实与结构变化，按时间从新到旧排列，可滚轮连续翻阅</div>
               </div>
+              <button class="btn" type="button" data-open-page="review" data-review-target="market">打开市场复盘</button>
             </div>
-            <div class="insight-tabs" role="tablist" aria-label="洞察分类">
-              <button class="insight-tab active" type="button" data-insight-filter="all">全部</button>
-              <button class="insight-tab" type="button" data-insight-filter="market">大盘</button>
-              <button class="insight-tab" type="button" data-insight-filter="stock">个股</button>
-              <button class="insight-tab" type="button" data-insight-filter="opportunity">机会</button>
-            </div>
-            <div id="articleFeed" class="article-feed"><div class="empty">正在读取市场洞察…</div></div>
+            <div id="articleFeed" class="article-feed"><div class="empty">正在读取市场复盘文章…</div></div>
           </section>
         </div>
-
-        <section id="insightAsk" class="panel insight-ask">
-          <div class="panel-title">继续问清楚</div>
-          <div class="insight-ask-copy">可以询问市场、公司、财报、新闻影响或自己的研究逻辑；发送后进入统一研究 Agent，并保留为新的历史对话。</div>
-          <form id="insightAskForm" class="insight-ask-form">
-            <input id="insightQuestion" class="insight-question" type="text" autocomplete="off" placeholder="例如：中兴通讯这次下跌改变了原来的研究逻辑吗？">
-            <button id="insightAskButton" class="btn primary" type="submit">进入研究 Agent</button>
-          </form>
-        </section>
 
         <section id="todayOverviewGrid" class="today-overview-grid" aria-label="我的研究待办与重要变化" hidden>
           <article class="panel today-overview-card">
@@ -407,7 +410,7 @@
               <div id="searchPageTitle" class="panel-title">搜索结果</div>
               <div id="searchPageSummary" class="panel-subtitle">股票、行业和你的研究记录会分组显示；搜索不会自动发送给 AI。</div>
             </div>
-            <button id="searchPageBack" class="btn" type="button">返回今日观察</button>
+            <button id="searchPageBack" class="btn" type="button">返回市场总览</button>
           </div>
           <div class="search-page-body">
             <div id="searchPageStatus" class="search-page-summary">输入关键词后查看完整结果。</div>
@@ -434,13 +437,13 @@
             </div>
           </div>
           <nav class="screening-section-nav" role="tablist" aria-label="选股研究分区">
-            <button class="active" type="button" role="tab" aria-selected="true" data-screening-jump="general">通用截面筛选</button>
+            <button class="active" type="button" role="tab" aria-selected="true" data-screening-jump="general">按条件选股</button>
             <button type="button" role="tab" aria-selected="false" data-screening-jump="li_zong">李总策略</button>
           </nav>
           <section id="liZongPanel" class="li-zong-panel" aria-labelledby="liZongTitle" data-load-state="idle" hidden>
             <div class="li-zong-head">
               <div>
-                <div class="li-zong-kicker">DETERMINISTIC STRATEGY</div>
+                <div class="li-zong-kicker">规则公开 · 每项可核验</div>
                 <div id="liZongTitle" class="li-zong-title">李总策略</div>
                 <div class="li-zong-copy">独立执行长期基本面、股性与量价规则；满足介入条件只进入重点关注和人工复核，不自动买入、不生成仓位或目标价。</div>
               </div>
@@ -472,7 +475,7 @@
               <div class="li-zong-backtest-head">
                 <div>
                   <div id="liZongBacktestTitle" class="li-zong-history-title">双周等权换仓历史验证</div>
-                  <div class="li-zong-history-copy">在每个历史交易日按当时可得数据运行同一套规则；最早于信号后的下一交易日开盘换仓，任意两次换仓至少间隔10个交易日。本版不计交易成本，沪深300只对照策略实际持仓期间。</div>
+                  <div class="li-zong-history-copy">在每个历史交易日按当时可得数据运行同一套规则；最早于信号后的下一交易日开盘换仓，任意两次换仓至少间隔10个交易日。本版不计交易成本；沪深300只在策略持仓期参与比较，空仓期同步冻结。</div>
                 </div>
                 <div class="li-zong-backtest-periods" role="tablist" aria-label="回测区间">
                   <button type="button" role="tab" data-li-zong-backtest-period="3m">近3个月</button>
@@ -491,7 +494,7 @@
                 <div><span>组合更新</span><strong id="liZongBacktestRebalances">—</strong></div>
               </div>
               <div id="liZongBacktestChart" class="li-zong-backtest-chart"><div class="screener-empty">长期回测数据正在由后台分批生成。</div></div>
-              <div id="liZongBacktestLegend" class="li-zong-history-legend" hidden><span><i class="strategy"></i>李总策略双周等权组合</span><span><i class="benchmark"></i>沪深300同暴露基准</span><span>零交易成本；空仓期两条曲线均冻结</span></div>
+              <div id="liZongBacktestLegend" class="li-zong-history-legend" hidden><span><i class="strategy"></i>李总策略双周等权组合</span><span><i class="benchmark"></i>沪深300同暴露基准</span><span>零交易成本；策略空仓期不计入比较</span></div>
               <div id="liZongBacktestRebalanceList" class="li-zong-backtest-rebalances" hidden></div>
               <div class="li-zong-backtest-boundary">历史表现用于检验策略，不代表未来收益；涨跌停排队、停牌后实际成交和冲击成本仍需进一步模拟。</div>
             </section>
@@ -510,8 +513,8 @@
               <div id="liZongHistoryResults" class="li-zong-history-list"><div class="screener-empty">正在生成近期历史回放…</div></div>
             </section>
           </section>
-          <section id="generalScreenerPanel" aria-label="通用截面筛选">
-            <div class="screener-section-heading"><strong>通用截面筛选</strong><span>适合快速缩小研究范围；与李总策略的长周期规则和盘后触发独立运行。</span></div>
+          <section id="generalScreenerPanel" aria-label="按条件选股">
+            <div class="screener-section-heading"><strong>按条件选股</strong><span>自己选择行业、市值和估值条件，快速缩小需要继续研究的股票范围。</span></div>
             <div class="screener-layout">
             <aside class="screener-controls">
               <h3>设置研究条件</h3>
@@ -571,7 +574,12 @@
                 </div>
                 <div id="stockScreenCountBadge" class="screener-count">— 只</div>
               </div>
-              <div id="stockScreenResults" class="screener-list"><div class="screener-empty">选择模板并执行筛选。每只候选都会展示命中原因、关键指标、缺失项和下一步研究入口。</div></div>
+              <div id="stockScreenExplanation" class="screener-explanation" hidden></div>
+              <details id="stockScreenDataDetails" class="screener-data-details" hidden>
+                <summary>查看数据日期与覆盖范围</summary>
+                <div id="stockScreenDataDetail" class="screener-data-detail"></div>
+              </details>
+              <div id="stockScreenResults" class="screener-list"><div class="screener-empty">先选择研究模板和股票范围，再点击“执行确定性筛选”。结果会说明为什么入选，以及下一步应该核验什么。</div></div>
             </section>
             </div>
           </section>
@@ -581,7 +589,7 @@
           <div class="panel-head">
             <div>
               <div class="panel-title">我的关注</div>
-              <div class="panel-subtitle">把候选、关注与持仓组织为长期研究资产；判断、变化、任务和历史不会因结束跟踪而丢失</div>
+              <div class="panel-subtitle">集中查看关注与持仓股票的最新行情、研究进展和下一步需要核验的事项</div>
             </div>
             <button id="addWatchlist" class="btn primary">＋ 添加关注</button>
           </div>
@@ -594,17 +602,13 @@
             <button id="cancelWatchlistAdd" class="btn" type="button">取消</button>
           </form>
           <div class="watchlist-workspace">
-            <section class="watchlist-report-digest" aria-label="今日研究更新">
-              <div class="watchlist-report-digest-head">
-                <div>
-                  <div class="watchlist-report-digest-title">今日研究更新</div>
-                  <div id="watchlistReportSummary" class="watchlist-report-digest-copy">正在汇总关注股票的预生成报告与最新研究时间…</div>
-                </div>
-                <button id="watchlistAgentBrief" class="btn primary" type="button">让 Agent 即时汇总</button>
-              </div>
-              <div id="watchlistReports" class="watchlist-report-list"><div class="empty">正在读取研究报告…</div></div>
-            </section>
             <div class="watchlist-table-card">
+              <div class="watchlist-section-heading">
+                <div>
+                  <div class="watchlist-section-title">关注股票与行情</div>
+                  <div id="watchlistTableSummary" class="watchlist-section-copy">正在读取关注股票和行情覆盖情况…</div>
+                </div>
+              </div>
               <div class="watchlist-tabs">
                 <button class="active" type="button" data-watchlist-filter="all">全部</button>
                 <button type="button" data-watchlist-filter="holding">持仓</button>
@@ -623,20 +627,30 @@
               </div>
               <div id="watchlist" class="watchlist-table"><div class="empty">正在读取股票研究资产…</div></div>
             </div>
+            <section id="watchlistDetail" class="watchlist-detail"><div class="empty">选择一只股票查看分时、日K、周K和月K</div></section>
             <aside class="watchlist-side">
-              <section class="watchlist-summary-card">
+              <section class="watchlist-summary-card" hidden aria-hidden="true">
                 <div class="watchlist-side-head">研究资产概览</div>
                 <div id="watchlistOverviewStats" class="watchlist-overview-stats"><div class="empty">正在汇总…</div></div>
                 <div id="watchlistStatusDistribution" class="watchlist-status-wrap"></div>
               </section>
               <section class="watchlist-task-card">
-                <div class="watchlist-side-head">近期研究任务</div>
+                <div class="watchlist-side-head">下一步研究</div>
                 <div id="watchlistTasks" class="watchlist-task-list"><div class="empty">正在建立任务清单…</div></div>
               </section>
             </aside>
-            <section id="watchlistDetail" class="watchlist-detail"><div class="empty">选择一项研究资产查看分时、日线和周线</div></section>
+            <section class="watchlist-report-digest" aria-label="关注股票研究报告">
+              <div class="watchlist-report-digest-head">
+                <div>
+                  <div class="watchlist-report-digest-title">关注股票研究报告</div>
+                  <div id="watchlistReportSummary" class="watchlist-report-digest-copy">正在整理最近生成的研究报告…</div>
+                </div>
+                <button id="watchlistAgentBrief" class="btn primary" type="button">让 Agent 汇总关注股票</button>
+              </div>
+              <div id="watchlistReports" class="watchlist-report-list"><div class="empty">正在读取研究报告…</div></div>
+            </section>
           </div>
-          <div id="watchlistSource" class="source-note">关系、优先级、跟踪状态和正式判断按用户隔离保存；结束跟踪不会删除原研究空间。</div>
+          <div id="watchlistSource" class="source-note">这里会保留每只股票的关注状态、研究判断和历史记录，方便后续持续跟踪。</div>
         </section>
 
         <section id="deepStockPanel" class="panel research-page-panel deep-stock-panel" hidden>
@@ -664,10 +678,10 @@
           </div>
           <section id="stockSpaceOverviewPane" class="stock-space-pane" data-stock-space-pane="overview">
             <div id="deepStockOverview" class="deep-stock-overview"><div class="empty">正在准备当前判断、重要变化、待处理事项与行情证据…</div></div>
-            <div id="deepStockJourney" class="stock-research-journey"></div>
           </section>
           <section id="stockSpaceAiPane" class="stock-space-pane" data-stock-space-pane="ai" hidden>
             <div id="deepStockContent" class="deep-stock-empty">正在恢复绑定对话。系统会读取已有研究阶段、证据和历史消息，不会新建重复会话。</div>
+            <div id="deepStockJourney" class="stock-research-journey"></div>
           </section>
           <section id="stockSpaceEvidencePane" class="stock-space-pane" data-stock-space-pane="evidence" hidden>
             <div id="deepStockEvidence" class="stock-space-evidence"><div class="empty">正在整理数据与证据…</div></div>
@@ -683,8 +697,8 @@
         <section id="accountPanel" class="panel research-page-panel account-page" hidden>
           <div class="panel-head">
             <div>
-              <div class="panel-title">个人中心</div>
-              <div class="panel-subtitle">查看当前个人空间、研究资产、资料与服务状态；只展示真实数据</div>
+              <div class="panel-title">我的研究空间</div>
+              <div class="panel-subtitle">查看关注、对话、资料与风险画像；账户技术信息收在页面末尾</div>
             </div>
           </div>
           <div class="account-content">
@@ -708,36 +722,80 @@
               <article class="account-metric"><span>资料库文档</span><strong id="accountKnowledgeCount">0</strong></article>
               <article class="account-metric"><span>待处理研究项</span><strong id="accountPendingCount">0</strong></article>
             </section>
-            <section class="account-section-grid">
-              <article class="account-card">
-                <div class="account-card-title">账户与会话</div>
-                <div class="account-card-copy">当前为单设备匿名个人空间，不冒充正式账号系统。</div>
-                <div class="account-list">
-                  <div class="account-row"><span>用户标识</span><strong id="accountUserId">—</strong></div>
-                  <div class="account-row"><span>创建时间</span><strong id="accountCreatedAt">—</strong></div>
-                  <div class="account-row"><span>会话有效期</span><strong id="accountSessionExpires">—</strong></div>
+            <section class="account-risk-profile" aria-labelledby="riskProfileTitle">
+              <div class="account-risk-head">
+                <div>
+                  <div class="account-risk-eyebrow">由你确认的个人事实</div>
+                  <h2 id="riskProfileTitle">理财需求与风险画像</h2>
+                  <p>先回答 7 个通俗问题，再保存核对，最后由你决定是否让 AI 使用。Agent 不会从聊天中自动修改这些答案。</p>
                 </div>
-              </article>
-              <article class="account-card">
-                <div class="account-card-title">研究资产</div>
-                <div class="account-card-copy">这些数量来自当前用户的真实关注、对话、资料和长期股票空间。</div>
-                <div class="account-list">
-                  <div class="account-row"><span>研究模式</span><strong id="accountResearchMode">—</strong></div>
-                  <div class="account-row"><span>数据健康</span><strong id="accountDataHealth">—</strong></div>
-                  <div class="account-row"><span>后台刷新</span><strong id="accountBackgroundJobs">—</strong></div>
+                <div id="riskProfileState" class="risk-profile-state">尚未填写</div>
+              </div>
+              <ol class="risk-profile-steps" aria-label="风险画像填写流程">
+                <li id="riskProfileStepAnswer" class="risk-profile-step active">
+                  <span>1</span>
+                  <div><strong>回答 7 个问题</strong><small id="riskProfileProgressText">已回答 0/7</small></div>
+                </li>
+                <li id="riskProfileStepSave" class="risk-profile-step">
+                  <span>2</span>
+                  <div><strong>保存并核对</strong><small>先保存，不会立即给 AI</small></div>
+                </li>
+                <li id="riskProfileStepConfirm" class="risk-profile-step">
+                  <span>3</span>
+                  <div><strong>确认让 AI 使用</strong><small>只有你确认后才生效</small></div>
+                </li>
+              </ol>
+              <div class="risk-profile-progress">
+                <div id="riskProfileProgressBar" class="risk-profile-progress-track" role="progressbar" aria-label="风险画像回答进度" aria-valuemin="0" aria-valuemax="7" aria-valuenow="0"><span></span></div>
+                <div id="riskProfileNextStep" class="risk-profile-next-step">请从第 1 题开始</div>
+              </div>
+              <div id="riskProfileConfirmed" class="risk-profile-confirmed" hidden></div>
+              <form id="riskProfileForm" class="risk-profile-form">
+                <div id="riskProfileQuestions" class="risk-profile-questions"><div class="empty">正在读取问卷…</div></div>
+                <div class="risk-profile-actions">
+                  <button id="riskProfileSave" class="btn" type="submit">保存并核对</button>
+                  <button id="riskProfileConfirm" class="btn primary" type="button" disabled>确认让 AI 使用</button>
+                  <span id="riskProfileStatus" class="risk-profile-status" aria-live="polite">先完成 7 个问题；保存后仍需你再次确认。</span>
                 </div>
-              </article>
-              <article class="account-card">
-                <div class="account-card-title">隐私、用量与版本</div>
-                <div class="account-card-copy">生产账号、多设备恢复、导出、账户删除和 BYOK 属于后续版本。</div>
-                <div class="account-list">
-                  <div class="account-row"><span>隐私边界</span><strong>个人上下文按用户隔离</strong></div>
-                  <div class="account-row"><span>会员与额度</span><strong>内部 MVP 暂未启用计费</strong></div>
-                  <div class="account-row"><span>模型连接</span><strong>由服务端安全管理</strong></div>
-                </div>
-              </article>
+              </form>
+              <div id="riskProfileBoundary" class="account-boundary">聊天内容不会自动改写正式画像；你可以随时重新填写，但新版本仍需再次确认。</div>
             </section>
-            <div class="account-boundary">当前页面不展示虚构会员、青豆、付费档位或账户安全能力。仅当后端已有真实对象和可验证流程时，才会增加相应操作。</div>
+            <details class="account-service-details">
+              <summary>
+                <span>服务、隐私与版本说明</span>
+                <small>需要排查账户或数据状态时再展开</small>
+              </summary>
+              <section class="account-section-grid">
+                <article class="account-card">
+                  <div class="account-card-title">账户与会话</div>
+                  <div class="account-card-copy">当前为单设备匿名个人空间，不冒充正式账号系统。</div>
+                  <div class="account-list">
+                    <div class="account-row"><span>用户标识</span><strong id="accountUserId">—</strong></div>
+                    <div class="account-row"><span>创建时间</span><strong id="accountCreatedAt">—</strong></div>
+                    <div class="account-row"><span>会话有效期</span><strong id="accountSessionExpires">—</strong></div>
+                  </div>
+                </article>
+                <article class="account-card">
+                  <div class="account-card-title">研究服务状态</div>
+                  <div class="account-card-copy">这些状态来自当前用户的真实研究空间和后台服务。</div>
+                  <div class="account-list">
+                    <div class="account-row"><span>研究模式</span><strong id="accountResearchMode">—</strong></div>
+                    <div class="account-row"><span>数据健康</span><strong id="accountDataHealth">—</strong></div>
+                    <div class="account-row"><span>后台刷新</span><strong id="accountBackgroundJobs">—</strong></div>
+                  </div>
+                </article>
+                <article class="account-card">
+                  <div class="account-card-title">隐私与版本边界</div>
+                  <div class="account-card-copy">生产账号、多设备恢复、导出、账户删除和 BYOK 属于后续版本。</div>
+                  <div class="account-list">
+                    <div class="account-row"><span>隐私边界</span><strong>个人上下文按用户隔离</strong></div>
+                    <div class="account-row"><span>会员与额度</span><strong>内部 MVP 暂未启用计费</strong></div>
+                    <div class="account-row"><span>模型连接</span><strong>由服务端安全管理</strong></div>
+                  </div>
+                </article>
+              </section>
+              <div class="account-boundary">当前页面不展示虚构会员、青豆、付费档位或账户安全能力。仅当后端已有真实对象和可验证流程时，才会增加相应操作。</div>
+            </details>
           </div>
         </section>
 
@@ -809,9 +867,9 @@
           </div>
           <section id="agentEntryHub" class="agent-entry-hub" aria-label="开始金融研究">
             <div class="agent-entry-intro">
-              <div class="agent-entry-eyebrow">即时研究入口</div>
-              <div class="agent-entry-title">从一个明确对象开始</div>
-              <div class="agent-entry-copy">每次点击都会读取最新可用数据并由 Hermes 即时生成。事实、反方证据、失效条件和数据时间会分开呈现，不调用预存答案。</div>
+              <div class="agent-entry-eyebrow">开始研究</div>
+              <div class="agent-entry-title">你现在想了解什么？</div>
+              <div class="agent-entry-copy">可以直接问大盘、股票、基金、ETF、财报或理财常识，也可以使用下面的独立工具。AI 会先回答问题，再说明关键依据和仍不能确认的地方。</div>
               <div id="agentResumeResearch" class="agent-entry-resume" hidden>
                 <div class="agent-entry-resume-copy">
                   <span class="agent-entry-resume-label">继续上次研究</span>
@@ -823,17 +881,17 @@
             </div>
             <article class="agent-entry-card">
               <div>
-                <strong>诊大盘</strong>
-                <span>诊断 A 股主要指数、全市场广度、成交与行业结构，不预测下一交易日涨跌。</span>
+                <strong>看今天大盘</strong>
+                <span>查看主要指数、涨跌家数、成交额和领涨行业。</span>
               </div>
               <div class="agent-entry-actions">
-                <button id="agentMarketDiagnosis" class="btn primary" type="button">即时诊断大盘</button>
+                <button id="agentMarketDiagnosis" class="btn primary" type="button">分析今天大盘</button>
               </div>
             </article>
             <article class="agent-entry-card">
               <div>
-                <strong>诊个股</strong>
-                <span>输入股票名称、6 位代码或完整代码；歧义结果不会被静默选中。</span>
+                <strong>研究一只股票</strong>
+                <span>输入名称或代码，进入这只股票的长期研究对话。</span>
               </div>
               <form id="agentStockDiagnosisForm" class="agent-stock-diagnosis-form">
                 <input id="agentStockDiagnosisQuery" type="search" autocomplete="off" aria-label="诊个股股票名称或代码" placeholder="如 贵州茅台 / 600519">
@@ -841,14 +899,28 @@
               </form>
               <div id="agentStockDiagnosisStatus" class="agent-entry-status" aria-live="polite"></div>
             </article>
-            <article class="agent-entry-card">
+            <article class="agent-entry-card screening-entry-card">
               <div>
-                <strong>智能选股</strong>
-                <span>先用透明、可解释规则形成研究候选，再进入个股空间核验证据。</span>
+                <strong>按规则选股</strong>
+                <span>使用公开筛选条件查看候选，再逐只核验证据。</span>
               </div>
               <div class="agent-entry-actions">
-                <button class="btn" type="button" data-open-page="screening">打开透明选股</button>
+                <button class="btn" type="button" data-open-page="screening">打开选股</button>
               </div>
+            </article>
+            <article class="agent-entry-card fund-entry-card">
+              <div>
+                <strong>比较基金与 ETF</strong>
+                <span>按相同窗口比较规模和历史收益；场内成交价与基金净值会分开显示。</span>
+              </div>
+              <form id="fundComparisonForm" class="fund-comparison-form">
+                <label><span>产品一</span><input id="fundComparisonFirst" type="search" autocomplete="off" aria-label="第一个基金或ETF" placeholder="如 510300"></label>
+                <label><span>产品二</span><input id="fundComparisonSecond" type="search" autocomplete="off" aria-label="第二个基金或ETF" placeholder="如 159915"></label>
+                <button id="fundComparisonSubmit" class="btn primary" type="submit">比较</button>
+              </form>
+              <div id="fundComparisonStatus" class="agent-entry-status" aria-live="polite"></div>
+              <div id="fundComparisonChoices" class="fund-comparison-choices" hidden></div>
+              <div id="fundComparisonResult" class="fund-comparison-result" hidden></div>
             </article>
           </section>
           <aside class="agent-history" aria-label="历史研究对话">
@@ -866,6 +938,7 @@
                 <option value="stock">个股</option>
                 <option value="market">大盘</option>
                 <option value="screening">选股</option>
+                <option value="funds">基金理财</option>
                 <option value="portfolio">关注</option>
                 <option value="other">其他</option>
               </select>
@@ -906,26 +979,35 @@
             </div>
           </section>
           <div id="messages" class="messages">
-            <div class="message agent">你好，我是清数智算。你可以直接问市场、个股、新闻、财报或原研究逻辑；我会结合实时数据、研究资料和分析工具即时回答，并把事实、反方证据与失效条件分开说明。</div>
+            <div class="message agent">你好，我是清数智算。你可以直接问市场、个股、基金、ETF、财报或理财常识；我会结合实时证据、研究资料和金融知识，先回答问题，再解释关键依据、风险和适合条件。</div>
           </div>
-          <div id="quickActions" class="quick-actions">
-            <span class="quick-actions-label">研究类型</span>
-            <button class="chip" data-message="分析中兴通讯当前的经营、行业、估值、反方证据和主要风险">个股分析</button>
-            <button class="chip" data-message="比较中兴通讯、中际旭创和英伟达的盈利质量、估值和主要风险；严格区分报告期和币种口径">多股比较</button>
-            <button class="chip" data-message="研究A股通信设备板块当前行情、行业证据、主要驱动和反方风险">行业研究</button>
-            <button class="chip" data-message="分析我的自选股当前最值得优先核验的变化、风险和研究任务">关注组合</button>
-            <button id="earningsQualityAction" class="chip">公告财报</button>
-            <button class="chip secondary-research-action" data-quick-secondary hidden data-message="只看反方证据和原假设的失效条件">反方风险</button>
-            <button class="chip secondary-research-action" data-quick-secondary hidden data-message="请根据我自己记录的原计划，检查这次拟议操作是否偏离计划；不要替我生成买卖建议">操作前检查</button>
-            <button class="chip secondary-research-action" data-quick-secondary hidden data-message="请比较两家公司在行业位置、经营质量、估值口径和风险上的差异">公司对比</button>
-            <button class="chip secondary-research-action" data-quick-secondary hidden data-message="请分析当前市场环境如何影响我的自选股和原研究假设">市场环境</button>
-            <button class="chip secondary-research-action" data-quick-secondary hidden data-message="我的自选股最近有什么变化？">跟踪变化</button>
-            <button class="chip secondary-research-action" data-quick-secondary hidden data-message="我的研究行动和观察条件是什么？">研究行动</button>
-            <button id="financialDriversAction" class="chip secondary-research-action" data-quick-secondary hidden>利润现金流</button>
-            <button id="shareholderAction" class="chip secondary-research-action" data-quick-secondary hidden>股东结构</button>
-            <button id="analystExpectationsAction" class="chip secondary-research-action" data-quick-secondary data-intent="analyst_expectations" hidden>分析师预期</button>
-            <button id="eventTimelineAction" class="chip secondary-research-action" data-quick-secondary hidden>事件脉络</button>
-            <button id="toggleQuickActions" class="chip quick-actions-toggle" type="button" aria-expanded="false">更多能力 · 9</button>
+          <div id="quickActions" class="quick-actions" aria-label="快捷研究入口">
+            <div class="quick-action-group">
+              <span class="quick-actions-label">常用问题</span>
+              <div class="quick-action-buttons">
+                <button class="chip" data-message="今天A股怎么样？请基于最新可用的主要指数、全市场涨跌家数、成交额和行业表现，用普通投资者能看懂的话直接回答；不同交易日的数据要明确说明。">大盘解读</button>
+                <button class="chip" data-message="分析中兴通讯当前的经营、行业、估值、反方证据和主要风险">个股分析</button>
+                <button class="chip" data-message="研究A股通信设备板块当前行情、行业证据、主要驱动和反方风险">行业板块</button>
+                <button class="chip" data-message="分析我的自选股当前最值得优先核验的变化、风险和研究任务">自选股变化</button>
+                <button class="chip" data-message="基金和ETF有什么区别？如果我是刚开始理财的普通投资者，应该根据哪些条件选择？信息不足时请先给选择逻辑，不要替我下结论。">基金与 ETF</button>
+              </div>
+            </div>
+            <div class="quick-action-group quick-action-group-tools">
+              <span class="quick-actions-label">专项工具</span>
+              <div class="quick-action-buttons">
+                <button id="earningsQualityAction" class="chip">财报公告</button>
+                <button class="chip" data-message="比较中兴通讯、中际旭创和英伟达的盈利质量、估值和主要风险；严格区分报告期和币种口径">多股比较</button>
+                <button class="chip" data-message="只看反方证据和原假设的失效条件">反方风险</button>
+                <button class="chip" data-message="请根据我自己记录的原计划，检查这次拟议操作是否偏离计划；不要替我生成买卖建议">操作前检查</button>
+                <button class="chip secondary-research-action" data-quick-secondary hidden data-message="请分析当前市场环境如何影响我的自选股和原研究假设">市场与持仓</button>
+                <button class="chip secondary-research-action" data-quick-secondary hidden data-message="我的研究行动和观察条件是什么？">研究任务</button>
+                <button id="financialDriversAction" class="chip secondary-research-action" data-quick-secondary hidden>利润现金流</button>
+                <button id="shareholderAction" class="chip secondary-research-action" data-quick-secondary hidden>股东结构</button>
+                <button id="analystExpectationsAction" class="chip secondary-research-action" data-quick-secondary data-intent="analyst_expectations" hidden>分析师预期</button>
+                <button id="eventTimelineAction" class="chip secondary-research-action" data-quick-secondary hidden>事件脉络</button>
+                <button id="toggleQuickActions" class="chip quick-actions-toggle" type="button" aria-expanded="false">全部工具</button>
+              </div>
+            </div>
           </div>
           <form id="chatForm" class="composer">
             <textarea id="chatInput" placeholder="输入研究问题；Enter 发送，Shift+Enter 换行"></textarea>
@@ -986,6 +1068,7 @@
   </div>
 
   <script src="/static/qs-charts.js"></script>
+  <script src="/static/qs-kline-explorer.js"></script>
   <script src="/static/demo.js"></script>
   <script src="/static/qs-format.js"></script>
   <script src="/static/qs-screening.js"></script>
@@ -995,6 +1078,7 @@
   <script src="/static/qs-agent-ui.js"></script>
   <script src="/static/qs-knowledge.js"></script>
   <script src="/static/qs-home.js"></script>
+  <script src="/static/qs-funds.js"></script>
   <script src="/static/qs-watchlist.js"></script>
   <script src="/static/qs-market.js"></script>
   <script src="/static/qs-stock-core.js"></script>

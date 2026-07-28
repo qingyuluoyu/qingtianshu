@@ -28,9 +28,7 @@ function dedupeInsightItems(items = []) {
     function renderArticles(items = state.insightItems) {
       const container = $("articleFeed");
       container.innerHTML = "";
-      const visibleItems = state.insightFilter === "all"
-        ? items
-        : items.filter(item => item.category === state.insightFilter);
+      const visibleItems = items.filter(item => item.category === "market");
       for (const article of visibleItems) {
         const row = document.createElement("button"); row.className = "article-item";
         const title = document.createElement("span"); title.className = "article-item-title"; title.textContent = article.title || "市场洞察";
@@ -40,7 +38,7 @@ function dedupeInsightItems(items = []) {
         row.addEventListener("click", () => openReader(article.title, humanizeInsightText(article.body || article.summary), `${article.content_label || "市场洞察"} · ${readableTime(article.created_at)}`));
         container.appendChild(row);
       }
-      if (!container.children.length) container.innerHTML = '<div class="empty">新的市场洞察正在形成</div>';
+      if (!container.children.length) container.innerHTML = '<div class="empty">新的市场复盘文章正在形成</div>';
       renderMarketReviewCenter(items);
       renderHomeFocus();
     }
@@ -59,7 +57,7 @@ function dedupeInsightItems(items = []) {
         row.addEventListener("click", () => openReader(article.title, humanizeInsightText(article.body || article.summary), `市场复盘 · ${readableTime(article.created_at)}`));
         container.appendChild(row);
       }
-      if (!container.children.length) container.innerHTML = '<div class="empty">还没有已保存的市场复盘。后台形成新的市场短文后会按时间出现在这里。</div>';
+      if (!container.children.length) container.innerHTML = '<div class="empty">还没有已保存的市场复盘。新的市场结构记录会按时间出现在这里。</div>';
     }
 
     async function loadArticles() {

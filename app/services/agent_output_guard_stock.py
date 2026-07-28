@@ -550,7 +550,7 @@ def _stock_current_quote_close_conflict(answer: str, evidence: dict[str, Any]) -
         # every occurrence of “收盘” as a completed close used to turn natural
         # sentences such as “尚未收盘” into the broken phrase “尚未最新报价”.
         if re.search(
-            r"(?:尚未|还未|未|不是|并非|不能|不应|不可|没有|并没有)"
+            r"(?:尚未|还未|还没|未|不是|并非|不能|不应|不可|没有|并没有)"
             r"[^。；\n]{0,8}(?:收盘(?:价)?|收于)",
             clause,
         ):
@@ -563,10 +563,13 @@ def _stock_current_quote_close_conflict(answer: str, evidence: dict[str, Any]) -
             clause,
         ):
             continue
-        current_close_claim = re.search(
-            r"(?:今天|今日|当前|现在|最新|盘中)[^。；\n]{0,18}"
-            r"(?:收盘(?:价)?|收于)",
-            clause,
+        current_close_claim = any(
+            not any(term in match.group(0) for term in previous_terms)
+            for match in re.finditer(
+                r"(?:今天|今日|当前|现在|最新|盘中)[^。；\n]{0,18}"
+                r"(?:收盘(?:价)?|收于)",
+                clause,
+            )
         )
         quote_close_claim = any(
             value is not None and abs(value - float(quote_price)) <= tolerance
@@ -742,7 +745,30 @@ def _normalize_history_price_mislabeled_as_current_quote(
             f"{match.group('prefix')}收盘价{match.group('price')}{match.group('unit')}"
         )
 
-    return previous_pattern.sub(replace_previous, normalized)
+    normalized = previous_pattern.sub(replace_previous, normalized)
+    earlier_quote_pattern = re.compile(
+        r"(?P<prefix>(?:相对于|相较于|较|比)?此前)(?:最新)?报价\s*"
+        r"(?P<price>[0-9]+(?:\.[0-9]+)?)(?P<unit>\s*(?:元|美元|港元)?)"
+    )
+
+    def replace_earlier_quote(match: re.Match[str]) -> str:
+        value = _number_value(match.group("price"))
+        if value is None or abs(value - float(baseline_close)) > baseline_tolerance:
+            return match.group(0)
+        relation = match.group("prefix")
+        if relation.startswith("相对于"):
+            prefix = "相对于上一交易日收盘价"
+        elif relation.startswith("相较于"):
+            prefix = "相较于上一交易日收盘价"
+        elif relation.startswith("较"):
+            prefix = "较上一交易日收盘价"
+        elif relation.startswith("比"):
+            prefix = "比上一交易日收盘价"
+        else:
+            prefix = "此前上一交易日收盘价"
+        return f"{prefix}{match.group('price')}{match.group('unit')}"
+
+    return earlier_quote_pattern.sub(replace_earlier_quote, normalized)
 
 
 def _stock_current_quote_ma20_conflict(answer: str, evidence: dict[str, Any]) -> bool:
@@ -919,20 +945,32 @@ def _stock_current_quote_required_but_missing(
     ]
     price_tolerance = max(0.02, abs(float(quote_price)) * 0.002)
     if not any(
-        abs(value - float(quote_price)) <= price_tolerance for value in claimed_values
+        abs(value - float(quote_price)) <= price_tolerance + 1e-9
+        for value in claimed_values
     ):
         return True
 
     change_tolerance = max(0.02, abs(float(quote_change)) * 0.002)
     if any(
-        abs(value - float(quote_change)) <= change_tolerance for value in claimed_values
+        abs(value - float(quote_change)) <= change_tolerance + 1e-9
+        for value in claimed_values
     ):
         return False
 
     direction_terms = (
-        ("下跌", "跌幅", "收跌", "回落", "走低", "下挫", "下滑")
+        (
+            "下跌",
+            "跌了",
+            "微跌",
+            "跌幅",
+            "收跌",
+            "回落",
+            "走低",
+            "下挫",
+            "下滑",
+        )
         if float(quote_change) < 0
-        else ("上涨", "涨幅", "收涨", "反弹", "走高", "上扬")
+        else ("上涨", "涨了", "微涨", "涨幅", "收涨", "反弹", "走高", "上扬")
     )
     for clause in re.split(r"[。；\n]", answer):
         if not any(term in clause for term in direction_terms):
@@ -941,7 +979,8 @@ def _stock_current_quote_required_but_missing(
             value = _number_value(match.group(0))
             if (
                 value is not None
-                and abs(abs(value) - abs(float(quote_change))) <= change_tolerance
+                and abs(abs(value) - abs(float(quote_change)))
+                <= change_tolerance + 1e-9
             ):
                 return False
     return True
@@ -1229,7 +1268,7 @@ def _is_evidence_security_entity_clause(clause: str, evidence: dict[str, Any]) -
 
 def _has_stock_event_sentiment_overclaim(answer: str) -> bool:
     for clause in re.split(r"[。；\n]", answer):
-        if not re.search(r"(?:公告|媒体|报道|事件|披露)", clause):
+        if not re.search(r"(?:公告|媒体|报道|事件|披露|线索|消息|信息)", clause):
             continue
         explicit_boundary = re.search(
             r"(?:不能|不得|不应|不可|无法|不宜|不作|不做|不代表|不等于)"
@@ -1289,7 +1328,19 @@ def _has_stock_event_sentiment_overclaim(answer: str) -> bool:
     return False
 
 
-def _has_stock_unsupported_causal_hypothesis(answer: str) -> bool:
+def _has_stock_unsupported_causal_hypothesis(
+    answer: str, evidence: dict[str, Any] | None = None
+) -> bool:
+    evidence = evidence or {}
+    question = str(evidence.get("user_question") or "")
+    research_focus = str((evidence.get("research_plan") or {}).get("focus") or "")
+    price_cause_question = research_focus == "price_cause" or (
+        any(term in question for term in ("为什么", "为何", "原因", "怎么跌", "怎么涨"))
+        and any(
+            term in question
+            for term in ("涨", "跌", "回落", "走弱", "走强", "大涨", "大跌")
+        )
+    )
     cautious_terms = (
         "不能确认",
         "无法确认",
@@ -1303,11 +1354,47 @@ def _has_stock_unsupported_causal_hypothesis(answer: str) -> bool:
         "不能归因",
     )
     for clause in re.split(r"[。；\n]", answer):
+        if price_cause_question:
+            market_story = re.search(
+                r"(?:融资余额|融资买入|融资盘)[^。；\n]{0,100}"
+                r"(?:意味着|说明|表明)[^。；\n]{0,100}"
+                r"(?:对价格波动(?:往往)?更敏感|容易卖出|抛售|卖出压力|形成压力)|"
+                r"(?:融资余额|融资买入|融资盘)[^。；\n]{0,160}"
+                r"(?:这类|相关|融资)资金[^。；\n]{0,50}"
+                r"(?:对价格波动(?:往往)?更敏感|容易卖出|抛售|卖出压力|形成压力)|"
+                r"(?:借钱买|加杠杆买|融资买入)[^。；\n]{0,120}"
+                r"(?:这类|相关|融资)资金[^。；\n]{0,50}"
+                r"(?:对价格波动(?:往往)?更敏感|容易卖出|抛售|卖出压力|形成压力)|"
+                r"(?:股权登记|分红登记|除权除息)[^。；\n]{0,140}"
+                r"(?:可能|往往|通常)[^。；\n]{0,100}"
+                r"(?:卖出|离场|获利了结|拿完分红就走)|"
+                r"(?:股权登记日|分红登记日)[^。；\n]{0,100}"
+                r"(?:当日|当天)?[^。；\n]{0,30}(?:参考价|股价)"
+                r"[^。；\n]{0,30}(?:自动|会|将)[^。；\n]{0,20}"
+                r"(?:扣除|调整|除权|除息)|"
+                r"(?:股权登记|分红登记)[^。；\n]{0,100}"
+                r"(?:除息|除权)[^。；\n]{0,60}(?:影响|因素|导致|额外)|"
+                r"(?:等|等待|关注)[^。；\n]{0,30}(?:今天|今日)?收盘后"
+                r"[^。；\n]{0,24}(?:除权除息|权益分派)(?:实施)?(?:公告|原文)",
+                clause,
+            )
+            explicit_registration_boundary = re.search(
+                r"(?:股权登记日|分红登记日)[^。；\n]{0,80}"
+                r"(?:不等于|并不等于|不代表|不能说明|不会)"
+                r"[^。；\n]{0,80}(?:自动扣除|一定要跌|必然下跌)|"
+                r"(?:没有证据|尚无证据|未有证据)[^。；\n]{0,90}"
+                r"(?:就是除权除息日|自动扣减|自动扣除)|"
+                r"不能(?:直接)?(?:说|把)[^。；\n]{0,80}"
+                r"(?:拿完分红就跑|登记日导致下跌|归结为[^。；\n]{0,20}分红除权)",
+                clause,
+            )
+            if market_story and not explicit_registration_boundary:
+                return True
         if not any(term in clause for term in ("无法核验", "不能核验", "不可能核验")):
             if re.search(
-                r"(?:核验|确认|排除)[^。；\n]{0,24}"
-                r"(?:未公开|内幕)[^。；\n]{0,20}"
-                r"(?:信息|消息|订单|仓位|变动)",
+                r"(?:核验|确认|排除|排查|留意|关注|判断)[^。；\n]{0,180}"
+                r"(?:未公开|未披露|尚未被正式披露|内幕)[^。；\n]{0,24}"
+                r"(?:信息|消息|订单|仓位|变动|变化|事项|因素)",
                 clause,
             ):
                 return True
@@ -1322,12 +1409,39 @@ def _has_stock_unsupported_causal_hypothesis(answer: str) -> bool:
         ):
             return True
         if re.search(
+            r"(?:上涨|下跌|大跌|回落|走弱|走强)[^。；\n]{0,80}"
+            r"(?:更像|主要)[^。；\n]{0,30}(?:跟随|跟着)"
+            r"[^。；\n]{0,30}(?:整体市场|大盘|市场节奏)|"
+            r"(?:上涨|下跌|涨了|跌了|涨的原因|跌的原因|大跌|回落|走弱|走强)"
+            r"[^。；\n]{0,80}"
+            r"(?:更像|更可能|大概率)[^。；\n]{0,60}"
+            r"(?:公司|个股|板块|行业)[^。；\n]{0,40}(?:因素|原因|驱动)|"
+            r"(?:涨的原因|跌的原因)[^。；\n]{0,40}(?:主要|只能|得)"
+            r"[^。；\n]{0,30}(?:公司|个股|板块|行业)[^。；\n]{0,24}(?:情况|因素|原因)|"
+            r"(?:属于|表现为|体现为)[^。；\n]{0,30}(?:个股|公司)"
+            r"[^。；\n]{0,20}(?:独立走弱|独立走强|独立表现)|"
             r"(?:上涨|下跌|大跌|回落)[^。；\n]{0,24}(?:主要)?"
             r"(?:来自|源于|归因于|由)[^。；\n]{0,24}"
             r"(?:个股|公司)(?:自身|特定)?(?:因素|压力|原因)|"
+            r"(?:上涨|下跌|大跌|回落|跌幅|涨幅)[^。；\n]{0,80}"
+            r"(?:更多|主要)[^。；\n]{0,24}(?:是|由)?"
+            r"(?:自身|个股|公司)(?:特定)?因素[^。；\n]{0,16}(?:主导|驱动)|"
+            r"(?:上涨|下跌|大跌|回落)[^。；\n]{0,100}"
+            r"(?:更像|更可能)[^。；\n]{0,60}(?:公司|个股)"
+            r"[^。；\n]{0,28}(?:自己的情况|自身因素|特定因素)|"
             r"(?:更多|主要)?体现为[^。；\n]{0,120}"
             r"(?:获利回吐|基本面隐忧|因素共振|情绪共振)|"
             r"(?:获利回吐|基本面隐忧)[^。；\n]{0,60}(?:共振|导致|驱动)",
+            clause,
+        ):
+            return True
+        if re.search(
+            r"(?:上涨|下跌|大跌|回落|相对弱势|相对偏弱|跑输|跑赢)"
+            r"[^。；\n]{0,100}(?:更可能是|可能是|可能来自|可能源于|说明|表明)"
+            r"[^。；\n]{0,100}(?:短期资金行为|资金选择|资金偏好|筹码变化|"
+            r"节奏变化|获利了结|获利回吐|市场情绪|交易情绪|技术性因素)|"
+            r"(?:上涨|下跌|大跌|回落|相对弱势|相对偏弱|跑输|跑赢)"
+            r"[^。；\n]{0,100}(?:而非|并非|不是)[^。；\n]{0,36}基本面",
             clause,
         ):
             return True
@@ -1362,6 +1476,12 @@ def _has_stock_unsupported_causal_hypothesis(answer: str) -> bool:
         if re.search(
             r"(?:最常见的情况|通常情况|大概率)[^。；\n]{0,180}"
             r"(?:基本面疑虑|筹码分布|持有人分散|提前定价)",
+            clause,
+        ):
+            return True
+        if price_cause_question and re.search(
+            r"(?:等|等待|关注)[^。；\n]{0,70}(?:公司)?(?:可能)?"
+            r"(?:发布|披露)(?:的)?(?:正式)?(?:公告|说明|澄清)",
             clause,
         ):
             return True

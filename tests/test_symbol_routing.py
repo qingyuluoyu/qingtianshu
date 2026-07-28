@@ -1,4 +1,9 @@
-from app.main import _extract_symbol, _extract_symbols, _symbols_from_history
+from app.main import (
+    _extract_symbol,
+    _extract_symbols,
+    _is_stock_screen_query,
+    _symbols_from_history,
+)
 
 
 def test_security_name_beats_t_plus_research_horizon() -> None:
@@ -14,6 +19,23 @@ def test_t_plus_horizon_does_not_become_at_and_t_ticker() -> None:
 
 def test_bare_ticker_t_remains_supported() -> None:
     assert _extract_symbol(None, "分析 T 的最新财报", watchlist=[]) == "T"
+
+
+def test_generic_financial_product_acronyms_do_not_become_stock_tickers() -> None:
+    assert _extract_symbols(
+        None,
+        "基金、ETF、LOF、REIT和QDII有什么区别？",
+        watchlist=[],
+    ) == []
+    assert _extract_symbol("ETF", "分析证券代码ETF", watchlist=[]) == "ETF"
+
+
+def test_fund_product_choice_does_not_start_a_share_stock_screening() -> None:
+    assert not _is_stock_screen_query(
+        "我快退休了，不知道该选股票基金还是债券基金"
+    )
+    assert not _is_stock_screen_query("帮我筛选基金和ETF")
+    assert _is_stock_screen_query("帮我筛选几只股票做研究候选")
 
 
 def test_multiple_named_stocks_are_extracted_in_user_order() -> None:

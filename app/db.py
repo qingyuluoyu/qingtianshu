@@ -16,7 +16,7 @@ from app.utils import json_dumps, utc_now, write_json
 
 class Database:
     SYSTEM_EDITOR_ID = "system-market-editor"
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     def __init__(
         self,
@@ -233,6 +233,33 @@ class Database:
     @staticmethod
     def _row(row: Any | None) -> dict[str, Any] | None:
         return dict(row) if row is not None else None
+
+    @staticmethod
+    def _risk_profile_row(row: Any | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["answers"] = json.loads(item.pop("answers_json") or "{}")
+        item["derived"] = json.loads(item.pop("derived_json") or "{}")
+        return item
+
+    @staticmethod
+    def _fund_product_row(row: Any | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["returns"] = json.loads(item.pop("returns_json") or "{}")
+        item["return_ranks"] = json.loads(
+            item.pop("return_ranks_json") or "{}"
+        )
+        item["fees"] = json.loads(item.pop("fees_json") or "{}")
+        item["top_holdings_summary"] = json.loads(
+            item.pop("top_holdings_json") or "[]"
+        )
+        raw_quote = item.pop("live_quote_json")
+        item["live_quote"] = json.loads(raw_quote) if raw_quote else None
+        item["warnings"] = json.loads(item.pop("warnings_json") or "[]")
+        return item
 
     @staticmethod
     def _stock_workspace_row(
@@ -848,6 +875,122 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def latest_risk_profile(
+        self, user_id: str, *, status: str | None = None
+    ) -> dict[str, Any] | None:
+        clause = "AND status = ?" if status else ""
+        params: tuple[Any, ...] = (user_id, status) if status else (user_id,)
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT * FROM risk_profile_versions
+                WHERE user_id = ? {clause}
+                ORDER BY version_no DESC, rowid DESC LIMIT 1
+                """,
+                params,
+            ).fetchone()
+        return self._risk_profile_row(row)
+
+    def save_risk_profile_draft(
+        self,
+        user_id: str,
+        *,
+        answers: dict[str, Any],
+        derived: dict[str, Any],
+        base_version: int,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as connection:
+            latest = connection.execute(
+                """
+                SELECT * FROM risk_profile_versions
+                WHERE user_id = ?
+                ORDER BY version_no DESC, rowid DESC LIMIT 1
+                """,
+                (user_id,),
+            ).fetchone()
+            latest_item = dict(latest) if latest is not None else None
+            latest_version = int(latest_item["version_no"]) if latest_item else 0
+            if int(base_version) != latest_version:
+                raise ValueError("风险画像版本已经变化，请刷新后重新保存")
+            if latest_item and latest_item["status"] == "draft":
+                profile_id = str(latest_item["id"])
+                version_no = latest_version
+                connection.execute(
+                    """
+                    UPDATE risk_profile_versions
+                    SET answers_json = ?, derived_json = ?, updated_at = ?
+                    WHERE id = ? AND user_id = ? AND status = 'draft'
+                    """,
+                    (
+                        json_dumps(answers),
+                        json_dumps(derived),
+                        now,
+                        profile_id,
+                        user_id,
+                    ),
+                )
+            else:
+                profile_id = str(uuid4())
+                version_no = latest_version + 1
+                connection.execute(
+                    """
+                    INSERT INTO risk_profile_versions(
+                        id, user_id, version_no, questionnaire_version,
+                        status, answers_json, derived_json, source,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, 'qingshu_suitability_v1', 'draft', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        profile_id,
+                        user_id,
+                        version_no,
+                        json_dumps(answers),
+                        json_dumps(derived),
+                        "user_questionnaire",
+                        now,
+                        now,
+                    ),
+                )
+        profile = self.latest_risk_profile(user_id, status="draft")
+        if profile is None or int(profile["version_no"]) != version_no:
+            raise RuntimeError("风险画像草稿保存失败")
+        return profile
+
+    def confirm_risk_profile(
+        self, user_id: str, version_no: int
+    ) -> dict[str, Any] | None:
+        now = utc_now()
+        with self.connect() as connection:
+            target = connection.execute(
+                """
+                SELECT * FROM risk_profile_versions
+                WHERE user_id = ? AND version_no = ? AND status = 'draft'
+                """,
+                (user_id, int(version_no)),
+            ).fetchone()
+            if target is None:
+                return None
+            connection.execute(
+                """
+                UPDATE risk_profile_versions
+                SET status = 'superseded', superseded_at = ?, updated_at = ?
+                WHERE user_id = ? AND status = 'confirmed'
+                """,
+                (now, now, user_id),
+            )
+            updated = connection.execute(
+                """
+                UPDATE risk_profile_versions
+                SET status = 'confirmed', confirmed_at = ?, updated_at = ?
+                WHERE user_id = ? AND version_no = ? AND status = 'draft'
+                """,
+                (now, now, user_id, int(version_no)),
+            )
+            if updated.rowcount == 0:
+                return None
+        return self.latest_risk_profile(user_id, status="confirmed")
+
     def _sync_watchlist_file(self, user_id: str) -> None:
         user = self.get_user(user_id)
         if user is None:
@@ -982,6 +1125,13 @@ class Database:
             metadata = json.loads(raw_metadata or "{}")
         except (TypeError, ValueError):
             metadata = {}
+        conversation_scope = str(metadata.get("conversation_scope") or "").strip()
+        item["conversation_scope"] = (
+            conversation_scope
+            if conversation_scope
+            in {"stock", "market", "screening", "portfolio", "funds", "other"}
+            else None
+        )
         targets: dict[str, dict[str, str]] = {}
 
         def add_target(symbol: Any, name: Any = None) -> None:
@@ -1733,6 +1883,130 @@ class Database:
                     expires_at,
                 ),
             )
+
+    def save_fund_product_snapshot(
+        self, snapshot: dict[str, Any]
+    ) -> dict[str, Any]:
+        snapshot_id = str(uuid4())
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO fund_product_snapshots(
+                    id, code, name, product_kind, asset_class, fund_type,
+                    nav, accumulated_nav, nav_date, daily_return_pct,
+                    returns_json, return_ranks_json, purchase_status,
+                    redemption_status, fees_json, minimum_purchase_cny,
+                    minimum_recurring_purchase_cny, risk_level_upstream,
+                    net_assets_cny, fund_shares, fund_company, fund_manager,
+                    inception_date, top_holdings_json, live_quote_json,
+                    source, source_url, field_mapping, warnings_json, fetched_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(code, source, nav_date) DO UPDATE SET
+                    name = excluded.name,
+                    product_kind = excluded.product_kind,
+                    asset_class = excluded.asset_class,
+                    fund_type = excluded.fund_type,
+                    nav = excluded.nav,
+                    accumulated_nav = excluded.accumulated_nav,
+                    daily_return_pct = excluded.daily_return_pct,
+                    returns_json = excluded.returns_json,
+                    return_ranks_json = excluded.return_ranks_json,
+                    purchase_status = excluded.purchase_status,
+                    redemption_status = excluded.redemption_status,
+                    fees_json = excluded.fees_json,
+                    minimum_purchase_cny = excluded.minimum_purchase_cny,
+                    minimum_recurring_purchase_cny = excluded.minimum_recurring_purchase_cny,
+                    risk_level_upstream = excluded.risk_level_upstream,
+                    net_assets_cny = excluded.net_assets_cny,
+                    fund_shares = excluded.fund_shares,
+                    fund_company = excluded.fund_company,
+                    fund_manager = excluded.fund_manager,
+                    inception_date = excluded.inception_date,
+                    top_holdings_json = excluded.top_holdings_json,
+                    live_quote_json = excluded.live_quote_json,
+                    source_url = excluded.source_url,
+                    field_mapping = excluded.field_mapping,
+                    warnings_json = excluded.warnings_json,
+                    fetched_at = excluded.fetched_at
+                """,
+                (
+                    snapshot_id,
+                    snapshot["code"],
+                    snapshot["name"],
+                    snapshot["product_kind"],
+                    snapshot["asset_class"],
+                    snapshot["fund_type"],
+                    snapshot.get("nav"),
+                    snapshot.get("accumulated_nav"),
+                    snapshot.get("nav_date"),
+                    snapshot.get("daily_return_pct"),
+                    json_dumps(snapshot.get("returns") or {}),
+                    json_dumps(snapshot.get("return_ranks") or {}),
+                    snapshot.get("purchase_status"),
+                    snapshot.get("redemption_status"),
+                    json_dumps(snapshot.get("fees") or {}),
+                    snapshot.get("minimum_purchase_cny"),
+                    snapshot.get("minimum_recurring_purchase_cny"),
+                    snapshot.get("risk_level_upstream"),
+                    snapshot.get("net_assets_cny"),
+                    snapshot.get("fund_shares"),
+                    snapshot.get("fund_company"),
+                    snapshot.get("fund_manager"),
+                    snapshot.get("inception_date"),
+                    json_dumps(snapshot.get("top_holdings_summary") or []),
+                    (
+                        json_dumps(snapshot.get("live_quote"))
+                        if snapshot.get("live_quote") is not None
+                        else None
+                    ),
+                    snapshot["source"],
+                    snapshot.get("source_url"),
+                    snapshot.get("field_mapping") or "unknown",
+                    json_dumps(snapshot.get("warnings") or []),
+                    snapshot.get("fetched_at") or utc_now(),
+                ),
+            )
+        product = self.latest_fund_product_snapshot(snapshot["code"])
+        if product is None:
+            raise RuntimeError("基金产品快照保存失败")
+        return product
+
+    def latest_fund_product_snapshot(self, code: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM fund_product_snapshots
+                WHERE code = ? ORDER BY fetched_at DESC, rowid DESC LIMIT 1
+                """,
+                (code,),
+            ).fetchone()
+        return self._fund_product_row(row)
+
+    def search_fund_product_snapshots(
+        self, query: str, *, limit: int = 8
+    ) -> list[dict[str, Any]]:
+        keyword = str(query or "").strip()
+        if not keyword:
+            return []
+        like = f"%{keyword}%"
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM fund_product_snapshots
+                WHERE code LIKE ? OR name LIKE ? OR fund_type LIKE ?
+                ORDER BY fetched_at DESC, rowid DESC LIMIT ?
+                """,
+                (like, like, like, max(1, min(int(limit), 50))),
+            ).fetchall()
+        deduplicated: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            item = self._fund_product_row(row)
+            if item is None or item["code"] in seen:
+                continue
+            seen.add(str(item["code"]))
+            deduplicated.append(item)
+        return deduplicated
 
     def update_cache_payload_preserving_expiry(
         self, cache_key: str, payload: dict[str, Any]

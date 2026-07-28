@@ -103,6 +103,7 @@ class StockResearchEvidenceService:
         reusable_evidence: dict[str, Any] | None = None,
         reusable_generated_at: str | None = None,
         progress_callback: Callable[[str, str], None] | None = None,
+        force_online_refresh: bool = False,
     ) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
         selected_modules = set(
@@ -149,6 +150,29 @@ class StockResearchEvidenceService:
         ) or (evidence.get("conditional_outlook") or {}).get("label")
         is_a_share = canonical.endswith((".SS", ".SZ"))
 
+        if (plan or {}).get("focus") == "price_cause":
+            quote_service = self.fundamentals if is_a_share else self.us_fundamentals
+            try:
+                valuation = quote_service.get_quote(
+                    canonical,
+                    refresh_max_age_seconds=(
+                        0 if force_online_refresh else (600 if is_a_share else 900)
+                    ),
+                )
+            except (ValueError, TypeError):
+                valuation = None
+            current_quote = _current_quote_from_valuation(valuation)
+            if current_quote:
+                for key in (
+                    "quote_basis",
+                    "quote_label",
+                    "market_state",
+                    "complete_daily_bar_confirmed",
+                ):
+                    if valuation and valuation.get(key) is not None:
+                        current_quote[key] = valuation[key]
+                evidence["current_quote"] = current_quote
+
         if "company_information" in selected_modules:
             self._notify(
                 progress_callback,
@@ -164,9 +188,23 @@ class StockResearchEvidenceService:
                 target_key=information_key,
                 module_key="company_information",
                 loader=(
-                    (lambda: self.china_info.get_packet(canonical))
+                    (
+                        lambda: self.china_info.get_packet(
+                            canonical,
+                            refresh_max_age_seconds=(
+                                0 if force_online_refresh else 300
+                            ),
+                        )
+                    )
                     if is_a_share
-                    else (lambda: self.global_info.get_packet(canonical))
+                    else (
+                        lambda: self.global_info.get_packet(
+                            canonical,
+                            refresh_max_age_seconds=(
+                                0 if force_online_refresh else 900
+                            ),
+                        )
+                    )
                 ),
                 required="company_information" in required_modules,
                 max_age_hours=self._max_age(plan, "company_information"),
@@ -208,9 +246,23 @@ class StockResearchEvidenceService:
                 target_key="fundamentals",
                 module_key="fundamentals",
                 loader=(
-                    (lambda: self.fundamentals.get_packet(canonical))
+                    (
+                        lambda: self.fundamentals.get_packet(
+                            canonical,
+                            refresh_max_age_seconds=(
+                                0 if force_online_refresh else 600
+                            ),
+                        )
+                    )
                     if is_a_share
-                    else (lambda: self.us_fundamentals.get_packet(canonical))
+                    else (
+                        lambda: self.us_fundamentals.get_packet(
+                            canonical,
+                            refresh_max_age_seconds=(
+                                0 if force_online_refresh else 900
+                            ),
+                        )
+                    )
                 ),
                 required="fundamentals" in required_modules,
                 max_age_hours=self._max_age(plan, "fundamentals"),
@@ -272,7 +324,7 @@ class StockResearchEvidenceService:
                 "event_timeline",
                 "event_timeline",
                 lambda: self.event_timeline.get_packet(
-                    canonical, refresh_sources=False
+                    canonical, refresh_sources=force_online_refresh
                 ),
             ),
             (

@@ -1,4 +1,4 @@
-const welcomeMessage = "你好，我是清数智算。我会记住这个对话的上下文，并结合实时证据、你的资料、已确认记忆和金融分析工具即时回答。";
+const welcomeMessage = "你好，我是清数智算。你可以问市场、个股、基金、ETF、财报或理财常识；我会结合实时证据、你的资料和金融知识，先回答问题，再解释关键依据、风险和适合条件。";
     const evaluationMode = new URLSearchParams(window.location.search).get("qa") === "1";
     const state = {
       user: null,
@@ -9,6 +9,7 @@ const welcomeMessage = "你好，我是清数智算。我会记住这个对话�
       conversations: [],
       conversationMessages: [],
       expandedConversationTopics: new Set(),
+      conversationHistoryExpanded: false,
       conversationQuery: "",
       conversationScope: "all",
       watchlist: [],
@@ -18,6 +19,7 @@ const welcomeMessage = "你好，我是清数智算。我会记住这个对话�
       researchReports: [],
       selectedWatchlistSymbol: null,
       watchlistTimeframe: "intraday",
+      watchlistKlineExplorer: null,
       watchlistFilter: "all",
       watchlistSecondaryFilter: "all",
       editingWatchlistSymbol: null,
@@ -31,7 +33,7 @@ const welcomeMessage = "你好，我是清数智算。我会记住这个对话�
       workspaceBootReady: false,
       workspaceBootPromise: null,
       insightItems: [],
-      insightFilter: "all",
+      insightFilter: "market",
       stockScreener: null,
       stockScreenerLoading: false,
       screeningSection: "general",
@@ -63,6 +65,7 @@ const welcomeMessage = "你好，我是清数智算。我会记住这个对话�
       diagnosisSymbol: null,
       liveMarkets: [],
       marketBreadth: null,
+      marketSectors: [],
       todayOverview: null,
       todayOverviewAvailable: false,
       reviewTab: "trades",
@@ -90,6 +93,10 @@ const welcomeMessage = "你好，我是清数智算。我会记住这个对话�
       agentContextCollapsed: true,
       pendingAgentRequests: new Map(),
       agentResearchRunning: false,
+      fundComparison: null,
+      riskProfile: null,
+      riskProfileLoading: false,
+      riskProfileDirty: false,
       evaluationMode
     };
     const $ = (id) => document.getElementById(id);

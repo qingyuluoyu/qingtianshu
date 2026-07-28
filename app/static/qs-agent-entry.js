@@ -12,6 +12,9 @@ function currentWelcomeMessage() {
         || stockAgentIsEmbedded()
         || state.agentResearchRunning
         || hasUserMessage;
+      const entryActive = !hub.hidden;
+      $("agentSection")?.classList.toggle("entry-active", entryActive);
+      if ($("agentContextToggle")) $("agentContextToggle").hidden = entryActive;
       syncAgentResumeResearch();
     }
 
@@ -300,7 +303,7 @@ function currentWelcomeMessage() {
     function renderDiagnosisPlaceholder() {
       state.diagnosisSymbol = null;
       setAgentContextCollapsed(true);
-      $("diagnosisContext").hidden = false;
+      $("diagnosisContext").hidden = true;
       $("diagnosisTitle").textContent = "等待识别市场或证券";
       $("diagnosisMeta").textContent = "Agent 会根据问题自动呈现对应的大盘分钟线或个股日 K 线";
       $("diagnosisPrice").textContent = "—";

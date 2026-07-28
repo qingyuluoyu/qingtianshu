@@ -154,7 +154,8 @@ function connectServerEvents() {
           symbol: inferDiagnosisSymbol(data, question),
           marketKey: inferDiagnosisMarketKey(data, question),
           analysisTarget: data.evidence?.analysis_target || null,
-          liveAlignment: data.evidence?.live_alignment || null
+          liveAlignment: data.evidence?.live_alignment || null,
+          fundProductContext: data.evidence?.fund_product_context || null
         };
         state.agentContextMetadata = responseMetadata;
         renderAgentResearchContext(responseMetadata, question);
@@ -164,7 +165,15 @@ function connectServerEvents() {
           responseNode = null;
           renderMemoryCandidate(data.evidence.memory, data.answer || "");
         } else if (data.answer) {
-          responseNode = finalizeStreamingMessage(pending, data.answer, responseMetadata);
+          if (privateStream?.context?.finalRenderPromise) {
+            await privateStream.context.finalRenderPromise;
+            responseNode = privateStream.context.finalText === data.answer
+              ? pending
+              : finalizeStreamingMessage(pending, data.answer, responseMetadata, {replaceFinal: true});
+            if (responseNode === pending) appendFinalMessageMetadata(pending, data.answer, responseMetadata);
+          } else {
+            responseNode = finalizeStreamingMessage(pending, data.answer, responseMetadata);
+          }
         }
         else if (data.article) {
           responseNode = finalizeStreamingMessage(
@@ -240,7 +249,7 @@ function connectServerEvents() {
       container.classList.toggle("expanded", expanded);
       document.querySelectorAll("[data-quick-secondary]").forEach(item => { item.hidden = !expanded; });
       $("toggleQuickActions").setAttribute("aria-expanded", expanded ? "true" : "false");
-      $("toggleQuickActions").textContent = expanded ? "收起能力" : "更多能力 · 9";
+      $("toggleQuickActions").textContent = expanded ? "收起工具" : "全部工具";
     });
     document.querySelectorAll("[data-insight-filter]").forEach(button => button.addEventListener("click", () => {
       state.insightFilter = button.dataset.insightFilter || "all";

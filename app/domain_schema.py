@@ -55,6 +55,24 @@ DOMAIN_SCHEMA_SQL = r"""
                     confirmed_at TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS risk_profile_versions (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    version_no INTEGER NOT NULL,
+                    questionnaire_version TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN (
+                        'draft', 'confirmed', 'superseded'
+                    )),
+                    answers_json TEXT NOT NULL,
+                    derived_json TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    confirmed_at TEXT,
+                    superseded_at TEXT,
+                    UNIQUE(user_id, version_no)
+                );
+
                 CREATE TABLE IF NOT EXISTS runs (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -539,6 +557,40 @@ DOMAIN_SCHEMA_SQL = r"""
                     market_at TEXT,
                     fetched_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS fund_product_snapshots (
+                    id TEXT PRIMARY KEY,
+                    code TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    product_kind TEXT NOT NULL CHECK(product_kind IN ('fund', 'etf')),
+                    asset_class TEXT NOT NULL,
+                    fund_type TEXT NOT NULL,
+                    nav REAL,
+                    accumulated_nav REAL,
+                    nav_date TEXT,
+                    daily_return_pct REAL,
+                    returns_json TEXT NOT NULL DEFAULT '{}',
+                    return_ranks_json TEXT NOT NULL DEFAULT '{}',
+                    purchase_status TEXT,
+                    redemption_status TEXT,
+                    fees_json TEXT NOT NULL DEFAULT '{}',
+                    minimum_purchase_cny REAL,
+                    minimum_recurring_purchase_cny REAL,
+                    risk_level_upstream TEXT,
+                    net_assets_cny REAL,
+                    fund_shares REAL,
+                    fund_company TEXT,
+                    fund_manager TEXT,
+                    inception_date TEXT,
+                    top_holdings_json TEXT NOT NULL DEFAULT '[]',
+                    live_quote_json TEXT,
+                    source TEXT NOT NULL,
+                    source_url TEXT,
+                    field_mapping TEXT NOT NULL,
+                    warnings_json TEXT NOT NULL DEFAULT '[]',
+                    fetched_at TEXT NOT NULL,
+                    UNIQUE(code, source, nav_date)
                 );
 
                 CREATE TABLE IF NOT EXISTS market_breadth_snapshots (
@@ -1274,6 +1326,8 @@ DOMAIN_SCHEMA_SQL = r"""
 
                 CREATE INDEX IF NOT EXISTS idx_memories_user_status
                     ON memories(user_id, status);
+                CREATE INDEX IF NOT EXISTS idx_risk_profiles_user_status
+                    ON risk_profile_versions(user_id, status, version_no DESC);
                 CREATE INDEX IF NOT EXISTS idx_user_sessions_user_expiry
                     ON user_sessions(user_id, expires_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_user_uploads_user_created
@@ -1310,6 +1364,10 @@ DOMAIN_SCHEMA_SQL = r"""
                     ON conversation_messages(conversation_id, created_at ASC);
                 CREATE INDEX IF NOT EXISTS idx_knowledge_documents_owner_updated
                     ON knowledge_documents(owner_user_id, scope, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_fund_products_code_time
+                    ON fund_product_snapshots(code, fetched_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_fund_products_name
+                    ON fund_product_snapshots(name, fetched_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_articles_user_created
                     ON articles(user_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_market_bars_symbol_time

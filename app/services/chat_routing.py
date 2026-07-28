@@ -117,6 +117,11 @@ def _extract_symbols(
             "ROA",
             "EPS",
             "TTM",
+            "ETF",
+            "LOF",
+            "REIT",
+            "REITS",
+            "QDII",
             "SZ",
             "SS",
             "SH",
@@ -135,6 +140,46 @@ def _extract_symbols(
 
 def _is_stock_screen_query(message: str) -> bool:
     folded = re.sub(r"\s+", "", message).casefold()
+    product_terms = (
+        "股票型基金",
+        "股票基金",
+        "债券型基金",
+        "债券基金",
+        "指数基金",
+        "货币基金",
+        "混合基金",
+        "基金",
+        "etf",
+        "lof",
+        "reits",
+        "reit",
+        "qdii",
+    )
+    screening_text = folded
+    for term in product_terms:
+        screening_text = screening_text.replace(term, "")
+    # “该选股票基金还是债券基金”里的“选股/选股票”只是产品名称
+    # 交界，不能启动全A股筛选。若句子还明确要求筛选股票，下面的
+    # 正常规则仍会识别。
+    if screening_text != folded and not any(
+        term in screening_text
+        for term in (
+            "筛选股票",
+            "筛股票",
+            "筛选a股",
+            "筛a股",
+            "候选股票",
+            "股票候选",
+            "研究候选",
+            "选股策略",
+        )
+    ):
+        if not re.search(
+            r"(?:找|挑|筛|选)(?:一些|几只|一批)?[^。；，,]{0,12}(?:股票|公司)",
+            screening_text,
+        ):
+            return False
+    folded = screening_text
     direct_terms = (
         "筛选股票",
         "筛股票",

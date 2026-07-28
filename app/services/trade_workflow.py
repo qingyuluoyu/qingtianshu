@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import json
+import re
 from typing import Any
 from uuid import uuid4
 
@@ -54,6 +55,30 @@ class TradeWorkflowService:
         "expired": set(),
     }
     _DECIMAL_QUANT = Decimal("0.000001")
+    _REVIEW_PRICE_LEAKAGE_TERMS = (
+        "操作价",
+        "持仓成本",
+        "成本价",
+        "复权收盘",
+        "价格变化",
+        "价格路径",
+        "价格层面",
+        "亏损卖出",
+        "盈利卖出",
+        "操作后上涨",
+        "操作后下跌",
+        "后续交易日",
+    )
+    _REVIEW_PLAN_SCOPE_TERMS = (
+        "计划的触发条件",
+        "计划要求",
+        "计划设定",
+        "计划一致",
+        "触发条件",
+        "与原计划",
+        "条件强度",
+        "条件已满足",
+    )
 
     def __init__(self, database: Database) -> None:
         self.database = database
@@ -523,10 +548,15 @@ class TradeWorkflowService:
         unfenced = text
         if unfenced.startswith("```") and unfenced.endswith("```"):
             unfenced = "\n".join(unfenced.splitlines()[1:-1]).strip()
-        try:
-            payload = json.loads(unfenced)
-        except (TypeError, json.JSONDecodeError):
-            payload = None
+        payload: Any = unfenced
+        for _ in range(2):
+            if not isinstance(payload, str):
+                break
+            try:
+                payload = json.loads(payload.strip())
+            except (TypeError, json.JSONDecodeError):
+                payload = None
+                break
         if isinstance(payload, dict):
             logic = str(payload.get("logic_result") or "").strip()
             if logic:
@@ -584,6 +614,120 @@ class TradeWorkflowService:
             "bias_tags": tags,
             "improvement_text": "\n".join(sections["improvement_text"]).strip()
             or None,
+        }
+
+    @classmethod
+    def normalize_review_agent_draft(
+        cls,
+        review: dict[str, Any],
+        draft: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Keep review logic separate from price outcomes and internal jargon."""
+
+        def clean_sentences(value: Any, *, drop_terms: tuple[str, ...]) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            clauses = re.split(r"(?<=[。！？；，,])|\n+", text)
+            cleaned = "".join(
+                clause.strip()
+                for clause in clauses
+                if clause.strip()
+                and not any(term in clause for term in drop_terms)
+            ).strip()
+            return re.sub(
+                r"^(?:但|然而|不过|同时|因此|所以)[，,、]?\s*",
+                "",
+                cleaned,
+            )
+
+        def user_facing(value: Any) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            replacements = (
+                (r"thesis", "研究判断"),
+                (r"watch_items", "观察项"),
+                (r"workspace", "研究空间"),
+                (r"冻结判断", "操作时保存的判断"),
+                (r"冻结计划", "操作时保存的计划"),
+                (r"冻结到操作上下文中", "随操作记录一并保存"),
+                (r"冻结快照", "操作时保存的记录"),
+                (r"冻结上下文", "操作时保存的记录"),
+                (r"冻结时", "操作时"),
+                (r"冻结", "保存"),
+                (r"计划状态为已保存", "计划已保存"),
+                (r"后续更新为已执行", "实际操作已记录"),
+                (r"（版本\s*\d+）", ""),
+                (r"操作者主观定性", "当时的定性判断"),
+            )
+            for pattern, replacement in replacements:
+                text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+            return text
+
+        logic_result = user_facing(
+            clean_sentences(
+                draft.get("logic_result"),
+                drop_terms=(
+                    *cls._REVIEW_PRICE_LEAKAGE_TERMS,
+                    *cls._REVIEW_PLAN_SCOPE_TERMS,
+                ),
+            )
+        )
+        plan_deviation = user_facing(
+            clean_sentences(
+                draft.get("plan_deviation"),
+                drop_terms=cls._REVIEW_PRICE_LEAKAGE_TERMS,
+            )
+        )
+        improvement_text = user_facing(draft.get("improvement_text"))
+        if re.search(
+            r"(?:比如|例如)[^。！？]*(?:\d|[XxＸ]|[%％]|超过|低于|高于)",
+            improvement_text,
+        ):
+            prefix = re.split(r"[，,]?(?:比如|例如)", improvement_text, maxsplit=1)[
+                0
+            ].rstrip("，,；;。")
+            improvement_text = (
+                f"{prefix}。由用户自己写清判断标准，并保存所用数据、来源和核验结论。"
+            )
+
+        combined = " ".join((logic_result, plan_deviation, improvement_text))
+        plan = review.get("action_plan") or {}
+        process_tags: list[str] = []
+        if not plan.get("id"):
+            process_tags.append("未关联操作计划")
+        if any(
+            term in combined
+            for term in (
+                "缺失",
+                "缺少",
+                "缺乏",
+                "无相关核验记录",
+                "未留存",
+                "未能完整留存",
+                "未记录",
+                "没有记录",
+                "无法核验",
+            )
+        ):
+            process_tags.append("证据未留档")
+        if plan.get("id") and any(
+            term in plan_deviation
+            for term in ("条件强度", "条件已满足", "触发条件")
+        ):
+            process_tags.append("触发条件待确认")
+        if any(
+            term in plan_deviation
+            for term in ("执行与计划不一致", "偏离原计划", "未按计划")
+        ):
+            process_tags.append("执行与计划不一致")
+
+        return {
+            "logic_result": logic_result,
+            "plan_deviation": plan_deviation or None,
+            "bias_tags": process_tags[:3],
+            "improvement_text": improvement_text or None,
         }
 
     def refresh_trade_review(self, user_id: str, review_id: str) -> dict[str, Any]:

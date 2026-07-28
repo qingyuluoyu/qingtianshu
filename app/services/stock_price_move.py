@@ -99,6 +99,16 @@ def _normalized_event_title(value: Any) -> str:
     return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", str(value or "").casefold())
 
 
+def _is_low_signal_price_move_media(item: dict[str, Any]) -> bool:
+    """Keep recurring market-statistics headlines out of causal model context."""
+
+    title = str(item.get("title") or "")
+    return bool(
+        re.search(r"(?:融资买入|融资余额|融资融券)", title)
+        or re.search(r"(?:股权登记|分红登记|分红力度居前)", title)
+    )
+
+
 def build_stock_price_move_event_evidence(
     evidence: dict[str, Any],
 ) -> dict[str, Any]:
@@ -308,12 +318,31 @@ def compact_stock_price_move_event_evidence(
     """
 
     packet = build_stock_price_move_event_evidence(evidence)
+    original_media = list(packet.get("same_date_media_clues") or [])
+    model_media = [
+        item for item in original_media if not _is_low_signal_price_move_media(item)
+    ]
+    low_signal_count = len(original_media) - len(model_media)
+    compact_coverage_status = packet.get("coverage_status")
+    if low_signal_count and not model_media and not packet.get(
+        "same_date_official_disclosures"
+    ):
+        compact_coverage_status = "same_date_low_signal_background_only"
     return {
         **packet,
+        "coverage_status": compact_coverage_status,
+        "same_date_low_signal_background_count": low_signal_count,
         "same_date_official_disclosures": list(
             packet.get("same_date_official_disclosures") or []
         )[:2],
-        "same_date_media_clues": list(packet.get("same_date_media_clues") or [])[:3],
+        "same_date_media_clues": model_media[:3],
+        "same_date_media_source_count": len(
+            {
+                str(item.get("source") or "")
+                for item in model_media
+                if item.get("source")
+            }
+        ),
         "same_date_after_close_events": list(
             packet.get("same_date_after_close_events") or []
         )[:2],

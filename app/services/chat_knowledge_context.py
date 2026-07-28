@@ -13,6 +13,9 @@ def _filter_knowledge_context(
     evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     items = list(context.get("items") or [])
+    research_focus = str(
+        (((evidence or {}).get("research_plan") or {}).get("focus") or "")
+    )
     if intent == "market_brief":
         stock_research_prefixes = (
             "research-report:",
@@ -41,6 +44,41 @@ def _filter_knowledge_context(
                 "builtin:market-trend-risk.md",
             }
             or str(item.get("source_key") or "").startswith(("market-", "market:"))
+        ]
+    elif intent == "general_research" and (evidence or {}).get(
+        "financial_advisor_context"
+    ):
+        required_sources = set(
+            ((evidence or {}).get("financial_advisor_context") or {}).get(
+                "required_sources"
+            )
+            or []
+        )
+        generated_research_prefixes = (
+            "research-report:",
+            "earnings-quality:",
+            "financial-drivers:",
+            "business-structure:",
+            "shareholder-structure:",
+            "analyst-expectations:",
+            "event-timeline:",
+            "filing-evidence:",
+            "research-outcome:",
+            "research-actions:",
+            "research-priority:",
+            "research-change:",
+            "deep-stock:",
+        )
+        items = [
+            item
+            for item in items
+            if str(item.get("source_key") or "") in required_sources
+            or (
+                item.get("scope") == "user"
+                and not str(item.get("source_key") or "").startswith(
+                    generated_research_prefixes
+                )
+            )
         ]
     elif intent == "stock_screen":
         stock_specific_prefixes = (
@@ -84,6 +122,37 @@ def _filter_knowledge_context(
         and symbol
     ):
         canonical = normalize_symbol(symbol)
+        if research_focus == "price_cause":
+            # A same-day price question already receives refreshed quote,
+            # market/industry context and a scoped event timeline.  Generated
+            # slow-moving stock archives are neither fresh price evidence nor
+            # independent user material, and re-injecting them here can make
+            # the model explain today's move with an old financial or holder
+            # snapshot.  Keep generic reference material and genuine uploads;
+            # the latter remains contextual only under the prompt contract.
+            generated_stock_prefixes = (
+                "research-report:",
+                "earnings-quality:",
+                "financial-drivers:",
+                "business-structure:",
+                "peer-operating:",
+                "shareholder-structure:",
+                "analyst-expectations:",
+                "event-timeline:",
+                "filing-evidence:",
+                "research-outcome:",
+                "research-actions:",
+                "research-priority:",
+                "research-change:",
+                "deep-stock:",
+            )
+            items = [
+                item
+                for item in items
+                if not str(item.get("source_key") or "").startswith(
+                    generated_stock_prefixes
+                )
+            ]
         question = str((evidence or {}).get("user_question") or "")
         time_sensitive_question = any(
             term in question

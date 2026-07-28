@@ -41,6 +41,8 @@ from app.api_models import (
     PositionOpeningCreate,
     PositionOperationCreate,
     PositionOperationRevisionCreate,
+    RiskProfileConfirm,
+    RiskProfileDraft,
     StockRelationUpdate,
     StockScreenRequest,
     ThesisCandidateCreate,
@@ -79,6 +81,7 @@ from app.providers.shareholders import AShareShareholderProvider
 from app.providers.analyst_expectations import AShareAnalystExpectationsProvider
 from app.providers.filings import AShareFilingProvider
 from app.providers.fundamentals import AShareFundamentalsProvider
+from app.providers.funds import EastmoneyFundProvider
 from app.providers.global_info import NasdaqCompanyNewsProvider
 from app.providers.market_news import GoogleNewsMarketProvider
 from app.providers.us_fundamentals import USEquityFundamentalsProvider
@@ -213,6 +216,7 @@ from app.services.li_zong_strategy_service import LiZongStrategyService
 from app.services.today_overview import TodayOverviewService
 from app.services.calibration import OutlookCalibrationService
 from app.services.fundamentals import FundamentalsService
+from app.services.fund_products import FundProductService
 from app.services.earnings_quality import EarningsQualityService
 from app.services.evidence_tasks import EvidenceTaskService
 from app.services.event_timeline import EventTimelineService
@@ -234,6 +238,7 @@ from app.services.research_plan import ResearchPlanService
 from app.services.research_priority import ResearchPriorityService
 from app.services.research_actions import ResearchActionService
 from app.services.research_outcomes import ResearchOutcomeService
+from app.services.risk_profile import RiskProfileService
 from app.services.run_review_presentation import _public_run_review
 from app.utils import utc_now
 
@@ -299,6 +304,7 @@ def create_app(
     breadth_provider: Any | None = None,
     industry_index_provider: Any | None = None,
     tushare_client: Any | None = None,
+    fund_product_provider: Any | None = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.ensure_directories()
@@ -312,6 +318,12 @@ def create_app(
         database, PROJECT_ROOT / "app" / "knowledge" / "common"
     )
     knowledge.seed_common_documents()
+    fund_products = FundProductService(
+        database,
+        fund_product_provider or EastmoneyFundProvider(),
+        cache_seconds=max(300, settings.market_cache_seconds),
+    )
+    risk_profiles = RiskProfileService(database)
     supplied_market_provider = market_provider
     market_provider = market_provider or YahooMarketProvider(
         database, ttl_seconds=settings.market_cache_seconds
@@ -598,6 +610,8 @@ def create_app(
         chat_market_evidence=chat_market_evidence,
         chat_stock_research_evidence=chat_stock_research_evidence,
         chat_execution=chat_execution,
+        fund_products=fund_products,
+        risk_profiles=risk_profiles,
     )
     background = BackgroundScheduler(
         database,
@@ -630,6 +644,7 @@ def create_app(
         li_zong_backtest=li_zong_backtest,
         trade_workflow=trade_workflow,
         change_events=change_events,
+        fund_products=fund_products,
     )
 
     @asynccontextmanager
@@ -679,6 +694,8 @@ def create_app(
     app.state.live_markets = live_markets
     app.state.data_health = data_health
     app.state.knowledge = knowledge
+    app.state.fund_products = fund_products
+    app.state.risk_profiles = risk_profiles
     app.state.market_news = market_news
     app.state.evidence_tasks = evidence_tasks
     app.state.conversation_quality = conversation_quality
@@ -759,6 +776,7 @@ def create_app(
                 "message_count",
                 "last_message_preview",
                 "last_intent",
+                "conversation_scope",
                 "research_targets",
                 "created_at",
                 "updated_at",
@@ -1199,6 +1217,87 @@ def create_app(
         if not database.archive_conversation(user["id"], conversation_id):
             raise HTTPException(status_code=404, detail="研究对话不存在")
         return Response(status_code=204)
+
+    @app.get("/fund-products/search")
+    def search_fund_products(
+        request: Request,
+        q: str = Query(min_length=1, max_length=80),
+        limit: int = Query(default=8, ge=1, le=20),
+    ) -> dict[str, Any]:
+        require_session_user(request)
+        try:
+            return fund_products.search(q, limit=limit)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    @app.get("/fund-products/{code}")
+    def get_fund_product(
+        code: str,
+        request: Request,
+        refresh: bool = Query(default=False),
+    ) -> dict[str, Any]:
+        require_session_user(request)
+        try:
+            return fund_products.public_product(
+                fund_products.get_product(code, force_refresh=refresh)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ProviderError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="当前没有取得该基金或ETF的可核验产品事实",
+            ) from exc
+
+    @app.get("/fund-products")
+    def compare_fund_products(
+        request: Request,
+        codes: str = Query(min_length=13, max_length=80),
+        refresh: bool = Query(default=False),
+    ) -> dict[str, Any]:
+        require_session_user(request)
+        items = [item.strip() for item in codes.split(",") if item.strip()]
+        try:
+            return fund_products.compare(items, force_refresh=refresh)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ProviderError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="当前没有取得完整的基金或ETF比较事实",
+            ) from exc
+
+    @app.get("/me/risk-profile")
+    def get_my_risk_profile(request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        return risk_profiles.get_packet(user["id"])
+
+    @app.put("/me/risk-profile/draft")
+    def save_my_risk_profile_draft(
+        payload: RiskProfileDraft, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return risk_profiles.save_draft(
+                user["id"],
+                answers=payload.answers,
+                base_version=payload.base_version,
+            )
+        except ValueError as exc:
+            status_code = 409 if "版本" in str(exc) else 422
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+    @app.post("/me/risk-profile/confirm")
+    def confirm_my_risk_profile(
+        payload: RiskProfileConfirm, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        try:
+            return risk_profiles.confirm(
+                user["id"], version_no=payload.version_no
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/stock-screener/profiles")
     def list_stock_screener_profiles() -> dict[str, Any]:

@@ -26,7 +26,11 @@ _PROHIBITED_OUTPUT_PATTERNS = (
         r"[^。；\n]{0,16}(?:上涨|下跌)[^。；\n]{0,10}\d+(?:\.\d+)?%",
         re.IGNORECASE,
     ),
-    re.compile(r"(?:保证收益|稳赚|必涨|必跌|强烈买入|强烈卖出|建议买入|建议卖出)"),
+    re.compile(
+        r"(?<!不)(?<!不能)(?<!无法)(?<!不会)(?<!并不)(?<!绝不)"
+        r"(?<!没有)(?<!并非)(?<!不可)"
+        r"(?:保证收益|稳赚|必涨|必跌|强烈买入|强烈卖出|建议买入|建议卖出)"
+    ),
     re.compile(r"\b(?:BUY|HOLD|SELL)\b", re.IGNORECASE),
 )
 _PRIVATE_OPERATIONAL_OUTPUT_PATTERNS = (

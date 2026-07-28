@@ -70,6 +70,7 @@ def test_agent_callbacks_preserve_private_stream_protocol() -> None:
             "draft": "当前回答",
             "event_index": 2,
             "is_unverified": True,
+            "is_guarded_partial": True,
         }
     )
     publisher.forward_agent_stream({"type": "reset"})
@@ -94,6 +95,7 @@ def test_agent_callbacks_preserve_private_stream_protocol() -> None:
         "agent_stream_complete",
     ]
     assert private.events[1][2]["draft"] == "当前回答"
+    assert private.events[1][2]["is_guarded_partial"] is True
     assert private.events[-1][2]["run_id"] == "run-1"
 
 

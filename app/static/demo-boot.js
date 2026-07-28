@@ -56,6 +56,9 @@ $("agentResumeOpen").addEventListener("click", async event => {
       activateWorkspace(button.dataset.page);
     }));
     document.querySelectorAll("[data-open-page]").forEach(button => button.addEventListener("click", () => {
+      if (button.dataset.openPage === "review" && button.dataset.reviewTarget) {
+        state.reviewTab = button.dataset.reviewTarget;
+      }
       activateWorkspace(button.dataset.openPage);
     }));
     document.querySelectorAll("[data-home-focus]").forEach(button => button.addEventListener("click", () => {
@@ -71,7 +74,7 @@ $("agentResumeOpen").addEventListener("click", async event => {
     }));
     $("marketDetailToggle").addEventListener("click", () => {
       const expanded = $("marketDashboard").classList.toggle("expanded");
-      $("marketDetailToggle").textContent = expanded ? "收起市场结构" : "展开市场结构";
+      $("marketDetailToggle").textContent = expanded ? "收起详细结构" : "查看行业与涨跌明细";
       $("marketDetailToggle").setAttribute("aria-expanded", expanded ? "true" : "false");
     });
     $("agentProcessToggle").addEventListener("click", () => setAgentProcessExpanded(!state.agentProcessExpanded));

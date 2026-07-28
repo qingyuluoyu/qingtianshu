@@ -276,9 +276,49 @@ def test_demo_filters_saved_conversations_by_explicit_stock_target() -> None:
         assert fragment in page
 
     filter_section = _function_section(
-        page, "function filteredConversationItems", "function syncConversationFilterControls"
+        page, "function filteredConversationItems", "const RECENT_CONVERSATION_TOPIC_LIMIT"
     )
     assert "conversationTopicKey" not in filter_section
+
+
+def test_demo_keeps_fund_and_retirement_history_out_of_stock_categories() -> None:
+    page = frontend_source()
+    scope_section = _function_section(
+        page, "function conversationScopeKey", "function conversationScopeLabel"
+    )
+
+    assert 'item?.conversation_scope || ""' in scope_section
+    assert '"funds"' in scope_section
+    assert "基金|ETF|LOF|REIT|QDII" in scope_section
+    assert scope_section.index("基金|ETF|LOF|REIT|QDII") < scope_section.index(
+        "个股研究|该股|这只股票"
+    )
+    assert '["screening", "选股"], ["funds", "基金理财"]' in page
+    assert '<option value="funds">基金理财</option>' in page
+
+
+def test_demo_limits_default_history_by_topic_without_limiting_search() -> None:
+    page = frontend_source()
+    render_section = _function_section(
+        page, "function renderConversationList", "async function loadConversations"
+    )
+
+    for fragment in (
+        "const RECENT_CONVERSATION_TOPIC_LIMIT = 8",
+        "function conversationHistoryTopicKey(item)",
+        "function recentConversationItems(items = []",
+        "topic === activeTopic",
+        "function appendConversationHistoryToggle",
+        'button.textContent = expanded ? "只看最近对话" : `查看全部历史（${total}）`;',
+        "const displayedItems = limited ? recentItems : filteredItems;",
+        "appendConversationGroups(container, displayedItems)",
+        "container.scrollTop = 0;",
+    ):
+        assert fragment in page
+
+    assert "const filtering = Boolean(state.conversationQuery.trim())" in render_section
+    assert "const hasOlderHistory = !filtering" in render_section
+    assert "for (const item of filteredItems)" in render_section
 
 
 def test_demo_exposes_stock_workspace_load_failure_and_retry() -> None:

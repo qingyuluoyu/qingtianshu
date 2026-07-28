@@ -13,6 +13,7 @@ from app.services.chat_context import (
     ChatConversationNotFound,
     ChatUploadExpired,
     ChatUploadNotFound,
+    build_financial_advisor_context,
 )
 from app.services.chat_knowledge_context import _filter_knowledge_context
 from app.services.chat_routing import (
@@ -63,6 +64,8 @@ class ChatOrchestrationService:
     chat_market_evidence: Any
     chat_stock_research_evidence: Any
     chat_execution: Any
+    fund_products: Any
+    risk_profiles: Any
 
     def handle(
         self,
@@ -150,6 +153,29 @@ class ChatOrchestrationService:
         image_path = prepared.image_path
         model_tier = prepared.model_tier
         knowledge_context = prepared.knowledge_context
+        confirmed_risk_profile = self.risk_profiles.confirmed_context(user_id)
+        financial_advisor_context = build_financial_advisor_context(
+            message,
+            confirmed_profile=confirmed_risk_profile,
+        )
+        fund_product_context = None
+        if upload is None:
+            try:
+                fund_product_context = self.fund_products.build_question_context(
+                    message
+                )
+            except (ProviderError, ValueError):
+                if re.search(r"(?<!\d)\d{6}(?!\d)", message) and any(
+                    term in message for term in ("基金", "ETF", "etf", "联接")
+                ):
+                    fund_product_context = {
+                        "contract_version": "fund_product_research_v1",
+                        "status": "unavailable",
+                        "boundary": (
+                            "当前没有取得这些产品的可核验时点事实；回答只能解释核验方法，"
+                            "不能补写收益、规模、费率或产品状态。"
+                        ),
+                    }
 
         def persist_response(
             response_payload: dict[str, Any],
@@ -231,6 +257,22 @@ class ChatOrchestrationService:
                 "generated_at": utc_now(),
                 "memory": memory,
                 "warnings": ["该内容只是候选记忆，确认后才会用于长期个性化。"],
+            }
+        elif fund_product_context is not None and upload is None:
+            intent = "general_research"
+            symbol = None
+            evidence = {
+                "type": intent,
+                "generated_at": utc_now(),
+                "fund_product_context": fund_product_context,
+                "financial_advisor_context": financial_advisor_context,
+                "knowledge_context": knowledge_context,
+                "research_capabilities": [
+                    "基金与ETF当前产品事实",
+                    "同口径历史收益窗口",
+                    "用户已确认适合性事实",
+                    "金融知识资料库",
+                ],
             }
         elif li_zong_query and upload is None:
             intent = "stock_screen"
@@ -429,6 +471,10 @@ class ChatOrchestrationService:
                             "金融研究工具",
                         ],
                     }
+                    if financial_advisor_context:
+                        evidence["financial_advisor_context"] = (
+                            financial_advisor_context
+                        )
             else:
                 intent = "stock_research"
                 try:
@@ -466,8 +512,10 @@ class ChatOrchestrationService:
             symbol=symbol,
             evidence=evidence,
         )
-        if knowledge_context.get("items") and "knowledge_context" not in evidence:
+        if knowledge_context.get("items"):
             evidence["knowledge_context"] = knowledge_context
+        else:
+            evidence.pop("knowledge_context", None)
 
         return self.chat_execution.execute(
             user=user,

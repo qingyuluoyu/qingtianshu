@@ -10,6 +10,7 @@ from app.services.chat_context import (
     ChatRequestContextService,
     ChatUploadExpired,
     ChatUploadNotFound,
+    build_financial_advisor_context,
 )
 
 
@@ -128,6 +129,146 @@ def test_prepare_creates_conversation_and_requires_market_knowledge() -> None:
     assert "市场涨跌原因" in knowledge.calls[0]["query"]
     assert database.messages[0]["role"] == "user"
     assert database.messages[0]["metadata"]["model_tier"] == "economy"
+
+
+def test_prepare_requires_financial_education_sources_for_fund_etf_question() -> None:
+    service, _, knowledge = build_service()
+
+    prepared = service.prepare(
+        user_id="user-finance",
+        message="基金和ETF有什么区别，哪个更适合长期持有？",
+        conversation_id=None,
+        quality_scope="product",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="economy",
+    )
+
+    assert prepared.symbol is None
+    assert knowledge.calls[0]["required_source_keys"] == [
+        "builtin:fund-etf-practical-guide.md",
+        "builtin:risk-return-and-allocation.md",
+        "builtin:financial-products-basics.md",
+    ]
+    assert knowledge.calls[0]["max_results"] == 4
+    assert "底层资产" in knowledge.calls[0]["query"]
+    assert "适合性" in knowledge.calls[0]["query"]
+
+
+def test_prepare_requires_risk_and_bond_guides_for_suitability_question() -> None:
+    service, _, knowledge = build_service()
+
+    service.prepare(
+        user_id="user-bond",
+        message="退休后债券基金适不适合我，我需要保留流动性",
+        conversation_id=None,
+        quality_scope="product",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="economy",
+    )
+
+    assert knowledge.calls[0]["required_source_keys"] == [
+        "builtin:fund-etf-practical-guide.md",
+        "builtin:fixed-income-and-rates.md",
+        "builtin:risk-return-and-allocation.md",
+        "builtin:financial-products-basics.md",
+    ]
+    assert knowledge.calls[0]["max_results"] == 5
+
+
+def test_financial_advisor_context_keeps_retirement_question_conditional() -> None:
+    context = build_financial_advisor_context(
+        "我快退休了，有一笔闲钱，股票基金和债券基金哪个更适合我？"
+    )
+
+    assert context is not None
+    assert context["mode"] == "product_suitability"
+    assert context["status"] == "needs_profile"
+    assert "资金使用时间" in context["missing_fields"]
+    assert "可接受回撤" in context["missing_fields"]
+    assert "资金使用时间" in context["missing_fields"]
+    assert "可接受回撤" in context["missing_fields"]
+    assert any("不根据年龄推断收入" in item for item in context["hard_boundaries"])
+
+
+def test_financial_advisor_context_treats_beginner_choice_as_suitability() -> None:
+    context = build_financial_advisor_context(
+        "基金和ETF有什么区别？如果我是刚开始理财的普通投资者，"
+        "应该根据哪些条件选择？信息不足时请先给选择逻辑，不要替我下结论。"
+    )
+
+    assert context is not None
+    assert context["mode"] == "product_suitability"
+    assert context["status"] == "needs_profile"
+
+
+def test_financial_advisor_context_keeps_beginner_explanation_concept_only() -> None:
+    context = build_financial_advisor_context(
+        "基金和ETF到底是什么关系？请用小白能看懂的话简短说明。",
+        confirmed_profile={
+            "version_no": 1,
+            "answer_labels": {
+                "fund_use_horizon": "长期不用",
+                "loss_tolerance": "可以接受一定波动",
+            },
+        },
+    )
+
+    assert context is not None
+    assert context["status"] == "concept_only"
+    assert "confirmed_risk_profile" not in context
+
+
+def test_confirmed_risk_profile_does_not_invent_existing_assets() -> None:
+    confirmed_profile = {
+        "version_no": 1,
+        "answer_labels": {
+            "fund_use_horizon": "长期不用",
+            "liquidity_need": "可以等待到账",
+            "loss_tolerance": "会不安，但能先核验原因",
+            "emergency_reserve": "已单独准备",
+            "debt_burden": "负债压力较小",
+            "investment_experience": "刚开始了解",
+            "primary_objective": "在波动与增长之间平衡",
+        },
+        "derived": {"constraints": ["产品规则需要用通俗语言解释"]},
+    }
+
+    context = build_financial_advisor_context(
+        "请结合我已经确认的风险画像，帮我梳理哪些基金和ETF更适合我优先比较。",
+        confirmed_profile=confirmed_profile,
+    )
+
+    assert context is not None
+    assert context["mode"] == "product_suitability"
+    assert context["status"] == "needs_profile"
+    assert context["provided_fields"] == [
+        "资金使用时间",
+        "可接受回撤",
+        "应急储备",
+        "负债情况",
+    ]
+    assert context["missing_fields"] == ["已有资产"]
+    assert context["confirmed_risk_profile"]["version_no"] == 1
+
+    completed = build_financial_advisor_context(
+        "请结合我的风险画像帮我选择。我目前主要持有银行存款，没有基金和股票。",
+        confirmed_profile=confirmed_profile,
+    )
+    assert completed is not None
+    assert completed["status"] == "ready_for_conditional_guidance"
+    assert completed["missing_fields"] == []
+
+    natural_followup = build_financial_advisor_context(
+        "我目前主要持有银行存款，没有基金和股票。"
+        "请基于这些已知条件继续帮我缩小优先比较范围。",
+        confirmed_profile=confirmed_profile,
+    )
+    assert natural_followup is not None
+    assert natural_followup["mode"] == "product_suitability"
+    assert natural_followup["status"] == "ready_for_conditional_guidance"
+    assert natural_followup["missing_fields"] == []
 
 
 def test_prepare_restores_stock_target_for_contextual_followup() -> None:

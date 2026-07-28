@@ -368,8 +368,7 @@ function tone(value) {
     function renderMessageContent(node, role, text, pending, metadata) {
       node.textContent = "";
       if (role === "agent" && !pending) {
-        const body = document.createElement("div"); body.className = "message-body";
-        body.appendChild(renderMarkdown(text)); node.appendChild(body);
+        renderFinalAnswerBody(node, text);
         appendStructuredAnswer(node, metadata);
         appendMessageSources(node, metadata);
         appendMessageActions(node, text);
@@ -381,6 +380,7 @@ function tone(value) {
     function addMessage(role, text, pending = false, metadata = null) {
       const node = document.createElement("div");
       node.className = `message ${role}${pending ? " pending" : ""}`;
+      if (role === "agent" && pending) node.dataset.userNavigatedDuringRun = "false";
       renderMessageContent(node, role, text, pending, metadata);
       $("messages").appendChild(node);
       $("messages").scrollTop = $("messages").scrollHeight;
@@ -404,6 +404,18 @@ function tone(value) {
       appendMessageActions(node, text);
     }
 
+    function userNavigatedDuringAgentRun(node) {
+      return node?.dataset.userNavigatedDuringRun === "true";
+    }
+
+    function scrollAgentMessage(node, {anchorStart = false} = {}) {
+      if (!node?.isConnected || userNavigatedDuringAgentRun(node)) return;
+      const messages = $("messages");
+      messages.scrollTop = anchorStart
+        ? Math.max(0, node.offsetTop - 12)
+        : messages.scrollHeight;
+    }
+
     function finalizeStreamingMessage(node, text, metadata = null, options = {}) {
       if (!node) return null;
       const finalText = String(text || "");
@@ -413,19 +425,93 @@ function tone(value) {
         if (sameFinalAnswer) appendFinalMessageMetadata(node, finalText, metadata);
         return node;
       }
-      const messages = $("messages");
-      const distanceFromBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight;
-      const keepAtBottom = distanceFromBottom < 96;
       replaceMessageContent(node, finalText, metadata);
       node.classList.add("stream-finalized");
       node.dataset.finalAnswerVisible = "true";
       node.dataset.finalAnswer = finalText;
-      if (keepAtBottom) messages.scrollTop = messages.scrollHeight;
+      const messages = $("messages");
+      const longAnswer = node.offsetHeight > messages.clientHeight * .68 || finalText.length > 520;
+      scrollAgentMessage(node, {anchorStart: longAnswer});
       return node;
     }
 
+    function verifiedAnswerBlocks(text) {
+      const blocks = String(text || "").trim().split(/\n{2,}/).map(item => item.trim()).filter(Boolean);
+      return blocks.length ? blocks : [String(text || "")];
+    }
+
+    async function renderVerifiedAnswerProgressively(node, text) {
+      if (!node || node.dataset.finalAnswerVisible === "true") return node;
+      const finalText = String(text || "");
+      if (node.dataset.guardedPartialVisible === "true") {
+        return finalizeStreamingMessage(node, finalText);
+      }
+      const sections = splitAnswerFootnotes(finalText);
+      const blocks = verifiedAnswerBlocks(sections.main);
+      if (blocks.length < 2 || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) {
+        return finalizeStreamingMessage(node, finalText);
+      }
+      node.classList.remove("pending", "streaming-progress");
+      node.agentEvidenceProgress = null;
+      node.textContent = "";
+      const body = document.createElement("div"); body.className = "message-body"; node.appendChild(body);
+      node.classList.add("stream-finalized", "verified-progressive-answer");
+      node.dataset.finalAnswerVisible = "true";
+      node.dataset.finalAnswer = finalText;
+      const longAnswer = finalText.length > 520 || blocks.length > 4;
+      const delay = Math.max(28, Math.min(65, Math.round(260 / blocks.length)));
+      for (let index = 0; index < blocks.length; index += 1) {
+        body.appendChild(renderMarkdown(blocks[index]));
+        scrollAgentMessage(node, {anchorStart: longAnswer});
+        if (index < blocks.length - 1) await new Promise(resolve => setTimeout(resolve, delay));
+      }
+      appendAnswerFootnotes(node, sections.footnotes);
+      node.classList.remove("verified-progressive-answer");
+      return node;
+    }
+
+    function renderGuardedPartialAnswer(node, text) {
+      if (!node?.isConnected || node.dataset.finalAnswerVisible === "true") return;
+      const draft = String(text || "").trim();
+      if (!draft || draft === node.dataset.guardedPartialText) return;
+      node.classList.remove("pending");
+      node.classList.add("streaming-progress", "guarded-streaming-answer");
+      node.agentEvidenceProgress = null;
+      node.textContent = "";
+      const label = document.createElement("div");
+      label.className = "guarded-stream-label";
+      label.textContent = "正在生成 · 已显示目前可确认的内容";
+      const body = document.createElement("div"); body.className = "message-body";
+      const sections = splitAnswerFootnotes(draft);
+      body.appendChild(renderMarkdown(sections.main));
+      node.append(label, body);
+      appendAnswerFootnotes(node, sections.footnotes);
+      node.dataset.guardedPartialVisible = "true";
+      node.dataset.guardedPartialText = draft;
+      scrollAgentMessage(node, {anchorStart: true});
+    }
+
+    function markActiveAgentScrollIntent() {
+      for (const request of state.pendingAgentRequests.values()) {
+        const node = request?.node || request;
+        if (node?.isConnected && node.dataset.finalAnswerVisible !== "true") {
+          node.dataset.userNavigatedDuringRun = "true";
+        }
+      }
+    }
+
+    $("messages").addEventListener("wheel", markActiveAgentScrollIntent, {passive: true});
+    $("messages").addEventListener("touchstart", markActiveAgentScrollIntent, {passive: true});
+    $("messages").addEventListener("pointerdown", markActiveAgentScrollIntent, {passive: true});
+    document.addEventListener("keydown", event => {
+      if (!["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) return;
+      if (event.target?.closest?.("input, textarea, select, [contenteditable='true']")) return;
+      markActiveAgentScrollIntent();
+    });
+
     function renderStreamingProgress(node, label = "AI 正在整理证据并生成回答…", evidenceProgress = null) {
       if (!node?.isConnected || node.dataset.finalAnswerVisible === "true") return;
+      if (node.dataset.guardedPartialVisible === "true") return;
       node.classList.add("pending", "streaming-progress");
       const firstEvidenceSummary = Boolean(evidenceProgress?.items?.length) && !node.agentEvidenceProgress?.items?.length;
       if (evidenceProgress?.items?.length) node.agentEvidenceProgress = evidenceProgress;
@@ -448,11 +534,9 @@ function tone(value) {
       }
       node.appendChild(card);
       const messages = $("messages");
-      if (firstEvidenceSummary && card.offsetHeight > messages.clientHeight * .62) {
-        messages.scrollTop = Math.max(0, node.offsetTop - 8);
-      } else {
-        messages.scrollTop = messages.scrollHeight;
-      }
+      scrollAgentMessage(node, {
+        anchorStart: firstEvidenceSummary && card.offsetHeight > messages.clientHeight * .62
+      });
     }
 
     function connectPrivateAgentStream(requestId, pending) {
@@ -477,7 +561,11 @@ function tone(value) {
             if (data.is_unverified === false && data.is_final === true) {
               context.finalText = data.draft;
               context.finalShown = true;
-              finalizeStreamingMessage(pending, context.finalText);
+              context.finalRenderPromise = pending.dataset.finalAnswerVisible === "true"
+                ? Promise.resolve(pending)
+                : renderVerifiedAnswerProgressively(pending, context.finalText);
+            } else if (data.is_guarded_partial === true) {
+              renderGuardedPartialAnswer(pending, data.draft);
             } else {
               renderStreamingProgress(pending, "回答草稿已生成，正在核对行情、数字和证据…");
             }
@@ -524,14 +612,17 @@ function tone(value) {
     }
 
     function conversationScopeKey(item) {
+      const explicitScope = String(item?.conversation_scope || "").trim();
+      if (["stock", "market", "screening", "portfolio", "funds", "other"].includes(explicitScope)) return explicitScope;
       const intent = String(item?.last_intent || "").trim();
       const title = String(item?.title || "");
       const preview = String(item?.last_message_preview || "");
       const text = `${title} ${preview}`;
-      if (/个股研究|该股|这只股票|这家公司|相对.{0,10}(行业|板块)|(行业|板块).{0,6}(更强|更弱)|股票代码|[036]\d{5}/.test(title)) return "stock";
       if (/自选股|关注与持仓|关注组合|持仓股票|我的关注|我的自选/.test(title)) return "portfolio";
+      if (/基金|ETF|LOF|REIT|QDII|银行理财|理财产品|股票和基金|基金和股票|股票基金|债券|固收|存款|养老|退休|资产配置|风险承受|风险画像/i.test(text)) return "funds";
       if (/筛选|李总策略|候选股票|候选股|筛出|(^|[^自])选股/.test(title)) return "screening";
       if (/成交额|涨跌家数|普跌|结构性行情|大盘|主要指数|(A股|美股|港股|日股|韩股|欧股|伦敦金).{0,12}(收盘|市场|指数|涨跌|成交)/.test(title)) return "market";
+      if (/个股研究|该股|这只股票|这家公司|相对.{0,10}(行业|板块)|(行业|板块).{0,6}(更强|更弱)|股票代码|[036]\d{5}/.test(title)) return "stock";
       if (intent === "stock_screen") return "screening";
       if (["market_brief", "market_pulse_article"].includes(intent)) return "market";
       if ([
@@ -548,7 +639,7 @@ function tone(value) {
     }
 
     function conversationScopeLabel(item) {
-      return {stock: "个股", market: "大盘", screening: "选股", portfolio: "关注", other: "其他"}[conversationScopeKey(item)] || "其他";
+      return {stock: "个股", market: "大盘", screening: "选股", portfolio: "关注", funds: "基金理财", other: "其他"}[conversationScopeKey(item)] || "其他";
     }
 
     function conversationResearchTargets(item) {
@@ -578,7 +669,7 @@ function tone(value) {
     function syncConversationScopeOptions() {
       const baseOptions = [
         ["all", "全部"], ["stock", "个股"], ["market", "大盘"],
-        ["screening", "选股"], ["portfolio", "关注"], ["other", "其他"]
+        ["screening", "选股"], ["funds", "基金理财"], ["portfolio", "关注"], ["other", "其他"]
       ];
       const stockOptions = conversationStockFilterOptions(state.conversations);
       const validValues = new Set(baseOptions.map(item => item[0]));
@@ -631,7 +722,30 @@ function tone(value) {
         });
     }
 
-    function syncConversationFilterControls(filteredCount) {
+    const RECENT_CONVERSATION_TOPIC_LIMIT = 8;
+
+    function conversationHistoryTopicKey(item) {
+      const section = conversationDateSection(item?.updated_at);
+      return `${section.key}:${conversationTopicKey(item)}`;
+    }
+
+    function conversationTopicCount(items = []) {
+      return new Set(items.map(conversationHistoryTopicKey)).size;
+    }
+
+    function recentConversationItems(items = [], topicLimit = RECENT_CONVERSATION_TOPIC_LIMIT) {
+      const selectedTopics = new Set();
+      const activeItem = items.find(item => item.id === state.conversationId);
+      const activeTopic = activeItem ? conversationHistoryTopicKey(activeItem) : "";
+      for (const item of items) {
+        const topic = conversationHistoryTopicKey(item);
+        if (selectedTopics.has(topic)) continue;
+        if (selectedTopics.size < topicLimit || topic === activeTopic) selectedTopics.add(topic);
+      }
+      return items.filter(item => selectedTopics.has(conversationHistoryTopicKey(item)));
+    }
+
+    function syncConversationFilterControls(filteredCount, displayState = {}) {
       const showFilters = state.conversations.length >= 8;
       $("conversationFilters").hidden = !showFilters;
       $("conversationMobileTools").hidden = !showFilters;
@@ -640,6 +754,8 @@ function tone(value) {
       const filtering = Boolean(state.conversationQuery.trim()) || state.conversationScope !== "all";
       $("conversationFilterMeta").textContent = filtering
         ? `显示 ${filteredCount} / ${state.conversations.length} 个对话`
+        : displayState.limited
+        ? `最近 ${displayState.topicCount || 0} 个主题 · 共 ${state.conversations.length} 个对话`
         : `${state.conversations.length} 个历史对话，可按标题或最近内容查找`;
     }
 
@@ -715,17 +831,45 @@ function tone(value) {
       }
     }
 
+    function appendConversationHistoryToggle(container, {expanded, total}) {
+      const button = document.createElement("button");
+      button.className = "conversation-history-toggle";
+      button.type = "button";
+      button.setAttribute("aria-expanded", String(expanded));
+      button.textContent = expanded ? "只看最近对话" : `查看全部历史（${total}）`;
+      button.addEventListener("click", () => {
+        state.conversationHistoryExpanded = !expanded;
+        renderConversationList();
+        container.scrollTop = 0;
+      });
+      container.appendChild(button);
+    }
+
     function renderConversationList(items = null) {
       if (Array.isArray(items)) state.conversations = visibleConversationItems(items);
       const filteredItems = filteredConversationItems(state.conversations);
-      syncConversationFilterControls(filteredItems.length);
+      const filtering = Boolean(state.conversationQuery.trim()) || state.conversationScope !== "all";
+      const recentItems = recentConversationItems(filteredItems);
+      const hasOlderHistory = !filtering && recentItems.length < filteredItems.length;
+      const limited = hasOlderHistory && !state.conversationHistoryExpanded;
+      const displayedItems = limited ? recentItems : filteredItems;
+      syncConversationFilterControls(filteredItems.length, {
+        limited,
+        topicCount: conversationTopicCount(displayedItems),
+      });
       for (const container of [$("conversationList"), $("agentHistoryList")]) {
         container.innerHTML = "";
-        appendConversationGroups(container, filteredItems);
+        appendConversationGroups(container, displayedItems);
         if (!container.children.length) {
           container.innerHTML = state.conversations.length
             ? '<div class="conversation-filter-empty">没有匹配的历史对话<br>可以换一个关键词或研究类型</div>'
             : '<div class="knowledge-summary">还没有历史对话</div>';
+        }
+        if (hasOlderHistory) {
+          appendConversationHistoryToggle(container, {
+            expanded: state.conversationHistoryExpanded,
+            total: filteredItems.length,
+          });
         }
       }
       const switcher = $("conversationSwitcher");
@@ -738,7 +882,6 @@ function tone(value) {
         option.textContent = `当前对话 · ${activeItem.title || "新的研究对话"}`;
         switcher.appendChild(option);
       }
-      const filtering = Boolean(state.conversationQuery.trim()) || state.conversationScope !== "all";
       if (filtering && !filteredItems.length) {
         const option = document.createElement("option");
         option.disabled = true;
@@ -770,6 +913,14 @@ function tone(value) {
     async function openConversation(conversationId, activatePage = true, historyMode = null) {
       if (activatePage) activateWorkspace("agent", {historyMode: "none"});
       const data = await api(`/me/conversations/${encodeURIComponent(conversationId)}`);
+      const nextEvaluationMode = data.quality_scope === "evaluation";
+      const evaluationModeChanged = state.evaluationMode !== nextEvaluationMode;
+      state.evaluationMode = nextEvaluationMode;
+      if (evaluationModeChanged) {
+        updateAgentMode();
+        syncReviewModeVisibility();
+        await loadConversations(false, false);
+      }
       state.conversationId = data.id;
       state.conversationMessages = data.messages || [];
       const boundDeepStockSession = state.deepStockSessions.find(item => item.conversation_id === data.id) || null;

@@ -53,6 +53,59 @@ function inferDiagnosisMarketKey(data, question = "") {
       return targets;
     }
 
+    function fundProductDiagnosisContext(data, question = "") {
+      const context = data?.evidence?.fund_product_context
+        || data?.fundProductContext
+        || data?.fund_product_context
+        || data?.metadata?.fund_product_context
+        || null;
+      if (context) return context;
+      const text = String(question || "");
+      const codes = [...text.matchAll(/(?<!\d)(\d{6})(?!\d)/g)].map(match => match[1]);
+      const hasFundTerm = /(基金|ETF|etf|联接|债基|货基|场内|场外)/.test(text);
+      if (hasFundTerm || (codes.length && codes.every(code => code.startsWith("1") || code.startsWith("5")))) {
+        return {mode: codes.length > 1 ? "comparison" : "single_product"};
+      }
+      return null;
+    }
+
+    function renderFundProductDiagnosis(context = {}) {
+      const comparison = context.comparison || {};
+      const products = comparison.products || (context.product ? [context.product] : []);
+      const names = products.map(item => item.name || item.code).filter(Boolean);
+      setAgentContextCollapsed(false);
+      $("diagnosisContext").hidden = false;
+      $("diagnosisTitle").textContent = names.length
+        ? `${names.join("、")} · 产品事实`
+        : "基金与 ETF · 产品研究";
+      $("diagnosisMeta").textContent = "基金净值与 ETF 场内成交价分开呈现；历史收益不代表未来表现。";
+      $("diagnosisPrice").textContent = "—";
+      $("diagnosisChange").className = "diagnosis-change flat";
+      $("diagnosisChange").textContent = "—";
+      const metricsNode = $("diagnosisMetrics");
+      metricsNode.innerHTML = "";
+      const metrics = products.flatMap(item => [
+        {
+          label: `${item.name || item.code} · 净值`,
+          value: item.nav == null ? "—" : `${numeric(item.nav)} · ${item.nav_date || "日期待核验"}`
+        },
+        {
+          label: `${item.name || item.code} · 场内价`,
+          value: item.live_quote?.price == null ? "不适用或暂未取得" : `${numeric(item.live_quote.price)} · ${pct(item.live_quote.pct_change)}`
+        }
+      ]).slice(0, 4);
+      if (!metrics.length) metrics.push({label: "研究对象", value: "基金或 ETF"});
+      for (const item of metrics) {
+        const card = document.createElement("div"); card.className = "diagnosis-metric";
+        const label = document.createElement("div"); label.className = "diagnosis-metric-label"; label.textContent = item.label;
+        const value = document.createElement("div"); value.className = "diagnosis-metric-value"; value.textContent = item.value;
+        card.append(label, value); metricsNode.appendChild(card);
+      }
+      const canvas = $("diagnosisKline");
+      canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+      renderAgentResearchContext();
+    }
+
     function renderDiagnosisChart({title, meta, price, change, points, metrics = []}) {
       setAgentContextCollapsed(false);
       $("diagnosisContext").hidden = false;
@@ -238,6 +291,12 @@ function inferDiagnosisMarketKey(data, question = "") {
     }
 
     async function maybeUpdateDiagnosis(data, question = "") {
+      const fundContext = fundProductDiagnosisContext(data, question);
+      if (fundContext) {
+        state.diagnosisSymbol = null;
+        renderFundProductDiagnosis(fundContext);
+        return;
+      }
       const targets = diagnosisResearchTargets(data);
       if (targets.length > 1) {
         renderMultiStockDiagnosis(targets);
@@ -265,8 +324,15 @@ function inferDiagnosisMarketKey(data, question = "") {
         symbol: metadata.symbol,
         market_key: metadata.market_key,
         research_targets: metadata.research_targets || metadata.researchTargets || [],
-        analysis_target: metadata.analysis_target || null
+        analysis_target: metadata.analysis_target || null,
+        fund_product_context: metadata.fund_product_context || null
       };
+      const fundContext = fundProductDiagnosisContext(context, lastUser?.content || "");
+      if (fundContext) {
+        state.diagnosisSymbol = null;
+        renderFundProductDiagnosis(fundContext);
+        return;
+      }
       const targets = diagnosisResearchTargets(context);
       if (targets.length > 1) {
         renderMultiStockDiagnosis(targets);
@@ -348,6 +414,89 @@ function inferDiagnosisMarketKey(data, question = "") {
       if (!items.length) container.innerHTML = '<div class="empty">A 股指数快照正在更新</div>';
     }
 
+    function marketTurnoverLabel(value) {
+      const amount = Number(value || 0);
+      if (!Number.isFinite(amount) || amount <= 0) return "—";
+      return amount >= 10000
+        ? `${(amount / 10000).toFixed(2)} 万亿元`
+        : `${numeric(amount)} 亿元`;
+    }
+
+    function renderMarketQuickRead() {
+      const container = $("marketQuickGrid");
+      if (!container) return;
+      const packet = state.marketBreadth || {};
+      const breadth = packet.breadth || {};
+      const distribution = packet.distribution || {};
+      const turnover = packet.turnover || {};
+      const sectors = state.marketSectors || [];
+      const marketDate = packet.market_date || "";
+      const total = Number(breadth.total || 0);
+      const marketState = breadth.state || (total ? "市场结构已更新" : "更新中");
+
+      $("marketQuickTitle").textContent = total ? `A股${marketState}` : "A股一眼看懂";
+      $("marketQuickMeta").textContent = total
+        ? `${marketDate ? `${marketDate} · ` : ""}覆盖沪深京 ${Number(total).toLocaleString("zh-CN")} 只股票；以下只描述已经发生的市场结构。`
+        : "正在汇总全市场涨跌、成交和领涨方向";
+
+      const medianRaw = distribution.median_pct_change;
+      const median = medianRaw === null || medianRaw === undefined
+        ? Number.NaN
+        : Number(medianRaw);
+      const turnoverTotal = Number(turnover.total_amount_100m_cny || 0);
+      const turnoverHistory = turnover.history_comparison || {};
+      const leadingSector = sectors[0] || null;
+      const leadingName = leadingSector?.name || "更新中";
+      const leadingChangeRaw = leadingSector?.pct_change;
+      const leadingChange = leadingChangeRaw === null || leadingChangeRaw === undefined
+        ? Number.NaN
+        : Number(leadingChangeRaw);
+      const turnoverChangeRaw = turnoverHistory.change_vs_previous_pct;
+      const turnoverChange = turnoverChangeRaw === null || turnoverChangeRaw === undefined
+        ? Number.NaN
+        : Number(turnoverChangeRaw);
+      const cards = [
+        {
+          label: "市场状态",
+          value: total ? marketState : "更新中",
+          detail: total
+            ? `上涨 ${Number(breadth.advancers || 0).toLocaleString("zh-CN")} 只 · 下跌 ${Number(breadth.decliners || 0).toLocaleString("zh-CN")} 只`
+            : "正在读取涨跌家数",
+          valueClass: Number(breadth.advancers || 0) >= Number(breadth.decliners || 0) ? "up" : "down"
+        },
+        {
+          label: "全市场涨跌中位数",
+          value: Number.isFinite(median) ? pct(median) : "—",
+          detail: Number.isFinite(median) ? "一半股票高于该值，一半低于该值" : "正在计算大多数股票的表现",
+          valueClass: Number.isFinite(median) ? tone(median) : ""
+        },
+        {
+          label: "当日累计成交额",
+          value: marketTurnoverLabel(turnoverTotal),
+          detail: turnoverHistory.status === "available" && Number.isFinite(turnoverChange)
+            ? `较上一完整交易日 ${pct(turnoverChange)}`
+            : "同口径历史正在逐日积累",
+          valueClass: ""
+        },
+        {
+          label: "领涨方向",
+          value: leadingName,
+          detail: Number.isFinite(leadingChange)
+            ? `${pct(leadingChange)} · 按板块涨幅排序，不是买入建议`
+            : "正在读取板块表现",
+          valueClass: Number.isFinite(leadingChange) ? tone(leadingChange) : ""
+        }
+      ];
+      container.innerHTML = "";
+      cards.forEach(item => {
+        const card = document.createElement("article"); card.className = "market-quick-card";
+        const label = document.createElement("span"); label.textContent = item.label;
+        const value = document.createElement("strong"); value.className = item.valueClass || ""; value.textContent = item.value;
+        const detail = document.createElement("small"); detail.textContent = item.detail;
+        card.append(label, value, detail); container.appendChild(card);
+      });
+    }
+
     function updateMarketDashboardDate() {
       const breadth = state.marketBreadth;
       if (!breadth?.market_date) return;
@@ -361,6 +510,7 @@ function inferDiagnosisMarketKey(data, question = "") {
     function renderMarketBreadth(data) {
       state.marketBreadth = data;
       renderHomeFocus();
+      renderMarketQuickRead();
       const breadth = data.breadth || {};
       const container = $("marketBreadthOverview"); container.innerHTML = "";
       if (data.status !== "available" || !breadth.total) {

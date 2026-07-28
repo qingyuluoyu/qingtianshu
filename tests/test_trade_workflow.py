@@ -1,12 +1,83 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
+
+from app.services.trade_workflow import TradeWorkflowService
 
 
 def _create_user(client: TestClient, name: str) -> dict:
     response = client.post("/users", json={"name": name})
     assert response.status_code == 201
     return response.json()
+
+
+def test_review_draft_normalization_separates_price_and_internal_language() -> None:
+    normalized = TradeWorkflowService.normalize_review_agent_draft(
+        {"action_plan": {"id": "plan-1"}},
+        {
+            "logic_result": (
+                "操作价37.4元，第3个后续交易日复权收盘35.25元。"
+                "但"
+                "操作时保存的记录缺失经营现金流和订单核验，无法验证原判断。"
+                "当时逻辑离计划设定的触发门槛还有距离。"
+                "本次减少数量与计划一致。"
+                "计划要求的两个触发条件与实际理由条件强度不同，"
+                "需要用户确认条件已满足。"
+                "操作时持仓成本36元，操作价35.90元，属于亏损卖出。"
+            ),
+            "plan_deviation": (
+                "计划（版本3）触发条件是经营现金流继续恶化，但实际理由只是尚未改善，"
+                "条件强度不同；冻结时计划状态为已保存，后续更新为已执行，"
+                "操作前没有记录订单核验。"
+            ),
+            "bias_tags": ["确认偏差", "可得性启发", "叙事谬误"],
+            "improvement_text": (
+                "把核验数据冻结到操作上下文中，并加入thesis的watch_items。"
+                "例如经营现金流连续两个季度同比下降超过X%，"
+                "或在手订单低于预期X%。"
+            ),
+        },
+    )
+
+    assert "持仓成本" not in normalized["logic_result"]
+    assert "操作价" not in normalized["logic_result"]
+    assert "亏损卖出" not in normalized["logic_result"]
+    assert not normalized["logic_result"].startswith("但")
+    assert "计划的触发条件" not in normalized["logic_result"]
+    assert "计划要求" not in normalized["logic_result"]
+    assert "计划设定" not in normalized["logic_result"]
+    assert "计划一致" not in normalized["logic_result"]
+    assert "thesis" not in normalized["improvement_text"]
+    assert "watch_items" not in normalized["improvement_text"]
+    assert "随操作记录一并保存" in normalized["improvement_text"]
+    assert "X%" not in normalized["improvement_text"]
+    assert "由用户自己写清判断标准" in normalized["improvement_text"]
+    assert "版本3" not in normalized["plan_deviation"]
+    assert "冻结时" not in normalized["plan_deviation"]
+    assert "后续更新为已执行" not in normalized["plan_deviation"]
+    assert normalized["bias_tags"] == ["证据未留档", "触发条件待确认"]
+
+
+def test_review_agent_answer_decodes_nested_json_string() -> None:
+    nested = json.dumps(
+        json.dumps(
+            {
+                "logic_result": "操作时证据不足，需要继续核验。",
+                "plan_deviation": None,
+                "bias_tags": ["证据未留档"],
+                "improvement_text": None,
+            },
+            ensure_ascii=False,
+        ),
+        ensure_ascii=False,
+    )
+
+    parsed = TradeWorkflowService.parse_review_agent_answer(nested)
+
+    assert parsed["logic_result"] == "操作时证据不足，需要继续核验。"
+    assert parsed["bias_tags"] == ["证据未留档"]
 
 
 def _add_stock(client: TestClient) -> None:

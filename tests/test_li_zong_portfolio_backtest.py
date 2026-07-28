@@ -80,7 +80,7 @@ def test_equal_weight_backtest_rebalances_on_next_open_without_lookahead():
     assert result["benchmark_policy"] == "same_exposure_only"
     assert all(item["cost_pct_of_nav"] == 0.0 for item in result["rebalances"])
     assert result["benchmark_return_pct"] == 0.0
-    assert result["portfolio_version"] == "li_zong_2w_no_cost_v2"
+    assert result["portfolio_version"] == "li_zong_2w_no_cost_same_exposure_v4"
 
 
 def test_backtest_holds_cash_when_strategy_never_selects_a_stock():
@@ -103,6 +103,7 @@ def test_backtest_holds_cash_when_strategy_never_selects_a_stock():
     assert result["selection_update_count"] == 0
     assert result["ever_selected_symbol_count"] == 0
     assert result["benchmark_return_pct"] == 0.0
+    assert result["benchmark_trading_days"] == 0
     assert all(item["benchmark_exposed"] is False for item in result["points"])
 
 
@@ -338,14 +339,20 @@ def test_backtest_api_and_frontend_expose_three_periods(app, client, monkeypatch
 
     response = client.get("/v1/stock-strategies/li-zong/backtest?period=3y")
     page = client.get("/demo")
+    screening_script = client.get("/static/qs-screening.js")
 
     assert response.status_code == 200
     assert response.json()["selected_period"] == "3y"
     assert page.status_code == 200
+    assert screening_script.status_code == 200
     assert 'id="liZongBacktestPanel"' in page.text
     assert 'data-li-zong-backtest-period="3m"' in page.text
     assert 'data-li-zong-backtest-period="1y"' in page.text
     assert 'data-li-zong-backtest-period="3y"' in page.text
+    assert "沪深300同暴露基准" in page.text
+    assert "策略空仓期不计入比较" in page.text
+    assert "沪深300同暴露累计收益曲线" in screening_script.text
+    assert "沪深300连续区间累计收益曲线" not in screening_script.text
 
 
 def test_backtest_tables_and_long_history_window_are_initialized(app):

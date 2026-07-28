@@ -16,6 +16,10 @@ from app.services.stock_market_context import (
     _build_stock_market_context,
     _stock_analysis_target,
 )
+from app.services.stock_research_contract import (
+    build_stock_research_contract,
+    finalize_stock_research_contract,
+)
 from app.utils import utc_now
 
 
@@ -54,15 +58,39 @@ class ChatStockResearchEvidenceService:
         history: list[dict[str, Any]],
         publish_progress: Callable[..., None],
     ) -> dict[str, Any]:
-        plan = self.research_plan.build(message, conversation_history=history)
+        plan = dict(
+            self.research_plan.build(message, conversation_history=history)
+        )
+        watchlist_item = self.database.get_watchlist_item(user_id, symbol)
+        latest_report = (
+            self.research_reports.get_latest(symbol, generate_if_missing=False)
+            if watchlist_item is not None
+            else None
+        )
+        evidence_contract = build_stock_research_contract(
+            watchlist_item=watchlist_item,
+            latest_report=latest_report,
+        )
+        plan["evidence_contract_version"] = evidence_contract["contract_version"]
+        plan["evidence_path"] = evidence_contract["path"]
+        plan["selected_skills"] = list(
+            dict.fromkeys(
+                [
+                    *(plan.get("selected_skills") or []),
+                    evidence_contract["skill_name"],
+                ]
+            )
+        )
+        module_max_age_hours = dict(plan.get("module_max_age_hours") or {})
+        for module_key in evidence_contract["always_refresh_modules"]:
+            if module_key in (plan.get("selected_modules") or []):
+                module_max_age_hours[module_key] = 0
+        plan["module_max_age_hours"] = module_max_age_hours
         publish_progress(
             "research_plan_ready",
             plan.get("progress_label") or "已识别研究重点，正在核验相关证据…",
             research_focus=plan.get("focus"),
             evidence_modules=plan.get("selected_modules"),
-        )
-        latest_report = self.research_reports.get_latest(
-            symbol, generate_if_missing=False
         )
 
         def publish_evidence_module(module_key: str, label: str) -> None:
@@ -81,9 +109,16 @@ class ChatStockResearchEvidenceService:
                 reusable_evidence=(latest_report or {}).get("evidence"),
                 reusable_generated_at=(latest_report or {}).get("generated_at"),
                 progress_callback=publish_evidence_module,
+                force_online_refresh=bool(
+                    evidence_contract.get("force_online_refresh")
+                ),
             )
         except ProviderError:
-            if latest_report is None or not latest_report.get("evidence"):
+            if (
+                not evidence_contract.get("precomputed_report_reuse_allowed")
+                or latest_report is None
+                or not latest_report.get("evidence")
+            ):
                 raise
             evidence = dict(latest_report["evidence"])
             evidence["generated_at"] = utc_now()
@@ -130,6 +165,11 @@ class ChatStockResearchEvidenceService:
                 "next_review": tracking_item.get("next_review"),
                 "boundary": tracking_packet.get("boundary"),
             }
+        evidence["research_evidence_contract"] = finalize_stock_research_contract(
+            evidence_contract,
+            evidence=evidence,
+            latest_report=latest_report,
+        )
         return evidence
 
     def attach_workspace_context(

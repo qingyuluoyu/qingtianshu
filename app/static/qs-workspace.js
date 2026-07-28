@@ -69,7 +69,9 @@ function readWorkspaceRoute() {
       const agent = $("agentSection");
       const embedded = stockAgentIsEmbedded();
       if (embedded) {
-        if (agent.parentElement !== $("stockSpaceAiPane")) $("stockSpaceAiPane").appendChild(agent);
+        const aiPane = $("stockSpaceAiPane");
+        const journey = $("deepStockJourney");
+        if (agent.parentElement !== aiPane || agent.nextElementSibling !== journey) aiPane.insertBefore(agent, journey);
       } else if (agent.previousElementSibling !== $("agentSectionHome")) {
         $("agentSectionHome").after(agent);
       }
@@ -87,13 +89,13 @@ function readWorkspaceRoute() {
 
     function activateWorkspace(page = "insights", options = {}) {
       const pages = {
-        insights: ["今日观察", "全球行情、A股全景、行业轮动与个人研究脉冲"],
+        insights: ["市场总览", "全球行情、A股全景、行业轮动与个人研究脉冲"],
         search: ["搜索", "查找股票、行业和已保存的个人研究资产"],
-        agent: ["AI 研究", "连续对话、历史研究、自动 K 线与证据链"],
+        agent: ["AI 投研对话", "连续对话、历史研究、自动 K 线与证据链"],
         screening: ["AI 研究 · 透明选股", "用确定性规则生成可解释研究候选，再进入个股空间继续核验"],
         deep_stock: ["个股研究", "围绕一只股票持续保存判断、变化、证据、任务、对话和报告"],
         watchlist: ["我的关注", "按关系、优先级和跟踪状态管理长期股票研究资产"],
-        knowledge: ["资料库", "集中查看通用研究资料与个人资料，并管理可被 Agent 检索的内容"],
+        knowledge: ["金融资料库", "集中查看通用研究资料与个人资料，并管理可被 Agent 检索的内容"],
         review: ["复盘中心", "跟踪研究结论、后续验证与风险变化"],
         account: ["个人中心", "查看个人空间、研究资产、资料用量与真实服务状态"]
       };
@@ -167,7 +169,10 @@ function readWorkspaceRoute() {
         }
       }
       if (page === "knowledge") void loadKnowledge();
-      if (page === "account") renderAccountCenter();
+      if (page === "account") {
+        renderAccountCenter();
+        void loadRiskProfile();
+      }
       syncWorkspaceUrl(options.historyMode || "push");
       if (options.scroll !== false) window.scrollTo({top: 0, behavior: "smooth"});
     }

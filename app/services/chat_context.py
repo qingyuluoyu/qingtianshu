@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Any
 
 from app.services.chat_routing import (
@@ -74,6 +75,238 @@ class PreparedChatContext:
     knowledge_context: dict[str, Any]
 
 
+def _financial_education_sources(message: str) -> list[str]:
+    folded = message.casefold().replace(" ", "")
+    fund_terms = (
+        "基金",
+        "etf",
+        "指数基金",
+        "联接基金",
+        "场内基金",
+        "场外基金",
+        "主动基金",
+        "被动基金",
+        "基金定投",
+    )
+    bond_terms = (
+        "债券",
+        "债基",
+        "债券基金",
+        "国债",
+        "信用债",
+        "可转债",
+        "利率",
+        "降息",
+        "加息",
+        "久期",
+        "固收",
+    )
+    suitability_terms = (
+        "资产配置",
+        "怎么配置",
+        "如何配置",
+        "适合我",
+        "适不适合",
+        "哪个更适合",
+        "哪一个更适合",
+        "哪类更适合",
+        "怎么选",
+        "如何选择",
+        "该选",
+        "选哪个",
+        "风险承受",
+        "风险偏好",
+        "能亏",
+        "亏多少",
+        "投资期限",
+        "持有多久",
+        "应急资金",
+        "闲钱",
+        "养老",
+        "退休",
+        "流动性需求",
+        "理财产品怎么选",
+    )
+    product_terms = (
+        "金融产品",
+        "理财产品",
+        "银行理财",
+        "货币基金",
+        "存款",
+        "保险",
+        "股票和基金",
+        "基金和股票",
+        "黄金",
+    )
+
+    sources: list[str] = []
+    if any(term in folded for term in fund_terms):
+        sources.append("builtin:fund-etf-practical-guide.md")
+    if any(term in folded for term in bond_terms):
+        sources.append("builtin:fixed-income-and-rates.md")
+    if any(term in folded for term in suitability_terms):
+        sources.append("builtin:risk-return-and-allocation.md")
+    if sources or any(term in folded for term in product_terms):
+        sources.append("builtin:financial-products-basics.md")
+    return list(dict.fromkeys(sources))
+
+
+def build_financial_advisor_context(
+    message: str,
+    *,
+    confirmed_profile: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    sources = _financial_education_sources(message)
+    if not sources:
+        return None
+    folded = message.casefold().replace(" ", "")
+    explicit_suitability_query = any(
+        term in folded
+        for term in (
+            "适合我",
+            "适不适合",
+            "哪个更适合",
+            "哪一个更适合",
+            "哪类更适合",
+            "怎么选",
+            "如何选择",
+            "该选",
+            "选哪个",
+            "怎么配置",
+            "如何配置",
+            "资产配置",
+            "直接告诉我",
+        )
+    )
+    personal_context_query = any(
+        term in folded
+        for term in (
+            "如果我是",
+            "结合我",
+            "根据我",
+            "基于我的",
+            "基于这些已知条件",
+            "基于前面的条件",
+            "结合前面的条件",
+            "我的风险画像",
+            "已确认的风险画像",
+            "我应该",
+            "我该",
+            "对我",
+            "普通投资者",
+            "刚开始理财",
+            "理财新手",
+            "投资新手",
+            "小白",
+        )
+    )
+    profile_reference_query = any(
+        term in folded
+        for term in (
+            "结合我",
+            "根据我",
+            "基于我的",
+            "基于这些已知条件",
+            "基于前面的条件",
+            "结合前面的条件",
+            "我的风险画像",
+            "已确认的风险画像",
+            "我应该",
+            "我该",
+            "对我",
+        )
+    )
+    choice_or_advice_query = any(
+        term in folded
+        for term in (
+            "选择",
+            "怎么挑",
+            "如何挑",
+            "优先比较",
+            "先比较",
+            "应该比较",
+            "下一步",
+            "配置",
+            "下结论",
+        )
+    )
+    suitability_query = explicit_suitability_query or (
+        personal_context_query and choice_or_advice_query
+    )
+    # Once a user has explicitly confirmed a risk profile, a request to keep
+    # narrowing or comparing products is still a suitability follow-up even
+    # when they naturally say "continue" instead of repeating "for me".
+    if confirmed_profile and (profile_reference_query or choice_or_advice_query):
+        suitability_query = True
+    if not suitability_query:
+        return {
+            "mode": "financial_education",
+            "status": "concept_only",
+            "required_sources": sources,
+        }
+
+    field_patterns = {
+        "资金使用时间": (
+            r"(?:\d+|[一二三四五六七八九十]+)(?:年|个月)",
+            r"(?:短期|长期|近期|很快|随时)(?:要用|不用|动用|使用)",
+        ),
+        "可接受回撤": (
+            r"(?:能|可以|不能|无法|不太能).{0,8}(?:接受|承受).{0,8}(?:亏|回撤|波动)",
+            r"(?:亏|回撤).{0,8}(?:会卖|不卖|能扛|不能扛)",
+        ),
+        "应急储备": (
+            r"(?:已有|有|没有|无).{0,6}(?:应急金|应急储备|备用金)",
+        ),
+        "负债情况": (
+            r"(?:有|没有|无).{0,6}(?:负债|房贷|车贷|贷款)",
+        ),
+        "已有资产": (
+            r"(?:已有|持有|已经买了|目前有).{0,12}(?:存款|基金|股票|债券|理财|保险|房产)",
+        ),
+    }
+    provided = [
+        label
+        for label, patterns in field_patterns.items()
+        if any(re.search(pattern, folded) for pattern in patterns)
+    ]
+    if confirmed_profile:
+        profile_answers = confirmed_profile.get("answer_labels") or {}
+        confirmed_field_map = {
+            "资金使用时间": "fund_use_horizon",
+            "可接受回撤": "loss_tolerance",
+            "应急储备": "emergency_reserve",
+            "负债情况": "debt_burden",
+            # Reserved for a future questionnaire version. The current seven
+            # questions do not ask what the user already owns.
+            "已有资产": "existing_assets",
+        }
+        provided.extend(
+            label
+            for label, answer_key in confirmed_field_map.items()
+            if profile_answers.get(answer_key)
+        )
+    provided = list(dict.fromkeys(provided))
+    missing = [label for label in field_patterns if label not in provided]
+    context = {
+        "mode": "product_suitability",
+        "status": "ready_for_conditional_guidance" if not missing else "needs_profile",
+        "provided_fields": provided,
+        "missing_fields": missing,
+        "required_sources": sources,
+        "hard_boundaries": [
+            "缺少关键个人事实时，只解释选择逻辑并追问，不判断哪类产品更适合。",
+            "不使用自创百分比、金额、期限、配置比例或回撤阈值。",
+            "不根据年龄推断收入、工作状态、家庭责任或风险承受能力。",
+        ],
+    }
+    if confirmed_profile:
+        context["confirmed_risk_profile"] = confirmed_profile
+        context["hard_boundaries"].append(
+            "已确认问卷只用于条件化解释，不等同于持牌机构适当性结论或自动产品推荐。"
+        )
+    return context
+
+
 def _knowledge_request(
     *,
     message: str,
@@ -86,7 +319,7 @@ def _knowledge_request(
     stock_comparison_query: bool,
     analyst_expectations_context: bool,
     event_timeline_context: bool,
-) -> tuple[str, list[str] | None]:
+) -> tuple[str, list[str] | None, int]:
     query = message
     required_sources: list[str] | None = None
     if (explicit_market_query and symbol is None) or (
@@ -128,7 +361,21 @@ def _knowledge_request(
             f"{message} 公司公告 监管文件 重要事件 催化风险 "
             "官方披露 媒体线索 原文复核"
         )
-    return query, required_sources
+    financial_sources = _financial_education_sources(message)
+    if financial_sources:
+        query = (
+            f"{query} 金融产品底层资产 风险收益 流动性 费用 "
+            "投资期限 适合性 普通投资者解释"
+        )
+        required_sources = list(
+            dict.fromkeys([*(required_sources or []), *financial_sources])
+        )
+    max_results = (
+        min(5, max(3, len(required_sources or []) + 1))
+        if financial_sources
+        else 5
+    )
+    return query, required_sources, max_results
 
 
 class ChatRequestContextService:
@@ -270,7 +517,11 @@ class ChatRequestContextService:
             self.database.mark_user_upload_used(user_id, image_id)
             resolved_model_tier = "vision"
 
-        knowledge_query, required_knowledge_sources = _knowledge_request(
+        (
+            knowledge_query,
+            required_knowledge_sources,
+            knowledge_max_results,
+        ) = _knowledge_request(
             message=message,
             symbol=symbol,
             prior_intent=prior_intent,
@@ -285,7 +536,7 @@ class ChatRequestContextService:
         knowledge_context = self.knowledge.retrieve(
             user_id,
             knowledge_query,
-            max_results=5,
+            max_results=knowledge_max_results,
             required_source_keys=required_knowledge_sources,
         )
         self.database.add_conversation_message(
@@ -339,4 +590,5 @@ __all__ = [
     "ChatUploadExpired",
     "ChatUploadNotFound",
     "PreparedChatContext",
+    "build_financial_advisor_context",
 ]

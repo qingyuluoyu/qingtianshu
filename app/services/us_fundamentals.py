@@ -7,6 +7,7 @@ from app.catalog import RESEARCH_TARGETS, normalize_symbol
 from app.db import Database
 from app.providers.us_fundamentals import USEquityFundamentalsProvider
 from app.services.fundamentals import summarize_fundamentals
+from app.services.live_market import market_quote_semantics
 from app.utils import utc_now
 
 
@@ -93,6 +94,32 @@ class USEquityFundamentalsService:
             "regulatory_filings_saved": filings_saved,
             "sources": source_status,
             "warnings": warnings,
+        }
+
+    def get_quote(
+        self, symbol: str, refresh_max_age_seconds: int = 900
+    ) -> dict[str, Any] | None:
+        """Return a fresh US quote without loading SEC statements or filings."""
+        canonical = normalize_symbol(symbol)
+        if canonical.endswith((".SS", ".SZ")):
+            raise ValueError("美股报价服务不支持 A 股证券")
+        valuation = self.database.latest_valuation_snapshot(canonical)
+        if valuation is None or _is_older_than(
+            valuation.get("fetched_at") if valuation else None,
+            refresh_max_age_seconds,
+        ):
+            try:
+                self.database.save_valuation_snapshot(
+                    self.provider.fetch_valuation(canonical)
+                )
+            except Exception:
+                pass
+            valuation = self.database.latest_valuation_snapshot(canonical)
+        if valuation is None:
+            return None
+        return {
+            **valuation,
+            **market_quote_semantics("us", valuation.get("market_timestamp")),
         }
 
     def get_packet(

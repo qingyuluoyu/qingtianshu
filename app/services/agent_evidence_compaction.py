@@ -953,6 +953,7 @@ def compact_stock_research_evidence(
             "evidence_debate",
             "module_statuses",
             "evidence_status",
+            "research_evidence_contract",
         ),
     )
     plan = evidence.get("research_plan") or {}
@@ -966,6 +967,8 @@ def compact_stock_research_evidence(
             "selected_modules",
             "selected_skills",
             "answer_requirements",
+            "evidence_contract_version",
+            "evidence_path",
         ),
     )
     question = str(evidence.get("user_question") or "")
@@ -1541,6 +1544,7 @@ def compact_stock_research_evidence(
             "research_plan",
             "stock_market_context",
             "price_move_event_evidence",
+            "research_evidence_contract",
         )
         return {
             key: compact[key]

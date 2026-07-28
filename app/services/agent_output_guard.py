@@ -442,6 +442,30 @@ class AgentOutputGuard:
                     }
                     allowed_values.extend(derived_values)
                     allowed_magnitudes.extend(abs(value) for value in derived_values)
+        breadth_candidates = [
+            ((guard_evidence.get("market_breadth") or {}).get("breadth") or {}),
+            (
+                (
+                    (guard_evidence.get("stock_market_context") or {}).get(
+                        "market_breadth"
+                    )
+                    or {}
+                ).get("breadth")
+                or {}
+            ),
+        ]
+        for breadth in breadth_candidates:
+            total = breadth.get("total")
+            if not isinstance(total, (int, float)) or float(total) <= 0:
+                continue
+            for key in ("advancers", "decliners", "unchanged"):
+                count = breadth.get(key)
+                if not isinstance(count, (int, float)):
+                    continue
+                share = float(count) / float(total) * 100
+                derived_shares = {round(share), round(share, 1), round(share, 2)}
+                allowed_values.extend(derived_shares)
+                allowed_magnitudes.extend(abs(value) for value in derived_shares)
         classification_method = str(
             (
                 ((guard_evidence.get("market_breadth") or {}).get("breadth") or {}).get(
@@ -474,9 +498,13 @@ class AgentOutputGuard:
             line_start = answer.rfind("\n", 0, match.start()) + 1
             prefix = answer[line_start : match.start()]
             suffix = answer[match.end() : match.end() + 2]
+            list_prefix = re.fullmatch(
+                r"\s*(?:(?:[-+*]|#{1,6})\s+)?(?:\*\*|__)?",
+                prefix,
+            )
             is_list_marker = (
                 not token.endswith("%")
-                and not prefix.strip()
+                and list_prefix is not None
                 and suffix[:1]
                 in {
                     ".",
@@ -486,6 +514,23 @@ class AgentOutputGuard:
                 }
             )
             if is_list_marker:
+                continue
+            named_index_prefix = answer[max(0, match.start() - 12) : match.start()]
+            named_index_suffix = answer[match.end() : match.end() + 8]
+            is_named_index_label = (
+                not token.endswith("%")
+                and re.search(
+                    r"(?:沪深|中证|上证|科创|创业板|标普|日经|富时|纳斯达克)\s*$",
+                    named_index_prefix,
+                )
+                is not None
+                and re.match(
+                    r"\s*(?:指数|ETF|etf|等|成分|[）)])?",
+                    named_index_suffix,
+                )
+                is not None
+            )
+            if is_named_index_label:
                 continue
             explicit_sign = token.startswith(("+", "-"))
             implied_value: float | None = None
@@ -512,6 +557,7 @@ class AgentOutputGuard:
                 if direction is not None:
                     implied_value = direction * abs(value)
             tolerance_floor = 0.02
+            approximate_upper_bound: float | None = None
             if token.endswith("%"):
                 numeric_token = token.lstrip("+-").rstrip("%")
                 decimal_places = (
@@ -527,10 +573,17 @@ class AgentOutputGuard:
                     tolerance_floor = 0.051
             else:
                 numeric_token = token.lstrip("+-").replace(",", "")
-                if "." not in numeric_token and re.search(
-                    r"(?:约|大约|约为|近)\s*$", prefix[-10:]
+                trailing_zeros = len(numeric_token) - len(numeric_token.rstrip("0"))
+                if (
+                    "." not in numeric_token
+                    and trailing_zeros > 0
+                    and re.match(r"\s*多", answer[match.end() : match.end() + 3])
                 ):
-                    trailing_zeros = len(numeric_token) - len(numeric_token.rstrip("0"))
+                    approximate_upper_bound = abs(value) + 10**trailing_zeros
+                if "." not in numeric_token and re.search(
+                    r"(?:约|大约|约为|近|超过|多于|高于|至少|不少于)\s*$",
+                    prefix[-10:],
+                ):
                     if trailing_zeros > 0:
                         tolerance_floor = max(
                             tolerance_floor, 0.51 * (10**trailing_zeros)
@@ -543,6 +596,11 @@ class AgentOutputGuard:
             else:
                 supported = matches(value, allowed_values, tolerance_floor) or matches(
                     abs(value), allowed_magnitudes, tolerance_floor
+                )
+            if not supported and approximate_upper_bound is not None:
+                supported = any(
+                    abs(value) <= item < approximate_upper_bound
+                    for item in allowed_magnitudes
                 )
 
             if not supported:
@@ -922,7 +980,7 @@ class AgentOutputGuard:
                 unsupported_market_inferences.append(_STOCK_MARKET_ABSORPTION_LABEL)
             if _has_stock_event_sentiment_overclaim(answer):
                 unsupported_market_inferences.append(_STOCK_EVENT_SENTIMENT_LABEL)
-            if _has_stock_unsupported_causal_hypothesis(answer):
+            if _has_stock_unsupported_causal_hypothesis(answer, evidence):
                 unsupported_market_inferences.append(
                     _STOCK_UNSUPPORTED_CAUSAL_HYPOTHESIS_LABEL
                 )
@@ -1144,6 +1202,11 @@ class AgentOutputGuard:
             r"(?:上涨|下跌|平盘)",
             right,
         ):
+            return True
+        if re.search(
+            r"(?:全市场|全A股|A股|股票|上涨的|下跌的)[^。；\n]{0,36}$",
+            left,
+        ) and re.match(r"^\s*(?:涨|跌)(?:[、，,）)])?", right):
             return True
         return bool(
             re.search(
@@ -1430,6 +1493,10 @@ class AgentOutputGuard:
 
         for label, predicate in (
             (
+                _STOCK_INDUSTRY_CAUSAL_LABEL,
+                _has_stock_industry_causal_overclaim,
+            ),
+            (
                 _STOCK_MARKET_ABSORPTION_LABEL,
                 _has_stock_market_absorption_overclaim,
             ),
@@ -1439,7 +1506,7 @@ class AgentOutputGuard:
             ),
             (
                 _STOCK_UNSUPPORTED_CAUSAL_HYPOTHESIS_LABEL,
-                _has_stock_unsupported_causal_hypothesis,
+                lambda text: _has_stock_unsupported_causal_hypothesis(text, evidence),
             ),
         ):
             if label not in unsupported_market_inferences:
@@ -1683,7 +1750,7 @@ class AgentOutputGuard:
             line_has_unsupported_inference = line_has_unsupported_inference or (
                 _STOCK_UNSUPPORTED_CAUSAL_HYPOTHESIS_LABEL
                 in unsupported_market_inferences
-                and _has_stock_unsupported_causal_hypothesis(line)
+                and _has_stock_unsupported_causal_hypothesis(line, evidence)
             )
             line_has_private_operation = any(
                 pattern.search(line) for pattern in _PRIVATE_OPERATIONAL_OUTPUT_PATTERNS

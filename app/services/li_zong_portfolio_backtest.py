@@ -45,7 +45,7 @@ class LiZongPortfolioBacktestService:
     MARKET_CAP_MIN_YI = LiZongParameters().market_cap_min_yi
     COST_BPS_PER_SIDE = 0.0
     MIN_REBALANCE_TRADING_DAYS = 10
-    PORTFOLIO_VERSION = "li_zong_2w_no_cost_v2"
+    PORTFOLIO_VERSION = "li_zong_2w_no_cost_same_exposure_v4"
     TARGET_HISTORY_MARKET_DAYS = 1150
     STATE_INPUT_VERSION = "ready_market_window_v3_tail_gap_strict"
     DEFAULT_MARKET_DAY_BATCH_SIZE = 30
@@ -61,8 +61,9 @@ class LiZongPortfolioBacktestService:
         "回测严格使用每个历史交易日当时已公告的财务与股东数据、当日历史市值，"
         "以及当日及以前的量价数据。候选集合变化后，最早在下一完整交易日开盘"
         "执行，但任意两次实际换仓至少间隔10个交易日；冷却期内只保留最新候选"
-        "集合。本版不计交易成本。沪深300仅在策略持仓期间保持同等市场暴露，"
-        "策略空仓时基准同步空仓。尚未模拟涨跌停排队、停牌后的实际成交、冲击"
+        "集合。本版不计交易成本。沪深300只在策略实际持仓期间保持同等市场暴露，"
+        "策略空仓期间基准同步冻结，不计入相对收益比较。尚未模拟涨跌停"
+        "排队、停牌后的实际成交、冲击"
         "成本、分红税和真实佣金阶梯；已明确退市的股票使用最后可得复权收盘价"
         "作为强制退出代理。结果只用于验证规则历史表现，不构成收益承诺或投资建议。"
     )
@@ -1377,6 +1378,7 @@ class LiZongPortfolioBacktestService:
             "minimum_rebalance_trading_days": cls.MIN_REBALANCE_TRADING_DAYS,
             "exposure_trading_days": exposure_trading_days,
             "benchmark_policy": "same_exposure_only",
+            "benchmark_trading_days": exposure_trading_days,
             "trading_cost_bps_per_side": cls.COST_BPS_PER_SIDE,
             "points": points,
             "rebalances": rebalances,
@@ -1973,7 +1975,10 @@ class LiZongPortfolioBacktestService:
             ),
             "weighting": "每次换仓后对可成交候选等资金配置。",
             "cost_bps_per_side": cls.COST_BPS_PER_SIDE,
-            "benchmark": f"{cls.BENCHMARK_NAME}（仅在策略持仓期保持同等市场暴露）",
+            "benchmark": (
+                f"{cls.BENCHMARK_NAME}（只在策略持仓期保持同等市场暴露；"
+                "策略空仓期同步冻结）"
+            ),
             "price_basis": "复权因子调整后的开盘价和收盘价。",
             "cash_policy": "候选为空时持有现金，现金收益按0计。",
             "delisting_policy": (

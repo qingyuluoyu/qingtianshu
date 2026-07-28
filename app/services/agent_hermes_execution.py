@@ -343,6 +343,7 @@ def execute_hermes_streaming(
                             "event_index": visible_events,
                             "withheld_segments": withheld_segments,
                             "is_unverified": True,
+                            "is_guarded_partial": True,
                         }
                     )
             elif event_type == "final":

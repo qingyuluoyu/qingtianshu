@@ -47,6 +47,54 @@
       .sort((left, right) => new Date(left.time) - new Date(right.time));
   }
 
+  function aggregateCandles(points, period = "daily") {
+    const rows = normalizeCandles(points);
+    if (["intraday", "daily"].includes(period)) return rows;
+    const groups = new Map();
+    for (const row of rows) {
+      const date = new Date(row.time);
+      if (Number.isNaN(date.getTime())) continue;
+      let key;
+      if (period === "weekly") {
+        const weekday = date.getUTCDay() || 7;
+        date.setUTCDate(date.getUTCDate() - weekday + 1);
+        key = date.toISOString().slice(0, 10);
+      } else if (period === "monthly") {
+        key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-01`;
+      } else {
+        return rows;
+      }
+      const current = groups.get(key);
+      if (!current) {
+        groups.set(key, {...row, time: key});
+        continue;
+      }
+      current.high = Math.max(current.high, row.high);
+      current.low = Math.min(current.low, row.low);
+      current.close = row.close;
+      current.volume += row.volume;
+    }
+    return [...groups.values()];
+  }
+
+  function candlesInRange(points, range = "1y") {
+    const rows = normalizeCandles(points);
+    if (!rows.length || range === "max") return rows;
+    const monthCount = {"1mo": 1, "3mo": 3, "6mo": 6, "1y": 12, "2y": 24, "5y": 60}[range];
+    if (!monthCount) return rows;
+    const latest = new Date(rows.at(-1).time);
+    if (Number.isNaN(latest.getTime())) return rows;
+    const cutoff = new Date(latest);
+    cutoff.setUTCMonth(cutoff.getUTCMonth() - monthCount);
+    return rows.filter(row => new Date(row.time) >= cutoff);
+  }
+
+  function visibleBarsForRange(points, range = "1y") {
+    const rows = normalizeCandles(points);
+    if (!rows.length) return 0;
+    return Math.max(1, candlesInRange(rows, range).length);
+  }
+
   function movingAverage(rows, period) {
     const size = Math.max(1, Math.floor(finite(period, 1)));
     let sum = 0;
@@ -57,10 +105,11 @@
     });
   }
 
-  function computeViewport(rows, visibleBars, panOffset) {
+  function computeViewport(rows, visibleBars, panOffset, minimumBars = 12) {
     const total = rows.length;
     const requested = visibleBars == null ? Math.min(90, total) : Math.floor(finite(visibleBars, total));
-    const count = total ? clamp(requested, Math.min(12, total), total) : 0;
+    const minimum = Math.max(1, Math.floor(finite(minimumBars, 12)));
+    const count = total ? clamp(requested, Math.min(minimum, total), total) : 0;
     const maximumOffset = Math.max(0, total - count);
     const offset = clamp(Math.floor(finite(panOffset, 0)), 0, maximumOffset);
     const end = Math.max(0, total - offset);
@@ -191,7 +240,7 @@
       if (context) context.clearRect(0, 0, canvas.width || 0, canvas.height || 0);
       return null;
     }
-    const viewport = computeViewport(rows, options.visibleBars, options.panOffset);
+    const viewport = computeViewport(rows, options.visibleBars, options.panOffset, options.minimumBars);
     const minimumHeight = options.interactive ? 220 : 92;
     const {context, width, height} = setupCanvas(canvas, minimumHeight);
     const showVolume = options.showVolume === true;
@@ -330,10 +379,11 @@
 
   function createInteractiveKline(canvas, points, options = {}) {
     let rows = normalizeCandles(points);
+    const minimumBars = Math.max(1, Math.floor(finite(options.minimumBars, 12)));
     const defaultVisibleBars = clamp(
       Math.floor(finite(options.visibleBars, Math.min(90, rows.length))),
-      Math.min(12, rows.length || 12),
-      Math.max(12, rows.length)
+      Math.min(minimumBars, rows.length || minimumBars),
+      Math.max(minimumBars, rows.length)
     );
     const storageKey = options.storageKey ? `qingshu:kline:v1:${options.storageKey}` : null;
     const storage = safeStorage(storageKey);
@@ -361,7 +411,7 @@
     }
 
     function notify() {
-      const viewport = computeViewport(rows, state.visibleBars, state.panOffset);
+      const viewport = computeViewport(rows, state.visibleBars, state.panOffset, minimumBars);
       state.visibleBars = viewport.count;
       state.panOffset = viewport.panOffset;
       persist();
@@ -415,7 +465,7 @@
         const delta = position.x - state.dragging.x;
         if (Math.abs(delta) >= 3) state.dragging.moved = true;
         if (state.dragging.moved) {
-          const viewport = computeViewport(rows, state.visibleBars, state.dragging.panOffset);
+          const viewport = computeViewport(rows, state.visibleBars, state.dragging.panOffset, minimumBars);
           const step = Math.max(2, (canvas.clientWidth - 62) / Math.max(1, viewport.count));
           state.panOffset = state.dragging.panOffset + Math.round(delta / step);
           notify();
@@ -444,11 +494,11 @@
     }
 
     function zoom(direction) {
-      const viewport = computeViewport(rows, state.visibleBars, state.panOffset);
+      const viewport = computeViewport(rows, state.visibleBars, state.panOffset, minimumBars);
       const factor = direction === "in" ? 0.78 : 1.28;
       state.visibleBars = clamp(
         Math.round(viewport.count * factor),
-        Math.min(12, rows.length),
+        Math.min(minimumBars, rows.length),
         rows.length
       );
       notify();
@@ -636,6 +686,9 @@
   return Object.freeze({
     colors: COLORS,
     normalizeCandles,
+    aggregateCandles,
+    candlesInRange,
+    visibleBarsForRange,
     movingAverage,
     computeViewport,
     chartLayout,
