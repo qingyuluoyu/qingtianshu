@@ -61,6 +61,8 @@ def _compact_stock_workspace_context(
                 "as_of_date",
                 "candidate_status",
                 "matched_reasons",
+                "research_focus",
+                "attention_flags",
                 "missing_fields",
                 "limitations",
                 "updated_at",

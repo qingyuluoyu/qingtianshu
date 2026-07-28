@@ -618,6 +618,7 @@ function liZongStatusLabel(value) {
     }
 
     function stockScreenCandidatePrompt(item, profileKey) {
+      if (item.research_focus) return item.research_focus;
       const metrics = item.metrics || {};
       const financials = item.financials || {};
       if (profileKey === "quality") {
@@ -746,6 +747,14 @@ function liZongStatusLabel(value) {
         const promptCopy = document.createElement("span"); promptCopy.textContent = stockScreenCandidatePrompt(item, profile.key);
         prompt.append(promptTitle, promptCopy); card.appendChild(prompt);
 
+        if (item.attention_flags?.length) {
+          const flags = document.createElement("ul"); flags.className = "screener-reasons screener-attention-flags";
+          item.attention_flags.slice(0, 4).forEach(value => {
+            const flag = document.createElement("li"); flag.textContent = value; flags.appendChild(flag);
+          });
+          prompt.appendChild(flags);
+        }
+
         const detail = document.createElement("details"); detail.className = "screener-card-details";
         const summary = document.createElement("summary"); summary.textContent = "查看完整数据与入选依据";
         const detailBody = document.createElement("div"); detailBody.className = "screener-card-detail-body";
@@ -773,6 +782,8 @@ function liZongStatusLabel(value) {
           as_of_date: meta.latest_completed_trade_date,
           candidate_status: payload?.status,
           matched_reasons: item.matched_reasons || [],
+          research_focus: item.research_focus || stockScreenCandidatePrompt(item, profile.key),
+          attention_flags: item.attention_flags || [],
           missing_fields: (item.missing_fields || []).map(stockScreenFieldLabel)
         };
         const actions = document.createElement("div"); actions.className = "screener-actions";

@@ -182,6 +182,8 @@ def test_screening_candidate_entry_is_saved_without_completing_research_stage(ap
                     "营收同比保持增长",
                     "毛利率高于模板下限",
                 ],
+                "research_focus": "先核验改善是否来自主营并转化为现金流。",
+                "attention_flags": ["净利润同比下降，需要先排除低质量增长。"],
                 "missing_fields": ["最新公告原文", "现金流变化原因"],
             },
         },
@@ -200,6 +202,8 @@ def test_screening_candidate_entry_is_saved_without_completing_research_stage(ap
         "as_of_date": "2026-07-22",
         "candidate_status": "ready",
         "matched_reasons": ["营收同比保持增长", "毛利率高于模板下限"],
+        "research_focus": "先核验改善是否来自主营并转化为现金流。",
+        "attention_flags": ["净利润同比下降，需要先排除低质量增长。"],
         "missing_fields": ["最新公告原文", "现金流变化原因"],
         "status": "user_selected_context",
         "limitations": [
@@ -216,6 +220,12 @@ def test_screening_candidate_entry_is_saved_without_completing_research_stage(ap
     workspace_payload = workspace.json()
     assert workspace_payload["name"] == "中兴通讯"
     assert workspace_payload["research_entry"]["profile_key"] == "quality"
+    assert workspace_payload["research_entry"]["research_focus"] == (
+        "先核验改善是否来自主营并转化为现金流。"
+    )
+    assert workspace_payload["pending_actions"][0]["next_step"] == (
+        "先核验改善是否来自主营并转化为现金流。"
+    )
     assert workspace_payload["pending_actions"][0]["source"] == "screening_entry"
     assert "经营改善候选" in workspace_payload["pending_actions"][0]["title"]
 

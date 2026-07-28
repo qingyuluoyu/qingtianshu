@@ -1258,6 +1258,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert ".screener-explanation span { color: #596b83; font-size: 13px;" in frontend
     assert ".screener-card-details { margin-top: 10px; border-top: 1px solid #e2e8f1; }" in frontend
     assert ".screener-candidate-prompt { display: grid;" in frontend
+    assert ".screener-candidate-prompt .screener-attention-flags { grid-column: 2;" in frontend
     assert ".screener-reasons { margin: 6px 0 0; padding-left: 18px; color: #4e6078; font-size: 13px;" in frontend
     assert 'id="agentHistoryList"' in frontend
     assert 'id="conversationSwitcher"' in frontend

@@ -381,9 +381,13 @@ def test_demo_displays_stock_screen_data_contract_and_missing_reasons() -> None:
         "数据版本 ${dataVersion.slice(-8)}",
         "这不等于全市场没有候选",
         "item.missing_reasons || []",
+        "item.attention_flags?.length",
+        "research_focus: item.research_focus",
+        "attention_flags: item.attention_flags",
         "数据缺口：",
     ):
         assert fragment in section
+    assert "if (item.research_focus) return item.research_focus;" in page
     assert "建议一次只放宽一项规则" not in section
 
 

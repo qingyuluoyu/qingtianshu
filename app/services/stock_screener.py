@@ -64,7 +64,7 @@ PROFILE_DEFINITIONS: dict[str, dict[str, Any]] = {
     "pullback": {
         "label": "回撤后待复核候选",
         "description": "寻找近 20 日回撤、近 5 日暂时企稳且交易活跃度达到门槛的高风险观察样本。",
-        "sort_rule": "按近 5 日收益从高到低排列；不计算综合分。",
+        "sort_rule": "按近 5 日收益从低到高排列，优先展示刚转正、较接近企稳的样本；不计算综合分。",
         "defaults": {
             "min_market_cap_yi": 30.0,
             "min_return_5d": 0.0,
@@ -196,9 +196,7 @@ class StockScreenerService:
         working = frame.copy()
         input_count = len(working)
         market_cap_available = int(working["total_mv_yi"].notna().sum())
-        valuation_available = int(
-            working[["pe_ttm", "pb"]].notna().all(axis=1).sum()
-        )
+        valuation_available = int(working[["pe_ttm", "pb"]].notna().all(axis=1).sum())
         return_20d_available = int(working["return_20d_pct"].notna().sum())
         working = self._apply_universe_rules(
             working,
@@ -238,21 +236,15 @@ class StockScreenerService:
                     working["ts_code"].astype(str).isin(incomplete_symbols)
                 ]
                 pool_size = min(40, max(24, max_results * 2))
-                supplemental = self._diverse_financial_pool(
-                    supplemental, pool_size
-                )
+                supplemental = self._diverse_financial_pool(supplemental, pool_size)
                 supplemental_symbols = [
                     str(value)
                     for value in supplemental.get(
                         "ts_code", pd.Series(dtype=str)
                     ).tolist()
                 ]
-                finance_packets.update(
-                    self._load_financials_many(supplemental_symbols)
-                )
-            working = working[
-                working["ts_code"].astype(str).isin(finance_packets)
-            ]
+                finance_packets.update(self._load_financials_many(supplemental_symbols))
+            working = working[working["ts_code"].astype(str).isin(finance_packets)]
         else:
             working = self._sort_frame(working, profile).head(max_results * 2)
             financial_symbols = [
@@ -346,12 +338,13 @@ class StockScreenerService:
         }
         if market == "all" and represents_full_market:
             actual_scope_label = "全部A股"
-        elif market == "all" and market_snapshot_coverage["ratio"] >= self.minimum_market_coverage_ratio:
+        elif (
+            market == "all"
+            and market_snapshot_coverage["ratio"] >= self.minimum_market_coverage_ratio
+        ):
             actual_scope_label = "A股完整行情范围，财务或规则字段部分覆盖"
         elif market == "all":
-            actual_scope_label = (
-                f"已同步A股 {input_count}/{expected_snapshot} 只"
-            )
+            actual_scope_label = f"已同步A股 {input_count}/{expected_snapshot} 只"
         else:
             actual_scope_label = market_labels.get(market, "所选A股范围")
         representation_reasons: list[str] = []
@@ -500,9 +493,7 @@ class StockScreenerService:
             ):
                 cached_frame = self._snapshot[1].copy()
                 cached_meta = dict(self._snapshot[2])
-                cached_ratio = self._market_coverage_ratio(
-                    cached_frame, cached_meta
-                )
+                cached_ratio = self._market_coverage_ratio(cached_frame, cached_meta)
                 if not (
                     self.client is not None
                     and cached_meta.get("source_mode") == "persisted"
@@ -575,9 +566,7 @@ class StockScreenerService:
         return frame, {**meta, "cache_hit": False}
 
     @staticmethod
-    def _market_coverage_ratio(
-        frame: pd.DataFrame, meta: Mapping[str, Any]
-    ) -> float:
+    def _market_coverage_ratio(frame: pd.DataFrame, meta: Mapping[str, Any]) -> float:
         expected = int(meta.get("listed_stock_count") or len(frame))
         return len(frame) / expected if expected else 0.0
 
@@ -701,7 +690,9 @@ class StockScreenerService:
         frame = pd.DataFrame(rows)
         if frame.empty:
             raise ValueError("持久化选股截面为空")
-        frame["industry"] = frame.get("industry", "未分类").fillna("未分类").replace("", "未分类")
+        frame["industry"] = (
+            frame.get("industry", "未分类").fillna("未分类").replace("", "未分类")
+        )
         frame["industry_avg_return_20d_pct"] = frame.groupby("industry")[
             "return_20d_pct"
         ].transform("mean")
@@ -762,12 +753,11 @@ class StockScreenerService:
             "snapshot_built_at": utc_now(),
             "price_basis": "生产数据库最近稳定完整日线",
             "valuation_basis": "生产数据库同交易日 daily_basic 稳定截面",
-            "market_coverage_ratio": round(
-                len(frame) / listed_stock_count, 6
-            ) if listed_stock_count else 0.0,
+            "market_coverage_ratio": round(len(frame) / listed_stock_count, 6)
+            if listed_stock_count
+            else 0.0,
             "market_snapshot_representative": (
-                len(frame) / listed_stock_count
-                >= self.minimum_market_coverage_ratio
+                len(frame) / listed_stock_count >= self.minimum_market_coverage_ratio
                 if listed_stock_count
                 else False
             ),
@@ -881,7 +871,9 @@ class StockScreenerService:
         frame = stock_basic.merge(latest, on="ts_code", how="inner")
         frame = frame.merge(base_5, on="ts_code", how="left")
         frame = frame.merge(base_20, on="ts_code", how="left")
-        frame = frame.merge(daily_basic, on="ts_code", how="left", suffixes=("", "_basic"))
+        frame = frame.merge(
+            daily_basic, on="ts_code", how="left", suffixes=("", "_basic")
+        )
         numeric_columns = [
             "latest_close",
             "pct_change",
@@ -903,11 +895,11 @@ class StockScreenerService:
             else:
                 frame[column] = math.nan
         frame["return_5d_pct"] = (
-            (frame["latest_close"] / frame["close_5d_base"] - 1.0) * 100.0
-        )
+            frame["latest_close"] / frame["close_5d_base"] - 1.0
+        ) * 100.0
         frame["return_20d_pct"] = (
-            (frame["latest_close"] / frame["close_20d_base"] - 1.0) * 100.0
-        )
+            frame["latest_close"] / frame["close_20d_base"] - 1.0
+        ) * 100.0
         frame["total_mv_yi"] = frame["total_mv"] / 10_000.0
         frame["circ_mv_yi"] = frame["circ_mv"] / 10_000.0
         if "industry" not in frame:
@@ -942,9 +934,7 @@ class StockScreenerService:
         digest = hashlib.sha256(b"stock_screen_snapshot_v1")
         digest.update(latest_date.encode("utf-8"))
         digest.update(
-            pd.util.hash_pandas_object(
-                fingerprint_frame, index=False
-            ).values.tobytes()
+            pd.util.hash_pandas_object(fingerprint_frame, index=False).values.tobytes()
         )
         data_version = f"stock-screen-v1-{digest.hexdigest()[:16]}"
         listed_stock_count = int(stock_basic["ts_code"].nunique())
@@ -969,12 +959,11 @@ class StockScreenerService:
             "snapshot_built_at": utc_now(),
             "price_basis": "最近完整交易日日线",
             "valuation_basis": "与最近完整交易日对齐的 daily_basic 截面",
-            "market_coverage_ratio": round(
-                len(frame) / listed_stock_count, 6
-            ) if listed_stock_count else 0.0,
+            "market_coverage_ratio": round(len(frame) / listed_stock_count, 6)
+            if listed_stock_count
+            else 0.0,
             "market_snapshot_representative": (
-                len(frame) / listed_stock_count
-                >= self.minimum_market_coverage_ratio
+                len(frame) / listed_stock_count >= self.minimum_market_coverage_ratio
                 if listed_stock_count
                 else False
             ),
@@ -1017,15 +1006,14 @@ class StockScreenerService:
         elif market == "star":
             result = result[code.str.startswith("688")]
         elif market == "main":
-            result = result[
-                code.str.match(r"^(?:000|001|002|003|600|601|603|605)")
-            ]
+            result = result[code.str.match(r"^(?:000|001|002|003|600|601|603|605)")]
         industry = str(filters.get("industry") or "").strip()
         if industry:
             result = result[
-                result["industry"].fillna("").astype(str).str.contains(
-                    industry, case=False, regex=False
-                )
+                result["industry"]
+                .fillna("")
+                .astype(str)
+                .str.contains(industry, case=False, regex=False)
             ]
         return result[
             result["latest_close"].notna()
@@ -1184,9 +1172,7 @@ class StockScreenerService:
         for code in unique_codes:
             if packets.get(code, {}).get("status") == "available":
                 continue
-            packets[code] = self._load_financials(
-                code, persisted_only=persisted_only
-            )
+            packets[code] = self._load_financials(code, persisted_only=persisted_only)
         return packets
 
     @classmethod
@@ -1236,7 +1222,11 @@ class StockScreenerService:
             )
         )
         packet["coverage_status"] = (
-            "sufficient" if available >= 5 else "partial" if available else "unavailable"
+            "sufficient"
+            if available >= 5
+            else "partial"
+            if available
+            else "unavailable"
         )
         return packet
 
@@ -1278,7 +1268,7 @@ class StockScreenerService:
         elif profile == "value":
             columns, ascending = ["pe_ttm", "pb", "ts_code"], [True, True, True]
         elif profile == "pullback":
-            columns, ascending = ["return_5d_pct", "ts_code"], [False, True]
+            columns, ascending = ["return_5d_pct", "ts_code"], [True, True]
         else:
             if "revenue_yoy" in frame:
                 columns, ascending = ["revenue_yoy", "ts_code"], [False, True]
@@ -1300,9 +1290,7 @@ class StockScreenerService:
             "industry_avg_return_20d_pct": self._number(
                 row.get("industry_avg_return_20d_pct")
             ),
-            "industry_excess_20d_pct": self._number(
-                row.get("industry_excess_20d_pct")
-            ),
+            "industry_excess_20d_pct": self._number(row.get("industry_excess_20d_pct")),
             "pe_ttm": self._number(row.get("pe_ttm")),
             "pb": self._number(row.get("pb")),
             "ps_ttm": self._number(row.get("ps_ttm")),
@@ -1342,9 +1330,7 @@ class StockScreenerService:
             "volume_ratio",
         }
         relevant_financial_fields = (
-            {"revenue_yoy", "net_profit_yoy", "roe"}
-            if profile == "quality"
-            else set()
+            {"revenue_yoy", "net_profit_yoy", "roe"} if profile == "quality" else set()
         )
         relevant_fields = relevant_metric_fields | relevant_financial_fields
         missing_fields = [
@@ -1365,6 +1351,9 @@ class StockScreenerService:
                 "coverage_status": "unavailable",
             }
         reasons = self._matched_reasons(profile, metrics, clean_financials)
+        research_focus, attention_flags = self._research_guidance(
+            profile, metrics, clean_financials
+        )
         financial_coverage = str(
             clean_financials.get("coverage_status") or "unavailable"
         )
@@ -1393,9 +1382,7 @@ class StockScreenerService:
             else:
                 code = "market_field_missing"
                 reason = "最近完整交易日未返回该字段"
-            missing_reasons.append(
-                {"field": field, "code": code, "reason": reason}
-            )
+            missing_reasons.append({"field": field, "code": code, "reason": reason})
         return {
             "ts_code": str(row.get("ts_code") or ""),
             "internal_symbol": str(row.get("internal_symbol") or ""),
@@ -1427,6 +1414,8 @@ class StockScreenerService:
                 "financial_quality": financial_coverage,
             },
             "matched_reasons": reasons,
+            "research_focus": research_focus,
+            "attention_flags": attention_flags,
             "missing_fields": sorted(set(missing_fields)),
             "missing_reasons": missing_reasons,
             "not_applicable_fields": not_applicable_fields,
@@ -1472,6 +1461,86 @@ class StockScreenerService:
         ]
 
     @staticmethod
+    def _research_guidance(
+        profile: str,
+        metrics: Mapping[str, Any],
+        financials: Mapping[str, Any],
+    ) -> tuple[str, list[str]]:
+        """Build deterministic research priorities from displayed metrics."""
+
+        def number(value: Any) -> float | None:
+            return StockScreenerService._number(value)
+
+        def fmt(value: Any) -> str:
+            parsed = number(value)
+            return "—" if parsed is None else f"{parsed:.2f}"
+
+        if profile == "quality":
+            research_focus = (
+                f"营收同比 {fmt(financials.get('revenue_yoy'))}%、"
+                f"净利润同比 {fmt(financials.get('net_profit_yoy'))}% 与 "
+                f"ROE {fmt(financials.get('roe'))}% 是否来自主营并能转化为现金流，"
+                "同时排除一次性损益。"
+            )
+        elif profile == "value":
+            research_focus = (
+                f"PE TTM {fmt(metrics.get('pe_ttm'))}、"
+                f"PB {fmt(metrics.get('pb'))} 对应的是持续盈利能力，"
+                "还是盈利恶化、周期高点或高负债造成的低估值。"
+            )
+        elif profile == "pullback":
+            research_focus = (
+                f"近 20 日 {fmt(metrics.get('return_20d_pct'))}% 的回撤原因是什么，"
+                f"并确认近 5 日 {fmt(metrics.get('return_5d_pct'))}% "
+                "是接近转正或刚转正的企稳迹象，还是快速反弹后的二次波动。"
+            )
+        else:
+            research_focus = (
+                f"近 20 日 {fmt(metrics.get('return_20d_pct'))}%、"
+                f"相对行业 {fmt(metrics.get('industry_excess_20d_pct'))} 个百分点的强势"
+                "是否有业绩或公告支撑，并明确趋势转弱条件。"
+            )
+
+        flags: list[str] = []
+        pct_change = number(metrics.get("pct_change"))
+        if pct_change is not None and pct_change <= -5:
+            flags.append(
+                f"当日下跌 {abs(pct_change):.2f}%，短期价格出现明显转弱，"
+                "需优先核对公告、行业事件和资金兑现。"
+            )
+        return_5d = number(metrics.get("return_5d_pct"))
+        if profile == "pullback" and return_5d is not None and return_5d >= 15:
+            flags.append(
+                f"近 5 日已反弹 {return_5d:.2f}%，不宜继续理解为“刚企稳”，"
+                "需要检查追高和再次回落风险。"
+            )
+        net_profit_yoy = number(financials.get("net_profit_yoy"))
+        if net_profit_yoy is not None and net_profit_yoy < 0:
+            flags.append(
+                f"最新财报净利润同比 {net_profit_yoy:.2f}%，"
+                "盈利变化是当前候选逻辑的反方线索。"
+            )
+        roe = number(financials.get("roe"))
+        if roe is not None and roe < 3:
+            flags.append(f"最新财报 ROE {roe:.2f}%，资本回报仍偏低。")
+        debt_to_assets = number(financials.get("debt_to_assets"))
+        if debt_to_assets is not None and debt_to_assets >= 75:
+            flags.append(f"资产负债率 {debt_to_assets:.2f}%，负债约束需要优先核验。")
+        pe_ttm = number(metrics.get("pe_ttm"))
+        pb = number(metrics.get("pb"))
+        if (pe_ttm is not None and pe_ttm >= 80) or (pb is not None and pb >= 8):
+            valuation_parts = []
+            if pe_ttm is not None:
+                valuation_parts.append(f"PE TTM {pe_ttm:.2f}")
+            if pb is not None:
+                valuation_parts.append(f"PB {pb:.2f}")
+            flags.append(
+                f"{'、'.join(valuation_parts)}，估值约束较高，"
+                "对盈利兑现和预期变化更敏感。"
+            )
+        return research_focus, flags[:4]
+
+    @staticmethod
     def _rules(filters: Mapping[str, Any]) -> list[dict[str, Any]]:
         rules: list[dict[str, Any]] = []
         if filters.get("exclude_st", True):
@@ -1495,10 +1564,16 @@ class StockScreenerService:
         for key, label in FILTER_LABELS.items():
             if key not in filters or filters[key] is None:
                 continue
-            unit = "%" if any(
-                token in key
-                for token in ("return", "turnover", "revenue", "profit", "roe")
-            ) else "亿元" if "market_cap" in key else None
+            unit = (
+                "%"
+                if any(
+                    token in key
+                    for token in ("return", "turnover", "revenue", "profit", "roe")
+                )
+                else "亿元"
+                if "market_cap" in key
+                else None
+            )
             rules.append(
                 {
                     "field": label,

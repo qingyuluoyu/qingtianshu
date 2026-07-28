@@ -244,6 +244,8 @@ def test_screening_entry_reaches_stock_agent_evidence_and_prompt(app):
         "as_of_date": "2026-07-28",
         "candidate_status": "ready",
         "matched_reasons": ["营收同比保持增长", "毛利率高于模板下限"],
+        "research_focus": "先核验改善是否来自主营并转化为现金流。",
+        "attention_flags": ["净利润同比下降，需要先排除低质量增长。"],
         "missing_fields": ["最新公告原文", "现金流变化原因"],
     }
     created = client.post(
@@ -269,6 +271,8 @@ def test_screening_entry_reaches_stock_agent_evidence_and_prompt(app):
     ]
     assert research_entry["source_label"] == "经营改善候选"
     assert research_entry["matched_reasons"] == entry["matched_reasons"]
+    assert research_entry["research_focus"] == entry["research_focus"]
+    assert research_entry["attention_flags"] == entry["attention_flags"]
     assert research_entry["missing_fields"] == entry["missing_fields"]
 
     prompt = (
@@ -280,6 +284,8 @@ def test_screening_entry_reaches_stock_agent_evidence_and_prompt(app):
     assert "选股入口线索使用要求" in prompt
     assert "经营改善候选" in prompt
     assert "营收同比保持增长" in prompt
+    assert "先核验改善是否来自主营并转化为现金流" in prompt
+    assert "净利润同比下降" in prompt
     assert "现金流变化原因" in prompt
 
 

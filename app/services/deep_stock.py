@@ -269,9 +269,11 @@ class DeepStockResearchService:
                 {},
             )
         ).get("key") == "original_thesis":
+            focus = str(research_entry.get("research_focus") or "").strip()
             next_question = (
-                f"请先核验{name}命中“{research_entry['source_label']}”的理由、"
-                "反方证据和缺失项，再形成自己的关注理由。"
+                f"请先核验{name}命中“{research_entry['source_label']}”的理由。"
+                + (f"当前优先问题是：{focus}" if focus else "")
+                + "同时检查反方证据和缺失项，再形成自己的关注理由。"
             )
         session = self.database.save_deep_stock_session(
             user_id=user_id,
@@ -335,8 +337,10 @@ class DeepStockResearchService:
         if source_label is None:
             source_label = "研究候选筛选"
         matched_reasons = clean_items(entry_context.get("matched_reasons"), 12)
+        research_focus = clean_text(entry_context.get("research_focus"), 300)
+        attention_flags = clean_items(entry_context.get("attention_flags"), 4)
         missing_fields = clean_items(entry_context.get("missing_fields"), 8)
-        return {
+        normalized = {
             "source_kind": source_kind,
             "source_label": source_label,
             "display_name": clean_text(entry_context.get("display_name"), 80),
@@ -354,6 +358,11 @@ class DeepStockResearchService:
             ],
             "updated_at": utc_now(),
         }
+        if research_focus:
+            normalized["research_focus"] = research_focus
+        if attention_flags:
+            normalized["attention_flags"] = attention_flags
+        return normalized
 
     def get(self, user_id: str, symbol: str) -> dict[str, Any] | None:
         canonical = normalize_symbol(symbol)

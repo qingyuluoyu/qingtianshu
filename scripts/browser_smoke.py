@@ -312,6 +312,11 @@ def screening_candidate_disclosure_state(page: Page) -> dict[str, Any]:
                   volume_ratio: 1.15,
                 },
                 financials: {report_period: "2026-03-31", roe: 2.43},
+                research_focus: "近 20 日 +43.44%、相对行业 +65.87 个百分点的强势是否有业绩或公告支撑，并明确趋势转弱条件。",
+                attention_flags: [
+                  "当日下跌 11.67%，短期价格出现明显转弱，需优先核对公告、行业事件和资金兑现。",
+                  "PE TTM 204.33、PB 28.34，估值约束较高，对盈利兑现和预期变化更敏感。",
+                ],
                 matched_reasons: [
                   "近 5 日收益 4.10%",
                   "近 20 日收益 43.44%",
@@ -334,6 +339,8 @@ def screening_candidate_disclosure_state(page: Page) -> dict[str, Any]:
                   volume_ratio: 1.08,
                 },
                 financials: {report_period: "2026-03-31", roe: 3.86},
+                research_focus: "近 20 日 +43.73%、相对行业 +56.12 个百分点的强势是否有业绩或公告支撑，并明确趋势转弱条件。",
+                attention_flags: [],
                 matched_reasons: [
                   "近 5 日收益 0.05%",
                   "近 20 日收益 43.73%",
@@ -352,7 +359,8 @@ def screening_candidate_disclosure_state(page: Page) -> dict[str, Any]:
             coreMetricCounts: cards.map(card => card.querySelectorAll(".screener-metrics-core .screener-metric").length),
             cardDetailsClosed: cards.every(card => !card.querySelector(".screener-card-details")?.open),
             firstFullMetricCount: first?.querySelectorAll(".screener-metrics-full .screener-metric").length || 0,
-            firstReasonCount: first?.querySelectorAll(".screener-reasons li").length || 0,
+            firstReasonCount: first?.querySelectorAll(".screener-card-detail-body .screener-reasons li").length || 0,
+            firstAttentionFlagCount: first?.querySelectorAll(".screener-attention-flags li").length || 0,
             firstSummary: first?.querySelector(".screener-card-details summary")?.textContent?.trim() || "",
             firstPrompt: first?.querySelector(".screener-candidate-prompt")?.textContent?.trim() || "",
             ruleDetailsClosed: !document.querySelector("#stockScreenRuleDetails")?.open,
@@ -1221,12 +1229,14 @@ def run_check(
         if not (
             screening_candidate_disclosure.get("firstFullMetricCount", 0) >= 6
             and screening_candidate_disclosure.get("firstReasonCount") == 3
+            and screening_candidate_disclosure.get("firstAttentionFlagCount") == 2
             and screening_candidate_disclosure.get("firstSummary") == "查看完整数据与入选依据"
         ):
             problems.append("条件选股完整数据或入选依据没有保留在展开区")
         if not (
             "近期强于行业" in screening_candidate_disclosure.get("profileTitle", "")
             and "先核验" in screening_candidate_disclosure.get("firstPrompt", "")
+            and "当日下跌 11.67%" in screening_candidate_disclosure.get("firstPrompt", "")
             and "适合" in screening_candidate_disclosure.get("profileHint", "")
         ):
             problems.append("条件选股模板用途或逐股核验提示不可读")

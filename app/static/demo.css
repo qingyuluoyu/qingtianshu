@@ -355,6 +355,7 @@
     .screener-metric strong { display: block; margin-top: 3px; color: #2c3a50; font-size: 14px; }
     .screener-candidate-prompt { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 8px; align-items: start; margin-top: 10px; padding: 9px 10px; border-left: 3px solid #e7ae45; border-radius: 8px; background: #fff8e9; color: #6f5a34; font-size: 12px; line-height: 1.6; }
     .screener-candidate-prompt strong { color: #8a5d17; white-space: nowrap; }
+    .screener-candidate-prompt .screener-attention-flags { grid-column: 2; margin: 0; color: #7a5422; }
     .screener-card-details { margin-top: 10px; border-top: 1px solid #e2e8f1; }
     .screener-card-details summary { position: relative; padding: 10px 30px 2px 0; color: #4770ad; font-size: 12px; font-weight: 720; cursor: pointer; list-style: none; }
     .screener-card-details summary::-webkit-details-marker { display: none; }
@@ -1738,6 +1739,7 @@
       .screener-inline, .screener-metrics-full { grid-template-columns: 1fr 1fr; }
       .screener-metrics-core { grid-template-columns: repeat(3,minmax(0,1fr)); }
       .screener-candidate-prompt { grid-template-columns: 1fr; gap: 2px; }
+      .screener-candidate-prompt .screener-attention-flags { grid-column: 1; }
       .li-zong-panel { margin: 12px; }
       .li-zong-head { flex-direction: column; }
       .li-zong-stats { grid-template-columns: repeat(2,minmax(0,1fr)); padding-left: 12px; padding-right: 12px; }

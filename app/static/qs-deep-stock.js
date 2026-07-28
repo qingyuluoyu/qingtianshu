@@ -204,9 +204,12 @@ async function openDeepStockSymbol(symbol, tabKey = "overview", options = {}) {
         const entryCard = document.createElement("section"); entryCard.className = "deep-stock-card";
         const entryTitle = document.createElement("div"); entryTitle.className = "deep-stock-card-title"; entryTitle.textContent = "本次研究入口";
         const entryCopy = document.createElement("div"); entryCopy.className = "deep-stock-card-copy";
-        entryCopy.textContent = `${entry.source_label || "研究候选筛选"}${entry.as_of_date ? ` · 数据日 ${entry.as_of_date}` : ""}。这些是待核验线索，不会自动完成研究阶段。`;
+        entryCopy.textContent = entry.research_focus
+          ? `${entry.source_label || "研究候选筛选"}${entry.as_of_date ? ` · 数据日 ${entry.as_of_date}` : ""}。${entry.research_focus}`
+          : `${entry.source_label || "研究候选筛选"}${entry.as_of_date ? ` · 数据日 ${entry.as_of_date}` : ""}。这些是待核验线索，不会自动完成研究阶段。`;
         entryCard.append(entryTitle, entryCopy);
         const entryItems = [
+          ...(entry.attention_flags || []).slice(0, 4).map(value => `注意：${value}`),
           ...(entry.matched_reasons || []).slice(0, 4).map(value => `命中：${value}`),
           ...(entry.missing_fields || []).slice(0, 4).map(value => `待补：${value}`)
         ];

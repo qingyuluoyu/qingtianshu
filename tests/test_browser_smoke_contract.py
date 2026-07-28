@@ -45,6 +45,8 @@ def test_browser_smoke_runner_covers_desktop_mobile_and_core_routes() -> None:
         "条件选股候选没有保持三项核心指标与默认折叠",
         "条件选股完整数据或入选依据没有保留在展开区",
         "条件选股模板用途或逐股核验提示不可读",
+        "firstAttentionFlagCount",
+        "当日下跌 11.67%",
         "390px 条件选股候选卡宽度不足",
         "通过后端守卫的流式正文没有显示",
         "后续进度事件覆盖了已显示的流式正文",

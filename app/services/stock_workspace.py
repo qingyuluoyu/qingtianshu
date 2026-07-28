@@ -171,7 +171,8 @@ class StockWorkspaceService:
                     "severity": "medium",
                     "source": "screening_entry",
                     "next_step": (
-                        "逐条核验候选命中理由、反方证据和缺失字段，"
+                        research_entry.get("research_focus")
+                        or "逐条核验候选命中理由、反方证据和缺失字段，"
                         "再决定是否形成正式关注判断。"
                     ),
                 },

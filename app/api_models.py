@@ -75,6 +75,8 @@ class DeepStockEntryContext(BaseModel):
     as_of_date: str | None = Field(default=None, max_length=32)
     candidate_status: str | None = Field(default=None, max_length=40)
     matched_reasons: list[str] = Field(default_factory=list, max_length=12)
+    research_focus: str | None = Field(default=None, max_length=300)
+    attention_flags: list[str] = Field(default_factory=list, max_length=4)
     missing_fields: list[str] = Field(default_factory=list, max_length=8)
 
 

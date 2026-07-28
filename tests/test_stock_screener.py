@@ -119,7 +119,12 @@ class FakeTushareClient:
         }
 
     def _daily_basic(
-        self, ts_code: str, pe: float, pb: float, total_mv_yi: float, volume_ratio: float
+        self,
+        ts_code: str,
+        pe: float,
+        pb: float,
+        total_mv_yi: float,
+        volume_ratio: float,
     ) -> dict:
         return {
             "ts_code": ts_code,
@@ -173,14 +178,16 @@ class FakePersistedSnapshotDatabase:
             return [
                 self._record(
                     code,
-                    [{
-                        "ts_code": code,
-                        "name": name,
-                        "industry": industry,
-                        "market": "主板",
-                        "list_date": "20100101",
-                        "exchange": code.split(".")[1],
-                    }],
+                    [
+                        {
+                            "ts_code": code,
+                            "name": name,
+                            "industry": industry,
+                            "market": "主板",
+                            "list_date": "20100101",
+                            "exchange": code.split(".")[1],
+                        }
+                    ],
                 )
                 for code, name, industry in zip(
                     self.codes, self.names, self.industries, strict=True
@@ -190,16 +197,18 @@ class FakePersistedSnapshotDatabase:
             return [
                 self._record(
                     code,
-                    [{
-                        "ts_code": code,
-                        "trade_date": self.trade_dates[-1],
-                        "turnover_rate": 2.0,
-                        "volume_ratio": 1.2,
-                        "pe_ttm": 20.0 + index,
-                        "pb": 2.0,
-                        "total_mv_yi": 200.0 + index * 20,
-                        "circ_mv_yi": 160.0 + index * 20,
-                    }],
+                    [
+                        {
+                            "ts_code": code,
+                            "trade_date": self.trade_dates[-1],
+                            "turnover_rate": 2.0,
+                            "volume_ratio": 1.2,
+                            "pe_ttm": 20.0 + index,
+                            "pb": 2.0,
+                            "total_mv_yi": 200.0 + index * 20,
+                            "circ_mv_yi": 160.0 + index * 20,
+                        }
+                    ],
                 )
                 for index, code in enumerate(self.codes)
             ]
@@ -215,29 +224,33 @@ class FakePersistedSnapshotDatabase:
                         close = self.base_5[index]
                     elif offset == 24:
                         close = self.latest_closes[index]
-                    rows.append({
-                        "ts_code": code,
-                        "trade_date": trade_date,
-                        "open": close - 0.2,
-                        "high": close + 0.5,
-                        "low": close - 0.5,
-                        "close": close,
-                        "pct_chg": 1.0,
-                        "vol": 1_000_000 + index,
-                        "amount": 50_000 - index * 1_000,
-                    })
+                    rows.append(
+                        {
+                            "ts_code": code,
+                            "trade_date": trade_date,
+                            "open": close - 0.2,
+                            "high": close + 0.5,
+                            "low": close - 0.5,
+                            "close": close,
+                            "pct_chg": 1.0,
+                            "vol": 1_000_000 + index,
+                            "amount": 50_000 - index * 1_000,
+                        }
+                    )
                 records.append(self._record(code, list(reversed(rows))))
             return records
         if dataset == "fina_indicator":
             return [
                 self._record(
                     code,
-                    [{
-                        "ts_code": code,
-                        "ann_date": "20260429",
-                        "end_date": "20260331",
-                        "roe": 8.0 + index,
-                    }],
+                    [
+                        {
+                            "ts_code": code,
+                            "ann_date": "20260429",
+                            "end_date": "20260331",
+                            "roe": 8.0 + index,
+                        }
+                    ],
                 )
                 for index, code in enumerate(self.codes)
             ]
@@ -335,8 +348,80 @@ def test_persisted_database_snapshot_keeps_screener_usable_without_live_provider
         "ratio": 1.0,
     }
     assert {item["name"] for item in result["items"]} == {"中兴通讯", "浦发银行"}
-    assert all(item["financials"]["report_period"] == "2026-03-31" for item in result["items"])
+    assert all(
+        item["financials"]["report_period"] == "2026-03-31" for item in result["items"]
+    )
     assert "生产数据库" in result["warnings"][0]
+
+
+def test_pullback_candidates_prioritize_samples_closest_to_stabilizing():
+    frame = pd.DataFrame(
+        [
+            {"ts_code": "000001.SZ", "return_5d_pct": 30.0},
+            {"ts_code": "000002.SZ", "return_5d_pct": 2.0},
+            {"ts_code": "000003.SZ", "return_5d_pct": 12.0},
+        ]
+    )
+
+    sorted_frame = StockScreenerService._sort_frame(frame, "pullback")
+
+    assert sorted_frame["return_5d_pct"].tolist() == [2.0, 12.0, 30.0]
+    profile = next(
+        item for item in StockScreenerService.profiles() if item["key"] == "pullback"
+    )
+    assert "从低到高" in profile["sort_rule"]
+    assert "刚转正" in profile["sort_rule"]
+
+
+def test_screen_candidate_builds_research_focus_and_real_metric_attention_flags():
+    service = StockScreenerService(None)
+    item = service._build_item(
+        pd.Series(
+            {
+                "ts_code": "000063.SZ",
+                "internal_symbol": "000063.SZ",
+                "name": "中兴通讯",
+                "industry": "通信设备",
+                "market": "主板",
+                "list_date": "19851118",
+                "trade_date": "20260728",
+                "latest_close": 40.0,
+                "pct_change": -9.2,
+                "return_5d_pct": 8.0,
+                "return_20d_pct": 30.0,
+                "industry_avg_return_20d_pct": 10.0,
+                "industry_excess_20d_pct": 20.0,
+                "pe_ttm": 120.0,
+                "pb": 9.0,
+                "ps_ttm": 5.0,
+                "total_mv_yi": 800.0,
+                "circ_mv_yi": 700.0,
+                "turnover_rate": 4.0,
+                "volume_ratio": 1.5,
+            }
+        ),
+        "trend",
+        {
+            "status": "available",
+            "coverage_status": "sufficient",
+            "report_period": "2026-03-31",
+            "announcement_date": "2026-04-29",
+            "revenue_yoy": 5.0,
+            "net_profit_yoy": -12.5,
+            "roe": 5.0,
+            "gross_margin": 30.0,
+            "net_margin": 8.0,
+            "debt_to_assets": 55.0,
+        },
+    )
+
+    assert "近 20 日" in item["research_focus"]
+    assert "相对行业" in item["research_focus"]
+    assert any("当日下跌 9.20%" in value for value in item["attention_flags"])
+    assert any("净利润同比 -12.50%" in value for value in item["attention_flags"])
+    assert any("反方线索" in value for value in item["attention_flags"])
+    assert any("PE TTM 120.00" in value for value in item["attention_flags"])
+    assert len(item["attention_flags"]) <= 4
 
 
 def test_undercovered_persisted_snapshot_switches_to_live_full_market_data():
@@ -383,9 +468,7 @@ def test_stock_screener_api_requires_user_and_returns_deterministic_candidates(a
     app.state.stock_screener.client = fake
     client = TestClient(app)
 
-    unauthenticated = client.post(
-        "/me/stock-screener", json={"profile": "trend"}
-    )
+    unauthenticated = client.post("/me/stock-screener", json={"profile": "trend"})
     assert unauthenticated.status_code == 401
 
     assert client.post("/users", json={"name": "Screener User"}).status_code == 201
@@ -504,9 +587,7 @@ def test_stock_screen_explains_field_level_missing_reason():
 
     item = next(value for value in result["items"] if value["name"] == "中际旭创")
     assert "pb" in item["missing_fields"]
-    reason = next(
-        value for value in item["missing_reasons"] if value["field"] == "pb"
-    )
+    reason = next(value for value in item["missing_reasons"] if value["field"] == "pb")
     assert reason == {
         "field": "pb",
         "code": "daily_basic_field_missing",
@@ -527,6 +608,7 @@ def test_stock_screen_agent_contract_keeps_scope_dates_and_readable_gaps():
     assert compact["data_contract"]["data_version"].startswith("stock-screen-v1-")
     assert compact["data_contract"]["coverage"]["market_snapshot"]["expected"] == 5
     assert all("ts_code" not in item for item in compact["items"])
+    assert all(item.get("research_focus") for item in compact["items"])
     assert "股票池覆盖 5/5 只（100.0%）" in preview
     assert "数据版本 stock-screen-v1-" in preview
     assert "行情日 2026-07-21" in preview
@@ -559,14 +641,14 @@ def test_stock_screen_guard_rejects_full_market_claim_when_snapshot_is_incomplet
         "A股全市场没有股票满足本轮条件。", evidence
     )
     scoped = AgentService._validate_model_output(
-        "股票池覆盖5526/5530只；本轮已覆盖范围内没有股票满足全部条件，"
-        "不能外推全市场。",
+        "股票池覆盖5526/5530只；本轮已覆盖范围内没有股票满足全部条件，不能外推全市场。",
         evidence,
     )
 
     assert overclaim["passed"] is False
-    assert "通用选股覆盖不足时不能外推为全市场结论" in (
-        overclaim["unsupported_market_inferences"]
+    assert (
+        "通用选股覆盖不足时不能外推为全市场结论"
+        in (overclaim["unsupported_market_inferences"])
     )
     assert scoped["passed"] is True
 
@@ -592,13 +674,12 @@ def test_stock_screen_guard_uses_financial_representation_not_only_market_rows()
         "items": [],
     }
 
-    result = AgentService._validate_model_output(
-        "全部A股没有经营改善候选。", evidence
-    )
+    result = AgentService._validate_model_output("全部A股没有经营改善候选。", evidence)
 
     assert result["passed"] is False
-    assert "通用选股覆盖不足时不能外推为全市场结论" in (
-        result["unsupported_market_inferences"]
+    assert (
+        "通用选股覆盖不足时不能外推为全市场结论"
+        in (result["unsupported_market_inferences"])
     )
 
 
@@ -616,13 +697,12 @@ def test_stock_screen_guard_rejects_candidate_count_conflict():
     conflict = AgentService._validate_model_output(
         "本轮筛选出 10 只研究候选。", evidence
     )
-    aligned = AgentService._validate_model_output(
-        "本轮筛选出 2 只研究候选。", evidence
-    )
+    aligned = AgentService._validate_model_output("本轮筛选出 2 只研究候选。", evidence)
 
     assert conflict["passed"] is False
-    assert "通用选股候选数量必须与确定性结果一致" in (
-        conflict["unsupported_market_inferences"]
+    assert (
+        "通用选股候选数量必须与确定性结果一致"
+        in (conflict["unsupported_market_inferences"])
     )
     assert aligned["passed"] is True
 

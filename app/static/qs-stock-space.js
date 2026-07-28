@@ -576,6 +576,8 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
       thesisCopy.textContent = workspace?.thesis?.summary || watchItem?.thesis || (researchEntry
         ? [
             `你从“${researchEntry.source_label || "研究候选筛选"}”进入研究空间。`,
+            researchEntry.research_focus ? `当前优先核验：${researchEntry.research_focus}` : "",
+            (researchEntry.attention_flags || []).length ? `需要先检查：${researchEntry.attention_flags.slice(0, 4).map(value => String(value).replace(/[。；;，,\s]+$/, "")).join("；")}。` : "",
             (researchEntry.matched_reasons || []).length ? `已保存的候选理由：${researchEntry.matched_reasons.slice(0, 4).join("；")}。` : "",
             (researchEntry.missing_fields || []).length ? `仍需补证：${researchEntry.missing_fields.slice(0, 4).join("、")}。` : "",
             "这些内容只是待核验线索，不会自动成为正式关注判断或推进研究阶段。"

@@ -1715,6 +1715,8 @@ def compact_stock_screen_evidence(
                 "evidence_times",
                 "coverage_status",
                 "matched_reasons",
+                "research_focus",
+                "attention_flags",
                 "missing_fields",
                 "not_applicable_fields",
                 "limitations",
