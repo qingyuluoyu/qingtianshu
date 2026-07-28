@@ -75,6 +75,40 @@ class PreparedChatContext:
     knowledge_context: dict[str, Any]
 
 
+def _prefers_bound_candidate_research(message: str) -> bool:
+    """Keep one-stock candidate follow-ups in its long-term research conversation."""
+
+    folded = re.sub(r"\s+", "", message).casefold()
+    broad_screening_terms = (
+        "筛选a股",
+        "筛a股",
+        "筛选股票",
+        "筛股票",
+        "候选股票",
+        "股票候选",
+        "找几只",
+        "挑几只",
+        "选几只",
+        "一批股票",
+    )
+    research_terms = (
+        "为什么进入",
+        "为什么入选",
+        "入选原因",
+        "这个逻辑",
+        "逻辑还",
+        "是否成立",
+        "还成立",
+        "持续性",
+        "反方证据",
+        "风险",
+        "核验",
+    )
+    return any(term in folded for term in research_terms) and not any(
+        term in folded for term in broad_screening_terms
+    )
+
+
 def _financial_education_sources(message: str) -> list[str]:
     folded = message.casefold().replace(" ", "")
     fund_terms = (
@@ -437,6 +471,23 @@ class ChatRequestContextService:
         explicit_market_query = _is_market_query(message)
         explicit_industry_topic = _extract_industry_topic(message)
         explicit_stock_screen_query = _is_stock_screen_query(message)
+        bound_session_lookup = getattr(
+            self.database,
+            "get_deep_stock_session_by_conversation",
+            None,
+        )
+        bound_deep_stock = (
+            bound_session_lookup(user_id, resolved_conversation_id)
+            if callable(bound_session_lookup)
+            else None
+        )
+        if bound_deep_stock and _prefers_bound_candidate_research(message):
+            bound_symbol = str(bound_deep_stock.get("symbol") or "")
+            if not symbols and bound_symbol:
+                symbols = [bound_symbol]
+                symbol = bound_symbol
+            if symbol == bound_symbol:
+                explicit_stock_screen_query = False
         prior_screen_profile = _stock_screen_profile_from_history(history)
         stock_screen_query = explicit_stock_screen_query or (
             prior_intent == "stock_screen" and contextual_followup

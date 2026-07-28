@@ -98,7 +98,7 @@ function liZongStatusLabel(value) {
       const values = sampled.flatMap(item => [Number(item.return_pct), Number(item.benchmark_return_pct), 0]);
       const min = Math.min(...values); const max = Math.max(...values); const span = Math.max(1, max - min);
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      svg.setAttribute("viewBox", "0 0 720 190"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "李总策略双周等权组合与沪深300同暴露累计收益曲线");
+      svg.setAttribute("viewBox", "0 0 720 190"); svg.setAttribute("role", "img"); svg.setAttribute("aria-label", "李总策略双周等权组合与沪深300连续区间累计收益曲线");
       const coordinates = key => sampled.map((item, index) => {
         const x = 42 + index * (650 / Math.max(1, sampled.length - 1));
         const y = 166 - ((Number(item[key]) - min) / span) * 138;

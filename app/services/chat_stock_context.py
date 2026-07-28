@@ -52,6 +52,20 @@ def _compact_stock_workspace_context(
                 "updated_at",
             ),
         ),
+        "research_entry": select(
+            workspace.get("research_entry"),
+            (
+                "source_kind",
+                "source_label",
+                "profile_key",
+                "as_of_date",
+                "candidate_status",
+                "matched_reasons",
+                "missing_fields",
+                "limitations",
+                "updated_at",
+            ),
+        ),
         "position": {
             "opening": select(
                 position.get("opening"),

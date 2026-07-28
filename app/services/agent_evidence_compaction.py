@@ -1207,6 +1207,7 @@ def compact_stock_research_evidence(
                     "research_focus",
                     "relation",
                     "formal_thesis",
+                    "research_entry",
                     "position",
                     "completeness",
                     "data_meta",

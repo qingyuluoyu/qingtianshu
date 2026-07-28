@@ -77,10 +77,10 @@ def test_equal_weight_backtest_rebalances_on_next_open_without_lookahead():
     assert result["period_return_pct"] > 0.0
     assert result["total_cost_pct_of_initial_nav"] == 0.0
     assert result["trading_cost_bps_per_side"] == 0.0
-    assert result["benchmark_policy"] == "same_exposure_only"
+    assert result["benchmark_policy"] == "continuous_full_period"
     assert all(item["cost_pct_of_nav"] == 0.0 for item in result["rebalances"])
     assert result["benchmark_return_pct"] == 0.0
-    assert result["portfolio_version"] == "li_zong_2w_no_cost_same_exposure_v4"
+    assert result["portfolio_version"] == "li_zong_2w_no_cost_full_benchmark_v5"
 
 
 def test_backtest_holds_cash_when_strategy_never_selects_a_stock():
@@ -102,12 +102,12 @@ def test_backtest_holds_cash_when_strategy_never_selects_a_stock():
     assert result["annualized_return_pct"] == 0.0
     assert result["selection_update_count"] == 0
     assert result["ever_selected_symbol_count"] == 0
-    assert result["benchmark_return_pct"] == 0.0
-    assert result["benchmark_trading_days"] == 0
-    assert all(item["benchmark_exposed"] is False for item in result["points"])
+    assert result["benchmark_return_pct"] == 2.0
+    assert result["benchmark_trading_days"] == len(dates)
+    assert all(item["benchmark_exposed"] is True for item in result["points"])
 
 
-def test_backtest_freezes_benchmark_after_strategy_returns_to_cash():
+def test_backtest_keeps_benchmark_moving_after_strategy_returns_to_cash():
     dates = [value.date().isoformat() for value in pd.bdate_range("2026-01-05", periods=14)]
     candidate_rows = [
         {"trade_date": trade_date, "symbol": "000001.SZ"}
@@ -144,14 +144,14 @@ def test_backtest_freezes_benchmark_after_strategy_returns_to_cash():
         dates[11],
     ]
     assert result["rebalances"][1]["holding_count"] == 0
-    assert result["points"][11]["benchmark_exposed"] is False
-    assert result["points"][11]["benchmark_nav"] == result["points"][-1][
+    assert result["points"][11]["benchmark_exposed"] is True
+    assert result["points"][11]["benchmark_nav"] < result["points"][-1][
         "benchmark_nav"
     ]
-    assert result["benchmark_return_pct"] == 9.901
+    assert result["benchmark_return_pct"] == 13.0
 
 
-def test_backtest_reenters_benchmark_at_the_same_open_as_the_strategy():
+def test_backtest_benchmark_is_independent_of_strategy_reentry():
     dates = [value.date().isoformat() for value in pd.bdate_range("2026-01-05", periods=24)]
     candidate_dates = [*dates[:3], *dates[13:]]
     candidate_rows = [
@@ -189,35 +189,104 @@ def test_backtest_reenters_benchmark_at_the_same_open_as_the_strategy():
         dates[11],
         dates[21],
     ]
-    expected_benchmark_nav = (111.0 / 101.0) * (123.0 / 121.0)
-    assert result["points"][20]["benchmark_exposed"] is False
+    expected_benchmark_nav = 123.0 / 100.0
+    assert result["points"][20]["benchmark_exposed"] is True
     assert result["points"][21]["benchmark_exposed"] is True
     assert result["points"][-1]["benchmark_nav"] == round(
         expected_benchmark_nav, 8
     )
 
 
-def test_backtest_rejects_missing_benchmark_open_on_exposure_entry():
+def test_backtest_continuous_benchmark_does_not_require_open_prices():
     dates = ["2026-01-05", "2026-01-06"]
 
-    with pytest.raises(ValueError, match="benchmark has no open price"):
-        LiZongPortfolioBacktestService.calculate_portfolio(
-            period="3m",
-            candidate_rows=[{"trade_date": dates[0], "symbol": "000001.SZ"}],
-            price_rows=[
-                {
-                    "trade_date": dates[1],
-                    "symbol": "000001.SZ",
-                    "adjusted_open": 10.0,
-                    "adjusted_close": 10.0,
-                }
-            ],
-            benchmark_rows=[
-                {"trade_date": dates[0], "close": 100.0},
-                {"trade_date": dates[1], "close": 101.0},
-            ],
-            eligible_symbol_count=1,
-        )
+    result = LiZongPortfolioBacktestService.calculate_portfolio(
+        period="3m",
+        candidate_rows=[{"trade_date": dates[0], "symbol": "000001.SZ"}],
+        price_rows=[
+            {
+                "trade_date": dates[1],
+                "symbol": "000001.SZ",
+                "adjusted_open": 10.0,
+                "adjusted_close": 10.0,
+            }
+        ],
+        benchmark_rows=[
+            {"trade_date": dates[0], "close": 100.0},
+            {"trade_date": dates[1], "close": 101.0},
+        ],
+        eligible_symbol_count=1,
+    )
+
+    assert result["benchmark_return_pct"] == 1.0
+    assert result["benchmark_trading_days"] == 2
+
+
+def test_compatible_v4_result_can_be_rebased_without_changing_strategy_nav():
+    prior = {
+        "portfolio_version": "li_zong_2w_no_cost_same_exposure_v4",
+        "period": "3m",
+        "start_date": "2026-01-05",
+        "end_date": "2026-01-07",
+        "period_return_pct": 5.0,
+        "benchmark_return_pct": 0.0,
+        "benchmark_annualized_return_pct": 0.0,
+        "excess_return_pct": 5.0,
+        "points": [
+            {
+                "trade_date": "2026-01-05",
+                "nav": 1.0,
+                "return_pct": 0.0,
+                "benchmark_nav": 1.0,
+                "benchmark_return_pct": 0.0,
+                "holding_count": 0,
+                "benchmark_exposed": False,
+            },
+            {
+                "trade_date": "2026-01-06",
+                "nav": 1.02,
+                "return_pct": 2.0,
+                "benchmark_nav": 1.0,
+                "benchmark_return_pct": 0.0,
+                "holding_count": 1,
+                "benchmark_exposed": True,
+            },
+            {
+                "trade_date": "2026-01-07",
+                "nav": 1.05,
+                "return_pct": 5.0,
+                "benchmark_nav": 1.0,
+                "benchmark_return_pct": 0.0,
+                "holding_count": 0,
+                "benchmark_exposed": False,
+            },
+        ],
+        "debug": {"return_observation_count": 3},
+    }
+
+    migrated = LiZongPortfolioBacktestService._rebase_result_to_continuous_benchmark(
+        prior,
+        benchmark_rows=[
+            {"trade_date": "2026-01-05", "close": 100.0},
+            {"trade_date": "2026-01-06", "close": 101.0},
+            {"trade_date": "2026-01-07", "close": 102.0},
+        ],
+    )
+
+    assert migrated is not None
+    assert [item["nav"] for item in migrated["points"]] == [1.0, 1.02, 1.05]
+    assert [item["benchmark_nav"] for item in migrated["points"]] == [
+        1.0,
+        1.01,
+        1.02,
+    ]
+    assert all(item["benchmark_exposed"] for item in migrated["points"])
+    assert migrated["benchmark_return_pct"] == 2.0
+    assert migrated["excess_return_pct"] == 3.0
+    assert migrated["benchmark_policy"] == "continuous_full_period"
+    assert migrated["benchmark_trading_days"] == 3
+    assert migrated["portfolio_version"] == "li_zong_2w_no_cost_full_benchmark_v5"
+    assert migrated["debug"]["benchmark_migrated_from"].endswith("v4")
 
 
 def test_backtest_result_discloses_incomplete_input_coverage():
@@ -349,10 +418,10 @@ def test_backtest_api_and_frontend_expose_three_periods(app, client, monkeypatch
     assert 'data-li-zong-backtest-period="3m"' in page.text
     assert 'data-li-zong-backtest-period="1y"' in page.text
     assert 'data-li-zong-backtest-period="3y"' in page.text
-    assert "沪深300同暴露基准" in page.text
-    assert "策略空仓期不计入比较" in page.text
-    assert "沪深300同暴露累计收益曲线" in screening_script.text
-    assert "沪深300连续区间累计收益曲线" not in screening_script.text
+    assert "沪深300连续基准" in page.text
+    assert "策略空仓期指数仍继续变化" in page.text
+    assert "沪深300连续区间累计收益曲线" in screening_script.text
+    assert "沪深300同暴露累计收益曲线" not in screening_script.text
 
 
 def test_backtest_tables_and_long_history_window_are_initialized(app):

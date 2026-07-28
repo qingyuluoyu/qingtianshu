@@ -61,6 +61,8 @@
         key = date.toISOString().slice(0, 10);
       } else if (period === "monthly") {
         key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-01`;
+      } else if (period === "yearly") {
+        key = `${date.getUTCFullYear()}-01-01`;
       } else {
         return rows;
       }

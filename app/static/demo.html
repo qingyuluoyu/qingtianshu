@@ -475,7 +475,7 @@
               <div class="li-zong-backtest-head">
                 <div>
                   <div id="liZongBacktestTitle" class="li-zong-history-title">双周等权换仓历史验证</div>
-                  <div class="li-zong-history-copy">在每个历史交易日按当时可得数据运行同一套规则；最早于信号后的下一交易日开盘换仓，任意两次换仓至少间隔10个交易日。本版不计交易成本；沪深300只在策略持仓期参与比较，空仓期同步冻结。</div>
+                  <div class="li-zong-history-copy">在每个历史交易日按当时可得数据运行同一套规则；最早于信号后的下一交易日开盘换仓，任意两次换仓至少间隔10个交易日。本版不计交易成本；沪深300按完整区间连续计算，策略空仓期指数仍继续变化。</div>
                 </div>
                 <div class="li-zong-backtest-periods" role="tablist" aria-label="回测区间">
                   <button type="button" role="tab" data-li-zong-backtest-period="3m">近3个月</button>
@@ -494,7 +494,7 @@
                 <div><span>组合更新</span><strong id="liZongBacktestRebalances">—</strong></div>
               </div>
               <div id="liZongBacktestChart" class="li-zong-backtest-chart"><div class="screener-empty">长期回测数据正在由后台分批生成。</div></div>
-              <div id="liZongBacktestLegend" class="li-zong-history-legend" hidden><span><i class="strategy"></i>李总策略双周等权组合</span><span><i class="benchmark"></i>沪深300同暴露基准</span><span>零交易成本；策略空仓期不计入比较</span></div>
+              <div id="liZongBacktestLegend" class="li-zong-history-legend" hidden><span><i class="strategy"></i>李总策略双周等权组合</span><span><i class="benchmark"></i>沪深300连续基准</span><span>零交易成本；策略空仓期指数仍继续变化</span></div>
               <div id="liZongBacktestRebalanceList" class="li-zong-backtest-rebalances" hidden></div>
               <div class="li-zong-backtest-boundary">历史表现用于检验策略，不代表未来收益；涨跌停排队、停牌后实际成交和冲击成本仍需进一步模拟。</div>
             </section>
@@ -631,7 +631,7 @@
               </div>
               <div id="watchlist" class="watchlist-table"><div class="empty">正在读取股票研究资产…</div></div>
             </div>
-            <section id="watchlistDetail" class="watchlist-detail"><div class="empty">选择一只股票查看分时、日K、周K和月K</div></section>
+            <section id="watchlistDetail" class="watchlist-detail"><div class="empty">选择一只股票查看分时、日K、周K、月K和年K</div></section>
             <aside class="watchlist-side">
               <section class="watchlist-summary-card" hidden aria-hidden="true">
                 <div class="watchlist-side-head">研究资产概览</div>

@@ -233,6 +233,56 @@ def test_specialized_stock_agent_also_receives_formal_workspace_context(client):
     assert context["formal_thesis"]["summary"]
 
 
+def test_screening_entry_reaches_stock_agent_evidence_and_prompt(app):
+    client = TestClient(app)
+    user = _create_user(client, "Screening to Agent User")
+    entry = {
+        "source_kind": "stock_screen",
+        "source_label": "经营改善候选",
+        "display_name": "中兴通讯",
+        "profile_key": "quality",
+        "as_of_date": "2026-07-28",
+        "candidate_status": "ready",
+        "matched_reasons": ["营收同比保持增长", "毛利率高于模板下限"],
+        "missing_fields": ["最新公告原文", "现金流变化原因"],
+    }
+    created = client.post(
+        "/me/deep-stock",
+        json={"symbol": "000063", "entry_context": entry},
+    )
+    assert created.status_code == 201
+
+    response = client.post(
+        "/me/chat",
+        json={
+            "message": "中兴通讯为什么进入经营改善候选，这个逻辑还成立吗？",
+            "conversation_id": created.json()["conversation_id"],
+            "execute_agent": False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["intent"] == "stock_research"
+    research_entry = payload["evidence"]["stock_workspace_context"][
+        "research_entry"
+    ]
+    assert research_entry["source_label"] == "经营改善候选"
+    assert research_entry["matched_reasons"] == entry["matched_reasons"]
+    assert research_entry["missing_fields"] == entry["missing_fields"]
+
+    prompt = (
+        Path(app.state.database.get_user(user["id"])["workspace_path"])
+        / "runs"
+        / payload["run_id"]
+        / "prompt.md"
+    ).read_text(encoding="utf-8")
+    assert "选股入口线索使用要求" in prompt
+    assert "经营改善候选" in prompt
+    assert "营收同比保持增长" in prompt
+    assert "现金流变化原因" in prompt
+
+
 def test_required_module_failure_returns_partial_packet(client, app, monkeypatch):
     user = _create_user(client, "Research partial user")
     service = app.state.research_evidence

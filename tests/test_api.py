@@ -1210,6 +1210,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "分时" in frontend
     assert "周K" in frontend
     assert "月K" in frontend
+    assert "年K" in frontend
     assert "放大查看" in frontend
     assert 'data-page="review"' in frontend
     assert 'id="homeFocus"' in frontend

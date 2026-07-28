@@ -45,7 +45,10 @@ class LiZongPortfolioBacktestService:
     MARKET_CAP_MIN_YI = LiZongParameters().market_cap_min_yi
     COST_BPS_PER_SIDE = 0.0
     MIN_REBALANCE_TRADING_DAYS = 10
-    PORTFOLIO_VERSION = "li_zong_2w_no_cost_same_exposure_v4"
+    PORTFOLIO_VERSION = "li_zong_2w_no_cost_full_benchmark_v5"
+    COMPATIBLE_BENCHMARK_MIGRATION_SOURCES = {
+        "li_zong_2w_no_cost_same_exposure_v4"
+    }
     TARGET_HISTORY_MARKET_DAYS = 1150
     STATE_INPUT_VERSION = "ready_market_window_v3_tail_gap_strict"
     DEFAULT_MARKET_DAY_BATCH_SIZE = 30
@@ -61,8 +64,8 @@ class LiZongPortfolioBacktestService:
         "回测严格使用每个历史交易日当时已公告的财务与股东数据、当日历史市值，"
         "以及当日及以前的量价数据。候选集合变化后，最早在下一完整交易日开盘"
         "执行，但任意两次实际换仓至少间隔10个交易日；冷却期内只保留最新候选"
-        "集合。本版不计交易成本。沪深300只在策略实际持仓期间保持同等市场暴露，"
-        "策略空仓期间基准同步冻结，不计入相对收益比较。尚未模拟涨跌停"
+        "集合。本版不计交易成本。沪深300按回测完整交易区间连续计算，策略空仓"
+        "期间指数仍继续变化并计入相对收益比较。尚未模拟涨跌停"
         "排队、停牌后的实际成交、冲击"
         "成本、分红税和真实佣金阶梯；已明确退市的股票使用最后可得复权收盘价"
         "作为强制退出代理。结果只用于验证规则历史表现，不构成收益承诺或投资建议。"
@@ -119,6 +122,14 @@ class LiZongPortfolioBacktestService:
         }
         try:
             self._save_calendar(trade_dates, sync_run_id=run_id)
+            if hasattr(self.database, "latest_tushare_dataset_snapshot"):
+                for period in self.PERIOD_DAYS:
+                    migrated = self._migrate_compatible_benchmark_result(
+                        period,
+                        sync_run_id=run_id,
+                    )
+                    if migrated is not None:
+                        summary["periods_published"].append(period)
             summary["market_cap_days_added"] = self._refresh_market_cap_days(
                 trade_dates,
                 batch_size=market_batch,
@@ -183,7 +194,8 @@ class LiZongPortfolioBacktestService:
                         sync_run_id=run_id,
                     )
                     if result is not None:
-                        summary["periods_published"].append(period)
+                        if period not in summary["periods_published"]:
+                            summary["periods_published"].append(period)
             packet = self._progress_packet()
             status = (
                 "stable"
@@ -1138,6 +1150,140 @@ class LiZongPortfolioBacktestService:
         )
         return result
 
+    def _migrate_compatible_benchmark_result(
+        self,
+        period: str,
+        *,
+        sync_run_id: str,
+    ) -> dict[str, Any] | None:
+        existing = self.database.latest_tushare_dataset_snapshot(
+            self.RESULT_DATASET,
+            period,
+            stable_only=True,
+        )
+        prior = (existing or {}).get("payload") or {}
+        if prior.get("portfolio_version") == self.PORTFOLIO_VERSION:
+            return None
+        if (
+            prior.get("portfolio_version")
+            not in self.COMPATIBLE_BENCHMARK_MIGRATION_SOURCES
+            or prior.get("state_input_version") != self.STATE_INPUT_VERSION
+            or prior.get("period") != period
+            or float(prior.get("trading_cost_bps_per_side") or 0.0)
+            != self.COST_BPS_PER_SIDE
+            or int(prior.get("minimum_rebalance_trading_days") or 0)
+            != self.MIN_REBALANCE_TRADING_DAYS
+        ):
+            return None
+        start_date = str(prior.get("start_date") or "")
+        end_date = str(prior.get("end_date") or "")
+        if not start_date or not end_date:
+            return None
+        benchmark_rows = self._benchmark_rows(
+            start_date=start_date,
+            end_date=end_date,
+        )
+        migrated = self._rebase_result_to_continuous_benchmark(
+            prior,
+            benchmark_rows=benchmark_rows,
+        )
+        if migrated is None:
+            return None
+        migrated["data_version"] = self._fingerprint(
+            {
+                "portfolio_version": self.PORTFOLIO_VERSION,
+                "prior_data_version": (existing or {}).get("data_version"),
+                "benchmark": [
+                    {
+                        "trade_date": item.get("trade_date"),
+                        "close": self._number(item.get("close")),
+                    }
+                    for item in benchmark_rows
+                ],
+            }
+        )
+        self.database.save_tushare_dataset_snapshot(
+            dataset=self.RESULT_DATASET,
+            scope_key=period,
+            as_of_date=migrated.get("end_date"),
+            report_period=period,
+            source_updated_at=migrated.get("generated_at"),
+            sync_run_id=sync_run_id,
+            data_version=migrated["data_version"],
+            data_status="stable",
+            payload=migrated,
+        )
+        return migrated
+
+    @classmethod
+    def _rebase_result_to_continuous_benchmark(
+        cls,
+        prior: Mapping[str, Any],
+        *,
+        benchmark_rows: Sequence[Mapping[str, Any]],
+    ) -> dict[str, Any] | None:
+        points = list(prior.get("points") or [])
+        benchmark_by_date = {
+            str(item.get("trade_date") or ""): cls._number(item.get("close"))
+            for item in benchmark_rows
+            if item.get("trade_date")
+        }
+        if not points or len(points) != len(benchmark_by_date):
+            return None
+        point_dates = [str(item.get("trade_date") or "") for item in points]
+        if any(
+            trade_date not in benchmark_by_date
+            or benchmark_by_date[trade_date] is None
+            or float(benchmark_by_date[trade_date]) <= 0
+            for trade_date in point_dates
+        ):
+            return None
+        first_close = float(benchmark_by_date[point_dates[0]])
+        migrated_points: list[dict[str, Any]] = []
+        for item, trade_date in zip(points, point_dates, strict=True):
+            benchmark_nav = float(benchmark_by_date[trade_date]) / first_close
+            migrated_points.append(
+                {
+                    **dict(item),
+                    "benchmark_nav": round(benchmark_nav, 8),
+                    "benchmark_return_pct": round(
+                        (benchmark_nav - 1.0) * 100.0,
+                        4,
+                    ),
+                    "benchmark_exposed": True,
+                }
+            )
+        end_nav = float(migrated_points[-1]["nav"])
+        benchmark_end = float(migrated_points[-1]["benchmark_nav"])
+        calendar_days = max(
+            1,
+            (
+                date.fromisoformat(point_dates[-1])
+                - date.fromisoformat(point_dates[0])
+            ).days,
+        )
+        benchmark_annualized = (
+            benchmark_end ** (365.0 / calendar_days) - 1.0
+        ) * 100.0
+        return {
+            **dict(prior),
+            "portfolio_version": cls.PORTFOLIO_VERSION,
+            "points": migrated_points,
+            "benchmark_return_pct": round((benchmark_end - 1.0) * 100.0, 4),
+            "benchmark_annualized_return_pct": round(benchmark_annualized, 4),
+            "excess_return_pct": round((end_nav - benchmark_end) * 100.0, 4),
+            "benchmark_policy": "continuous_full_period",
+            "benchmark_trading_days": len(migrated_points),
+            "generated_at": utc_now(),
+            "assumptions": cls._assumptions(),
+            "boundary": cls.BOUNDARY,
+            "debug": {
+                **dict(prior.get("debug") or {}),
+                "benchmark_policy": "continuous_full_period",
+                "benchmark_migrated_from": prior.get("portfolio_version"),
+            },
+        }
+
     @classmethod
     def calculate_portfolio(
         cls,
@@ -1182,8 +1328,9 @@ class LiZongPortfolioBacktestService:
         cooldown_deferred = 0
         total_cost = 0.0
         total_turnover = 0.0
-        benchmark_units = 0.0
-        benchmark_cash = 1.0
+        first_benchmark_close = float(benchmark_by_date[dates[0]]["close"])
+        if first_benchmark_close <= 0:
+            raise ValueError("benchmark first close must be positive")
         pending: dict[str, Any] | None = None
         last_rebalance_index: int | None = None
 
@@ -1222,7 +1369,6 @@ class LiZongPortfolioBacktestService:
                     )
                     if tradable:
                         old_symbols = set(units)
-                        old_exposed = bool(old_symbols)
                         values_at_open = {
                             symbol: units[symbol] * float(day_prices[symbol]["open"])
                             for symbol in old_symbols
@@ -1249,18 +1395,6 @@ class LiZongPortfolioBacktestService:
                         turnover_ratio = (
                             turnover_amount / pre_trade_nav if pre_trade_nav else 0.0
                         )
-                        new_exposed = bool(desired)
-                        benchmark_open = benchmark_by_date[trade_date]["open"]
-                        if benchmark_open is None:
-                            raise ValueError(
-                                f"benchmark has no open price on {trade_date}"
-                            )
-                        if not old_exposed and new_exposed:
-                            benchmark_units = benchmark_cash / benchmark_open
-                            benchmark_cash = 0.0
-                        elif old_exposed and not new_exposed:
-                            benchmark_cash += benchmark_units * benchmark_open
-                            benchmark_units = 0.0
                         total_cost += cost
                         total_turnover += turnover_ratio
                         rebalances.append(
@@ -1294,8 +1428,8 @@ class LiZongPortfolioBacktestService:
                     )
                 nav += quantity * close
             benchmark_nav = (
-                benchmark_cash
-                + benchmark_units * benchmark_by_date[trade_date]["close"]
+                float(benchmark_by_date[trade_date]["close"])
+                / first_benchmark_close
             )
             points.append(
                 {
@@ -1305,7 +1439,7 @@ class LiZongPortfolioBacktestService:
                     "benchmark_nav": round(benchmark_nav, 8),
                     "benchmark_return_pct": round((benchmark_nav - 1.0) * 100.0, 4),
                     "holding_count": len(units),
-                    "benchmark_exposed": bool(benchmark_units),
+                    "benchmark_exposed": True,
                 }
             )
 
@@ -1377,8 +1511,8 @@ class LiZongPortfolioBacktestService:
             "cooldown_deferred_days": cooldown_deferred,
             "minimum_rebalance_trading_days": cls.MIN_REBALANCE_TRADING_DAYS,
             "exposure_trading_days": exposure_trading_days,
-            "benchmark_policy": "same_exposure_only",
-            "benchmark_trading_days": exposure_trading_days,
+            "benchmark_policy": "continuous_full_period",
+            "benchmark_trading_days": len(dates),
             "trading_cost_bps_per_side": cls.COST_BPS_PER_SIDE,
             "points": points,
             "rebalances": rebalances,
@@ -1387,7 +1521,7 @@ class LiZongPortfolioBacktestService:
             "boundary": cls.BOUNDARY,
             "debug": {
                 "return_observation_count": len(returns),
-                "benchmark_policy": "same_exposure_only",
+                "benchmark_policy": "continuous_full_period",
             },
         }
 
@@ -1976,8 +2110,8 @@ class LiZongPortfolioBacktestService:
             "weighting": "每次换仓后对可成交候选等资金配置。",
             "cost_bps_per_side": cls.COST_BPS_PER_SIDE,
             "benchmark": (
-                f"{cls.BENCHMARK_NAME}（只在策略持仓期保持同等市场暴露；"
-                "策略空仓期同步冻结）"
+                f"{cls.BENCHMARK_NAME}（按完整回测区间连续计算；"
+                "策略空仓期指数仍继续变化）"
             ),
             "price_basis": "复权因子调整后的开盘价和收盘价。",
             "cash_policy": "候选为空时持有现金，现金收益按0计。",

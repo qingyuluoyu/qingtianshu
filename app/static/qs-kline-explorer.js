@@ -9,13 +9,15 @@
     ["intraday", "分时"],
     ["daily", "日K"],
     ["weekly", "周K"],
-    ["monthly", "月K"]
+    ["monthly", "月K"],
+    ["yearly", "年K"]
   ]);
   const RANGES = Object.freeze([
     ["3mo", "近3月"],
     ["6mo", "近6月"],
     ["1y", "近1年"],
-    ["2y", "近2年"]
+    ["2y", "近2年"],
+    ["5y", "近5年"]
   ]);
   let activeDialog = null;
 
@@ -184,12 +186,13 @@
     shell.append(head, toolbar, meta, chartWrap, legend, metricGrid); container.appendChild(shell);
 
     async function fetchPayload(period) {
-      const key = period === "intraday" ? "intraday" : "history:2y";
+      const historyRange = period === "yearly" ? "5y" : "2y";
+      const key = period === "intraday" ? "intraday" : `history:${historyRange}`;
       if (cache.has(key)) return cache.get(key);
       if (typeof request !== "function") throw new Error("missing request function");
       const endpoint = period === "intraday"
         ? `/stocks/${encodeURIComponent(symbol)}/intraday`
-        : `/stocks/${encodeURIComponent(symbol)}/history?range=2y`;
+        : `/stocks/${encodeURIComponent(symbol)}/history?range=${historyRange}`;
       const promise = Promise.resolve(request(endpoint)).catch(error => {
         cache.delete(key);
         throw error;
@@ -273,7 +276,11 @@
         const asOf = payload.market_timestamp || points.at(-1)?.time;
         const source = payload.source || "公开行情源";
         const rangeText = selection.period === "intraday" ? "当日" : rangeLabel(selection.range);
-        const basis = selection.period === "intraday" ? "1分钟行情" : "日线OHLC（未额外复权）";
+        const basis = selection.period === "intraday"
+          ? "1分钟行情"
+          : selection.period === "daily"
+            ? "日线OHLC（未额外复权）"
+            : `由日线OHLC聚合的${periodLabel(selection.period)}`;
         meta.textContent = `${periodLabel(selection.period)} · ${rangeText} · 数据至 ${readableTime(asOf, timezone)} · ${basis} · ${source}`;
         canvas.setAttribute("aria-label", `${name}${periodLabel(selection.period)}，${rangeText}。方向键查看历史，加减键缩放，Home键或双击复位。`);
         canvas.hidden = false;
@@ -283,7 +290,7 @@
           if (destroyed || token !== renderToken || !canvas.isConnected) return;
           chartController = charts.createInteractiveKline(canvas, points, {
             visibleBars,
-            minimumBars: selection.period === "monthly" ? 2 : selection.period === "weekly" ? 4 : 12,
+            minimumBars: ["monthly", "yearly"].includes(selection.period) ? 2 : selection.period === "weekly" ? 4 : 12,
             showMovingAverages: true,
             showVolume: true,
             onStateChange(viewport) {

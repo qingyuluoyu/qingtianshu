@@ -521,7 +521,7 @@ function researchStatusMeta(status) {
         state.watchlistKlineExplorer?.destroy?.();
         state.watchlistKlineExplorer = null;
         container.innerHTML = '<div class="empty">还没有股票研究资产。点击右上角“添加关注”，或从透明选股保存一条候选线索。</div>';
-        $("watchlistDetail").innerHTML = '<div class="empty">添加股票后可查看分时、日K、周K和月K</div>';
+        $("watchlistDetail").innerHTML = '<div class="empty">添加股票后可查看分时、日K、周K、月K和年K</div>';
         state.selectedWatchlistSymbol = null;
       } else if (!visibleItems.length) {
         container.innerHTML = '<div class="empty">当前关系和状态筛选下没有研究资产。</div>';

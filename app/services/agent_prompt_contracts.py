@@ -447,6 +447,25 @@ unresolved 是尚未解决的风险或缺口，不能把 unresolved 写成已经
 百分比和比率可在不改变方向与含义的前提下保留最多两位小数。若 Claim 摘要没有用户可读的
 金额单位，可改用方向、同比、比率和报告期说明，不自行换算出新的金额。
 """
+    research_entry = (
+        (prompt_evidence.get("stock_workspace_context") or {}).get(
+            "research_entry"
+        )
+        if intent == "stock_research"
+        else None
+    )
+    if research_entry:
+        prompt += """
+
+## 选股入口线索使用要求
+
+stock_workspace_context.research_entry 是用户从条件选股或李总策略进入本股票研究空间时
+保存的线索。它必须参与本轮问题分析，但它不是已经确认的公司事实、投资评级或用户正式判断。
+当用户询问入选原因、逻辑持续性、上涨驱动、财务改善或风险时，先核对 matched_reasons 与
+本轮正式行情、财务、公告和行业证据是否一致，再指出 missing_fields 中仍需补证的项目。
+若本轮证据不支持某条入选理由，应直接说明当前只能保留为待核验线索，不得为了维持筛选结果
+而补写因果、推荐等级、目标价、仓位或未来胜率。无需机械复述全部字段，只回答用户当前问题。
+"""
     if (
         intent == "stock_screen"
         and (prompt_evidence.get("profile") or {}).get("key") == "li_zong"

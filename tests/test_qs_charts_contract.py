@@ -63,6 +63,10 @@ const candles = [
 ];
 const weekly = charts.aggregateCandles(candles, "weekly");
 const monthly = charts.aggregateCandles(candles, "monthly");
+const yearly = charts.aggregateCandles([
+  {{timestamp: "2025-12-31T01:30:00Z", open: 8, high: 10, low: 7, close: 9, volume: 90}},
+  ...candles
+], "yearly");
 const oneMonth = charts.candlesInRange(monthly, "1mo");
 const narrowViewport = charts.computeViewport(monthly, 1, 0, 2);
 process.stdout.write(JSON.stringify({{
@@ -74,6 +78,7 @@ process.stdout.write(JSON.stringify({{
   rightLabel,
   weekly,
   monthly,
+  yearly,
   oneMonth,
   visibleMonthBars: charts.visibleBarsForRange(monthly, "1mo"),
   narrowViewport: {{start: narrowViewport.start, end: narrowViewport.end, count: narrowViewport.count}},
@@ -115,6 +120,24 @@ process.stdout.write(JSON.stringify({{
         "close": 14,
         "volume": 390,
     }
+    assert result["yearly"] == [
+        {
+            "time": "2025-01-01",
+            "open": 8,
+            "high": 10,
+            "low": 7,
+            "close": 9,
+            "volume": 90,
+        },
+        {
+            "time": "2026-01-01",
+            "open": 10,
+            "high": 16,
+            "low": 9,
+            "close": 15,
+            "volume": 640,
+        },
+    ]
     assert len(result["oneMonth"]) == 2
     assert result["visibleMonthBars"] == 2
     assert result["narrowViewport"] == {"start": 1, "end": 3, "count": 2}
@@ -132,13 +155,16 @@ def test_stock_pages_share_period_range_and_expanded_kline_explorer() -> None:
     assert "charts.createInteractiveKline(canvas, points" in html
     assert "charts.aggregateCandles(payload.points || [], selection.period)" in html
     assert "charts.visibleBarsForRange(points, selection.range)" in html
-    assert '`/stocks/${encodeURIComponent(symbol)}/history?range=2y`' in html
+    assert 'const historyRange = period === "yearly" ? "5y" : "2y"' in html
+    assert '`/stocks/${encodeURIComponent(symbol)}/history?range=${historyRange}`' in html
     assert '`/stocks/${encodeURIComponent(symbol)}/intraday`' in html
     assert '["intraday", "分时"]' in html
     assert '["daily", "日K"]' in html
     assert '["weekly", "周K"]' in html
     assert '["monthly", "月K"]' in html
+    assert '["yearly", "年K"]' in html
     assert '["1y", "近1年"]' in html
+    assert '["5y", "近5年"]' in html
     assert "放大查看" in html
     assert "拖拽平移 · 滚轮缩放 · 双击复位" in html
     assert "function aggregateWeekly(points = [])" not in html
