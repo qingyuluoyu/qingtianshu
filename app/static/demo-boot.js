@@ -30,6 +30,8 @@ $("agentResumeOpen").addEventListener("click", async event => {
       event.preventDefault();
       void loadStockScreener();
     });
+    $("stockScreenProfile").addEventListener("change", renderStockScreenProfileHint);
+    renderStockScreenProfileHint();
     document.querySelectorAll("[data-li-zong-filter]").forEach(button => button.addEventListener("click", () => {
       state.liZongFilter = button.dataset.liZongFilter;
       void loadLiZongStrategy();

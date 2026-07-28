@@ -523,11 +523,12 @@
                 <div class="screener-field">
                   <label for="stockScreenProfile">研究模板</label>
                   <select id="stockScreenProfile">
-                    <option value="trend" selected>相对行业增强候选</option>
-                    <option value="quality">经营改善候选</option>
-                    <option value="value">估值约束观察候选</option>
-                    <option value="pullback">回撤后待复核候选</option>
+                    <option value="trend" selected>近期强于行业（波动可能较大）</option>
+                    <option value="quality">经营指标开始改善</option>
+                    <option value="value">估值处于约束范围</option>
+                    <option value="pullback">回撤后等待确认</option>
                   </select>
+                  <div id="stockScreenProfileHint" class="screener-profile-hint" aria-live="polite">适合发现近期明显强于同行、但仍需要核验上涨驱动的研究对象。</div>
                 </div>
                 <div class="screener-inline">
                   <div class="screener-field">
@@ -564,7 +565,10 @@
                 <button id="runStockScreener" class="btn primary screener-submit" type="submit">执行确定性筛选</button>
               </form>
               <div id="stockScreenBoundary" class="screener-boundary">这是可解释的研究候选筛选，不构成推荐、评级、目标价或交易建议。</div>
-              <div id="stockScreenRules" class="screener-rules"><div class="screener-rule">执行后会在这里列出实际生效的规则和阈值。</div></div>
+              <details id="stockScreenRuleDetails" class="screener-rule-details">
+                <summary id="stockScreenRuleSummary">查看实际生效规则</summary>
+                <div id="stockScreenRules" class="screener-rules"><div class="screener-rule">执行后会在这里列出实际生效的规则和阈值。</div></div>
+              </details>
             </aside>
             <section class="screener-results">
               <div class="screener-results-head">

@@ -308,10 +308,16 @@
     .screener-field { display: grid; gap: 6px; }
     .screener-field label { color: #526177; font-size: 13px; font-weight: 700; }
     .screener-field select, .screener-field input { width: 100%; border: 1px solid var(--line); border-radius: 10px; background: #fff; color: var(--text); padding: 10px 11px; }
+    .screener-profile-hint { color: #718097; font-size: 12px; line-height: 1.55; }
     .screener-inline { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
     .screener-submit { width: 100%; margin-top: 3px; }
     .screener-boundary { margin-top: 14px; padding: 11px 12px; border: 1px solid #d7e4fb; border-radius: 11px; background: #f1f6ff; color: #5d6d84; font-size: 13px; line-height: 1.65; }
-    .screener-rules { margin-top: 15px; display: grid; gap: 7px; }
+    .screener-rule-details { margin-top: 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+    .screener-rule-details summary { position: relative; padding: 10px 32px 10px 11px; color: #5d6d84; font-size: 12px; font-weight: 720; cursor: pointer; list-style: none; }
+    .screener-rule-details summary::-webkit-details-marker { display: none; }
+    .screener-rule-details summary::after { content: "＋"; position: absolute; top: 8px; right: 11px; color: #4777c4; font-size: 15px; }
+    .screener-rule-details[open] summary::after { content: "−"; }
+    .screener-rules { padding: 0 10px 10px; display: grid; gap: 7px; }
     .screener-rule { padding: 9px 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; color: #526177; font-size: 12px; line-height: 1.55; }
     .screener-results { min-width: 0; padding: 18px; background: #fff; }
     .screener-results-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
@@ -329,15 +335,24 @@
     .screener-data-details[open] summary::after { content: "−"; }
     .screener-data-detail { padding: 0 12px 11px; color: #728198; font-size: 12px; line-height: 1.65; }
     .screener-list { display: grid; gap: 11px; }
-    .screener-card { padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: #fbfcff; }
+    .screener-card { padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: #fbfcff; }
     .screener-card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
     .screener-stock-name { font-size: 16px; font-weight: 780; }
     .screener-stock-meta { margin-top: 3px; color: var(--muted); font-size: 12px; }
     .screener-period { color: #5f6f86; font-size: 12px; text-align: right; line-height: 1.5; }
-    .screener-metrics { display: grid; grid-template-columns: repeat(6,minmax(76px,1fr)); gap: 7px; margin-top: 12px; }
+    .screener-metrics { display: grid; grid-template-columns: repeat(3,minmax(76px,1fr)); gap: 7px; margin-top: 11px; }
     .screener-metric { padding: 8px 9px; border-radius: 9px; background: #f0f4fa; }
     .screener-metric span { display: block; color: #78869a; font-size: 12px; }
     .screener-metric strong { display: block; margin-top: 3px; color: #2c3a50; font-size: 14px; }
+    .screener-candidate-prompt { display: grid; grid-template-columns: auto minmax(0,1fr); gap: 8px; align-items: start; margin-top: 10px; padding: 9px 10px; border-left: 3px solid #e7ae45; border-radius: 8px; background: #fff8e9; color: #6f5a34; font-size: 12px; line-height: 1.6; }
+    .screener-candidate-prompt strong { color: #8a5d17; white-space: nowrap; }
+    .screener-card-details { margin-top: 10px; border-top: 1px solid #e2e8f1; }
+    .screener-card-details summary { position: relative; padding: 10px 30px 2px 0; color: #4770ad; font-size: 12px; font-weight: 720; cursor: pointer; list-style: none; }
+    .screener-card-details summary::-webkit-details-marker { display: none; }
+    .screener-card-details summary::after { content: "展开"; position: absolute; top: 10px; right: 0; color: #7c8da3; font-size: 11px; font-weight: 600; }
+    .screener-card-details[open] summary::after { content: "收起"; }
+    .screener-card-detail-body { padding-top: 5px; }
+    .screener-metrics-full { grid-template-columns: repeat(3,minmax(76px,1fr)); }
     .screener-reasons-title { margin-top: 12px; color: #344860; font-size: 13px; font-weight: 760; }
     .screener-reasons { margin: 6px 0 0; padding-left: 18px; color: #4e6078; font-size: 13px; line-height: 1.7; }
     .screener-missing { margin-top: 8px; color: #9a6b28; font-size: 12px; }
@@ -1710,7 +1725,9 @@
       .deep-session-cta { grid-template-columns: 1fr; }
       .stock-workspace-summary, .stock-task-grid, .stock-history-grid, .position-metrics, .position-entry-form { grid-template-columns: 1fr; }
       .position-entry-form textarea, .position-entry-form .position-form-wide { grid-column: auto; }
-      .screener-inline, .screener-metrics { grid-template-columns: 1fr 1fr; }
+      .screener-inline, .screener-metrics-full { grid-template-columns: 1fr 1fr; }
+      .screener-metrics-core { grid-template-columns: repeat(3,minmax(0,1fr)); }
+      .screener-candidate-prompt { grid-template-columns: 1fr; gap: 2px; }
       .li-zong-panel { margin: 12px; }
       .li-zong-head { flex-direction: column; }
       .li-zong-stats { grid-template-columns: repeat(2,minmax(0,1fr)); padding-left: 12px; padding-right: 12px; }

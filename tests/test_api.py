@@ -1234,12 +1234,21 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'id="watchlistPulse"' not in frontend
     assert 'id="stockScreenExplanation"' in frontend
     assert 'id="stockScreenDataDetails"' in frontend
+    assert 'id="stockScreenProfileHint"' in frontend
+    assert 'id="stockScreenRuleDetails"' in frontend
+    assert "近期强于行业（波动可能较大）" in frontend
+    assert "经营指标开始改善" in frontend
+    assert "查看完整数据与入选依据" in frontend
+    assert "function stockScreenCoreMetrics(item, profileKey)" in frontend
+    assert "function stockScreenCandidatePrompt(item, profileKey)" in frontend
     assert "这批结果怎么用" in frontend
     assert "为什么出现在这里" in frontend
     assert "加入我的关注" in frontend
     assert "研究这只股票" in frontend
     assert "让 Agent 继续研究" not in frontend
     assert ".screener-explanation span { color: #596b83; font-size: 13px;" in frontend
+    assert ".screener-card-details { margin-top: 10px; border-top: 1px solid #e2e8f1; }" in frontend
+    assert ".screener-candidate-prompt { display: grid;" in frontend
     assert ".screener-reasons { margin: 6px 0 0; padding-left: 18px; color: #4e6078; font-size: 13px;" in frontend
     assert 'id="agentHistoryList"' in frontend
     assert 'id="conversationSwitcher"' in frontend

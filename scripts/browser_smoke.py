@@ -273,6 +273,99 @@ def screening_section_state(page: Page) -> dict[str, Any]:
     )
 
 
+def screening_candidate_disclosure_state(page: Page) -> dict[str, Any]:
+    return page.evaluate(
+        """
+        () => {
+          renderStockScreener({
+            type: "stock_screen",
+            status: "ready",
+            profile: {
+              key: "trend",
+              label: "相对行业增强候选",
+              sort_rule: "按近 20 日相对行业超额收益从高到低排列；不计算综合分。",
+            },
+            data_meta: {
+              latest_completed_trade_date: "2026-07-28",
+              return_20d_base_date: "2026-06-30",
+              financial_report_periods: ["2026-03-31"],
+            },
+            data_contract: {coverage: {}, data_version: "browser-fixture-v1"},
+            rules: [
+              {field: "总市值下限", operator: ">=", value: 30, unit: "亿元"},
+              {field: "近 20 日收益下限", operator: ">=", value: 0, unit: "%"},
+              {field: "近 20 日行业超额下限", operator: ">=", value: 0, unit: ""},
+            ],
+            items: [
+              {
+                name: "锐捷网络",
+                internal_symbol: "301165.SZ",
+                ts_code: "301165.SZ",
+                industry: "通信设备",
+                metrics: {
+                  return_5d_pct: 4.1,
+                  return_20d_pct: 43.44,
+                  industry_excess_20d_pct: 65.87,
+                  pe_ttm: 204.33,
+                  pb: 28.34,
+                  total_mv_yi: 1454.85,
+                  volume_ratio: 1.15,
+                },
+                financials: {report_period: "2026-03-31", roe: 2.43},
+                matched_reasons: [
+                  "近 5 日收益 4.10%",
+                  "近 20 日收益 43.44%",
+                  "近 20 日相对所属行业样本均值 65.87 个百分点",
+                ],
+                missing_fields: [],
+              },
+              {
+                name: "紫光股份",
+                internal_symbol: "000938.SZ",
+                ts_code: "000938.SZ",
+                industry: "IT设备",
+                metrics: {
+                  return_5d_pct: 0.05,
+                  return_20d_pct: 43.73,
+                  industry_excess_20d_pct: 56.12,
+                  pe_ttm: 55.83,
+                  pb: 7.64,
+                  total_mv_yi: 1186.36,
+                  volume_ratio: 1.08,
+                },
+                financials: {report_period: "2026-03-31", roe: 3.86},
+                matched_reasons: [
+                  "近 5 日收益 0.05%",
+                  "近 20 日收益 43.73%",
+                  "近 20 日相对所属行业样本均值 56.12 个百分点",
+                ],
+                missing_fields: [],
+              },
+            ],
+            boundary: "这是可解释的研究候选筛选，不构成推荐、评级、目标价或交易建议。",
+          });
+          const cards = [...document.querySelectorAll("#stockScreenResults .screener-card")];
+          const first = cards[0];
+          const firstRect = first?.getBoundingClientRect();
+          return {
+            cardCount: cards.length,
+            coreMetricCounts: cards.map(card => card.querySelectorAll(".screener-metrics-core .screener-metric").length),
+            cardDetailsClosed: cards.every(card => !card.querySelector(".screener-card-details")?.open),
+            firstFullMetricCount: first?.querySelectorAll(".screener-metrics-full .screener-metric").length || 0,
+            firstReasonCount: first?.querySelectorAll(".screener-reasons li").length || 0,
+            firstSummary: first?.querySelector(".screener-card-details summary")?.textContent?.trim() || "",
+            firstPrompt: first?.querySelector(".screener-candidate-prompt")?.textContent?.trim() || "",
+            ruleDetailsClosed: !document.querySelector("#stockScreenRuleDetails")?.open,
+            profileTitle: document.querySelector("#stockScreenTitle")?.textContent?.trim() || "",
+            profileHint: document.querySelector("#stockScreenProfileHint")?.textContent?.trim() || "",
+            firstCardWidth: firstRect ? Math.round(firstRect.width * 10) / 10 : 0,
+            viewportWidth: window.innerWidth,
+          };
+        }
+        """
+    )
+
+
 def review_section_state(page: Page) -> dict[str, Any]:
     return page.evaluate(
         """
@@ -901,6 +994,7 @@ def run_check(
     overflow = visible_overflow(page)
     mobile_widths = []
     screening_structure = {}
+    screening_candidate_disclosure = {}
     agent_stream_reading = {}
     review_structure = {}
     populated_review_structure = {}
@@ -932,6 +1026,7 @@ def run_check(
         page.locator("#liZongPanel").wait_for(state="hidden")
         page.wait_for_timeout(100)
         restored_state = screening_section_state(page)
+        screening_candidate_disclosure = screening_candidate_disclosure_state(page)
         screening_structure = {
             "default": default_state,
             "loading": loading_state,
@@ -1037,6 +1132,7 @@ def run_check(
         "overflow": overflow,
         "mobile_core_widths": mobile_widths,
         "screening_progressive_disclosure": screening_structure,
+        "screening_candidate_disclosure": screening_candidate_disclosure,
         "agent_stream_reading": agent_stream_reading,
         "review_structure": review_structure,
         "populated_review_structure": populated_review_structure,
@@ -1113,6 +1209,30 @@ def run_check(
             or strategy_state.get("historyDetailsVisible")
         ):
             problems.append("李总策略历史详情没有保持默认折叠")
+    if screening_candidate_disclosure:
+        if not (
+            screening_candidate_disclosure.get("cardCount") == 2
+            and screening_candidate_disclosure.get("coreMetricCounts") == [3, 3]
+            and screening_candidate_disclosure.get("cardDetailsClosed")
+            and screening_candidate_disclosure.get("ruleDetailsClosed")
+        ):
+            problems.append("条件选股候选没有保持三项核心指标与默认折叠")
+        if not (
+            screening_candidate_disclosure.get("firstFullMetricCount", 0) >= 6
+            and screening_candidate_disclosure.get("firstReasonCount") == 3
+            and screening_candidate_disclosure.get("firstSummary") == "查看完整数据与入选依据"
+        ):
+            problems.append("条件选股完整数据或入选依据没有保留在展开区")
+        if not (
+            "近期强于行业" in screening_candidate_disclosure.get("profileTitle", "")
+            and "先核验" in screening_candidate_disclosure.get("firstPrompt", "")
+            and "适合" in screening_candidate_disclosure.get("profileHint", "")
+        ):
+            problems.append("条件选股模板用途或逐股核验提示不可读")
+        if viewport.width <= 390 and float(
+            screening_candidate_disclosure.get("firstCardWidth") or 0
+        ) < 300:
+            problems.append("390px 条件选股候选卡宽度不足")
         if strategy_state.get("sectionLabels") != ["按条件选股", "李总策略"]:
             problems.append("透明选股分区仍使用内部术语或标签顺序异常")
         if strategy_state.get("generalHeading") != "按条件选股":

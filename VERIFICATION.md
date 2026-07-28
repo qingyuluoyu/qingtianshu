@@ -1445,3 +1445,16 @@ uv run pytest
 - `uv run --extra dev pytest -q`：`792 tests collected`，全量通过；唯一提示为Starlette TestClient上游弃用警告。
 - `uv run ruff check .`、`uv run python -m compileall -q app tests scripts`、全部 `app/static/*.js` 的 `node --check`、`uv lock --check` 与 `git diff --check` 全部通过。
 - 运行态：`/health=ok`、Hermes启用、领域库Schema v5、运维库Schema v4、外部Worker 2个；队列ready/delayed/retrying均为0，数据健康53/54、0 critical。
+
+## 2026-07-28 W22 条件选股渐进披露与真实首次路径验收
+
+- 真实进入 `/research?mode=screening` 并执行默认模板，生产数据库返回12只候选。旧页面每张卡同时铺开6项指标、3条重复入选理由和2个动作；锐捷网络真实结果为近20日 `+43.44%`、行业超额 `+65.87%`、PE TTM `204.33`，用户需要自己从密集数字中识别风险。
+- 四个模板的前端名称改为“近期强于行业（波动可能较大）”“经营指标开始改善”“估值处于约束范围”“回撤后等待确认”，选择区同步说明各自适合什么时候使用；后端确定性规则、排序和候选合同没有改变。
+- 候选卡首层按模板只显示3项核心指标：趋势使用20日收益、行业超额与PE；经营改善使用营收同比、净利润同比与ROE；估值模板使用PE、PB与总市值；回撤模板使用20日收益、5日收益与量比。
+- 每张卡新增基于已取得事实的“先核验”说明，不生成推荐、评级或综合分。完整行情、估值、已取得财务指标、逐条入选理由和字段级缺口进入默认关闭的“查看完整数据与入选依据”；左侧实际规则也默认关闭并显示规则条数。
+- 浏览器Runner新增确定性候选夹具，不写数据库、不调用选股POST接口，但在桌面和390px都实际渲染已填充候选卡，并验证每卡3项核心指标、详情和规则默认折叠、完整数据与3条入选理由仍存在、模板用途与核验提示可读、390px候选卡宽度不低于300px。
+- 人工桌面真实数据截图和自动化桌面/390px已填充截图均完成视觉检查；390px候选卡三项指标保持单行，核验提示和两个下一步正常换行，无页面级横向溢出。
+- `artifacts/browser-smoke-w22-screening-disclosure-final/result.json` 为桌面与390px十个核心页面 `20 passed / 0 failed`；控制台错误、页面异常和非预期本地失败响应均为0。
+- 完整回归收集并通过 `822` 项；Ruff、Python `compileall`、全部静态JavaScript、`uv lock --check` 和 `git diff --check` 全部通过。运行态 `/ready=ok`，PostgreSQL领域库Schema v5、队列Schema v4，2个Worker active，ready/delayed/retrying均为0。
+
+当前边界：本轮只改善候选解释和阅读顺序，没有放宽规则、增加黑盒评分或把历史强势包装成推荐。选股结果仍只是下一步研究对象；用户进入个股空间后仍需核验财务、公告、行业变化和反方证据。

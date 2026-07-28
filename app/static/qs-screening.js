@@ -537,6 +537,113 @@ function liZongStatusLabel(value) {
       return explanations[profile.key] || "这些结果只是满足当前筛选条件的研究对象，不是推荐名单。下一步仍需核验财务、公告、行业变化和反方证据。";
     }
 
+    function stockScreenProfilePresentation(profile = {}) {
+      const key = typeof profile === "string" ? profile : profile.key;
+      return {
+        trend: {
+          label: "近期强于行业（波动可能较大）",
+          useCase: "适合发现近期明显强于同行、但仍需要核验上涨驱动的研究对象。"
+        },
+        quality: {
+          label: "经营指标开始改善",
+          useCase: "适合寻找最新财报出现改善线索、准备继续核验持续性和现金流的公司。"
+        },
+        value: {
+          label: "估值处于约束范围",
+          useCase: "适合从估值和市值约束开始缩小范围，再检查低估值形成原因。"
+        },
+        pullback: {
+          label: "回撤后等待确认",
+          useCase: "适合观察回撤后暂时企稳的股票，并区分正常波动与基本面恶化。"
+        }
+      }[key] || {
+        label: profile.label || "研究候选",
+        useCase: "适合先用公开规则缩小研究范围，再逐只核验事实和反方证据。"
+      };
+    }
+
+    function renderStockScreenProfileHint() {
+      const selected = $("stockScreenProfile")?.value || "trend";
+      $("stockScreenProfileHint").textContent = stockScreenProfilePresentation(selected).useCase;
+    }
+
+    function stockScreenCoreMetrics(item, profileKey) {
+      const metrics = item.metrics || {};
+      const financials = item.financials || {};
+      const rows = {
+        trend: [
+          ["近20日", pct(metrics.return_20d_pct)],
+          ["行业超额", pct(metrics.industry_excess_20d_pct)],
+          ["PE TTM", numeric(metrics.pe_ttm)]
+        ],
+        quality: [
+          ["营收同比", pct(financials.revenue_yoy)],
+          ["净利润同比", pct(financials.net_profit_yoy)],
+          ["ROE", pct(financials.roe)]
+        ],
+        value: [
+          ["PE TTM", numeric(metrics.pe_ttm)],
+          ["PB", numeric(metrics.pb)],
+          ["总市值", metrics.total_mv_yi == null ? "—" : `${numeric(metrics.total_mv_yi)}亿`]
+        ],
+        pullback: [
+          ["近20日", pct(metrics.return_20d_pct)],
+          ["近5日", pct(metrics.return_5d_pct)],
+          ["量比", numeric(metrics.volume_ratio)]
+        ]
+      };
+      return rows[profileKey] || rows.trend;
+    }
+
+    function stockScreenFullMetrics(item) {
+      const metrics = item.metrics || {};
+      const financials = item.financials || {};
+      const marketRows = [
+        ["近5日", pct(metrics.return_5d_pct)],
+        ["近20日", pct(metrics.return_20d_pct)],
+        ["行业超额", pct(metrics.industry_excess_20d_pct)],
+        ["PE TTM", numeric(metrics.pe_ttm)],
+        ["PB", numeric(metrics.pb)],
+        ["总市值", metrics.total_mv_yi == null ? "—" : `${numeric(metrics.total_mv_yi)}亿`]
+      ];
+      const financialRows = [
+        ["营收同比", financials.revenue_yoy],
+        ["净利润同比", financials.net_profit_yoy],
+        ["ROE", financials.roe],
+        ["毛利率", financials.gross_margin],
+        ["净利率", financials.net_margin],
+        ["资产负债率", financials.debt_to_assets]
+      ].filter(([, value]) => value != null).map(([label, value]) => [label, pct(value)]);
+      return [...marketRows, ...financialRows];
+    }
+
+    function stockScreenCandidatePrompt(item, profileKey) {
+      const metrics = item.metrics || {};
+      const financials = item.financials || {};
+      if (profileKey === "quality") {
+        return `最新财报营收同比 ${pct(financials.revenue_yoy)}、净利润同比 ${pct(financials.net_profit_yoy)}；还要核验现金流、改善持续性和一次性因素。`;
+      }
+      if (profileKey === "value") {
+        return `当前 PE TTM ${numeric(metrics.pe_ttm)}、PB ${numeric(metrics.pb)}；命中估值约束不代表低估，需要继续核验盈利质量和负债。`;
+      }
+      if (profileKey === "pullback") {
+        return `近20日 ${pct(metrics.return_20d_pct)}、近5日 ${pct(metrics.return_5d_pct)}；先确认回撤原因和企稳条件是否仍成立。`;
+      }
+      return `近20日 ${pct(metrics.return_20d_pct)}、相对行业 ${pct(metrics.industry_excess_20d_pct)}；先核验上涨驱动、业绩支撑和趋势转弱时的回撤风险。`;
+    }
+
+    function appendStockScreenMetrics(container, rows, className = "") {
+      const metrics = document.createElement("div");
+      metrics.className = `screener-metrics ${className}`.trim();
+      rows.forEach(([label, value]) => {
+        const metric = document.createElement("div"); metric.className = "screener-metric";
+        const labelNode = document.createElement("span"); labelNode.textContent = label;
+        const valueNode = document.createElement("strong"); valueNode.textContent = value;
+        metric.append(labelNode, valueNode); metrics.appendChild(metric);
+      });
+      container.appendChild(metrics);
+    }
+
     function renderStockScreenExplanation(profile = {}) {
       const container = $("stockScreenExplanation");
       container.innerHTML = "";
@@ -553,7 +660,8 @@ function liZongStatusLabel(value) {
       const contract = payload?.data_contract || {};
       const coverage = contract.coverage || {};
       const items = payload?.items || [];
-      $("stockScreenTitle").textContent = profile.label || "研究候选";
+      const presentation = stockScreenProfilePresentation(profile);
+      $("stockScreenTitle").textContent = presentation.label;
       $("stockScreenCountBadge").textContent = `${items.length} 只`;
       const periods = meta.financial_report_periods || [];
       const snapshotCoverage = coverage.market_snapshot || {};
@@ -591,7 +699,8 @@ function liZongStatusLabel(value) {
       $("stockScreenBoundary").textContent = payload?.boundary || "这是可解释的研究候选筛选，不构成推荐、评级、目标价或交易建议。";
 
       const rules = $("stockScreenRules"); rules.innerHTML = "";
-      (payload?.rules || []).slice(0, 10).forEach(rule => {
+      const visibleRules = (payload?.rules || []).slice(0, 10);
+      visibleRules.forEach(rule => {
         const node = document.createElement("div"); node.className = "screener-rule";
         node.textContent = `${rule.field} ${rule.operator} ${rule.value}${rule.unit || ""}`;
         node.title = rule.reason || "确定性筛选条件";
@@ -600,6 +709,8 @@ function liZongStatusLabel(value) {
       if (!rules.childElementCount) {
         const node = document.createElement("div"); node.className = "screener-rule"; node.textContent = "当前规则正在整理。"; rules.appendChild(node);
       }
+      $("stockScreenRuleSummary").textContent = visibleRules.length ? `查看实际生效规则（${visibleRules.length} 条）` : "查看实际生效规则";
+      $("stockScreenRuleDetails").open = false;
 
       const container = $("stockScreenResults"); container.innerHTML = "";
       if (!items.length) {
@@ -620,28 +731,22 @@ function liZongStatusLabel(value) {
         period.textContent = item.financials?.report_period ? `财务报告期\n${item.financials.report_period}` : "财务报告期\n待补充";
         head.append(identity, period); card.appendChild(head);
 
-        const metricRows = [
-          ["近5日", pct(item.metrics?.return_5d_pct)],
-          ["近20日", pct(item.metrics?.return_20d_pct)],
-          ["行业超额", pct(item.metrics?.industry_excess_20d_pct)],
-          ["PE TTM", numeric(item.metrics?.pe_ttm)],
-          ["PB", numeric(item.metrics?.pb)],
-          ["总市值", item.metrics?.total_mv_yi == null ? "—" : `${numeric(item.metrics.total_mv_yi)}亿`]
-        ];
-        const metrics = document.createElement("div"); metrics.className = "screener-metrics";
-        metricRows.forEach(([label, value]) => {
-          const metric = document.createElement("div"); metric.className = "screener-metric";
-          const labelNode = document.createElement("span"); labelNode.textContent = label;
-          const valueNode = document.createElement("strong"); valueNode.textContent = value;
-          metric.append(labelNode, valueNode); metrics.appendChild(metric);
-        });
-        card.appendChild(metrics);
+        appendStockScreenMetrics(card, stockScreenCoreMetrics(item, profile.key), "screener-metrics-core");
 
+        const prompt = document.createElement("div"); prompt.className = "screener-candidate-prompt";
+        const promptTitle = document.createElement("strong"); promptTitle.textContent = "先核验";
+        const promptCopy = document.createElement("span"); promptCopy.textContent = stockScreenCandidatePrompt(item, profile.key);
+        prompt.append(promptTitle, promptCopy); card.appendChild(prompt);
+
+        const detail = document.createElement("details"); detail.className = "screener-card-details";
+        const summary = document.createElement("summary"); summary.textContent = "查看完整数据与入选依据";
+        const detailBody = document.createElement("div"); detailBody.className = "screener-card-detail-body";
+        appendStockScreenMetrics(detailBody, stockScreenFullMetrics(item), "screener-metrics-full");
         const reasonsTitle = document.createElement("div"); reasonsTitle.className = "screener-reasons-title"; reasonsTitle.textContent = "为什么出现在这里";
-        card.appendChild(reasonsTitle);
+        detailBody.appendChild(reasonsTitle);
         const reasons = document.createElement("ul"); reasons.className = "screener-reasons";
         (item.matched_reasons || []).slice(0, 4).forEach(value => { const li = document.createElement("li"); li.textContent = value; reasons.appendChild(li); });
-        card.appendChild(reasons);
+        detailBody.appendChild(reasons);
         if (item.missing_fields?.length) {
           const missing = document.createElement("div"); missing.className = "screener-missing";
           const reasonByField = new Map((item.missing_reasons || []).map(entry => [entry.field, entry.reason]));
@@ -649,11 +754,12 @@ function liZongStatusLabel(value) {
             const reason = reasonByField.get(field);
             return `${stockScreenFieldLabel(field)}${reason ? `（${reason}）` : ""}`;
           }).join("；")}`;
-          card.appendChild(missing);
+          detailBody.appendChild(missing);
         }
+        detail.append(summary, detailBody); card.appendChild(detail);
         const entryContext = {
           source_kind: "stock_screen",
-          source_label: profile.label || "研究候选筛选",
+          source_label: presentation.label,
           display_name: item.name,
           profile_key: profile.key,
           as_of_date: meta.latest_completed_trade_date,
@@ -723,7 +829,7 @@ function liZongStatusLabel(value) {
             symbol: item.internal_symbol,
             name: item.name,
             market: "A股",
-            thesis: `由${sourceLabel || state.stockScreener?.profile?.label || "研究候选筛选"}进入关注；需要继续核验财务、公告和反方证据。`
+            thesis: `由${sourceLabel || stockScreenProfilePresentation(state.stockScreener?.profile || {}).label}进入关注；需要继续核验财务、公告和反方证据。`
           })
         });
         button.textContent = "已加入关注";
