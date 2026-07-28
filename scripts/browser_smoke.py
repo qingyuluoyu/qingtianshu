@@ -699,7 +699,8 @@ def agent_quick_actions_state(page: Page) -> dict[str, Any]:
               const root = document.querySelector("#quickActions");
               const buttons = [...root.querySelectorAll("button")];
               const visibleButtons = buttons.filter(node => !node.hidden);
-              const labels = [...root.querySelectorAll(".quick-actions-label")];
+              const labels = [...root.querySelectorAll(".quick-actions-label")]
+                .filter(node => node.closest(".quick-action-group")?.hidden !== true);
               return {
                 expanded: root.classList.contains("expanded"),
                 groupLabels: labels.map(node => node.textContent?.trim() || ""),

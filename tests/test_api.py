@@ -983,7 +983,8 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "公司对比" not in frontend
     assert "跟踪变化" not in frontend
     assert 'aria-label="市场总览"' in frontend
-    assert 'aria-label="AI投研对话"' in frontend
+    assert 'aria-label="金融顾问"' in frontend
+    assert 'aria-label="透明选股"' in frontend
     assert 'aria-label="金融资料库"' in frontend
     assert 'aria-label="我的关注"' in frontend
     assert 'aria-label="个股研究"' in frontend
@@ -1043,13 +1044,19 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "/v1/stocks/${encodeURIComponent(symbol)}/theses" in thesis_editor
     assert "base_version: editBaseVersion" in thesis_editor
     assert "正式判断已在其他页面更新" in thesis_editor
-    assert frontend.count('class="nav-item') == 6
+    assert frontend.count('class="nav-item') == 7
     assert (
-        frontend.index('data-page="watchlist"')
+        frontend.index('data-page="screening"')
+        < frontend.index('data-page="watchlist"')
         < frontend.index('data-page="deep_stock"')
         < frontend.index('data-page="agent"')
+        < frontend.index('data-page="review"')
+        < frontend.index('data-page="account"')
     )
-    assert 'data-page="screening" aria-label="选股研究"' not in frontend
+    assert 'data-page="screening" aria-label="透明选股"' in frontend
+    assert 'page === "screening" ? "agent" : page' not in frontend
+    assert 'grid-template-columns: repeat(7, minmax(72px,1fr))' in frontend
+    assert 'grid-template-columns: repeat(3,minmax(0,1fr))' in frontend
     assert 'data-open-page="screening"' in frontend
     assert 'id="accountPanel"' in frontend
     assert '<div class="panel-title">我的研究空间</div>' in frontend

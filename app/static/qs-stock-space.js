@@ -98,7 +98,7 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
       const conversation = document.createElement("article"); conversation.className = "stock-history-card";
       const conversationTitle = document.createElement("div"); conversationTitle.className = "stock-history-title"; conversationTitle.textContent = session ? "绑定的研究对话" : "尚未建立绑定对话";
       const conversationCopy = document.createElement("div"); conversationCopy.className = "stock-history-copy";
-      conversationCopy.textContent = session ? `${session.conversation?.message_count || 0} 条消息，七阶段问题会进入同一历史会话，方便连续追问和复核。` : "建立研究空间后，AI投研对话会绑定一个可长期保存的历史对话。";
+      conversationCopy.textContent = session ? `${session.conversation?.message_count || 0} 条消息，七阶段问题会进入同一历史会话，方便连续追问和复核。` : "建立研究空间后，金融顾问会绑定一个可长期保存的历史对话。";
       conversation.append(conversationTitle, conversationCopy);
       if (session) {
         const actions = document.createElement("div"); actions.className = "stock-workspace-actions";

@@ -26,6 +26,7 @@ def test_browser_smoke_runner_covers_desktop_mobile_and_core_routes() -> None:
         "screening_candidate_disclosure_state",
         "agent_landing_state",
         "agent_quick_actions_state",
+        'node.closest(".quick-action-group")?.hidden !== true',
         "agent_conversation_scope_state",
         "agent_stream_reading_state",
         "review_section_state",

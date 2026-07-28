@@ -43,12 +43,17 @@ def test_market_diagnosis_keeps_agent_and_live_dates_separate() -> None:
 
 def test_mobile_navigation_scrolls_active_page_into_view() -> None:
     workspace = (STATIC / "qs-workspace.js").read_text(encoding="utf-8")
+    page = (STATIC / "demo.html").read_text(encoding="utf-8")
     styles = (STATIC / "demo.css").read_text(encoding="utf-8")
 
     assert 'window.matchMedia("(max-width: 600px)").matches' in workspace
     assert "centeredLeft" in workspace
     assert "mobileNavigation.scrollLeft" in workspace
     assert "scrollbar-width: none" in styles
+    assert page.count('class="nav-item') == 7
+    assert 'data-page="screening" aria-label="透明选股"' in page
+    assert 'data-page="agent" aria-label="金融顾问"' in page
+    assert "grid-template-columns: repeat(3,minmax(0,1fr))" in styles
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is required")

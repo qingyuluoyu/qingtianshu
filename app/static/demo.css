@@ -796,7 +796,7 @@
       .sidebar { position: static; height: auto; padding: 8px 10px; flex-direction: row; align-items: center; gap: 6px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); scrollbar-width: none; scroll-behavior: smooth; }
       .sidebar::-webkit-scrollbar { display: none; }
       .sidebar .brand, .sidebar-spacer, .sidebar-foot, .nav-label { display: none; }
-      .sidebar-nav { flex: 1; display: grid; grid-template-columns: repeat(6, minmax(72px,1fr)); gap: 3px; min-width: 470px; }
+      .sidebar-nav { flex: 1; display: grid; grid-template-columns: repeat(7, minmax(72px,1fr)); gap: 3px; min-width: 548px; }
       .new-chat { width: 42px; min-width: 42px; padding: 9px; }
       .nav-item { min-width: 0; padding: 9px 5px; text-align: center; white-space: nowrap; font-size: 10px; scroll-margin-inline: 18px; }
       .sidebar .nav-text { display: inline; }
@@ -2097,7 +2097,7 @@
       .watchlist-manage-menu { right: auto; left: 0; }
     }
 
-    /* Demo hotfix: keep every primary destination visible in narrow embedded browsers. */
+    /* Keep all seven primary destinations visible in narrow embedded browsers. */
     @media (max-width: 600px) {
       .sidebar { overflow-x: hidden; }
       .sidebar-resource-btn { display: none; }
@@ -2137,6 +2137,62 @@
         font-size: 10px;
       }
     }
+
+    /* W24 readability pass: user-facing research evidence must remain legible. */
+    .conversation-search-box input { font-size: 12px; }
+    .conversation-scope-select,
+    .conversation-filter-meta,
+    .conversation-meta,
+    .conversation-date-heading,
+    .conversation-duplicate-toggle { font-size: 11px; }
+    .conversation-filter-empty { font-size: 12px; }
+    .conversation-duplicates .conversation-meta { font-size: 10px; }
+    .workspace-subtitle,
+    .panel-subtitle { font-size: 12px; line-height: 1.55; }
+    .deep-current-stage-label,
+    .deep-stage-index { font-size: 12px; }
+    .deep-stage-state,
+    .deep-stage-review,
+    .deep-stage-action { font-size: 11px; }
+    .deep-stage-copy,
+    .deep-stock-card-copy,
+    .deep-stock-list { font-size: 12px; }
+    .evidence-coverage-status,
+    .evidence-layer-detail,
+    .evidence-layer-label { font-size: 11px; }
+    .evidence-coverage-copy,
+    .evidence-layer-values,
+    .evidence-coverage-boundary { font-size: 12px; }
+    .li-zong-state { font-size: 12px; }
+    .li-zong-stat span,
+    .li-zong-badge,
+    .li-zong-metric span,
+    .li-zong-backtest-periods button,
+    .li-zong-backtest-progress,
+    .li-zong-backtest-metrics span,
+    .li-zong-backtest-rebalance strong,
+    .li-zong-backtest-rebalance span,
+    .li-zong-backtest-rebalance small,
+    .li-zong-backtest-boundary,
+    .li-zong-history-coverage,
+    .li-zong-history-toggle,
+    .li-zong-funnel-step span,
+    .li-zong-funnel-step small,
+    .li-zong-history-meta,
+    .li-zong-history-horizon span,
+    .li-zong-history-horizon small,
+    .li-zong-history-legend { font-size: 11px; }
+    .li-zong-copy,
+    .li-zong-limitations,
+    .li-zong-history-copy { font-size: 12px; }
+    .agent-progress-label,
+    .message-source-kind,
+    .message-source-meta { font-size: 11px; }
+    .agent-progress-boundary,
+    .message-source-copy { font-size: 12px; }
+    .live-instrument,
+    .stock-detail-symbol,
+    .qs-kline-legend { font-size: 11px; }
 
     /* Fund comparison and user-confirmed suitability facts. */
     body.agent-page #agentSection .agent-entry-hub { grid-template-columns: repeat(4,minmax(0,1fr)); }

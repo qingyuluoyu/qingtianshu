@@ -94,8 +94,8 @@ function readWorkspaceRoute() {
       const pages = {
         insights: ["市场总览", "全球行情、A股全景、行业轮动与个人研究脉冲"],
         search: ["搜索", "查找股票、行业和已保存的个人研究资产"],
-        agent: ["AI 投研对话", "连续对话、历史研究、自动 K 线与证据链"],
-        screening: ["AI 研究 · 透明选股", "用确定性规则生成可解释研究候选，再进入个股空间继续核验"],
+        agent: ["金融顾问", "连续对话、历史研究、自动 K 线与证据链"],
+        screening: ["透明选股", "用确定性规则生成可解释研究候选，再进入个股空间继续核验"],
         deep_stock: ["个股研究", "围绕一只股票持续保存判断、变化、证据、任务、对话和报告"],
         watchlist: ["我的关注", "按关系、优先级和跟踪状态管理长期股票研究资产"],
         knowledge: ["金融资料库", "集中查看通用研究资料与个人资料，并管理可被 Agent 检索的内容"],
@@ -125,10 +125,9 @@ function readWorkspaceRoute() {
       document.body.classList.toggle("review-page", page === "review");
       $("workspaceTitle").textContent = pages[page][0];
       $("workspaceSubtitle").textContent = pages[page][1];
-      const activeNavigationPage = page === "screening" ? "agent" : page;
       let activeNavigationButton = null;
       for (const button of document.querySelectorAll(".nav-item[data-page]")) {
-        const active = button.dataset.page === activeNavigationPage;
+        const active = button.dataset.page === page;
         button.classList.toggle("active", active);
         if (active) activeNavigationButton = button;
       }
