@@ -986,7 +986,11 @@
             <div class="message agent">你好，我是清数智算。你可以直接问市场、个股、基金、ETF、财报或理财常识；我会结合实时证据、研究资料和金融知识，先回答问题，再解释关键依据、风险和适合条件。</div>
           </div>
           <div id="quickActions" class="quick-actions" aria-label="快捷研究入口">
-            <div class="quick-action-group">
+            <div id="stockQuickActionGroup" class="quick-action-group stock-quick-action-group" hidden>
+              <span class="quick-actions-label">研究这只股票</span>
+              <div id="stockQuickActionButtons" class="quick-action-buttons"></div>
+            </div>
+            <div class="quick-action-group" data-quick-general>
               <span class="quick-actions-label">常用问题</span>
               <div class="quick-action-buttons">
                 <button class="chip" data-message="今天A股怎么样？请基于最新可用的主要指数、全市场涨跌家数、成交额和行业表现，用普通投资者能看懂的话直接回答；不同交易日的数据要明确说明。">大盘解读</button>
@@ -996,7 +1000,7 @@
                 <button class="chip" data-message="基金和ETF有什么区别？如果我是刚开始理财的普通投资者，应该根据哪些条件选择？信息不足时请先给选择逻辑，不要替我下结论。">基金与 ETF</button>
               </div>
             </div>
-            <div class="quick-action-group quick-action-group-tools">
+            <div class="quick-action-group quick-action-group-tools" data-quick-general>
               <span class="quick-actions-label">专项工具</span>
               <div class="quick-action-buttons">
                 <button id="earningsQualityAction" class="chip">财报公告</button>

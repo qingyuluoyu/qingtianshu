@@ -468,6 +468,19 @@ stock_workspace_context.research_entry 是用户从条件选股或李总策略�
 """
     if (
         intent == "stock_screen"
+        and (prompt_evidence.get("profile") or {}).get("key") != "li_zong"
+    ):
+        prompt += """
+
+## 通用选股范围要求
+
+必须先读取 data_contract.representation。只有 represents_full_market=true 时，才可将空结果
+表述为当前规则下的全部A股结论；否则必须使用 actual_scope_label，说明行情覆盖与财务核验范围，
+并明确结果只代表当前已覆盖范围。没有候选时，不得默认要求用户放宽规则，也不得把财务字段缺失
+写成股票不符合条件。候选是下一步研究对象，不是推荐、排名或未来涨跌判断。
+"""
+    if (
+        intent == "stock_screen"
         and (prompt_evidence.get("profile") or {}).get("key") == "li_zong"
     ):
         prompt += """

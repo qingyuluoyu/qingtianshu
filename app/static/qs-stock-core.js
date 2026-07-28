@@ -142,6 +142,9 @@ function refreshDeepStockSymbolOptions() {
         pane.hidden = pane.dataset.stockSpacePane !== tabKey;
       });
       syncAgentPlacement();
+      if (typeof syncBoundStockQuickActions === "function") {
+        syncBoundStockQuickActions(state.deepStock);
+      }
       if (
         tabKey === "ai"
         && state.workspacePage === "deep_stock"

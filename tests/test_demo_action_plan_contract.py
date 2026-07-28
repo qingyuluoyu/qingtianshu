@@ -233,6 +233,25 @@ def test_demo_restores_agent_route_before_loading_unrelated_dashboards() -> None
     )
 
 
+def test_demo_releases_global_event_stream_in_hidden_tabs() -> None:
+    page = frontend_source()
+    section = _function_section(
+        page, "let serverEventStream = null;", "async function refineChat"
+    )
+
+    for fragment in (
+        'if (document.visibilityState === "hidden" || serverEventStream) return;',
+        "serverEventStream = stream;",
+        'document.addEventListener("visibilitychange"',
+        'if (document.visibilityState === "hidden") closeServerEvents();',
+        'window.addEventListener("pagehide", closeServerEvents);',
+        'window.addEventListener("pageshow", openServerEvents);',
+        "serverEventStream.close();",
+        "serverEventStream = null;",
+    ):
+        assert fragment in section
+
+
 def test_demo_loads_li_zong_route_before_unrelated_dashboards() -> None:
     page = frontend_source()
     boot_section = page[page.index("state.workspaceBootPromise =") :]
@@ -352,13 +371,51 @@ def test_demo_displays_stock_screen_data_contract_and_missing_reasons() -> None:
 
     for fragment in (
         "const contract = payload?.data_contract || {};",
+        "const representation = contract.representation || {};",
+        "const scopeLabel = representation.actual_scope_label",
+        "representation.represents_requested_scope === true",
         "股票池 ${Number(snapshotCoverage.available || 0)",
         'coverageLabel("估值", coverage.valuation)',
         'coverageLabel("20日收益", coverage.return_20d)',
         "数据覆盖 ${coverageSummary}",
         "数据版本 ${dataVersion.slice(-8)}",
+        "这不等于全市场没有候选",
         "item.missing_reasons || []",
         "数据缺口：",
+    ):
+        assert fragment in section
+    assert "建议一次只放宽一项规则" not in section
+
+
+def test_bound_stock_agent_uses_profile_questions_without_leaving_stock_page() -> None:
+    page = frontend_source()
+
+    for fragment in (
+        'id="stockQuickActionGroup"',
+        "function boundStockQuickQuestions(session)",
+        'quality: [',
+        'trend: [',
+        'value: [',
+        'pullback: [',
+        "为什么入选",
+        "为何强于行业",
+        "低估还是变差",
+        "回撤原因",
+        'if (!stockAgentIsEmbedded()) activateWorkspace("agent");',
+    ):
+        assert fragment in page
+
+
+def test_stock_research_route_keeps_current_stage_visible_and_folds_full_route() -> None:
+    page = frontend_source()
+    section = _function_section(page, "function renderDeepStock", "async function startDeepStockSession")
+
+    for fragment in (
+        'focus.className = "deep-current-stage"',
+        'focusLabel.textContent = currentStage.status === "needs_review"',
+        'focusQuestion.textContent = session.next_question',
+        'stageDetails.className = "deep-stage-details"',
+        "查看完整研究路线（${session.stages?.length || 7} 个阶段）",
     ):
         assert fragment in section
 

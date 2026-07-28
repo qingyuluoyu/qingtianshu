@@ -115,6 +115,7 @@ def render_stock_preview(
         data_contract = evidence.get("data_contract") or {}
         contract_as_of = data_contract.get("as_of") or {}
         coverage = data_contract.get("coverage") or {}
+        representation = data_contract.get("representation") or {}
         snapshot = coverage.get("market_snapshot") or {}
         market_date = (
             contract_as_of.get("market_date")
@@ -134,10 +135,13 @@ def render_stock_preview(
             if expected
             else "股票池覆盖待确认"
         )
-        scope_boundary = (
+        scope_boundary = str(representation.get("note") or "").strip() or (
             "结果只代表本轮已覆盖范围，不能外推为全市场结论。"
             if expected and available_count < expected
             else "本轮股票池行情快照已完整覆盖。"
+        )
+        actual_scope_label = str(
+            representation.get("actual_scope_label") or "本轮股票池"
         )
         if evidence.get("status") == "unavailable":
             return (
@@ -148,15 +152,15 @@ def render_stock_preview(
             return (
                 f"本次使用“{profile.get('label') or '研究候选'}”规则，"
                 f"行情交易日为 {market_date}，{coverage_text}，数据版本 {data_version}。"
-                f"{scope_boundary}"
-                "当前覆盖范围内没有股票同时满足全部条件。建议一次只放宽一项规则再筛选，"
-                "避免把多项条件同时移除后失去研究边界。\n\n"
+                f"实际范围为{actual_scope_label}。{scope_boundary}"
+                "按当前规则未命中候选；系统不会默认建议放宽规则。\n\n"
                 f"{evidence.get('boundary') or '研究候选筛选，不构成推荐或交易建议。'}"
             )
         lines = [
             f"本次使用“{profile.get('label') or '研究候选'}”规则，"
             f"行情交易日为 {market_date}，{coverage_text}，数据版本 {data_version}；"
-            f"当前得到 {len(items)} 只研究候选。{scope_boundary}"
+            f"实际范围为{actual_scope_label}，当前得到 {len(items)} 只研究候选。"
+            f"{scope_boundary}"
             f"{profile.get('sort_rule') or ''}",
             "",
         ]

@@ -168,6 +168,15 @@
     .deep-stock-progress-meta { color: var(--muted); font-size: 11px; line-height: 1.6; }
     .deep-stock-track { height: 7px; margin-top: 12px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.06); }
     .deep-stock-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #55dbb6, #70a7ff); }
+    .deep-current-stage { padding: 16px; border: 1px solid rgba(112,167,255,.28); border-radius: 14px; background: rgba(112,167,255,.065); }
+    .deep-current-stage-label { color: #70a7ff; font-size: 10px; font-weight: 780; letter-spacing: .04em; }
+    .deep-current-stage strong { display: block; margin-top: 6px; color: var(--text); font-size: 16px; }
+    .deep-current-stage p { margin: 7px 0 0; color: var(--muted); font-size: 11px; line-height: 1.65; }
+    .deep-current-question { width: 100%; margin-top: 11px; padding: 10px 11px; border: 1px solid rgba(112,167,255,.3); border-radius: 10px; color: #cfe0ff; background: rgba(112,167,255,.09); font: inherit; font-size: 11px; line-height: 1.55; text-align: left; }
+    .deep-stage-details { overflow: hidden; border: 1px solid rgba(255,255,255,.065); border-radius: 13px; background: rgba(255,255,255,.02); }
+    .deep-stage-details > summary { padding: 12px 14px; color: var(--muted); font-size: 11px; font-weight: 720; cursor: pointer; }
+    .deep-stage-details[open] > summary { border-bottom: 1px solid rgba(255,255,255,.065); }
+    .deep-stage-details .deep-stage-list { padding: 10px; }
     .deep-stage-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 9px; }
     .deep-stage { min-width: 0; padding: 13px; border: 1px solid rgba(255,255,255,.065); border-radius: 13px; background: rgba(255,255,255,.025); }
     .deep-stage.in_progress { border-color: rgba(112,167,255,.32); background: rgba(112,167,255,.07); }
@@ -1641,6 +1650,7 @@
     body.agent-page #agentSection .quick-actions { grid-column: 1; grid-row: 4; display: grid; gap: 7px; overflow: hidden; padding: 8px 18px; border-top: 1px solid var(--line); background: #fff; }
     body.agent-page #agentSection .quick-actions.expanded { max-height: 168px; overflow-y: auto; scrollbar-gutter: stable; }
     .quick-action-group { min-width: 0; display: grid; grid-template-columns: 66px minmax(0,1fr); gap: 9px; align-items: start; }
+    .quick-action-group[hidden] { display: none !important; }
     .quick-action-buttons { min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; }
     body.agent-page #agentSection .quick-actions .chip { flex: 0 0 auto; min-height: 30px; padding: 7px 10px; border-color: #d7e0ec; color: #536781; background: #fff; font-size: 12px; line-height: 1.2; }
     body.agent-page #agentSection .quick-actions .chip:hover { border-color: #9ebbf2; color: #245dbd; background: #f5f8ff; }
@@ -1841,6 +1851,7 @@
     body.stock-agent-page #agentSection .conversation-switcher { display: none !important; }
     body.stock-agent-page #agentSection .agent-research-actions [data-open-page="deep_stock"] { display: none; }
     body.stock-agent-page #agentSection .research-mode-switch { display: none; }
+    body.stock-agent-page #agentSection .stock-quick-action-group { grid-template-columns: 92px minmax(0,1fr); }
     [data-review-whitebox][hidden] { display: none !important; }
     @media (max-width: 760px) {
       .search-page-list { grid-template-columns: 1fr; }
@@ -1880,6 +1891,15 @@
     .panel-head { padding: 16px 18px; }
     .panel-title { color: #1f304b; font-size: 16px; }
     .btn { border-radius: 9px; }
+    .deep-current-stage { border-color: #c9dafe; background: #f5f8ff; }
+    .deep-current-stage-label { color: #356dcc; }
+    .deep-current-stage strong { color: #24364f; }
+    .deep-current-stage p { color: #6d7c91; }
+    .deep-current-question { border-color: #c6d8fb; color: #285fae; background: #edf4ff; }
+    .deep-current-question:hover, .deep-current-question:focus-visible { border-color: #8eb3fa; background: #e5efff; outline: none; }
+    .deep-stage-details { border-color: #dfe6f0; background: #fff; }
+    .deep-stage-details > summary { color: #52657f; }
+    .deep-stage-details[open] > summary { border-color: #e6ebf2; }
 
     /* Market facts lead the page; personal research work follows without duplication. */
     #homeFocus { display: none !important; }

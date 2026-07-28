@@ -79,6 +79,9 @@ function readWorkspaceRoute() {
       agent.hidden = !visible;
       document.body.classList.toggle("agent-page", visible);
       document.body.classList.toggle("stock-agent-page", embedded);
+      if (typeof syncBoundStockQuickActions === "function") {
+        syncBoundStockQuickActions(state.deepStock);
+      }
     }
 
     function syncReviewModeVisibility() {

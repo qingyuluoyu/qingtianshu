@@ -926,7 +926,8 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "本次研究入口" in frontend
     assert "筛选线索待确认" in frontend
     assert "error?.status === 503" in frontend
-    assert "服务器尚未配置选股数据" in frontend
+    assert "完整股票范围正在同步" in frontend
+    assert "页面不会用不完整范围冒充全市场结论" in frontend
     assert "⊕ 添加图片" in frontend
     assert "AI 图像研究" in frontend
     assert 'api("/me/uploads/images"' in frontend

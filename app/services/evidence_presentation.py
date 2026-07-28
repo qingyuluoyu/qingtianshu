@@ -311,6 +311,7 @@ def build_visible_evidence_sources(
         data_contract = packet.get("data_contract") or {}
         contract_as_of = data_contract.get("as_of") or {}
         contract_coverage = data_contract.get("coverage") or {}
+        representation = data_contract.get("representation") or {}
         snapshot_coverage = contract_coverage.get("market_snapshot") or {}
         screen_date = contract_as_of.get("market_date") or (
             packet.get("data_meta") or {}
@@ -321,6 +322,17 @@ def build_visible_evidence_sources(
         if snapshot_expected:
             scope_parts.append(
                 f"股票池覆盖 {snapshot_available}/{snapshot_expected} 只"
+            )
+        if representation.get("actual_scope_label"):
+            scope_parts.append(
+                f"实际范围 {representation['actual_scope_label']}"
+            )
+        financial_coverage = contract_coverage.get("financial_candidate_pool") or {}
+        if financial_coverage.get("expected"):
+            scope_parts.append(
+                "财务核验 "
+                f"{int(financial_coverage.get('available') or 0)}/"
+                f"{int(financial_coverage.get('expected') or 0)} 只"
             )
         if data_contract.get("data_version"):
             scope_parts.append(f"数据版本 {data_contract['data_version']}")

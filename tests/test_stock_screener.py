@@ -254,6 +254,18 @@ class FakePersistedSnapshotDatabase:
         return {"scope_key": internal, "payload": {"rows": rows}}
 
 
+class UndercoveredPersistedSnapshotDatabase(FakePersistedSnapshotDatabase):
+    def latest_tushare_dataset_snapshot(self, dataset: str, scope_key: str):
+        if dataset == "a_share_universe" and scope_key == "all":
+            return {"payload": {"coverage": {"listed": 100}}}
+        return super().latest_tushare_dataset_snapshot(dataset, scope_key)
+
+
+class UnavailableLiveClient:
+    def query(self, api_name: str, **_params):
+        raise RuntimeError(f"{api_name} unavailable")
+
+
 def test_quality_screen_is_transparent_and_has_separate_data_dates():
     fake = FakeTushareClient()
     service = StockScreenerService(fake, snapshot_ttl_seconds=600)
@@ -273,6 +285,16 @@ def test_quality_screen_is_transparent_and_has_separate_data_dates():
         "missing": 0,
         "ratio": 1.0,
     }
+    assert result["data_contract"]["representation"] == {
+        "actual_scope_label": "全部A股",
+        "coverage_status": "complete",
+        "represents_requested_scope": True,
+        "represents_full_market": True,
+        "minimum_coverage_ratio": 0.95,
+        "note": "本轮数据足以代表所选范围的确定性规则计算。",
+    }
+    assert result["universe"]["financial_candidate_pool"] == 4
+    assert result["universe"]["financials_checked"] == 4
     assert result["items"][0]["name"] == "中际旭创"
     assert result["items"][0]["evidence_times"] == {
         "market_date": "2026-07-21",
@@ -315,6 +337,45 @@ def test_persisted_database_snapshot_keeps_screener_usable_without_live_provider
     assert {item["name"] for item in result["items"]} == {"中兴通讯", "浦发银行"}
     assert all(item["financials"]["report_period"] == "2026-03-31" for item in result["items"])
     assert "生产数据库" in result["warnings"][0]
+
+
+def test_undercovered_persisted_snapshot_switches_to_live_full_market_data():
+    live = FakeTushareClient()
+    service = StockScreenerService(
+        live,
+        database=UndercoveredPersistedSnapshotDatabase(),
+        snapshot_ttl_seconds=600,
+    )
+
+    result = service.screen(profile="trend", max_results=3)
+
+    assert result["data_meta"]["source_mode"] == "live"
+    assert result["data_contract"]["coverage"]["market_snapshot"]["ratio"] == 1.0
+    assert result["data_contract"]["representation"]["represents_full_market"] is True
+    assert live.calls["stock_basic"] == 1
+
+
+def test_undercovered_persisted_fallback_never_claims_an_empty_full_market_result():
+    service = StockScreenerService(
+        UnavailableLiveClient(),
+        database=UndercoveredPersistedSnapshotDatabase(),
+        snapshot_ttl_seconds=600,
+    )
+
+    result = service.screen(
+        profile="value",
+        max_results=3,
+        filters={"min_market_cap_yi": 10_000},
+    )
+
+    assert result["status"] == "empty"
+    assert result["data_meta"]["coverage_status"] == "constrained"
+    assert result["data_contract"]["representation"]["represents_full_market"] is False
+    assert result["data_contract"]["representation"]["actual_scope_label"] == (
+        "已同步A股 4/100 只"
+    )
+    assert "这不等于全市场没有候选" in result["warnings"][-1]
+    assert all("放宽" not in warning for warning in result["warnings"])
 
 
 def test_stock_screener_api_requires_user_and_returns_deterministic_candidates(app):
@@ -508,6 +569,37 @@ def test_stock_screen_guard_rejects_full_market_claim_when_snapshot_is_incomplet
         overclaim["unsupported_market_inferences"]
     )
     assert scoped["passed"] is True
+
+
+def test_stock_screen_guard_uses_financial_representation_not_only_market_rows():
+    evidence = {
+        "type": "stock_screen",
+        "profile": {"key": "quality", "label": "经营改善候选"},
+        "data_contract": {
+            "coverage": {
+                "market_snapshot": {
+                    "available": 5530,
+                    "expected": 5530,
+                    "missing": 0,
+                    "ratio": 1.0,
+                }
+            },
+            "representation": {
+                "represents_full_market": False,
+                "actual_scope_label": "A股完整行情范围，财务或规则字段部分覆盖",
+            },
+        },
+        "items": [],
+    }
+
+    result = AgentService._validate_model_output(
+        "全部A股没有经营改善候选。", evidence
+    )
+
+    assert result["passed"] is False
+    assert "通用选股覆盖不足时不能外推为全市场结论" in (
+        result["unsupported_market_inferences"]
+    )
 
 
 def test_stock_screen_guard_rejects_candidate_count_conflict():

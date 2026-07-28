@@ -1,5 +1,16 @@
-function connectServerEvents() {
+let serverEventStream = null;
+let serverEventLifecycleBound = false;
+
+function closeServerEvents() {
+      if (!serverEventStream) return;
+      serverEventStream.close();
+      serverEventStream = null;
+    }
+
+function openServerEvents() {
+      if (document.visibilityState === "hidden" || serverEventStream) return;
       const stream = new EventSource("/events");
+      serverEventStream = stream;
       stream.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -35,14 +46,29 @@ function connectServerEvents() {
         } catch { /* heartbeat or malformed events are safely ignored */ }
       };
       stream.onerror = () => {
+        if (serverEventStream !== stream) return;
         $("systemStatus").className = "status-pill attention";
         $("systemStatus").textContent = "正在重新连接";
       };
       stream.onopen = () => {
+        if (serverEventStream !== stream) return;
         void loadHealth().catch(() => {
           renderSystemHealth(state.health?.data_health || {status: "initializing", user_label: "数据正在同步"});
         });
       };
+    }
+
+function connectServerEvents() {
+      if (!serverEventLifecycleBound) {
+        document.addEventListener("visibilitychange", () => {
+          if (document.visibilityState === "hidden") closeServerEvents();
+          else openServerEvents();
+        });
+        window.addEventListener("pagehide", closeServerEvents);
+        window.addEventListener("pageshow", openServerEvents);
+        serverEventLifecycleBound = true;
+      }
+      openServerEvents();
     }
 
     async function refineChat(preview, node, metadata) {
@@ -239,10 +265,12 @@ function connectServerEvents() {
         if (!$("sendButton").disabled) $("chatForm").requestSubmit();
       }
     });
-    document.querySelectorAll("[data-message]").forEach((button) => button.addEventListener("click", async () => {
-      activateWorkspace("agent");
-      await sendChat(button.dataset.message);
-    }));
+    $("quickActions").addEventListener("click", async event => {
+      const button = event.target.closest("[data-message]");
+      if (!button || !$("quickActions").contains(button)) return;
+      if (!stockAgentIsEmbedded()) activateWorkspace("agent");
+      await sendChat(button.dataset.message || "");
+    });
     $("toggleQuickActions").addEventListener("click", () => {
       const container = $("quickActions");
       const expanded = !container.classList.contains("expanded");

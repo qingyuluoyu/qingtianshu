@@ -1735,6 +1735,7 @@ def compact_stock_screen_evidence(
             "universe_definition",
             "as_of",
             "coverage",
+            "representation",
             "sources",
             "license_boundary",
         )

@@ -21,8 +21,73 @@ async function openDeepStockSymbol(symbol, tabKey = "overview", options = {}) {
       return {completed: "已完成", needs_review: "待复核", in_progress: "当前阶段", pending: "待研究"}[status] || "待研究";
     }
 
+    function boundStockQuickQuestions(session) {
+      const name = session?.name || session?.symbol || "这只股票";
+      const symbol = session?.symbol || "";
+      const target = `${name}${symbol && name !== symbol ? `（${symbol}）` : ""}`;
+      const profile = session?.research_entry?.profile_key || "general";
+      const prompts = {
+        quality: [
+          ["为什么入选", `为什么${target}会进入经营改善候选？请逐条核验筛选理由与最新财报，不要把筛选线索当成已确认结论。`],
+          ["改善能否持续", `${target}当前的营收和利润改善能否持续？请拆解业务驱动、毛利率、费用率和现金流。`],
+          ["一次性因素", `${target}的利润改善中，有多少可能来自一次性损益、会计口径或低基数？`],
+          ["反方证据", `只检查会推翻${target}经营改善判断的反方证据和失效条件。`],
+          ["下期核验", `${target}下一份财报最需要核验哪三个指标，为什么？`]
+        ],
+        trend: [
+          ["为何强于行业", `${target}近20日为什么强于所属行业？请区分行业驱动、公司事件和交易结构。`],
+          ["上涨驱动", `${target}这轮上涨主要是行业共振还是个股因素？请给支持证据和反方证据。`],
+          ["量价质量", `${target}当前量价结构是否健康？哪些信号仍需完整交易日确认？`],
+          ["估值透支", `${target}的上涨是否已经透支估值或盈利预期？请与同行同口径比较。`],
+          ["失效条件", `什么变化会让${target}的相对行业增强逻辑失效？`]
+        ],
+        value: [
+          ["为什么便宜", `${target}为什么看起来估值较低？先核对PE、PB口径和报告期。`],
+          ["低估还是变差", `${target}是被低估，还是市场在定价基本面变差？请列支持与反方证据。`],
+          ["同行估值", `${target}与同行相比估值处于什么位置？请保持行业和盈利口径一致。`],
+          ["盈利与负债", `${target}的盈利质量、现金流和负债是否支持当前估值？`],
+          ["低估陷阱", `${target}最可能成为低估值陷阱的风险是什么？`]
+        ],
+        pullback: [
+          ["回撤原因", `${target}近20日回撤的主要原因是什么？请区分市场、行业和公司因素。`],
+          ["是否企稳", `${target}近5日企稳是否得到量价确认，还是只是短期反弹？`],
+          ["基本面变化", `${target}回撤期间基本面、公告或盈利预期发生了什么变化？`],
+          ["确认信号", `${target}还需要哪些完整交易日信号才能确认回撤结束？`],
+          ["再次转弱", `什么条件会说明${target}再次转弱，原企稳假设失效？`]
+        ],
+        general: [
+          ["今日涨跌", `${target}今天为什么涨跌？请基于最新可验证行情和事件直接回答。`],
+          ["怎么赚钱", `${target}主要靠什么业务赚钱？当前最重要的增长驱动是什么？`],
+          ["财务质量", `${target}最新财报的盈利质量和现金流怎么样？`],
+          ["估值同行", `${target}当前估值与同行相比处于什么位置？`],
+          ["主要风险", `${target}当前最需要警惕的三项反方证据和失效条件是什么？`]
+        ]
+      };
+      return prompts[profile] || prompts.general;
+    }
+
+    function syncBoundStockQuickActions(session = state.deepStock) {
+      const embedded = stockAgentIsEmbedded();
+      document.querySelectorAll("[data-quick-general]").forEach(node => { node.hidden = embedded; });
+      const group = $("stockQuickActionGroup");
+      const container = $("stockQuickActionButtons");
+      group.hidden = !embedded;
+      if (!embedded) return;
+      container.innerHTML = "";
+      for (const [label, message] of boundStockQuickQuestions(session)) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "chip";
+        button.textContent = label;
+        button.dataset.message = message;
+        container.appendChild(button);
+      }
+      $("quickActions").classList.remove("expanded");
+    }
+
     function renderDeepStock(session) {
       state.deepStock = session || null;
+      syncBoundStockQuickActions(session);
       const symbol = session?.symbol || $("deepStockSymbol").value || state.deepStockOverviewSymbol || "";
       if (symbol) renderStockSpaceTasks(symbol, session, null, state.stockActionPlans[symbol] || []);
       renderStockSpaceHistory(session, null, state.stockTradeReviews[symbol] || [], symbol);
@@ -93,6 +158,21 @@ async function openDeepStockSymbol(symbol, tabKey = "overview", options = {}) {
       const trackFill = document.createElement("span"); trackFill.style.width = `${session.progress?.percent || 0}%`; track.appendChild(trackFill);
       progress.append(progressHead, track);
 
+      const currentStage = session.current_stage || (session.stages || []).find(item => ["in_progress", "needs_review"].includes(item.status));
+      if (currentStage) {
+        const focus = document.createElement("section"); focus.className = "deep-current-stage";
+        const focusLabel = document.createElement("span"); focusLabel.className = "deep-current-stage-label"; focusLabel.textContent = currentStage.status === "needs_review" ? "当前待复核" : "当前研究阶段";
+        const focusTitle = document.createElement("strong"); focusTitle.textContent = currentStage.label;
+        const focusCopy = document.createElement("p"); focusCopy.textContent = currentStage.description || session.next_question || "继续围绕当前阶段补齐证据。";
+        const focusQuestion = document.createElement("button"); focusQuestion.type = "button"; focusQuestion.className = "deep-current-question"; focusQuestion.textContent = session.next_question || currentStage.question || "继续研究当前阶段";
+        focusQuestion.addEventListener("click", () => { void continueDeepStockConversation(session.next_question || currentStage.question); });
+        focus.append(focusLabel, focusTitle, focusCopy, focusQuestion); main.append(progress, focus);
+      } else {
+        main.appendChild(progress);
+      }
+
+      const stageDetails = document.createElement("details"); stageDetails.className = "deep-stage-details";
+      const stageSummary = document.createElement("summary"); stageSummary.textContent = `查看完整研究路线（${session.stages?.length || 7} 个阶段）`;
       const stages = document.createElement("div"); stages.className = "deep-stage-list";
       for (const item of session.stages || []) {
         const card = document.createElement("article"); card.className = `deep-stage ${item.status || "pending"}`;
@@ -116,7 +196,7 @@ async function openDeepStockSymbol(symbol, tabKey = "overview", options = {}) {
         });
         card.append(head, title, copy, review, action); stages.appendChild(card);
       }
-      main.append(progress, stages);
+      stageDetails.append(stageSummary, stages); main.appendChild(stageDetails);
 
       const side = document.createElement("aside"); side.className = "deep-stock-side";
       const entry = session.research_entry;

@@ -659,6 +659,7 @@ function liZongStatusLabel(value) {
       const meta = payload?.data_meta || {};
       const contract = payload?.data_contract || {};
       const coverage = contract.coverage || {};
+      const representation = contract.representation || {};
       const items = payload?.items || [];
       const presentation = stockScreenProfilePresentation(profile);
       $("stockScreenTitle").textContent = presentation.label;
@@ -679,7 +680,10 @@ function liZongStatusLabel(value) {
         coverageLabel("候选财务", coverage.financial_candidate_pool)
       ].filter(Boolean).join(" / ");
       const dataVersion = String(contract.data_version || meta.data_version || "");
+      const scopeLabel = representation.actual_scope_label || "本轮已同步范围";
+      const scopeComplete = representation.represents_requested_scope === true;
       $("stockScreenMeta").textContent = [
+        `实际范围 ${scopeLabel}`,
         meta.latest_completed_trade_date ? `行情截至 ${meta.latest_completed_trade_date}` : "行情日期待确认",
         periods.length ? `财务数据逐只标注，最新报告期 ${periods[0]}` : "财务报告期逐只展示",
         profile.sort_rule || ""
@@ -692,8 +696,10 @@ function liZongStatusLabel(value) {
         meta.latest_completed_trade_date ? `行情交易日 ${meta.latest_completed_trade_date}` : "行情日期待确认",
         meta.return_20d_base_date ? `20日比较基准 ${meta.return_20d_base_date}` : "",
         periods.length ? `财务报告期 ${periods.slice(0, 3).join("、")}` : "财务报告期逐只展示",
+        `实际范围 ${scopeLabel}`,
         snapshotCoverageText,
         coverageSummary ? `数据覆盖 ${coverageSummary}` : "",
+        representation.note || "",
         dataVersion ? `数据版本 ${dataVersion.slice(-8)}` : ""
       ].filter(Boolean).join(" · ");
       $("stockScreenBoundary").textContent = payload?.boundary || "这是可解释的研究候选筛选，不构成推荐、评级、目标价或交易建议。";
@@ -715,8 +721,10 @@ function liZongStatusLabel(value) {
       const container = $("stockScreenResults"); container.innerHTML = "";
       if (!items.length) {
         const empty = document.createElement("div"); empty.className = "screener-empty";
-        empty.textContent = payload?.status === "empty"
-          ? "当前没有股票同时满足全部条件。建议一次只放宽一项规则后重新筛选。"
+        empty.textContent = payload?.status === "empty" && scopeComplete
+          ? "按当前规则未命中候选。本轮计算覆盖所选范围，系统不会默认建议放宽规则。"
+          : payload?.status === "empty"
+            ? `在${scopeLabel}内未命中候选；这不等于全市场没有候选。`
           : "当前没有可展示的候选。可以调整一个筛选条件后重新执行。";
         container.appendChild(empty); return;
       }
@@ -806,13 +814,13 @@ function liZongStatusLabel(value) {
         $("stockScreenExplanation").hidden = true;
         $("stockScreenDataDetails").hidden = true;
         const unavailable = error?.status === 503;
-        $("stockScreenTitle").textContent = unavailable ? "智能选股数据正在准备" : "本次筛选暂未完成";
+        $("stockScreenTitle").textContent = unavailable ? "选股数据正在同步" : "本次筛选暂未完成";
         $("stockScreenMeta").textContent = unavailable
-          ? "服务器尚未配置完整选股数据，完成数据服务配置后即可重新执行。"
+          ? "系统正在补齐行情、估值和财务范围，完成后即可重新执行。"
           : "请检查筛选条件并重新执行；已有候选不会因此被清空。";
-        $("stockScreenCountBadge").textContent = unavailable ? "待准备" : "可重试";
+        $("stockScreenCountBadge").textContent = unavailable ? "同步中" : "可重试";
         $("stockScreenResults").innerHTML = unavailable
-          ? '<div class="screener-empty"><strong>服务器尚未配置选股数据</strong><br>请按 README 的 Tushare 数据配置说明完成设置并重启服务，然后点击“执行确定性筛选”。</div>'
+          ? '<div class="screener-empty"><strong>完整股票范围正在同步</strong><br>页面不会用不完整范围冒充全市场结论；稍后可直接重新执行。</div>'
           : '<div class="screener-empty">筛选服务暂时没有完成本次计算。调整条件或稍后重新执行。</div>';
       } finally {
         state.stockScreenerLoading = false;

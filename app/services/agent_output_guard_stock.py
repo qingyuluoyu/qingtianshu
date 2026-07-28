@@ -282,9 +282,15 @@ def _has_stock_screen_scope_overclaim(answer: str, evidence: dict[str, Any]) -> 
     snapshot = ((evidence.get("data_contract") or {}).get("coverage") or {}).get(
         "market_snapshot"
     ) or {}
+    representation = (evidence.get("data_contract") or {}).get(
+        "representation"
+    ) or {}
     expected = int(snapshot.get("expected") or 0)
     available = int(snapshot.get("available") or 0)
-    if not expected or available >= expected:
+    represents_full_market = representation.get("represents_full_market")
+    if represents_full_market is True:
+        return False
+    if represents_full_market is None and (not expected or available >= expected):
         return False
     if any(
         term in answer
@@ -295,6 +301,8 @@ def _has_stock_screen_scope_overclaim(answer: str, evidence: dict[str, Any]) -> 
             "仍有未覆盖",
             "不代表全市场",
             "不能外推全市场",
+            "财务核验",
+            "部分覆盖",
         )
     ):
         return False
