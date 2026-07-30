@@ -131,10 +131,11 @@ def test_hermes_oneshot_fallback_disables_all_tools(
 
     class Result:
         returncode = 0
-        stdout = "只返回研究文本"
+        stdout = None
 
     def fake_run(command, **kwargs):
         captured["command"] = command
+        kwargs["stdout"].write("只返回研究文本")
         return Result()
 
     monkeypatch.setattr(

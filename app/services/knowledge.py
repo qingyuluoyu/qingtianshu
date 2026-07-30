@@ -7,6 +7,10 @@ from typing import Any
 from uuid import uuid4
 
 from app.db import Database
+from app.services.document_conversion import (
+    DocumentConversionService,
+    SUPPORTED_DOCUMENT_MIME_TYPES,
+)
 from app.services.security_master import SecurityMasterService
 
 
@@ -19,6 +23,7 @@ class KnowledgeService:
         self.database = database
         self.common_root = Path(common_root)
         self.security_master = SecurityMasterService(database)
+        self.document_converter = DocumentConversionService()
 
     def seed_common_documents(self) -> int:
         count = 0
@@ -50,11 +55,20 @@ class KnowledgeService:
         mime_type: str,
         raw: bytes,
     ) -> dict[str, Any]:
-        content = self.decode_text(raw).strip()
+        suffix = Path(original_name).suffix.casefold()
+        if suffix in SUPPORTED_DOCUMENT_MIME_TYPES:
+            converted = self.document_converter.convert(
+                raw=raw,
+                original_name=original_name,
+            )
+            content = converted.markdown
+            mime_type = converted.mime_type
+        else:
+            content = self.decode_text(raw).strip()
         if not content:
             raise ValueError("资料内容为空")
         document_id = str(uuid4())
-        source_key = hashlib.sha256(raw).hexdigest()
+        source_key = f"upload:{hashlib.sha256(raw).hexdigest()}"
         return self.database.upsert_knowledge_document(
             document_id=document_id,
             owner_user_id=user_id,
@@ -97,7 +111,13 @@ class KnowledgeService:
                 document, str(document.get("content") or "")
             )
             title_tokens = self._tokens(public_title)
-            title_score = len(query_tokens & title_tokens) * 4.0
+            original_name_tokens = self._tokens(
+                str(document.get("original_name") or "")
+            )
+            title_score = (
+                len(query_tokens & title_tokens) * 4.0
+                + len(query_tokens & original_name_tokens) * 3.0
+            )
             for excerpt in self._chunks(public_content):
                 excerpt_tokens = self._tokens(excerpt)
                 overlap = query_tokens & excerpt_tokens
@@ -160,11 +180,20 @@ class KnowledgeService:
                 }
             if item is not None:
                 required_items.append(item)
-        required_ids = {item["document_id"] for item in required_items}
-        items = (
-            required_items
-            + [item for item in ranked if item["document_id"] not in required_ids]
-        )[:max_results]
+        reserved_uploads = [
+            item
+            for item in ranked
+            if str(item.get("source_key") or "").startswith("upload:")
+        ][: min(2, max_results)]
+        items = []
+        included_ids: set[str] = set()
+        for item in [*required_items, *reserved_uploads, *ranked]:
+            if item["document_id"] in included_ids:
+                continue
+            items.append(item)
+            included_ids.add(item["document_id"])
+            if len(items) >= max_results:
+                break
         return {
             "query": query,
             "items": items,

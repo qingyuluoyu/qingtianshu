@@ -30,6 +30,39 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
 
 
+def _local_process_is_alive(pid: int) -> bool:
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        open_process.restype = wintypes.HANDLE
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+
+        handle = open_process(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if handle:
+            close_handle(handle)
+            return True
+        error = ctypes.get_last_error()
+        if error == 87:  # ERROR_INVALID_PARAMETER: the PID no longer exists.
+            return False
+        if error == 5:  # ERROR_ACCESS_DENIED: the process exists but is protected.
+            return True
+        raise OSError(error, ctypes.FormatError(error))
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 @dataclass(frozen=True)
 class ClaimedJob:
     id: str
@@ -758,12 +791,8 @@ class OperationalDatabase:
             raw_pid = owner[len(prefix) :].split("-", 1)[0]
             if not raw_pid.isdigit():
                 continue
-            try:
-                os.kill(int(raw_pid), 0)
-            except ProcessLookupError:
+            if not _local_process_is_alive(int(raw_pid)):
                 dead_owners.add(owner)
-            except PermissionError:
-                continue
         if not dead_owners:
             return {"requeued": 0, "failed": 0}
         expired = _utc_now() - timedelta(seconds=1)

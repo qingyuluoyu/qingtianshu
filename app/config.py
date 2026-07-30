@@ -101,7 +101,7 @@ class Settings:
     session_cookie_secure: bool = False
     max_image_upload_bytes: int = 10 * 1024 * 1024
     max_image_pixels: int = 25_000_000
-    max_document_upload_bytes: int = 2 * 1024 * 1024
+    max_document_upload_bytes: int = 20 * 1024 * 1024
     background_market_news_refresh_seconds: int = 600
     tushare_token: str = ""
     tushare_api_url: str = "https://teajoin.com"
@@ -220,7 +220,7 @@ class Settings:
             ),
             max_image_pixels=int(os.getenv("MAX_IMAGE_PIXELS", "25000000")),
             max_document_upload_bytes=int(
-                os.getenv("MAX_DOCUMENT_UPLOAD_BYTES", str(2 * 1024 * 1024))
+                os.getenv("MAX_DOCUMENT_UPLOAD_BYTES", str(20 * 1024 * 1024))
             ),
             background_market_news_refresh_seconds=int(
                 os.getenv("BACKGROUND_MARKET_NEWS_REFRESH_SECONDS", "600")

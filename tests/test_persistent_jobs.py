@@ -8,7 +8,7 @@ import socket
 
 import psycopg
 
-from app.operational_db import OperationalDatabase
+from app.operational_db import OperationalDatabase, _local_process_is_alive
 from app.services.background import EventBroker
 
 
@@ -25,6 +25,11 @@ def execute_raw(store: OperationalDatabase, sql: str, parameters: tuple = ()) ->
         url = "postgresql://" + url.removeprefix("postgres://")
     with psycopg.connect(url) as connection:
         connection.execute(sql, parameters)
+
+
+def test_local_process_liveness_probe_is_cross_platform():
+    assert _local_process_is_alive(os.getpid()) is True
+    assert _local_process_is_alive(99_999_999) is False
 
 
 def test_enqueue_is_idempotent_and_survives_reopen(tmp_path: Path):

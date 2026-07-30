@@ -229,6 +229,7 @@ from app.services.peer_comparison import PeerComparisonService
 from app.services.data_health import DataHealthService
 from app.services.live_market import LiveMarketService
 from app.services.knowledge import KnowledgeService
+from app.services.document_conversion import SUPPORTED_DOCUMENT_MIME_TYPES
 from app.services.market_news import MarketNewsService
 from app.services.research_reports import (
     ResearchReportService,
@@ -2440,10 +2441,17 @@ def create_app(
         user = require_session_user(request)
         original_name = Path(file.filename or "research-note.txt").name[:180]
         suffix = Path(original_name).suffix.casefold()
-        if suffix not in {".txt", ".md", ".markdown", ".csv", ".json"}:
+        if suffix not in {
+            ".txt",
+            ".md",
+            ".markdown",
+            ".csv",
+            ".json",
+            *SUPPORTED_DOCUMENT_MIME_TYPES,
+        }:
             raise HTTPException(
                 status_code=415,
-                detail="资料库当前支持 TXT、Markdown、CSV 和 JSON 文本",
+                detail="资料库当前支持 PDF、DOCX、XLSX、TXT、Markdown、CSV 和 JSON",
             )
         raw = await file.read(settings.max_document_upload_bytes + 1)
         await file.close()
@@ -2465,6 +2473,10 @@ def create_app(
         (knowledge_dir / f"{document['id']}.txt").write_text(
             document["content"], encoding="utf-8"
         )
+        if suffix in SUPPORTED_DOCUMENT_MIME_TYPES:
+            source_dir = Path(user["workspace_path"]) / "uploads" / "documents"
+            source_dir.mkdir(parents=True, exist_ok=True)
+            (source_dir / f"{document['id']}{suffix}").write_bytes(raw)
         public = knowledge.public_document(
             {**document, "content_chars": len(document["content"])}
         )
@@ -2480,6 +2492,15 @@ def create_app(
             raise HTTPException(status_code=404, detail="个人资料不存在")
         stored_path = Path(user["workspace_path"]) / "knowledge" / f"{document_id}.txt"
         stored_path.unlink(missing_ok=True)
+        suffix = Path(str(document.get("original_name") or "")).suffix.casefold()
+        if suffix in SUPPORTED_DOCUMENT_MIME_TYPES:
+            source_path = (
+                Path(user["workspace_path"])
+                / "uploads"
+                / "documents"
+                / f"{document_id}{suffix}"
+            )
+            source_path.unlink(missing_ok=True)
         return Response(status_code=204)
 
     @app.get("/users/{user_id}")
