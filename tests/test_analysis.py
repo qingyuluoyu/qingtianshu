@@ -225,6 +225,27 @@ def test_analyze_history_builds_auditable_technical_panel():
     assert "不生成买卖信号" in metrics["technical_method"]
 
 
+def test_analyze_history_exposes_return_window_dates_for_event_alignment():
+    start = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    points = [
+        {
+            "timestamp": (start + timedelta(days=index)).isoformat(),
+            "close": 100 + index,
+            "high": 101 + index,
+            "low": 99 + index,
+            "volume": 1_000_000,
+        }
+        for index in range(70)
+    ]
+
+    metrics = analyze_history({"points": points})
+
+    assert metrics["return_20d_base_date"] == points[-21]["timestamp"]
+    assert metrics["return_20d_end_date"] == points[-1]["timestamp"]
+    assert metrics["return_5d_base_date"] == points[-6]["timestamp"]
+    assert metrics["return_5d_end_date"] == points[-1]["timestamp"]
+
+
 def test_index_history_prefers_fresher_china_fallback():
     service = MarketAnalysisService(
         None,

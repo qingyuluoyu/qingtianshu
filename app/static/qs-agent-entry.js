@@ -2,7 +2,7 @@ function currentWelcomeMessage() {
       return welcomeMessage;
     }
 
-    const marketDiagnosisPrompt = "请诊断当前A股大盘。必须基于最新可用且尽量属于同一交易日的主要指数、全市场涨跌分布、成交额、市场广度和行业结构，说明当前市场状态、核心驱动、反方证据、失效条件与数据时间；如数据日期不一致要明确指出。不要预测下一交易日方向，不要给出买卖建议。";
+    const marketDiagnosisPrompt = "请诊断当前A股大盘。必须基于最新可用且尽量属于同一交易日的主要指数、全市场涨跌分布、成交额、市场广度和行业结构，说明当前市场状态、核心驱动、反方证据、什么情况下需要重新判断，以及数据时间；如数据日期不一致要明确指出。不要预测下一交易日方向，不要给出买卖建议。";
 
     function syncAgentEntryHubVisibility() {
       const hub = $("agentEntryHub");
@@ -121,14 +121,17 @@ function currentWelcomeMessage() {
         status.textContent = `已识别 ${target.name}（${target.symbol}），正在进入唯一绑定研究对话…`;
         const session = await api("/me/deep-stock", {
           method: "POST",
-          body: JSON.stringify({symbol: target.symbol})
+          body: JSON.stringify({
+            symbol: target.symbol,
+            quality_scope: state.evaluationMode ? "evaluation" : "user"
+          })
         });
         state.deepStock = session;
         await loadConversations(false);
         await loadDeepStock({force: true});
-        const question = `请诊断${target.name}（${target.symbol}）当前研究状态。基于最新可验证的行情与技术结构、经营和财务质量、行业相对位置、估值口径、公告与事件，给出证据链、反方证据、原判断失效条件和下一条最值得核验的证据；明确行情数据时间和财务报告期。不要给目标价或买卖建议。`;
+        const question = `请诊断${target.name}（${target.symbol}）当前研究状态。基于最新可验证的行情与技术结构、经营和财务质量、行业相对位置、估值口径、公告与事件，给出证据链、反方证据、什么情况会推翻原判断，以及下一条最值得核验的证据；明确行情数据时间和财务报告期。不要给目标价或买卖建议。`;
         await continueDeepStockConversation(question, session);
-        $("chatInput").value = "";
+        clearChatInputDraft();
         const completed = await sendChat(question);
         status.textContent = completed
           ? `已在 ${target.name} 的长期研究空间完成本轮即时诊断。`
@@ -289,7 +292,7 @@ function currentWelcomeMessage() {
       appendAgentContextItem(capabilityList, {
         title: `${agentIntentLabel(metadata?.intent)}工作流`,
         tag: metadata?.status === "completed" ? "已完成" : "按需",
-        copy: "确定性数据负责数字和指标，Agent 负责解释、反方审查与失效条件。"
+        copy: "确定性数据负责数字和指标，Agent 负责解释、反方审查，并说明什么时候需要重新判断。"
       });
       [
         {title: "行情与技术结构", tag: "全市场", copy: "实时报价、日线、收益、均线、RSI、MACD、布林带、ATR、波动和回撤。"},

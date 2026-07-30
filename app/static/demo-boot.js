@@ -129,6 +129,7 @@ $("agentResumeOpen").addEventListener("click", async event => {
     window.addEventListener("popstate", () => { void restoreWorkspaceRoute(readWorkspaceRoute(), "none"); });
 
     state.workspaceBootPromise = (async function boot() {
+      const bootDraftRevision = state.chatDraftRevision;
       const initialRoute = readWorkspaceRoute();
       if (initialRoute.page === "screening") {
         state.screeningSection = initialRoute.screeningSection === "li_zong" ? "li_zong" : "general";
@@ -148,11 +149,15 @@ $("agentResumeOpen").addEventListener("click", async event => {
         if (initialRoute.page === "agent") {
           await Promise.all([loadConversations(false, false), loadDeepStock()]);
           if (!state.conversationId && initialRoute.conversationId === "new") {
-            startNewConversation(false, "none");
+            startNewConversation(false, "none", {
+              expectedDraftRevision: bootDraftRevision
+            });
             await loadMemoryCandidates();
           }
           if (state.workspaceNavigationVersion === bootNavigationVersion) {
-            await restoreWorkspaceRoute(initialRoute, "replace");
+            await restoreWorkspaceRoute(initialRoute, "replace", {
+              expectedDraftRevision: bootDraftRevision
+            });
           }
           void Promise.allSettled([
             loadWatchlist(),
@@ -170,7 +175,9 @@ $("agentResumeOpen").addEventListener("click", async event => {
             await loadLiZongStrategy();
           }
           if (state.workspaceNavigationVersion === bootNavigationVersion) {
-            await restoreWorkspaceRoute(initialRoute, "replace");
+            await restoreWorkspaceRoute(initialRoute, "replace", {
+              expectedDraftRevision: bootDraftRevision
+            });
           }
           void Promise.allSettled([
             loadWatchlist(),
@@ -189,7 +196,9 @@ $("agentResumeOpen").addEventListener("click", async event => {
           activateReviewTab(initialRoute.reviewTab || "trades", {historyMode: "none"});
           await loadReviewCenter();
           if (state.workspaceNavigationVersion === bootNavigationVersion) {
-            await restoreWorkspaceRoute(initialRoute, "replace");
+            await restoreWorkspaceRoute(initialRoute, "replace", {
+              expectedDraftRevision: bootDraftRevision
+            });
           }
           return;
         }
@@ -197,11 +206,15 @@ $("agentResumeOpen").addEventListener("click", async event => {
         await Promise.all([loadTodayOverview(), loadMarketDashboard(), loadSectors(), loadLiveMarkets(), loadArticles(), loadKnowledge(), loadDeepStock()]);
         await loadConversations(false, false);
         if (!state.conversationId) {
-          startNewConversation(false, "none");
+          startNewConversation(false, "none", {
+            expectedDraftRevision: bootDraftRevision
+          });
           await loadMemoryCandidates();
         }
         if (state.workspaceNavigationVersion === bootNavigationVersion) {
-          await restoreWorkspaceRoute(initialRoute, "replace");
+          await restoreWorkspaceRoute(initialRoute, "replace", {
+            expectedDraftRevision: bootDraftRevision
+          });
         }
       } catch (error) {
         $("systemStatus").textContent = "正在重新连接";

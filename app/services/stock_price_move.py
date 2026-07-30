@@ -22,10 +22,31 @@ STOCK_PRICE_MOVE_TERMS = (
     "大跌",
     "上涨的事实",
     "下跌的事实",
-    "可能解释",
-    "不能确认",
     "怎么回事",
     "市场或板块拖累",
+)
+
+STOCK_PRICE_MOVE_QUALIFIER_TERMS = (
+    "可能解释",
+    "不能确认",
+)
+
+STOCK_PRICE_MOVE_CONTEXT_TERMS = (
+    "股价",
+    "涨跌",
+    "上涨",
+    "下跌",
+    "收涨",
+    "收跌",
+    "大涨",
+    "大跌",
+    "回撤",
+    "回落",
+    "走强",
+    "走弱",
+    "异动",
+    "涨幅",
+    "跌幅",
 )
 
 STOCK_STRICT_SAME_DATE_TERMS = (
@@ -41,7 +62,12 @@ STOCK_STRICT_SAME_DATE_TERMS = (
 
 
 def is_stock_price_move_question(question: str) -> bool:
-    return any(term in str(question or "") for term in STOCK_PRICE_MOVE_TERMS)
+    text = str(question or "")
+    if any(term in text for term in STOCK_PRICE_MOVE_TERMS):
+        return True
+    return any(term in text for term in STOCK_PRICE_MOVE_QUALIFIER_TERMS) and any(
+        term in text for term in STOCK_PRICE_MOVE_CONTEXT_TERMS
+    )
 
 
 def _market_date(value: Any, timezone_name: str) -> str | None:
@@ -207,6 +233,9 @@ def build_stock_price_move_event_evidence(
             "research_relevance_label": item.get("research_relevance_label"),
             "authority_rank": authority_rank,
         }
+        direct_excerpt = _announcement_direct_excerpt(item)
+        if direct_excerpt:
+            candidate["direct_excerpt"] = direct_excerpt
         previous = deduplicated.get(key)
         if previous is None or authority_rank < int(previous["authority_rank"]):
             deduplicated[key] = candidate
@@ -531,10 +560,17 @@ def build_stock_price_move_visible_sources(
             )
 
     for item in event_packet.get("same_date_official_disclosures") or []:
+        direct_excerpt = str(item.get("direct_excerpt") or "").strip()
         add(
             "同日公告",
             str(item.get("title") or "同日公司公告"),
-            "目标交易时段内可见的公司或监管披露；公告存在不等于已证明价格因果。",
+            (
+                f"公司公告原文摘录：{direct_excerpt}；"
+                "该披露存在不等于已证明价格因果。"
+                if direct_excerpt
+                else "目标交易时段内可见的公司或监管披露；"
+                "公告标题存在不等于已证明价格因果。"
+            ),
             as_of=item.get("published_at") or item.get("event_date"),
             source=str(item.get("source") or item.get("evidence_label") or "公司披露"),
             url=item.get("url"),
@@ -580,3 +616,16 @@ def build_stock_price_move_visible_sources(
         )
 
     return sources[:10]
+
+
+def _announcement_direct_excerpt(item: dict[str, Any]) -> str:
+    direct_excerpt = re.sub(
+        r"\s+", " ", str(item.get("direct_excerpt") or "")
+    ).strip()
+    if direct_excerpt:
+        return direct_excerpt[:1200]
+    summary = re.sub(r"\s+", " ", str(item.get("summary") or "")).strip()
+    prefix = "公司公告原文摘录："
+    if summary.startswith(prefix):
+        return summary[len(prefix) :].strip()[:1200]
+    return ""

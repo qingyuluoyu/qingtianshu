@@ -227,6 +227,30 @@ def test_plain_price_move_question_skips_broad_structured_research_card(app):
     assert result is None
 
 
+def test_relative_industry_question_skips_broad_structured_research_card(app):
+    client = TestClient(app)
+    user = _create_user(client, "Focused Relative Industry")
+    _add_stock(client, "正式判断保持不变")
+    message = "宁德时代今天相对电池行业是增强还是走弱？"
+    evidence = {
+        **_evidence(),
+        "research_plan": {"focus": "relative_industry"},
+    }
+    run = _run(app, user["id"], "completed", message, evidence)
+
+    result = app.state.structured_ai.build_and_persist(
+        user_id=user["id"],
+        run=run,
+        evidence=evidence,
+        answer=run["answer"],
+        message=message,
+        conversation_id=None,
+        symbol="000063.SZ",
+    )
+
+    assert result is None
+
+
 def test_action_plan_writeback_requires_confirmation_and_keeps_targets_empty(app):
     owner = TestClient(app)
     owner_user = _create_user(owner, "Structured AI Plan Owner")

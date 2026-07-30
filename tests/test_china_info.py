@@ -74,6 +74,92 @@ def test_a_share_provider_parses_announcements_news_and_social_posts():
     assert social[0]["engagement"] == 150.0
 
 
+def test_a_share_provider_hydrates_relevant_announcement_with_direct_excerpt():
+    announcement_payload = {
+        "data": {
+            "list": [
+                {
+                    "art_code": "AN-IR-1",
+                    "title": "宁德时代:投资者关系活动记录表",
+                    "display_time": "2026-07-26 21:33:31:000",
+                }
+            ]
+        }
+    }
+    content_payload = {
+        "data": {
+            "notice_content": (
+                "2026上半年，公司收入同比增长54.8%。公司表示，过去几个季度"
+                "单位净利整体保持稳定，短期受原材料价格波动、新业务投入和"
+                "产品结构变动等因素影响。"
+            ),
+            "attach_url_web": "https://example.com/announcement.pdf",
+        }
+    }
+
+    def http_get(url, **kwargs):
+        if "api/content/ann" in url:
+            return FakeResponse(payload=content_payload)
+        return FakeResponse(payload=announcement_payload)
+
+    provider = AShareInformationProvider(http_get=http_get)
+    announcement = provider.fetch_announcements("300750.SZ", limit=1)[0]
+
+    assert announcement["direct_content_status"] == "available"
+    assert announcement["summary"].startswith("公司公告原文摘录：")
+    assert "原材料价格波动" in announcement["summary"]
+    assert announcement["attach_url"] == "https://example.com/announcement.pdf"
+
+
+def test_a_share_provider_prioritizes_direct_risk_and_operating_disclosures():
+    announcement_payload = {
+        "data": {
+            "list": [
+                {
+                    "art_code": "AN-GENERIC",
+                    "title": "宁德时代:董事会决议公告",
+                    "display_time": "2026-07-28 21:00:00:000",
+                },
+                {
+                    "art_code": "AN-RISK",
+                    "title": "宁德时代:关于收到监管问询函的公告",
+                    "display_time": "2026-07-27 21:00:00:000",
+                },
+                {
+                    "art_code": "AN-ORDER",
+                    "title": "宁德时代:关于签订重大合同的公告",
+                    "display_time": "2026-07-26 21:00:00:000",
+                },
+            ]
+        }
+    }
+    requested_codes = []
+
+    def http_get(url, **kwargs):
+        if "api/content/ann" in url:
+            article_code = kwargs["params"]["art_code"]
+            requested_codes.append(article_code)
+            return FakeResponse(
+                payload={
+                    "data": {
+                        "notice_content": f"{article_code} 公司公告正文，包含可核验事项和边界说明。"
+                        * 3
+                    }
+                }
+            )
+        return FakeResponse(payload=announcement_payload)
+
+    provider = AShareInformationProvider(http_get=http_get)
+    announcements = provider.fetch_announcements("300750.SZ", limit=3)
+
+    assert requested_codes == ["AN-RISK", "AN-ORDER"]
+    assert announcements[0].get("direct_content_status") is None
+    assert all(
+        item["direct_content_status"] == "available"
+        for item in announcements[1:]
+    )
+
+
 def test_sentiment_is_transparent_and_persisted(tmp_path: Path):
     posts = [
         {"title": "回购利好，继续看多", "engagement": 100},

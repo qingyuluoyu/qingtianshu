@@ -71,6 +71,49 @@ function connectServerEvents() {
       openServerEvents();
     }
 
+    async function loadConversations(openLatest = false, activatePage = false) {
+      if (!state.user) return;
+      const data = await api("/me/conversations?limit=100");
+      const visibleItems = visibleConversationItems(data.items || []);
+      renderConversationList(visibleItems);
+      if (openLatest && !state.conversationId && visibleItems.length) {
+        await openConversation(visibleItems[0].id, activatePage);
+      }
+    }
+
+    function startNewConversation(activatePage = true, historyMode = null, options = {}) {
+      if (activatePage) activateWorkspace("agent", {historyMode: "none"});
+      state.conversationId = null;
+      state.conversationMessages = [];
+      state.agentContextMetadata = {};
+      state.agentContextQuestion = "";
+      setAgentProcessExpanded(false);
+      $("conversationTitle").textContent = "新的研究对话";
+      $("messages").innerHTML = "";
+      addMessage("agent", currentWelcomeMessage());
+      renderDiagnosisPlaceholder();
+      renderConversationList(state.conversations);
+      clearImageAttachment();
+      if (options.expectedDraftRevision == null) clearChatInputDraft();
+      else {
+        setChatInputDraft("", {
+          force: true,
+          expectedRevision: options.expectedDraftRevision
+        });
+      }
+      if (state.workspacePage === "agent") $("chatInput").focus();
+      if (state.workspacePage === "agent") syncWorkspaceUrl(historyMode || (activatePage ? "push" : "replace"));
+      syncAgentEntryHubVisibility();
+    }
+
+    async function archiveConversation(conversationId) {
+      try {
+        await api(`/me/conversations/${encodeURIComponent(conversationId)}`, {method: "DELETE"});
+        if (state.conversationId === conversationId) startNewConversation(false);
+        await loadConversations(false);
+      } catch { addMessage("agent", "这个对话暂时无法归档，请稍后重试。"); }
+    }
+
     async function refineChat(preview, node, metadata) {
       if (!preview?.run_id || !preview?.assistant_message_id || !preview?.conversation_id || !node) return;
       const status = document.createElement("div");
@@ -251,8 +294,12 @@ function connectServerEvents() {
 
     $("chatForm").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const input = $("chatInput"); const message = input.value; input.value = "";
+      const input = $("chatInput"); const message = input.value; clearChatInputDraft();
       await sendChat(message);
+    });
+    $("chatInput").addEventListener("input", () => {
+      state.chatDraftRevision += 1;
+      state.chatDraftUserEdited = true;
     });
     $("chatInput").addEventListener("keydown", event => {
       if (

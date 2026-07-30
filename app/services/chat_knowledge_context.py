@@ -5,6 +5,51 @@ from typing import Any
 from app.catalog import normalize_symbol
 
 
+_GENERATED_STOCK_KNOWLEDGE_PREFIXES = (
+    "research-report:",
+    "earnings-quality:",
+    "financial-drivers:",
+    "business-structure:",
+    "peer-operating:",
+    "shareholder-structure:",
+    "analyst-expectations:",
+    "event-timeline:",
+    "filing-evidence:",
+    "research-outcome:",
+    "research-actions:",
+    "research-priority:",
+    "research-change:",
+    "deep-stock:",
+)
+
+
+def filter_quality_review_knowledge_context(
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep genuine user material out of generated-report feedback loops.
+
+    A quality-review turn already carries the current company's structured
+    filing extracts, comparable financial statements, operating cash flow and
+    business segments in its deterministic evidence packet. Re-retrieving a
+    generated research report feeds earlier prose and mechanical bridges back
+    into DeepSeek, which can make a fresh answer copy the archived narrative.
+    User uploads remain useful context, but every generated stock archive and
+    generic common document is excluded from this specialist prompt.
+    """
+
+    items = [
+        item
+        for item in (context.get("items") or [])
+        if item.get("scope") == "user"
+        and not str(item.get("source_key") or "").startswith(
+            _GENERATED_STOCK_KNOWLEDGE_PREFIXES
+        )
+    ]
+    coverage = dict(context.get("coverage") or {})
+    coverage["matched_documents"] = len(items)
+    return {**context, "items": items, "coverage": coverage}
+
+
 def _filter_knowledge_context(
     context: dict[str, Any],
     *,
@@ -122,6 +167,11 @@ def _filter_knowledge_context(
         and symbol
     ):
         canonical = normalize_symbol(symbol)
+        if research_focus == "quality_review":
+            context = filter_quality_review_knowledge_context(
+                {**context, "items": items}
+            )
+            items = list(context.get("items") or [])
         if research_focus == "price_cause":
             # A same-day price question already receives refreshed quote,
             # market/industry context and a scoped event timeline.  Generated
@@ -200,33 +250,50 @@ def _filter_knowledge_context(
             f"analyst-expectations:{canonical}",
             f"event-timeline:{canonical}",
         }
+        # These user-wide generated documents intentionally contain several
+        # securities.  They belong on portfolio/action pages, but putting them
+        # into a single-stock prompt can reassign another stock's numbers to the
+        # current company.  Current-symbol deterministic modules remain
+        # available below; genuine uploads and generic education material are
+        # still retained.
+        aggregate_generated_prefixes = (
+            "research-actions:",
+            "research-priority:",
+            "research-change:",
+            "deep-stock:",
+        )
         items = [
             item
             for item in items
             if (
-                (
-                    str(item.get("source_key") or "").startswith(
-                        f"filing-evidence:{canonical}:"
-                    )
-                    and (
-                        not report_period
-                        or report_period in str(item.get("title") or "")
-                    )
+                not str(item.get("source_key") or "").startswith(
+                    aggregate_generated_prefixes
                 )
-                or not str(item.get("source_key") or "").startswith(
+                and (
                     (
-                        "research-report:",
-                        "earnings-quality:",
-                        "financial-drivers:",
-                        "business-structure:",
-                        "peer-operating:",
-                        "shareholder-structure:",
-                        "analyst-expectations:",
-                        "event-timeline:",
-                        "filing-evidence:",
+                        str(item.get("source_key") or "").startswith(
+                            f"filing-evidence:{canonical}:"
+                        )
+                        and (
+                            not report_period
+                            or report_period in str(item.get("title") or "")
+                        )
                     )
+                    or not str(item.get("source_key") or "").startswith(
+                        (
+                            "research-report:",
+                            "earnings-quality:",
+                            "financial-drivers:",
+                            "business-structure:",
+                            "peer-operating:",
+                            "shareholder-structure:",
+                            "analyst-expectations:",
+                            "event-timeline:",
+                            "filing-evidence:",
+                        )
+                    )
+                    or item.get("source_key") in wanted
                 )
-                or item.get("source_key") in wanted
             )
         ]
     elif intent == "research_outcome":

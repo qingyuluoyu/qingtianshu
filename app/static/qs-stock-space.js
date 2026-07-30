@@ -28,8 +28,8 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
       const title = document.createElement("div"); title.className = "stock-space-section-title"; title.textContent = "任务与操作";
       const copy = document.createElement("div"); copy.className = "stock-space-section-copy"; copy.textContent = "我的观察任务会保存状态、结果和历史；系统建议只有在你确认后才成为个人任务。";
       copyWrap.append(title, copy);
-      const taskFocus = userTasks.find(task => !task.terminal)?.description || actions[0]?.next_step || session?.next_question || "核验当前最重要的反方证据与失效条件";
-      const agentTaskPrompt = `请立即核验 ${symbol} 当前最优先的研究问题：${taskFocus}\n\n必须使用当前可用的实时数据、资料库和证据链，区分已确认事实、推断与信息缺口，明确反方证据、数据时间和失效条件。完成即时核验后，生成观察任务草稿供我确认。正式任务必须等我点击确认后才写入；不要给出买卖建议。`;
+      const taskFocus = userTasks.find(task => !task.terminal)?.description || actions[0]?.next_step || session?.next_question || "核验当前最重要的反方证据，以及什么情况需要重新判断";
+      const agentTaskPrompt = `请立即核验 ${symbol} 当前最优先的研究问题：${taskFocus}\n\n必须使用当前可用的实时数据、资料库和证据链，区分已确认事实、推断与信息缺口，明确反方证据、数据时间，以及哪些可观察事实会推翻当前判断。完成即时核验后，生成观察任务草稿供我确认。正式任务必须等我点击确认后才写入；不要给出买卖建议。`;
       const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn primary"; ask.textContent = "让 Agent 帮我处理";
       ask.addEventListener("click", () => { void continueDeepStockConversation(agentTaskPrompt); });
       head.append(copyWrap, ask); container.appendChild(head);
@@ -76,7 +76,7 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
         const card = document.createElement("article"); card.className = "stock-task-card";
         const status = document.createElement("span"); status.className = "stock-task-status"; status.textContent = "下一步";
         const cardTitle = document.createElement("div"); cardTitle.className = "stock-task-title"; cardTitle.textContent = session?.current_stage?.label || "建立下一项观察条件";
-        const cardCopy = document.createElement("div"); cardCopy.className = "stock-task-copy"; cardCopy.textContent = session?.next_question || "当前没有需要优先处理的新任务，可以继续核验反方证据和失效条件。";
+        const cardCopy = document.createElement("div"); cardCopy.className = "stock-task-copy"; cardCopy.textContent = session?.next_question || "当前没有需要优先处理的新任务，可以继续核验反方证据，以及什么情况需要重新判断。";
         card.append(status, cardTitle, cardCopy); grid.appendChild(card);
       }
       container.appendChild(grid);
@@ -777,7 +777,7 @@ function renderStockSpaceTasks(symbol, session = null, workspace = null, actionP
       appendDeepBoardCard(researchBoard, {kind: "confirmed", title: "已确认的证据", items: supportedEvidenceItems});
       appendDeepBoardCard(researchBoard, {kind: "counter", title: "关键反证与压力", items: normalizeResearchItems([...counterEvidenceItems, ...riskEvidenceItems])});
       appendDeepBoardCard(researchBoard, {kind: "gaps", title: "仍需补证", items: informationGapItems});
-      appendDeepBoardCard(researchBoard, {kind: "invalidation", title: "判断失效条件", items: invalidationItems});
+      appendDeepBoardCard(researchBoard, {kind: "invalidation", title: "什么时候需要重新判断", items: invalidationItems});
       evidenceShell.appendChild(researchBoard);
 
       const moduleShell = document.createElement("section"); moduleShell.className = "deep-module-shell";

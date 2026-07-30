@@ -189,7 +189,8 @@ class Settings:
             default_research_symbols=tuple(
                 symbol.strip().upper()
                 for symbol in os.getenv(
-                    "DEFAULT_RESEARCH_SYMBOLS", "000063.SZ,300308.SZ,NVDA"
+                    "DEFAULT_RESEARCH_SYMBOLS",
+                    "000063.SZ,300308.SZ,300750.SZ,NVDA",
                 ).split(",")
                 if symbol.strip()
             ),

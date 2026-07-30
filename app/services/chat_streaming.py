@@ -90,6 +90,7 @@ class ChatStreamPublisher:
                 self.user_id,
                 {
                     "type": "agent_stream_status",
+                    "reset": True,
                     "label": str(
                         update.get("label")
                         or "实时生成连接已中断，正在恢复完整回答…"

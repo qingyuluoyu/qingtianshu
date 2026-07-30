@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from app.catalog import PEER_GROUPS, normalize_symbol
 from app.services.chat_routing import (
     _conversation_title,
     _extract_industry_topic,
@@ -27,6 +28,7 @@ from app.services.chat_routing import (
     _symbol_from_history,
     _symbols_from_history,
 )
+from app.services.security_master import SecurityMasterService
 
 
 class ChatConversationNotFound(LookupError):
@@ -76,10 +78,29 @@ class PreparedChatContext:
 
 
 def _prefers_bound_candidate_research(message: str) -> bool:
-    """Keep one-stock candidate follow-ups in its long-term research conversation."""
+    """Keep a bound one-stock conversation unless the user clearly rescreens.
+
+    A deep-stock conversation already supplies the research object.  Natural
+    questions about price, financials, cash flow or events therefore should not
+    need a small positive-keyword allowlist.  Only an explicit request to leave
+    the current object and produce another whole-market candidate set should
+    return ``False`` here; market, fund and other-security exits are handled
+    with their structured signals in :meth:`prepare`.
+    """
 
     folded = re.sub(r"\s+", "", message).casefold()
     broad_screening_terms = (
+        "全市场筛选",
+        "全a股筛选",
+        "重新筛选a股",
+        "重新筛a股",
+        "重新筛选股票",
+        "重新筛股票",
+        "重新选股",
+        "再选股",
+        "再筛选",
+        "换一批股票",
+        "换一批候选",
         "筛选a股",
         "筛a股",
         "筛选股票",
@@ -91,26 +112,84 @@ def _prefers_bound_candidate_research(message: str) -> bool:
         "选几只",
         "一批股票",
     )
-    research_terms = (
-        "为什么进入",
-        "为什么入选",
-        "入选原因",
-        "这个逻辑",
-        "逻辑还",
-        "是否成立",
-        "还成立",
-        "持续性",
-        "反方证据",
-        "风险",
-        "核验",
+    broad_screening_patterns = (
+        r"(?:重新|再|继续|帮我|请|给我)(?:做|跑|执行|开始)?(?:一次|一遍)?(?:选股|筛选)",
+        r"(?:找|挑|筛|选)(?:一些|几只|一批)[^。；，,]{0,12}(?:股票|公司|候选)",
     )
-    return any(term in folded for term in research_terms) and not any(
-        term in folded for term in broad_screening_terms
+    return not (
+        any(term in folded for term in broad_screening_terms)
+        or any(re.search(pattern, folded) for pattern in broad_screening_patterns)
     )
+
+
+def _requests_market_scope_change(message: str) -> bool:
+    """Require an explicit broad-market or sector question before leaving a stock.
+
+    Generic substrings such as “市场需求”“行业边界” and “行业数据” are common
+    inside company research.  They must not evict a conversation from its bound
+    security.  Named markets/indices and natural questions about overall market
+    or sector performance are explicit enough to change scope.
+    """
+
+    folded = re.sub(r"\s+", "", message).casefold()
+    direct_scope_terms = (
+        "大盘",
+        "a股",
+        "美股",
+        "港股",
+        "日股",
+        "日本股市",
+        "韩股",
+        "韩国股市",
+        "欧股",
+        "欧洲股市",
+        "伦敦金",
+        "现货黄金",
+        "标普",
+        "s&p",
+        "纳指",
+        "纳斯达克",
+        "道指",
+        "道琼斯",
+        "上证",
+        "深证",
+        "创业板",
+        "沪深300",
+        "中证500",
+        "恒生",
+        "日经",
+        "kospi",
+        "vix",
+        "dax",
+    )
+    if any(term in folded for term in direct_scope_terms):
+        return True
+
+    broad_patterns = (
+        r"(?:今天|当前|最近|现在|整体)?(?:市场|股市)"
+        r"(?:行情|走势|表现|情绪|风险|资金|涨|跌|上涨|下跌|收盘|开盘|"
+        r"怎么样|如何|为什么|怎么回事)",
+        r"(?:今天|当前|最近|现在|整体)(?:的)?(?:市场|股市)",
+        r"(?:哪些|什么|哪个|今天|当前|最近|现在|整体)[^。！？；]{0,12}"
+        r"(?:行业|板块)(?:领涨|领跌|轮动|上涨|下跌|表现|行情|走势|机会|"
+        r"怎么样|如何|为什么)?",
+        r"[A-Za-z0-9\u4e00-\u9fff]{2,12}(?:行业|板块)"
+        r"(?:今天|当前|最近|现在)?"
+        r"(?:行情|走势|表现|领涨|领跌|轮动|上涨|下跌|怎么样|如何|为什么)",
+    )
+    return any(re.search(pattern, folded) for pattern in broad_patterns)
 
 
 def _financial_education_sources(message: str) -> list[str]:
     folded = message.casefold().replace(" ", "")
+    # 个股财务讨论里的“毛利率/净利率/费用率”包含“利率”二字，但与
+    # 债券、久期和宏观利率教育无关。若直接做子串匹配，会让绑定个股
+    # 在询问盈利质量时错误退出研究空间并加载固收知识库。
+    bond_scope_text = re.sub(
+        r"(?:毛利率|净利率|费用率|税率|周转率|负债率|市占率|渗透率)",
+        "",
+        folded,
+    )
     fund_terms = (
         "基金",
         "etf",
@@ -176,7 +255,7 @@ def _financial_education_sources(message: str) -> list[str]:
     sources: list[str] = []
     if any(term in folded for term in fund_terms):
         sources.append("builtin:fund-etf-practical-guide.md")
-    if any(term in folded for term in bond_terms):
+    if any(term in bond_scope_text for term in bond_terms):
         sources.append("builtin:fixed-income-and-rates.md")
     if any(term in folded for term in suitability_terms):
         sources.append("builtin:risk-return-and-allocation.md")
@@ -416,6 +495,13 @@ class ChatRequestContextService:
     def __init__(self, database: Any, knowledge: Any) -> None:
         self.database = database
         self.knowledge = knowledge
+        self.security_master = (
+            SecurityMasterService(database)
+            if callable(
+                getattr(database, "latest_tushare_dataset_snapshot", None)
+            )
+            else None
+        )
 
     def prepare(
         self,
@@ -458,6 +544,10 @@ class ChatRequestContextService:
             message,
             watchlist=self.database.list_watchlist(user_id),
         )
+        if self.security_master is not None:
+            for resolved_symbol in self.security_master.symbols_mentioned_in(message):
+                if resolved_symbol not in symbols:
+                    symbols.append(resolved_symbol)
         symbol = symbols[0] if len(symbols) == 1 else None
         prior_intent = _intent_from_history(history)
         contextual_followup = _is_contextual_followup(message)
@@ -470,6 +560,7 @@ class ChatRequestContextService:
 
         explicit_market_query = _is_market_query(message)
         explicit_industry_topic = _extract_industry_topic(message)
+        peer_comparison_query = _is_peer_comparison_query(message)
         explicit_stock_screen_query = _is_stock_screen_query(message)
         bound_session_lookup = getattr(
             self.database,
@@ -481,16 +572,53 @@ class ChatRequestContextService:
             if callable(bound_session_lookup)
             else None
         )
-        if bound_deep_stock and _prefers_bound_candidate_research(message):
+        if bound_deep_stock:
             bound_symbol = str(bound_deep_stock.get("symbol") or "")
-            if not symbols and bound_symbol:
+            fixed_peer_symbols = {
+                normalize_symbol(str(item.get("symbol") or ""))
+                for item in (PEER_GROUPS.get(bound_symbol) or {}).get("peers", [])
+                if item.get("symbol")
+            }
+            explicit_other_symbols = {
+                item for item in symbols if item and item != bound_symbol
+            }
+            fixed_peer_followup = bool(
+                peer_comparison_query
+                and fixed_peer_symbols
+                and explicit_other_symbols.issubset(fixed_peer_symbols)
+            )
+            if fixed_peer_followup:
+                # Named fixed peers are comparison evidence for the bound stock,
+                # not new research objects and not a request to rerun screening.
                 symbols = [bound_symbol]
                 symbol = bound_symbol
-            if symbol == bound_symbol:
+                explicit_stock_screen_query = False
+            explicit_bound_stock_reference = _prefers_stock_context_followup(message)
+            explicitly_references_other_security = bool(symbols) and (
+                len(symbols) > 1 or bound_symbol not in symbols
+            )
+            broad_market_or_industry_query = bool(
+                _requests_market_scope_change(message)
+                and not stock_context_followup
+                and not explicit_bound_stock_reference
+                and not symbols
+            )
+            leaves_bound_stock = (
+                explicitly_references_other_security
+                or broad_market_or_industry_query
+                or bool(_financial_education_sources(message))
+                or not _prefers_bound_candidate_research(message)
+            )
+            if not leaves_bound_stock and not symbols and bound_symbol:
+                symbols = [bound_symbol]
+                symbol = bound_symbol
+            if not leaves_bound_stock and symbol == bound_symbol:
                 explicit_stock_screen_query = False
         prior_screen_profile = _stock_screen_profile_from_history(history)
         stock_screen_query = explicit_stock_screen_query or (
-            prior_intent == "stock_screen" and contextual_followup
+            prior_intent == "stock_screen"
+            and contextual_followup
+            and symbol is None
         )
         explicit_li_zong_query = "李总" in message and any(
             keyword in message for keyword in ("策略", "选股", "候选", "触发", "规则")
@@ -500,7 +628,6 @@ class ChatRequestContextService:
             and prior_screen_profile == "li_zong"
             and (contextual_followup or _is_li_zong_strategy_followup(message))
         )
-        peer_comparison_query = _is_peer_comparison_query(message)
         stock_comparison_query = (
             len(symbols) >= 2
             and not explicit_stock_screen_query

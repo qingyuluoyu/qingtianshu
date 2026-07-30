@@ -256,9 +256,9 @@ function readWorkspaceRoute() {
     function openAiFromSearch(query = state.searchQuery) {
       const question = String(query || "").trim();
       startNewConversation(true);
-      $("chatInput").value = question
+      setChatInputDraft(question
         ? `请研究“${question}”，先识别对象，再说明当前事实、核心驱动、反方证据和下一步核验项。`
-        : "";
+        : "", {force: true});
       $("chatInput").focus();
     }
 
@@ -364,7 +364,8 @@ function readWorkspaceRoute() {
       }
     }
 
-    async function restoreWorkspaceRoute(route, historyMode = "none") {
+    async function restoreWorkspaceRoute(route, historyMode = "none", options = {}) {
+      const draftRevision = options.expectedDraftRevision ?? state.chatDraftRevision;
       if (route.page === "search" && route.query) {
         await openGlobalSearchPage(route.query, {historyMode});
         return;
@@ -377,11 +378,19 @@ function readWorkspaceRoute() {
         activateWorkspace("agent", {historyMode: "none", scroll: false});
         if (route.conversationId && route.conversationId !== "new") {
           try { await openConversation(route.conversationId, false, historyMode); }
-          catch { startNewConversation(false, historyMode); }
+          catch {
+            startNewConversation(false, historyMode, {
+              expectedDraftRevision: draftRevision
+            });
+          }
         } else {
-          startNewConversation(false, historyMode);
+          startNewConversation(false, historyMode, {
+            expectedDraftRevision: draftRevision
+          });
         }
-        if (route.question) $("chatInput").value = route.question;
+        if (route.question) {
+          setChatInputDraft(route.question, {expectedRevision: draftRevision});
+        }
         return;
       }
       if (route.page === "review") {

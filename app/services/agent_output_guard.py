@@ -70,6 +70,9 @@ from app.services.agent_output_guard_stock import (
     _STOCK_CROSS_DATE_MARKET_LABEL,
     _STOCK_INDUSTRY_BREADTH_LABEL,
     _STOCK_60D_RETURN_BINDING_LABEL,
+    _STOCK_DEBT_RATIO_SCALE_LABEL,
+    _STOCK_CASHFLOW_CAUSE_LABEL,
+    _STOCK_STATIC_FINANCIAL_CAUSAL_LABEL,
     _STOCK_INDUSTRY_CAUSAL_LABEL,
     _STOCK_CONTRIBUTION_REQUIRED_LABEL,
     _STOCK_INDUSTRY_COUNTS_REQUIRED_LABEL,
@@ -107,7 +110,41 @@ from app.services.agent_output_guard_stock import (
     _has_stock_event_sentiment_overclaim,
     _has_stock_unsupported_causal_hypothesis,
     _has_stock_60d_return_binding_conflict,
+    _has_stock_debt_ratio_scale_conflict,
+    _has_stock_cashflow_causal_conflict,
+    _has_stock_static_financial_causal_overclaim,
 )
+
+
+_REASSESSMENT_REQUEST_TERMS = (
+    "失效条件",
+    "不成立条件",
+    "什么时候需要重新判断",
+    "何时需要重新判断",
+    "需要重新判断的情况",
+    "什么情况会推翻",
+    "哪些情况会推翻",
+    "什么会推翻",
+)
+_REASSESSMENT_ANSWER_TERMS = (
+    *_REASSESSMENT_REQUEST_TERMS,
+    "需要重新评估",
+    "当前判断需要重算",
+    "必须重算当前判断",
+)
+_REASSESSMENT_REQUIRED_LABEL = (
+    "用户明确询问何时需要重新判断时回答必须说明对应情况"
+)
+
+
+def _asks_for_reassessment_conditions(text: Any) -> bool:
+    normalized = str(text or "")
+    return any(term in normalized for term in _REASSESSMENT_REQUEST_TERMS)
+
+
+def _answer_explains_reassessment_conditions(text: Any) -> bool:
+    normalized = str(text or "")
+    return any(term in normalized for term in _REASSESSMENT_ANSWER_TERMS)
 
 
 class AgentOutputGuard:
@@ -153,6 +190,12 @@ class AgentOutputGuard:
 
     @staticmethod
     def _clean_user_facing_model_language(answer: str) -> str:
+        answer = re.sub(
+            r"(?im)^(\s*(?:#{1,6}\s*)?(?:\*\*|__)?)失效条件"
+            r"((?:\*\*|__)?\s*[：:]?)",
+            r"\1什么时候需要重新判断\2",
+            answer,
+        )
         answer = re.sub(
             r"(?im)^\s*(?:用户|提问者)询问(?:了)?[^\n]*$\n?",
             "",
@@ -271,6 +314,11 @@ class AgentOutputGuard:
         )
         answer = re.sub(r"[，,]?(?:因此)?回落不意外", "", answer)
         replacements = {
+            "原判断的失效条件": "什么情况会推翻原判断",
+            "原判断失效条件": "什么情况会推翻原判断",
+            "当前判断的失效条件": "需要重新判断当前结论的情况",
+            "判断失效条件": "需要重新判断的情况",
+            "失效条件": "需要重新判断的情况",
             "根据你提供的完整当前证据和技能要求": "根据当前可验证证据",
             '能确认的"非系统性拖累"': "市场与行业对照",
             "能确认的“非系统性拖累”": "市场与行业对照",
@@ -288,6 +336,8 @@ class AgentOutputGuard:
             "conditional_outlook": "条件展望",
             "`optional_gaps`": "扩展证据缺口",
             "optional_gaps": "扩展证据缺口",
+            "`unresolved_themes`": "仍待核验事项",
+            "unresolved_themes": "仍待核验事项",
             "`not_directionally_consistent`": "历史方向一致性不足",
             "not_directionally_consistent": "历史方向一致性不足",
             "`low_to_medium`": "较低至中等",
@@ -391,6 +441,14 @@ class AgentOutputGuard:
                     "market_date": market_breadth.get("market_date"),
                 }
             guard_evidence["market_breadth"] = market_breadth
+        elif evidence.get("type") == "stock_research":
+            # Retrieved prose is contextual reading, not a subject-bound
+            # numeric source. A user-wide research summary may contain metrics
+            # for several stocks; accepting every number in that text allowed a
+            # different security's volatility to pass as the current symbol's.
+            # Current-stock numbers must be supported by structured evidence.
+            guard_evidence = dict(evidence)
+            guard_evidence.pop("knowledge_context", None)
         evidence_text = json.dumps(guard_evidence, ensure_ascii=False, default=str)
         if trusted_context:
             evidence_text += "\n" + "\n".join(trusted_context)
@@ -416,6 +474,20 @@ class AgentOutputGuard:
             if absolute <= 10:
                 allowed_values.append(value * 100)
                 allowed_magnitudes.append(absolute * 100)
+
+        earnings = guard_evidence.get("earnings_quality") or {}
+        latest_report = earnings.get("latest_report") or {}
+        comparable_report = earnings.get("comparable_report") or {}
+        for key, current_value in latest_report.items():
+            comparable_value = comparable_report.get(key)
+            if not str(key).endswith("_pct") or not all(
+                isinstance(value, (int, float)) and not isinstance(value, bool)
+                for value in (current_value, comparable_value)
+            ):
+                continue
+            change_pp = float(current_value) - float(comparable_value)
+            allowed_values.append(change_pp)
+            allowed_magnitudes.append(abs(change_pp))
 
         # Metric names such as return_60d_pct contain structural period numbers
         # that the answer may name as “60日”. Only take these magnitudes from
@@ -541,9 +613,50 @@ class AgentOutputGuard:
                 "→" in nearby
                 or "->" in nearby
                 or (
+                    token.endswith("%")
+                    and re.search(
+                        r"(?:从|由)[^。；\n]{0,32}$",
+                        prefix[-40:],
+                    )
+                    is not None
+                    and re.match(
+                        r"\s*(?:下降|降低|回落|上升|提高|提升|增加|减少)",
+                        answer[match.end() : match.end() + 24],
+                    )
+                    is not None
+                )
+                or (
+                    token.endswith("%")
+                    and re.search(
+                        r"(?:率|占比|比重)(?:为|约为|是|达到|处于)\s*$",
+                        prefix[-28:],
+                    )
+                    is not None
+                )
+                or (
                     "由" in nearby
                     and any(term in nearby for term in ("变为", "降至", "升至"))
                 )
+                or re.search(
+                    r"(?:从|由)[^。；\n]{0,32}"
+                    r"(?:变为|变成|降至|升至|降到|升到|下降到|上升到|"
+                    r"跌到|涨到|回落到|提升到)\s*$",
+                    prefix[-48:],
+                )
+                is not None
+                or re.search(
+                    r"(?:下降|上升|回落|提升|增加|减少)[^。；\n]{0,20}"
+                    r"(?:至|到)(?:约|大约|近|超过|不足|高于|低于)?\s*$",
+                    prefix[-48:],
+                )
+                is not None
+                or re.search(
+                    r"(?:变为|变成|降至|升至|降到|升到|下降到|上升到|"
+                    r"跌到|涨到|回落到|提升到)"
+                    r"(?:约|大约|近|超过|不足|高于|低于)?\s*$",
+                    prefix[-24:],
+                )
+                is not None
             )
             if (
                 token.endswith("%")
@@ -558,32 +671,77 @@ class AgentOutputGuard:
                     implied_value = direction * abs(value)
             tolerance_floor = 0.02
             approximate_upper_bound: float | None = None
+            approximate_plain_number: re.Match[str] | None = None
             if token.endswith("%"):
                 numeric_token = token.lstrip("+-").rstrip("%")
                 decimal_places = (
                     len(numeric_token.rsplit(".", 1)[1]) if "." in numeric_token else 0
                 )
                 if decimal_places == 0:
+                    approximate_integer_percentage = re.search(
+                        r"(?:约|大约|约为|近|超过|不足|多于|低于|高于|"
+                        r"至少|不少于)\s*$",
+                        prefix[-10:],
+                    )
                     tolerance_floor = (
                         1.01
-                        if AgentOutputGuard._is_percentage_range_endpoint(answer, match)
+                        if (
+                            AgentOutputGuard._is_percentage_range_endpoint(
+                                answer, match
+                            )
+                            or approximate_integer_percentage
+                        )
                         else 0.51
                     )
+                    if approximate_integer_percentage:
+                        trailing_zeros = len(numeric_token) - len(
+                            numeric_token.rstrip("0")
+                        )
+                        if trailing_zeros > 0:
+                            tolerance_floor = max(
+                                tolerance_floor,
+                                0.51 * (10**trailing_zeros),
+                            )
                 elif decimal_places == 1:
                     tolerance_floor = 0.051
             else:
                 numeric_token = token.lstrip("+-").replace(",", "")
                 trailing_zeros = len(numeric_token) - len(numeric_token.rstrip("0"))
+                approximate_plain_number = re.search(
+                    r"(?:约|大约|约为|近|超过|多于|高于|至少|不少于)\s*$",
+                    prefix[-10:],
+                )
+                percentage_point_suffix = re.match(
+                    r"\s*(?:个)?百分点",
+                    answer[match.end() : match.end() + 8],
+                )
+                if re.match(
+                    r"\s*(?:个)?多(?:个)?百分点",
+                    answer[match.end() : match.end() + 8],
+                ):
+                    tolerance_floor = max(tolerance_floor, 1.01)
+                elif percentage_point_suffix:
+                    decimal_places = (
+                        len(numeric_token.rsplit(".", 1)[1])
+                        if "." in numeric_token
+                        else 0
+                    )
+                    if decimal_places == 0:
+                        tolerance_floor = max(
+                            tolerance_floor,
+                            1.01 if approximate_plain_number else 0.51,
+                        )
+                    elif decimal_places == 1:
+                        tolerance_floor = max(tolerance_floor, 0.051)
+                    elif decimal_places == 2:
+                        tolerance_floor = max(tolerance_floor, 0.006)
                 if (
                     "." not in numeric_token
                     and trailing_zeros > 0
                     and re.match(r"\s*多", answer[match.end() : match.end() + 3])
                 ):
                     approximate_upper_bound = abs(value) + 10**trailing_zeros
-                if "." not in numeric_token and re.search(
-                    r"(?:约|大约|约为|近|超过|多于|高于|至少|不少于)\s*$",
-                    prefix[-10:],
-                ):
+                if "." not in numeric_token and approximate_plain_number:
                     if trailing_zeros > 0:
                         tolerance_floor = max(
                             tolerance_floor, 0.51 * (10**trailing_zeros)
@@ -597,6 +755,19 @@ class AgentOutputGuard:
                 supported = matches(value, allowed_values, tolerance_floor) or matches(
                     abs(value), allowed_magnitudes, tolerance_floor
                 )
+                if (
+                    not supported
+                    and approximate_plain_number
+                    and re.match(
+                        r"\s*成",
+                        answer[match.end() : match.end() + 4],
+                    )
+                ):
+                    supported = matches(
+                        value * 10,
+                        allowed_values,
+                        1.01,
+                    ) or matches(value * 10, allowed_magnitudes, 1.01)
             if not supported and approximate_upper_bound is not None:
                 supported = any(
                     abs(value) <= item < approximate_upper_bound
@@ -875,10 +1046,10 @@ class AgentOutputGuard:
                     unsupported_market_inferences.append(
                         "用户询问全市场广度时回答必须给出涨跌家数和固定分类"
                     )
-            if "失效条件" in user_question and "失效条件" not in answer:
-                unsupported_market_inferences.append(
-                    "用户明确询问失效条件时回答必须包含失效条件"
-                )
+            if _asks_for_reassessment_conditions(
+                user_question
+            ) and not _answer_explains_reassessment_conditions(answer):
+                unsupported_market_inferences.append(_REASSESSMENT_REQUIRED_LABEL)
             if "不能确认" in user_question and not any(
                 term in answer
                 for term in (
@@ -974,6 +1145,14 @@ class AgentOutputGuard:
                 unsupported_market_inferences.append(_STOCK_INDUSTRY_BREADTH_LABEL)
             if _has_stock_60d_return_binding_conflict(answer, evidence):
                 unsupported_market_inferences.append(_STOCK_60D_RETURN_BINDING_LABEL)
+            if _has_stock_debt_ratio_scale_conflict(answer, evidence):
+                unsupported_market_inferences.append(_STOCK_DEBT_RATIO_SCALE_LABEL)
+            if _has_stock_cashflow_causal_conflict(answer, evidence):
+                unsupported_market_inferences.append(_STOCK_CASHFLOW_CAUSE_LABEL)
+            if _has_stock_static_financial_causal_overclaim(answer, evidence):
+                unsupported_market_inferences.append(
+                    _STOCK_STATIC_FINANCIAL_CAUSAL_LABEL
+                )
             if _has_stock_industry_causal_overclaim(answer):
                 unsupported_market_inferences.append(_STOCK_INDUSTRY_CAUSAL_LABEL)
             if _has_stock_market_absorption_overclaim(answer):
@@ -993,12 +1172,10 @@ class AgentOutputGuard:
         if (
             evidence.get("type") != "market_brief"
             and evidence.get("symbol")
-            and "失效条件" in str(evidence.get("user_question") or "")
-            and "失效条件" not in answer
+            and _asks_for_reassessment_conditions(evidence.get("user_question"))
+            and not _answer_explains_reassessment_conditions(answer)
         ):
-            unsupported_market_inferences.append(
-                "用户明确询问失效条件时回答必须包含失效条件"
-            )
+            unsupported_market_inferences.append(_REASSESSMENT_REQUIRED_LABEL)
         peer_operating = (evidence.get("peer_comparison") or {}).get(
             "operating_comparison"
         ) or {}
@@ -1377,6 +1554,16 @@ class AgentOutputGuard:
             semantic_conflicts
         ).issubset(repairable_semantic_conflicts)
         appendices: list[str | None] = []
+        quote_fact_added = False
+        if _STOCK_CURRENT_QUOTE_REQUIRED_LABEL in unsupported_market_inferences:
+            quote_fact = AgentOutputGuard._stock_current_quote_fact(evidence)
+            if quote_fact is None:
+                return None
+            answer = f"{quote_fact}\n\n{answer.lstrip()}"
+            unsupported_market_inferences.discard(
+                _STOCK_CURRENT_QUOTE_REQUIRED_LABEL
+            )
+            quote_fact_added = True
         if has_repairable_semantic_conflicts:
             if _STOCK_INDUSTRY_COUNTS_REQUIRED_LABEL in semantic_conflicts:
                 appendices.append(
@@ -1419,6 +1606,7 @@ class AgentOutputGuard:
                 and not unsupported_market_inferences
                 and not private_operational
                 and not semantic_conflicts
+                and not quote_fact_added
             )
             or prohibited
             or (semantic_conflicts and not has_repairable_semantic_conflicts)
@@ -1507,6 +1695,20 @@ class AgentOutputGuard:
             (
                 _STOCK_UNSUPPORTED_CAUSAL_HYPOTHESIS_LABEL,
                 lambda text: _has_stock_unsupported_causal_hypothesis(text, evidence),
+            ),
+            (
+                _STOCK_DEBT_RATIO_SCALE_LABEL,
+                lambda text: _has_stock_debt_ratio_scale_conflict(text, evidence),
+            ),
+            (
+                _STOCK_CASHFLOW_CAUSE_LABEL,
+                lambda text: _has_stock_cashflow_causal_conflict(text, evidence),
+            ),
+            (
+                _STOCK_STATIC_FINANCIAL_CAUSAL_LABEL,
+                lambda text: _has_stock_static_financial_causal_overclaim(
+                    text, evidence
+                ),
             ),
         ):
             if label not in unsupported_market_inferences:
@@ -1736,6 +1938,19 @@ class AgentOutputGuard:
                 and _has_stock_60d_return_binding_conflict(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
+                _STOCK_DEBT_RATIO_SCALE_LABEL in unsupported_market_inferences
+                and _has_stock_debt_ratio_scale_conflict(line, evidence)
+            )
+            line_has_unsupported_inference = line_has_unsupported_inference or (
+                _STOCK_CASHFLOW_CAUSE_LABEL in unsupported_market_inferences
+                and _has_stock_cashflow_causal_conflict(line, evidence)
+            )
+            line_has_unsupported_inference = line_has_unsupported_inference or (
+                _STOCK_STATIC_FINANCIAL_CAUSAL_LABEL
+                in unsupported_market_inferences
+                and _has_stock_static_financial_causal_overclaim(line, evidence)
+            )
+            line_has_unsupported_inference = line_has_unsupported_inference or (
                 _STOCK_INDUSTRY_CAUSAL_LABEL in unsupported_market_inferences
                 and _has_stock_industry_causal_overclaim(line)
             )
@@ -1758,6 +1973,42 @@ class AgentOutputGuard:
                 _is_public_component_source_boundary_clause(line)
                 or _is_evidence_security_entity_clause(line, evidence)
             )
+            if (
+                line_tokens & unsupported
+                and not line_has_unsupported_inference
+                and not line_has_private_operation
+                and (
+                    evidence.get("type")
+                    in {
+                        "earnings_quality",
+                        "financial_drivers",
+                        "business_structure",
+                        "shareholder_structure",
+                        "analyst_expectations",
+                        "event_timeline",
+                    }
+                    or (
+                        evidence.get("type") == "stock_research"
+                        and str(
+                            (evidence.get("research_plan") or {}).get("focus") or ""
+                        )
+                        in {"quality_review", "valuation_review"}
+                    )
+                )
+            ):
+                kept_clauses = []
+                for clause in re.split(r"(?<=[。！？；])", line):
+                    clause_tokens = {
+                        match.group(0) for match in _NUMBER_RE.finditer(clause)
+                    }
+                    if clause_tokens & unsupported:
+                        removed_count += 1
+                        continue
+                    kept_clauses.append(clause)
+                repaired_line = "".join(kept_clauses).strip()
+                if repaired_line:
+                    kept_lines.append(repaired_line)
+                continue
             if (
                 line_tokens & unsupported
                 or line_has_unsupported_inference
@@ -1790,6 +2041,21 @@ class AgentOutputGuard:
             appendix = AgentOutputGuard._market_cause_facts_appendix(evidence)
             if appendix:
                 post_repair_appendices.append(appendix)
+        if _STOCK_EVENT_SENTIMENT_LABEL in unsupported_market_inferences:
+            appendix = AgentOutputGuard._stock_event_evidence_appendix(evidence)
+            if appendix:
+                post_repair_appendices.append(appendix)
+        if (
+            _STOCK_UNSUPPORTED_CAUSAL_HYPOTHESIS_LABEL
+            in unsupported_market_inferences
+            and any(
+                term in str(evidence.get("user_question") or "")
+                for term in ("公告", "事件", "披露", "消息", "信息")
+            )
+        ):
+            appendix = AgentOutputGuard._stock_event_evidence_appendix(evidence)
+            if appendix:
+                post_repair_appendices.append(appendix)
         for appendix in post_repair_appendices:
             if appendix not in appendices:
                 appendices.append(appendix)
@@ -1800,9 +2066,18 @@ class AgentOutputGuard:
                 + "\n\n".join(str(appendix) for appendix in appendices)
             ).strip()
 
+        specialist_repair = evidence.get("type") in {
+            "earnings_quality",
+            "financial_drivers",
+            "business_structure",
+            "shareholder_structure",
+            "analyst_expectations",
+            "event_timeline",
+        }
+        minimum_repaired_length = 40 if specialist_repair else 80
         if (
-            not removed_count
-            or (len(repaired) < 80 and not unit_corrected)
+            (not removed_count and not quote_fact_added)
+            or (len(repaired) < minimum_repaired_length and not unit_corrected)
             or len(repaired) < len(answer.strip()) * 0.45
         ):
             return None
@@ -1815,6 +2090,103 @@ class AgentOutputGuard:
         if not repaired_guard["passed"]:
             return None
         return repaired, repaired_guard
+
+    @staticmethod
+    def _stock_current_quote_fact(evidence: dict[str, Any]) -> str | None:
+        if evidence.get("type") != "stock_research":
+            return None
+        quote = evidence.get("current_quote") or {}
+        price = quote.get("price")
+        change = quote.get("pct_change")
+        if not isinstance(price, (int, float)) or not isinstance(
+            change, (int, float)
+        ):
+            return None
+
+        def fmt(value: float) -> str:
+            return f"{value:.2f}".rstrip("0").rstrip(".")
+
+        currency = str(quote.get("currency") or "").upper()
+        unit = {"CNY": "元", "USD": "美元", "HKD": "港元"}.get(
+            currency, currency
+        )
+        unit = unit.strip()
+        name = str(
+            evidence.get("display_name") or quote.get("name") or evidence.get("symbol")
+        ).strip()
+        label = str(quote.get("quote_label") or "最新报价").strip()
+        market_date = str(
+            quote.get("market_date") or quote.get("market_timestamp") or ""
+        )[:10]
+        direction = "上涨" if float(change) >= 0 else "下跌"
+        date_text = f"（{market_date}）" if market_date else ""
+        unit_text = f"{unit}" if unit else ""
+        return (
+            f"最新行情：{name}{label}{date_text}为{fmt(float(price))}{unit_text}，"
+            f"较前收盘{direction}{fmt(abs(float(change)))}%。"
+        )
+
+    @staticmethod
+    def _stock_event_evidence_appendix(
+        evidence: dict[str, Any],
+    ) -> str | None:
+        if evidence.get("type") != "stock_research":
+            return None
+        events = (evidence.get("event_timeline") or {}).get("events") or []
+        selected: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for item in events:
+            if item.get("evidence_level") != "official_disclosure" and item.get(
+                "category"
+            ) != "announcement":
+                continue
+            title = str(item.get("title") or "").strip()
+            date = str(
+                item.get("event_date")
+                or item.get("published_at")
+                or item.get("notice_date")
+                or ""
+            )[:10]
+            if not title:
+                continue
+            key = (date, title)
+            if key in seen:
+                continue
+            seen.add(key)
+            selected.append(key)
+            if len(selected) >= 2:
+                break
+        if not selected:
+            return None
+        question = str(evidence.get("user_question") or "")
+        focus = str((evidence.get("research_plan") or {}).get("focus") or "")
+        if focus == "quality_review":
+            boundary = (
+                "这些正式披露确实存在；标题本身不能证明经营改善的原因或质量，"
+                "下一步需要核对原文中与本期经营、现金流和主营结构直接相关的内容。"
+            )
+        elif any(
+            term in question
+            for term in ("涨", "跌", "回撤", "异动", "企稳", "反转", "见底")
+        ):
+            boundary = (
+                "这些正式披露确实存在；标题本身不能证明它们与本次股价变化存在因果关系，"
+                "下一步需要核对公告原文中的事项内容和时间关系。"
+            )
+        else:
+            boundary = (
+                "这些正式披露确实存在；标题只能确认材料已经发布，不能代替原文对本轮问题"
+                "作出解释，下一步需要核对具体事项和披露口径。"
+            )
+        lines = [
+            "### 本轮相关公司披露",
+            *[
+                f"- {date}：{title}" if date else f"- {title}"
+                for date, title in selected
+            ],
+            boundary,
+        ]
+        return "\n".join(lines)
 
     @staticmethod
     def _market_cause_facts_appendix(evidence: dict[str, Any]) -> str | None:
@@ -2011,10 +2383,18 @@ class AgentOutputGuard:
                 names.append(f"{name}（{symbol}）")
             elif name:
                 names.append(name)
-        subject = "、".join(names) or f"{fallback_count} 只成分"
+        named_subjects = "、".join(names)
+        if (
+            isinstance(fallback_count, int)
+            and fallback_count > len(names)
+            and named_subjects
+        ):
+            subject = f"共 {fallback_count} 只成分（例如 {named_subjects}）"
+        else:
+            subject = named_subjects or f"{fallback_count} 只成分"
         primary_count = coverage.get("primary_adjusted_returns")
         primary_text = (
-            f"；其余 {primary_count} 只使用前复权日线"
+            f"；另有 {primary_count} 只使用前复权日线"
             if isinstance(primary_count, int)
             else ""
         )

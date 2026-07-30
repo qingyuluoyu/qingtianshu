@@ -399,7 +399,7 @@ def test_fund_and_risk_profile_frontend_preserves_explicit_user_boundary() -> No
         "function renderRiskProfileConfirmed", 1
     )[0]
     assert "startNewConversation" in advisor_function
-    assert '$("chatInput").value' in advisor_function
+    assert "setChatInputDraft(" in advisor_function
     assert "更适合我优先比较" in advisor_function
     assert "已经知道的条件" in advisor_function
     assert "sendChat(" not in advisor_function

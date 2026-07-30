@@ -35,6 +35,13 @@ def test_a_share_profit_cashflow_and_working_capital_drivers_are_separated(app):
         item["attribution_level"] == "confirmed_mechanical_driver"
         for item in drivers.values()
     )
+    assert (
+        drivers["gross_profit_revenue_scale_effect"]["calculation_nature"]
+        == "static_counterfactual"
+    )
+    assert "不能写成已经确认的经营原因" in drivers[
+        "gross_profit_revenue_scale_effect"
+    ]["interpretation_boundary"]
 
     clues = {item["key"]: item for item in packet["plausible_clues"]}
     assert "accounts_receivable" in clues
@@ -43,6 +50,15 @@ def test_a_share_profit_cashflow_and_working_capital_drivers_are_separated(app):
     assert packet["cashflow_analysis"][
         "cash_received_from_sales_ratio_change_pp"
     ] == pytest.approx(-6.894, abs=0.001)
+    cashflow = packet["cashflow_analysis"]
+    expected_change_pct = (
+        cashflow["operating_cashflow"]
+        / cashflow["comparable_operating_cashflow"]
+        - 1
+    ) * 100
+    assert cashflow["operating_cashflow_change_pct"] == pytest.approx(
+        expected_change_pct, abs=0.001
+    )
     assert all(item["attribution_level"] == "plausible_clue" for item in clues.values())
     assert any("尚未由三表科目确认" in item for item in packet["unresolved_causes"])
 

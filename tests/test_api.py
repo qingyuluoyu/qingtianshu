@@ -115,6 +115,61 @@ def test_visible_evidence_sources_include_structured_stock_evidence():
     assert sources[-1]["url"] == "https://example.invalid/news"
 
 
+def test_relative_industry_visible_sources_only_keep_relevant_evidence():
+    sources = _build_visible_evidence_sources(
+        {
+            "type": "stock_research",
+            "display_name": "宁德时代",
+            "research_plan": {"focus": "relative_industry"},
+            "metrics": {
+                "return_60d_pct": -12.1663,
+                "max_drawdown_60d_pct": -24.1826,
+            },
+            "provenance": {"market_timestamp": "2026-07-28T16:00:00+08:00"},
+            "li_zong_strategy": {"status": "not_qualified"},
+            "research_frame": {
+                "missing_information": ["公司最新公告尚未接入"]
+            },
+            "stock_market_context": {
+                "analysis_target": {"market_date": "2026-07-28"},
+                "exact_industry_index": {
+                    "name": "CS电池",
+                    "index_code": "931719",
+                    "market_date": "2026-07-28",
+                    "return_1d_pct": -2.82,
+                    "stock_return_1d_pct": -2.285,
+                    "stock_minus_industry_pct": 0.535,
+                    "component_breadth": {
+                        "status": "available",
+                        "advancers": 6,
+                        "decliners": 44,
+                        "unchanged": 0,
+                        "median_pct_change": -2.2885,
+                        "coverage": {
+                            "constituents": 50,
+                            "available_returns": 50,
+                        },
+                        "source_fallbacks": [
+                            {"symbol": "920185.BJ", "name": "贝特瑞"}
+                        ],
+                    },
+                },
+            },
+        }
+    )
+
+    assert [item["kind"] for item in sources] == [
+        "行业对照",
+        "行业成分",
+        "口径边界",
+        "反方证据",
+    ]
+    assert "公司减行业 +0.54 个百分点" in sources[0]["summary"]
+    assert "有效收益 50/50 只" in sources[1]["summary"]
+    assert "尚未接入" not in str(sources)
+    assert "李总策略" not in str(sources)
+
+
 def test_price_move_visible_sources_only_keep_same_date_causal_evidence():
     sources = _build_visible_evidence_sources(
         {
@@ -174,6 +229,13 @@ def test_price_move_visible_sources_only_keep_same_date_causal_evidence():
             "a_share_information": {
                 "announcements": [
                     {
+                        "title": "盘中同日公司公告",
+                        "published_at": "2026-07-24T14:00:00+08:00",
+                        "source": "深交所",
+                        "url": "https://example.invalid/announcement",
+                        "summary": "公司公告原文摘录：公司披露重大合同仍在正常履行。",
+                    },
+                    {
                         "title": "7月20日旧回购公告",
                         "published_at": "2026-07-20T18:00:00+08:00",
                         "source": "深交所",
@@ -202,10 +264,14 @@ def test_price_move_visible_sources_only_keep_same_date_causal_evidence():
         "市场对照",
         "市场广度",
         "行业对照",
+        "同日公告",
         "同日线索",
         "收盘后边界",
     ]
     assert "7月20日旧回购公告" not in titles
+    official = next(item for item in sources if item["kind"] == "同日公告")
+    assert "重大合同仍在正常履行" in official["summary"]
+    assert "不等于已证明价格因果" in official["summary"]
     assert all("财报" not in item["kind"] for item in sources)
     assert all("20日" not in item.get("summary", "") for item in sources)
 
@@ -772,6 +838,103 @@ def test_price_cause_stock_question_excludes_generated_stock_archives():
     assert "upload:user-note" in source_keys
 
 
+def test_mixed_stock_research_excludes_cross_stock_generated_user_summaries():
+    filtered = _filter_knowledge_context(
+        {
+            "items": [
+                {
+                    "scope": "user",
+                    "source_key": "research-actions:user-1",
+                    "title": "我的最新研究行动与观察条件",
+                    "excerpt": "另一只股票20日年化波动率115.10%。",
+                },
+                {
+                    "scope": "user",
+                    "source_key": "research-priority:user-1",
+                    "title": "我的研究优先级",
+                },
+                {
+                    "scope": "common",
+                    "source_key": "financial-drivers:000065.SZ",
+                    "title": "北方国际利润与现金流驱动",
+                },
+                {
+                    "scope": "common",
+                    "source_key": "financial-drivers:000063.SZ",
+                    "title": "中兴通讯利润与现金流驱动",
+                },
+                {
+                    "scope": "user",
+                    "source_key": "upload:north-note",
+                    "title": "我的北方国际调研笔记",
+                },
+            ]
+        },
+        intent="stock_research",
+        symbol="000065.SZ",
+        evidence={
+            "user_question": "北方国际回撤与财务和现金流变化有什么关系？",
+            "research_plan": {"focus": "mixed"},
+        },
+    )
+
+    source_keys = {item["source_key"] for item in filtered["items"]}
+    assert source_keys == {
+        "financial-drivers:000065.SZ",
+        "upload:north-note",
+    }
+
+
+def test_quality_review_knowledge_keeps_user_upload_but_drops_generated_reports():
+    filtered = _filter_knowledge_context(
+        {
+            "items": [
+                {
+                    "scope": "common",
+                    "source_key": "research-report:300750.SZ",
+                    "title": "宁德时代利润与现金流驱动分析",
+                    "excerpt": "收入规模对应毛利增加245.301亿元。",
+                },
+                {
+                    "scope": "common",
+                    "source_key": "financial-drivers:300750.SZ",
+                    "title": "宁德时代利润与现金流驱动",
+                    "excerpt": "预生成机械拆解正文。",
+                },
+                {
+                    "scope": "common",
+                    "source_key": "filing-evidence:300750.SZ:2026-06-30",
+                    "title": "宁德时代2026中报原文证据",
+                    "excerpt": "原文已在结构化证据包中按问题筛选。",
+                },
+                {
+                    "scope": "common",
+                    "source_key": "builtin:evidence-hierarchy.md",
+                    "title": "证据层级",
+                    "excerpt": "通用资料由Skill承担。",
+                },
+                {
+                    "scope": "user",
+                    "source_key": "upload:catl-note",
+                    "title": "我的宁德时代调研笔记",
+                    "excerpt": "用户要求重点核对海外业务风险。",
+                },
+            ]
+        },
+        intent="stock_research",
+        symbol="300750.SZ",
+        evidence={
+            "user_question": "宁德时代经营改善是否有质量？",
+            "research_plan": {"focus": "quality_review"},
+        },
+    )
+
+    assert [item["source_key"] for item in filtered["items"]] == [
+        "upload:catl-note"
+    ]
+    assert filtered["coverage"]["matched_documents"] == 1
+
+
 def test_financial_advisor_knowledge_excludes_unrelated_stock_archives():
     filtered = _filter_knowledge_context(
         {
@@ -866,6 +1029,8 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "createInteractiveKline" in chart_asset.text
     assert 'id="useHermesLabel" class="model-toggle" hidden' in frontend
     assert "研究深度" in frontend
+    assert "深入（回答更全面，等待更久）" in frontend
+    assert '$("modelTier").value = "deep"' not in frontend
     assert "按时间从新到旧" in frontend
     assert "当前交易中" in frontend
     assert "当前估算开盘" not in frontend
@@ -1126,8 +1291,16 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "!event.isComposing" in frontend
     assert "event.keyCode !== 229" in frontend
     assert '$("chatForm").requestSubmit()' in frontend
+    assert "function setChatInputDraft(value, options = {})" in frontend
+    assert "state.chatDraftUserEdited = true" in frontend
+    assert "expectedRevision !== state.chatDraftRevision" in frontend
     assert "function finalizeStreamingMessage(" in frontend
     assert "async function renderVerifiedAnswerProgressively(" in frontend
+    assert "function compactAnswerTextForComparison(" in frontend
+    assert (
+        "compactAnswerTextForComparison(finalMain) === compactAnswerTextForComparison(partialText)"
+        in frontend
+    )
     assert "function renderGuardedPartialAnswer(" in frontend
     assert "function splitAnswerFootnotes(" in frontend
     assert 'summary.textContent = "数据口径"' in frontend
@@ -1136,6 +1309,10 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'node?.dataset.userNavigatedDuringRun === "true"' in frontend
     assert "function scrollAgentMessage(" in frontend
     assert "scrollAgentMessage(node, {anchorStart: longAnswer})" in frontend
+    assert "node.getBoundingClientRect().top" in frontend
+    assert "messages.getBoundingClientRect().top + messages.scrollTop" in frontend
+    assert "const visibleTop = 92" in frontend
+    assert "window.scrollY + messagesTop - visibleTop" in frontend
     assert '$("messages").addEventListener("wheel", markActiveAgentScrollIntent' in frontend
     assert '$("messages").addEventListener("pointerdown", markActiveAgentScrollIntent' in frontend
     assert '["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]' in frontend
@@ -1202,6 +1379,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "打开原始公告或信息源" in frontend
     assert 'api("/me/deep-stock?limit=50")' in frontend
     assert 'api("/me/deep-stock", {' in frontend
+    assert "industry: item.industry || null" in frontend
     assert "deepStockLoaded: false" in frontend
     assert "deepStockLoadPromise: null" in frontend
     assert "正在恢复绑定对话" in frontend
@@ -1291,7 +1469,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "已确认的证据" in frontend
     assert "关键反证与压力" in frontend
     assert "仍需补证" in frontend
-    assert "判断失效条件" in frontend
+    assert "什么时候需要重新判断" in frontend
     assert "下一步研究" in frontend
     assert frontend.index('id="stockSpaceAiPane"') < frontend.index('id="deepStockJourney"') < frontend.index('id="stockSpaceEvidencePane"')
     assert 'aiPane.insertBefore(agent, journey)' in frontend
@@ -1309,7 +1487,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "const marketKey = inferDiagnosisMarketKey(data, question)" in frontend
     assert 'const marketTerms = new Set(["A", "AI", "ETF"' in frontend
     assert 'activateWorkspace("agent")' in frontend
-    assert '$("chatInput").value = "";' in frontend
+    assert "clearChatInputDraft();" in frontend
     assert "body.agent-page #agentSection" in frontend
     assert 'api("/research-method?limit=4")' in frontend
     assert 'api("/me/research-actions")' in frontend
@@ -2649,7 +2827,7 @@ def test_market_conversation_followup_keeps_market_and_region_context(client, ap
     assert "中兴通讯长期研究档案" not in counter_prompt
     assert "美国股市" in counter_prompt
     assert "必须引用其中至少一条作为事件线索" in counter_prompt
-    assert "最终回答必须包含标题“失效条件”" in counter_prompt
+    assert "最终回答必须包含标题“什么时候需要重新判断”" in counter_prompt
 
 
 def test_market_trend_followup_refreshes_market_evidence(client):

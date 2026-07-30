@@ -637,14 +637,27 @@ class DataHealthService:
                 latest_periods[0].get("report_date") if latest_periods else None
             )
             anchor_report_date = payload.get("anchor_report_date")
+            peers = list(payload.get("peers") or [])
+            period_mismatch_peers = [
+                item
+                for item in peers
+                if item.get("status") == "period_mismatch"
+                and item.get("latest_available_financial") is not None
+            ]
+            all_requested_peers_accounted_for = bool(requested) and (
+                comparable + len(period_mismatch_peers) == requested
+            )
             if snapshot is None:
                 status, label = "critical", f"{symbol}缺少同行经营比较"
             elif latest_report_date and anchor_report_date != latest_report_date:
                 status, label = "attention", f"{symbol}同行经营比较待更新"
             elif requested and comparable == requested:
                 status, label = "healthy", f"{symbol}同行经营比较正常"
-            elif comparable >= 2:
-                status, label = "attention", f"{symbol}同行经营样本部分可比"
+            elif all_requested_peers_accounted_for:
+                status, label = (
+                    "attention",
+                    f"{symbol}同行尚未披露同报告期数据",
+                )
             else:
                 status, label = "critical", f"{symbol}同行经营样本不足"
             checks.append(
@@ -657,6 +670,7 @@ class DataHealthService:
                     latest_report_date=latest_report_date,
                     requested_peers=requested,
                     same_period_financial_peers=comparable,
+                    period_mismatch_peers=len(period_mismatch_peers),
                     business_profile_peers=coverage.get("business_profile_peers", 0),
                 )
             )

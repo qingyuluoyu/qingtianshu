@@ -146,6 +146,22 @@ class StructuredAIService:
             # reintroduce old filings, technical indicators and financial
             # history that the user did not ask to review.
             return None
+        if (
+            str((evidence.get("research_plan") or {}).get("focus") or "")
+            == "relative_industry"
+            and not any(
+                (
+                    self._wants_thesis_writeback(message),
+                    self._wants_observation_task_writeback(message),
+                    self._wants_action_plan_writeback(message),
+                )
+            )
+        ):
+            # This narrow turn already exposes a small, purpose-built industry
+            # source list.  The broad stock claim ledger would otherwise add
+            # unrelated technical, strategy and module-gap cards below an
+            # otherwise focused answer.
+            return None
         ledger = evidence.get("research_claims") or build_research_claim_ledger(
             evidence
         )

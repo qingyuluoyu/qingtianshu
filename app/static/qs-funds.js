@@ -97,7 +97,7 @@ function fundKindLabel(value) {
 
     function openRiskProfileAdvisor() {
       startNewConversation(true, "push");
-      $("chatInput").value = "请结合我已经确认的风险画像，帮我梳理哪些基金、ETF或低波动工具更适合我优先比较。先告诉我你已经知道的条件，再只问仍会改变判断的关键信息；说明每类产品的主要亏损方式、流动性和费用边界。不要替我直接决定产品，也不要给收益承诺。";
+      setChatInputDraft("请结合我已经确认的风险画像，帮我梳理哪些基金、ETF或低波动工具更适合我优先比较。先告诉我你已经知道的条件，再只问仍会改变判断的关键信息；说明每类产品的主要亏损方式、流动性和费用边界。不要替我直接决定产品，也不要给收益承诺。", {force: true});
       $("chatInput").focus();
     }
 

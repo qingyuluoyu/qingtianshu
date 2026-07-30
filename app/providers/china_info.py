@@ -22,10 +22,29 @@ _LOW_SIGNAL_NEWS_RE = re.compile(
     r"(?:目标价|券商评级|评级观察|获推荐|强烈推荐|买入评级|卖出评级)",
     re.IGNORECASE,
 )
+_DIRECT_ANNOUNCEMENT_PRIORITY: tuple[tuple[int, re.Pattern[str]], ...] = (
+    (100, re.compile(r"投资者关系活动记录表|业绩说明会|调研")),
+    (95, re.compile(r"立案|处罚|调查|问询函|监管函|诉讼|仲裁|风险提示")),
+    (90, re.compile(r"业绩预告|业绩快报|经营情况|产销|订单|中标|重大合同")),
+    (75, re.compile(r"回购|增持|减持|质押|分红|权益分派|重大事项")),
+    (65, re.compile(r"收购|并购|重组|出售资产|定增|可转债|担保|借款|授信")),
+)
+
+
+def _announcement_excerpt(value: Any, limit: int = 900) -> str:
+    text = html.unescape(str(value or ""))
+    text = re.sub(r"[\u3000\xa0]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) < 40:
+        return ""
+    return text[: max(120, limit)].rstrip("，；：、 ")
 
 
 class AShareInformationProvider:
     ANNOUNCEMENT_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+    ANNOUNCEMENT_CONTENT_URL = (
+        "https://np-cnotice-stock.eastmoney.com/api/content/ann"
+    )
     SINA_NEWS_URL = "https://vip.stock.finance.sina.com.cn/corp/view/vCB_AllNewsStock.php"
     GUBA_URL = "https://guba.eastmoney.com/list,{code}.html"
 
@@ -68,9 +87,73 @@ class AShareInformationProvider:
                     ),
                     "engagement": None,
                     "fetched_at": utc_now(),
+                    "article_code": str(article_code),
                 }
             )
+        self._attach_direct_announcement_excerpts(items)
         return items
+
+    def _attach_direct_announcement_excerpts(
+        self, items: list[dict[str, Any]], limit: int = 3
+    ) -> None:
+        """Hydrate a few decision-relevant announcements with company text.
+
+        Announcement titles are useful for discovery but cannot support an
+        operating conclusion. Fetching every attachment would slow routine
+        refreshes, so only a bounded set of high-signal disclosures receives a
+        first-page direct excerpt. The excerpt is persisted in ``summary`` and
+        can therefore be retrieved by the Agent without replaying a generated
+        research report.
+        """
+
+        ranked: list[tuple[int, int, dict[str, Any]]] = []
+        for index, item in enumerate(items):
+            title = str(item.get("title") or "")
+            priority = max(
+                (
+                    score
+                    for score, pattern in _DIRECT_ANNOUNCEMENT_PRIORITY
+                    if pattern.search(title)
+                ),
+                default=0,
+            )
+            if priority:
+                ranked.append((-priority, index, item))
+        selected = [item for _, _, item in sorted(ranked)[: max(1, limit)]]
+
+        for item in selected:
+            article_code = str(item.get("article_code") or "").strip()
+            if not article_code:
+                continue
+            try:
+                response = self.http_get(
+                    self.ANNOUNCEMENT_CONTENT_URL,
+                    params={
+                        "art_code": article_code,
+                        "client_source": "web",
+                        "page_index": 1,
+                    },
+                    headers={
+                        "User-Agent": _UA,
+                        "Referer": "https://data.eastmoney.com/",
+                    },
+                    timeout=15,
+                )
+                response.raise_for_status()
+                data = (response.json() or {}).get("data") or {}
+                excerpt = _announcement_excerpt(data.get("notice_content"))
+                if not excerpt:
+                    continue
+                item["summary"] = f"公司公告原文摘录：{excerpt}"
+                item["direct_content_status"] = "available"
+                item["attach_url"] = data.get("attach_url_web") or data.get(
+                    "attach_url"
+                )
+            except Exception:
+                # The title remains a valid discovery record. A failed direct
+                # excerpt must not make the whole company-information refresh
+                # unavailable.
+                item["direct_content_status"] = "title_only"
 
     def fetch_company_news(self, symbol: str, limit: int = 30) -> list[dict[str, Any]]:
         canonical, code, market_prefix = _a_share_identity(symbol)

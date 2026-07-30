@@ -3,7 +3,6 @@ function tone(value) {
       if (value < 0) return "down";
       return "flat";
     }
-
     function watchlistQuote(item) {
       const current = item.current_quote || item.quote || {};
       const change = current.pct_change ?? item.metrics?.return_1d_pct;
@@ -15,7 +14,6 @@ function tone(value) {
         status: current.status || item.status
       };
     }
-
     function appendInlineMarkdown(target, text) {
       const pattern = /(\*\*[^*\n]+\*\*|`[^`\n]+`)/g;
       let cursor = 0;
@@ -34,7 +32,6 @@ function tone(value) {
       }
       if (cursor < text.length) target.appendChild(document.createTextNode(text.slice(cursor)));
     }
-
     function renderMarkdown(text) {
       const fragment = document.createDocumentFragment();
       const lines = String(text || "").replace(/\r\n/g, "\n").split("\n");
@@ -108,7 +105,6 @@ function tone(value) {
       appendCode();
       return fragment;
     }
-
     function appendMessageSources(node, metadata) {
       const answerSources = collectAnswerSources(metadata);
       const sourceCount = answerSources.length;
@@ -148,7 +144,6 @@ function tone(value) {
       sources.append(summary, list);
       node.appendChild(sources);
     }
-
     function aiWritebackPresentation(candidate) {
       const payload = candidate.payload || {};
       if (candidate.candidate_type === "observation_task") return {
@@ -192,7 +187,6 @@ function tone(value) {
         stale: "正式判断已更新，这份草稿已失效。"
       };
     }
-
     function appendAIWritebackCandidate(host, candidate, options = {}) {
       const presentation = aiWritebackPresentation(candidate);
       const card = document.createElement("div"); card.className = "ai-writeback-card";
@@ -236,7 +230,6 @@ function tone(value) {
       void api(`/v1/ai-writebacks/${encodeURIComponent(candidate.id)}`).then(current => applyStatus(current.status)).catch(() => {});
       return card;
     }
-
     function appendStructuredAnswer(node, metadata) {
       const structured = metadata?.structured_answer || metadata?.structuredAnswer;
       if (!structured || structured.contract_version !== "structured_ai_response_v1") return;
@@ -252,7 +245,6 @@ function tone(value) {
       const summary = document.createElement("summary");
       summary.textContent = `结构化证据 · 事实 ${facts.length} · 反证 ${risks.length} · 待核验 ${hypotheses.length + gaps.length}`;
       const body = document.createElement("div"); body.className = "structured-answer-body";
-
       const appendSection = (label, items, fallbackText = "") => {
         if (!(items || []).length && !fallbackText) return;
         const section = document.createElement("div"); section.className = "structured-answer-section";
@@ -281,22 +273,19 @@ function tone(value) {
         }
         body.appendChild(section);
       };
-
       appendSection("已确认事实", facts);
       appendSection("证据支持的推断", inferences);
       appendSection("反方证据与风险", risks);
       appendSection("待验证假设", hypotheses);
       appendSection("信息缺口", gaps);
-      appendSection("失效条件", invalidations);
+      appendSection("什么时候需要重新判断", invalidations);
       appendSection("下一步核验", nextTasks);
       appendSection("结论边界", [], structured.conclusion_boundary || "");
       details.append(summary, body); node.appendChild(details);
-
       for (const candidate of (structured.candidate_writebacks || [])) {
         appendAIWritebackCandidate(node, candidate);
       }
     }
-
     function appendMessageActions(node, text) {
       const actions = document.createElement("div"); actions.className = "message-actions";
       const copy = document.createElement("button");
@@ -310,7 +299,6 @@ function tone(value) {
       });
       actions.appendChild(copy); node.appendChild(actions);
     }
-
     function appendAgentRunBoundary(node, {kind = "degraded", title, copy, question}) {
       if (!node) return;
       node.querySelectorAll(":scope > .agent-run-boundary").forEach(item => item.remove());
@@ -340,7 +328,6 @@ function tone(value) {
       boundary.append(heading, detail, actions);
       node.appendChild(boundary);
     }
-
     function renderAgentFailure(node, question, error, directHermes) {
       const title = directHermes ? "本轮即时研究没有完成" : "Hermes 当前未连接";
       const copy = directHermes
@@ -364,7 +351,6 @@ function tone(value) {
         question
       });
     }
-
     function renderMessageContent(node, role, text, pending, metadata) {
       node.textContent = "";
       if (role === "agent" && !pending) {
@@ -376,7 +362,6 @@ function tone(value) {
         node.textContent = text;
       }
     }
-
     function addMessage(role, text, pending = false, metadata = null) {
       const node = document.createElement("div");
       node.className = `message ${role}${pending ? " pending" : ""}`;
@@ -386,7 +371,6 @@ function tone(value) {
       $("messages").scrollTop = $("messages").scrollHeight;
       return node;
     }
-
     function replaceMessageContent(node, text, metadata = null) {
       if (!node) return;
       node.classList.remove("pending");
@@ -394,7 +378,6 @@ function tone(value) {
       node.agentEvidenceProgress = null;
       renderMessageContent(node, "agent", text, false, metadata);
     }
-
     function appendFinalMessageMetadata(node, text, metadata = null) {
       if (!node || !metadata) return;
       node.querySelectorAll(":scope > .structured-answer, :scope > .message-sources, :scope > .ai-writeback-card, :scope > .message-actions")
@@ -403,19 +386,28 @@ function tone(value) {
       appendMessageSources(node, metadata);
       appendMessageActions(node, text);
     }
-
     function userNavigatedDuringAgentRun(node) {
       return node?.dataset.userNavigatedDuringRun === "true";
     }
-
     function scrollAgentMessage(node, {anchorStart = false} = {}) {
       if (!node?.isConnected || userNavigatedDuringAgentRun(node)) return;
       const messages = $("messages");
+      const relativeTop = node.getBoundingClientRect().top
+        - messages.getBoundingClientRect().top + messages.scrollTop;
       messages.scrollTop = anchorStart
-        ? Math.max(0, node.offsetTop - 12)
+        ? Math.max(0, relativeTop - 12)
         : messages.scrollHeight;
+      if (anchorStart) {
+        const visibleTop = 92;
+        const messagesTop = messages.getBoundingClientRect().top;
+        if (messagesTop < visibleTop || messagesTop > window.innerHeight * .35) {
+          window.scrollTo({
+            top: Math.max(0, window.scrollY + messagesTop - visibleTop),
+            behavior: "smooth"
+          });
+        }
+      }
     }
-
     function finalizeStreamingMessage(node, text, metadata = null, options = {}) {
       if (!node) return null;
       const finalText = String(text || "");
@@ -434,16 +426,47 @@ function tone(value) {
       scrollAgentMessage(node, {anchorStart: longAnswer});
       return node;
     }
-
     function verifiedAnswerBlocks(text) {
       const blocks = String(text || "").trim().split(/\n{2,}/).map(item => item.trim()).filter(Boolean);
       return blocks.length ? blocks : [String(text || "")];
     }
-
+    function compactAnswerTextForComparison(text) {
+      return String(text || "").replace(/\s+/g, "");
+    }
     async function renderVerifiedAnswerProgressively(node, text) {
       if (!node || node.dataset.finalAnswerVisible === "true") return node;
       const finalText = String(text || "");
       if (node.dataset.guardedPartialVisible === "true") {
+        const finalSections = splitAnswerFootnotes(finalText);
+        const finalMain = String(finalSections.main || "").trim();
+        const partialText = String(node.dataset.guardedPartialText || "").trim();
+        const body = node.querySelector(":scope > .message-body");
+        if (body && partialText && finalMain.startsWith(partialText)) {
+          const suffix = finalMain.slice(partialText.length).trim();
+          if (suffix) body.appendChild(renderMarkdown(suffix));
+          node.querySelector(":scope > .guarded-stream-label")?.remove();
+          appendAnswerFootnotes(node, finalSections.footnotes);
+          node.classList.remove("pending", "streaming-progress", "guarded-streaming-answer");
+          node.classList.add("stream-finalized");
+          node.dataset.finalAnswerVisible = "true";
+          node.dataset.finalAnswer = finalText;
+          scrollAgentMessage(node, {anchorStart: finalText.length > 520});
+          return node;
+        }
+        if (
+          body
+          && partialText
+          && compactAnswerTextForComparison(finalMain) === compactAnswerTextForComparison(partialText)
+        ) {
+          node.querySelector(":scope > .guarded-stream-label")?.remove();
+          appendAnswerFootnotes(node, finalSections.footnotes);
+          node.classList.remove("pending", "streaming-progress", "guarded-streaming-answer");
+          node.classList.add("stream-finalized");
+          node.dataset.finalAnswerVisible = "true";
+          node.dataset.finalAnswer = finalText;
+          scrollAgentMessage(node, {anchorStart: finalText.length > 520});
+          return node;
+        }
         return finalizeStreamingMessage(node, finalText);
       }
       const sections = splitAnswerFootnotes(finalText);
@@ -469,11 +492,26 @@ function tone(value) {
       node.classList.remove("verified-progressive-answer");
       return node;
     }
-
     function renderGuardedPartialAnswer(node, text) {
       if (!node?.isConnected || node.dataset.finalAnswerVisible === "true") return;
       const draft = String(text || "").trim();
-      if (!draft || draft === node.dataset.guardedPartialText) return;
+      const sections = splitAnswerFootnotes(draft);
+      const mainText = String(sections.main || "").trim();
+      if (!mainText || mainText === node.dataset.guardedPartialText) return;
+      const previousText = String(node.dataset.guardedPartialText || "").trim();
+      const existingBody = node.querySelector(":scope > .message-body");
+      if (
+        node.dataset.guardedPartialVisible === "true"
+        && existingBody
+        && previousText
+        && mainText.startsWith(previousText)
+      ) {
+        const suffix = mainText.slice(previousText.length).trim();
+        if (suffix) existingBody.appendChild(renderMarkdown(suffix));
+        node.dataset.guardedPartialText = mainText;
+        scrollAgentMessage(node, {anchorStart: true});
+        return;
+      }
       node.classList.remove("pending");
       node.classList.add("streaming-progress", "guarded-streaming-answer");
       node.agentEvidenceProgress = null;
@@ -482,15 +520,12 @@ function tone(value) {
       label.className = "guarded-stream-label";
       label.textContent = "正在生成 · 已显示目前可确认的内容";
       const body = document.createElement("div"); body.className = "message-body";
-      const sections = splitAnswerFootnotes(draft);
-      body.appendChild(renderMarkdown(sections.main));
+      body.appendChild(renderMarkdown(mainText));
       node.append(label, body);
-      appendAnswerFootnotes(node, sections.footnotes);
       node.dataset.guardedPartialVisible = "true";
-      node.dataset.guardedPartialText = draft;
+      node.dataset.guardedPartialText = mainText;
       scrollAgentMessage(node, {anchorStart: true});
     }
-
     function markActiveAgentScrollIntent() {
       for (const request of state.pendingAgentRequests.values()) {
         const node = request?.node || request;
@@ -499,7 +534,6 @@ function tone(value) {
         }
       }
     }
-
     $("messages").addEventListener("wheel", markActiveAgentScrollIntent, {passive: true});
     $("messages").addEventListener("touchstart", markActiveAgentScrollIntent, {passive: true});
     $("messages").addEventListener("pointerdown", markActiveAgentScrollIntent, {passive: true});
@@ -508,7 +542,6 @@ function tone(value) {
       if (event.target?.closest?.("input, textarea, select, [contenteditable='true']")) return;
       markActiveAgentScrollIntent();
     });
-
     function renderStreamingProgress(node, label = "AI 正在整理证据并生成回答…", evidenceProgress = null) {
       if (!node?.isConnected || node.dataset.finalAnswerVisible === "true") return;
       if (node.dataset.guardedPartialVisible === "true") return;
@@ -538,7 +571,6 @@ function tone(value) {
         anchorStart: firstEvidenceSummary && card.offsetHeight > messages.clientHeight * .62
       });
     }
-
     function connectPrivateAgentStream(requestId, pending) {
       const source = new EventSource(`/me/chat/stream/${encodeURIComponent(requestId)}`);
       const context = {node: pending, source, finalText: "", finalShown: false, opened: false};
@@ -571,6 +603,11 @@ function tone(value) {
             }
           }
           if (data.type === "agent_stream_status" && data.label && !context.finalShown) {
+            if (data.reset === true) {
+              delete pending.dataset.guardedPartialVisible;
+              delete pending.dataset.guardedPartialText;
+              pending.classList.remove("guarded-streaming-answer");
+            }
             renderStreamingProgress(pending, data.label);
           }
           if (["agent_stream_complete", "agent_stream_error"].includes(data.type)) source.close();
@@ -582,14 +619,12 @@ function tone(value) {
       };
       return {source, ready, context};
     }
-
     function visibleConversationItems(items = []) {
       return items.filter(item => state.evaluationMode
         ? item.quality_scope === "evaluation"
         : item.quality_scope !== "evaluation")
         .filter(item => Number(item.message_count || 0) > 0 || item.id === state.conversationId);
     }
-
     function conversationDateSection(value) {
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) return {key: "unknown", label: "更早"};
@@ -602,7 +637,6 @@ function tone(value) {
       if (dayOffset < 7) return {key: "recent", label: "最近 7 天"};
       return {key: "older", label: "更早"};
     }
-
     function conversationTopicKey(item) {
       return String(item?.title || "新的研究对话")
         .replace(/\s+/g, " ")
@@ -610,7 +644,6 @@ function tone(value) {
         .trim()
         .toLocaleLowerCase("zh-CN");
     }
-
     function conversationScopeKey(item) {
       const explicitScope = String(item?.conversation_scope || "").trim();
       if (["stock", "market", "screening", "portfolio", "funds", "other"].includes(explicitScope)) return explicitScope;
@@ -637,11 +670,9 @@ function tone(value) {
       if (/个股|股票|公司|行业|财报|公告|估值|股东|[036]\d{5}/.test(text)) return "stock";
       return "other";
     }
-
     function conversationScopeLabel(item) {
       return {stock: "个股", market: "大盘", screening: "选股", portfolio: "关注", funds: "基金理财", other: "其他"}[conversationScopeKey(item)] || "其他";
     }
-
     function conversationResearchTargets(item) {
       const output = [];
       for (const target of (item?.research_targets || [])) {
@@ -651,7 +682,6 @@ function tone(value) {
       }
       return output;
     }
-
     function conversationStockFilterOptions(items = []) {
       const options = new Map();
       for (const item of items) {
@@ -665,7 +695,6 @@ function tone(value) {
       }
       return [...options.values()].sort((left, right) => right.count - left.count || left.name.localeCompare(right.name, "zh-CN"));
     }
-
     function syncConversationScopeOptions() {
       const baseOptions = [
         ["all", "全部"], ["stock", "个股"], ["market", "大盘"],
@@ -694,7 +723,6 @@ function tone(value) {
         select.value = state.conversationScope;
       }
     }
-
     function filteredConversationItems(items = []) {
       const query = String(state.conversationQuery || "")
         .trim()
@@ -721,18 +749,14 @@ function tone(value) {
           return text.includes(query);
         });
     }
-
     const RECENT_CONVERSATION_TOPIC_LIMIT = 8;
-
     function conversationHistoryTopicKey(item) {
       const section = conversationDateSection(item?.updated_at);
       return `${section.key}:${conversationTopicKey(item)}`;
     }
-
     function conversationTopicCount(items = []) {
       return new Set(items.map(conversationHistoryTopicKey)).size;
     }
-
     function recentConversationItems(items = [], topicLimit = RECENT_CONVERSATION_TOPIC_LIMIT) {
       const selectedTopics = new Set();
       const activeItem = items.find(item => item.id === state.conversationId);
@@ -744,7 +768,6 @@ function tone(value) {
       }
       return items.filter(item => selectedTopics.has(conversationHistoryTopicKey(item)));
     }
-
     function syncConversationFilterControls(filteredCount, displayState = {}) {
       const showFilters = state.conversations.length >= 8;
       $("conversationFilters").hidden = !showFilters;
@@ -758,7 +781,6 @@ function tone(value) {
         ? `最近 ${displayState.topicCount || 0} 个主题 · 共 ${state.conversations.length} 个对话`
         : `${state.conversations.length} 个历史对话，可按标题或最近内容查找`;
     }
-
     function createConversationRow(item) {
       const row = document.createElement("div");
       row.className = `conversation-row${item.id === state.conversationId ? " active" : ""}`;
@@ -779,7 +801,6 @@ function tone(value) {
       row.append(open, remove);
       return row;
     }
-
     function appendConversationGroups(container, items) {
       const sections = new Map();
       for (const item of items) {
@@ -830,7 +851,6 @@ function tone(value) {
         container.appendChild(group);
       }
     }
-
     function appendConversationHistoryToggle(container, {expanded, total}) {
       const button = document.createElement("button");
       button.className = "conversation-history-toggle";
@@ -844,7 +864,6 @@ function tone(value) {
       });
       container.appendChild(button);
     }
-
     function renderConversationList(items = null) {
       if (Array.isArray(items)) state.conversations = visibleConversationItems(items);
       const filteredItems = filteredConversationItems(state.conversations);
@@ -899,18 +918,8 @@ function tone(value) {
       renderAgentResearchContext();
       renderAccountCenter();
     }
-
-    async function loadConversations(openLatest = false, activatePage = false) {
-      if (!state.user) return;
-      const data = await api("/me/conversations?limit=100");
-      const visibleItems = visibleConversationItems(data.items || []);
-      renderConversationList(visibleItems);
-      if (openLatest && !state.conversationId && visibleItems.length) {
-        await openConversation(visibleItems[0].id, activatePage);
-      }
-    }
-
     async function openConversation(conversationId, activatePage = true, historyMode = null) {
+      const draftRevision = state.chatDraftRevision;
       if (activatePage) activateWorkspace("agent", {historyMode: "none"});
       const data = await api(`/me/conversations/${encodeURIComponent(conversationId)}`);
       const nextEvaluationMode = data.quality_scope === "evaluation";
@@ -955,7 +964,9 @@ function tone(value) {
         state.agentContextQuestion = boundDeepStockSession.next_question || data.title || "";
         await loadStockDiagnosis(boundDeepStockSession.symbol);
         if (boundDeepStockSession.next_question && !$("chatInput").value.trim()) {
-          $("chatInput").value = boundDeepStockSession.next_question;
+          setChatInputDraft(boundDeepStockSession.next_question, {
+            expectedRevision: draftRevision
+          });
         }
       }
       renderConversationList(state.conversations);
@@ -965,31 +976,4 @@ function tone(value) {
       if (state.workspacePage === "agent") syncWorkspaceUrl(historyMode || (activatePage ? "push" : "replace"));
       else if (stockAgentIsEmbedded()) syncWorkspaceUrl(historyMode || "replace");
       syncAgentEntryHubVisibility();
-    }
-
-    function startNewConversation(activatePage = true, historyMode = null) {
-      if (activatePage) activateWorkspace("agent", {historyMode: "none"});
-      state.conversationId = null;
-      state.conversationMessages = [];
-      state.agentContextMetadata = {};
-      state.agentContextQuestion = "";
-      setAgentProcessExpanded(false);
-      $("conversationTitle").textContent = "新的研究对话";
-      $("messages").innerHTML = "";
-      addMessage("agent", currentWelcomeMessage());
-      renderDiagnosisPlaceholder();
-      renderConversationList(state.conversations);
-      clearImageAttachment();
-      $("chatInput").value = "";
-      if (state.workspacePage === "agent") $("chatInput").focus();
-      if (state.workspacePage === "agent") syncWorkspaceUrl(historyMode || (activatePage ? "push" : "replace"));
-      syncAgentEntryHubVisibility();
-    }
-
-    async function archiveConversation(conversationId) {
-      try {
-        await api(`/me/conversations/${encodeURIComponent(conversationId)}`, {method: "DELETE"});
-        if (state.conversationId === conversationId) startNewConversation(false);
-        await loadConversations(false);
-      } catch { addMessage("agent", "这个对话暂时无法归档，请稍后重试。"); }
     }

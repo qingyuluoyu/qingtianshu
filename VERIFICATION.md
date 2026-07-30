@@ -1472,3 +1472,81 @@ uv run pytest
 - 完整回归收集并通过 `822` 项；Ruff、Python `compileall`、全部静态JavaScript、`uv lock --check` 和 `git diff --check` 全部通过。运行态 `/ready=ok`，PostgreSQL领域库Schema v5、队列Schema v4，2个Worker active，ready/delayed/retrying均为0。
 
 当前边界：本轮只改善候选解释和阅读顺序，没有放宽规则、增加黑盒评分或把历史强势包装成推荐。选股结果仍只是下一步研究对象；用户进入个股空间后仍需核验财务、公告、行业变化和反方证据。
+
+## 2026-07-29 W26 北方国际真实 DeepSeek 稳定性与长会话压缩
+
+- 连续保存真实 `deepseek-v4-pro` Pass 5—9，Run 分别为 `7017b2e0-2e0b-4a59-8f66-306fa9406296`、`3dc25b34-bf26-42c0-b869-b20c7e0e48d0`、`6b95e54f-d633-4712-b2e1-9f78b58b28fd`、`25af918e-237e-4934-bf53-4a6a1f073a48`、`264eef76-2201-460c-8523-c2c60c4a3236`。全部为 `stock_research / completed`，证明当前股票路由和基本证据装配已工作。
+- Pass 5 错把财务费用解释为利息或汇兑成本，并把经营现金流覆盖倍数解释为利润已经“真金白银”收回；Pass 6 把销售收现率上升解释成回款节奏改善；Pass 7 把经营现金流净额下降写成公司实际收到的钱减少；Pass 9 把财务压力外推为股价回撤原因、把经营现金流净额称作现金流入，并混淆不同公告的20日窗口。Pass 8 最接近合格，但单次合格不能证明稳定通过。
+- 证据层与生成合同已收紧：覆盖倍数高于1不再自动代表盈利质量改善；没有财报原文时不得把财务费用归因于利息、汇兑或融资成本；销售收现率不能直接代表回款改善；经营现金流净额下降不能直接写成“实际收到的钱少了”；财务问题必须带报告期、营收同比、净利润同比和现金流；收益窗口提供起止日期。
+- 真实长会话追问优化前 Run `ab3b1df5-9049-4bf9-aa8e-39294f3094b3` 错误进入 `comprehensive`，Prompt 92,100字符、输入35,575 tokens、首个安全正文19.178秒、总耗时27.534秒。优化后 Run `ee20b968-c6d5-467e-aff6-d63c3d1ccc80` 进入 `mixed`，Prompt 33,827字符、输入14,738 tokens、首个安全正文13.741秒、总耗时20.605秒。
+- 优化前后均为 `guarded_cumulative_stream_v3`，均产生9次安全正文更新并原位完成；优化后不再为当前财务与企稳追问加载公告、事件、历史条件走查和无关展望模块。
+- 本轮定向测试覆盖 Agent Prompt合同、收益窗口日期、财报质量、财务现金流拆解、ResearchPlan、Agent Guard、证据压缩及Chat/API路由，最近执行均通过，仅有Starlette/httpx上游弃用提示。
+
+当前边界：最新代码尚未执行全量测试和完整静态门禁；最新页面的Enter发送、流式滚动、用户上滚保持、最终原位替换、刷新恢复、390px长回答阅读、控制台和信息源链接仍未完成浏览器验收。W26尚未完成，三个选股模板也尚未分别形成真实候选、真实Run、Prompt、截图与人工评分闭环。
+
+## 2026-07-29 W26 连续主营结构追问真实 DeepSeek 验收
+
+- 复现根因：连续主营追问中的“当前不能确认”被 `is_stock_price_move_question()` 误判为股价异动问题，专项压缩删除真实 `dimensions/key_changes`。DeepSeek没有取得“工程建设与服务、资源设备供应链”等分部，随后生成不属于当前证据包的“货物贸易72%”。
+- 路由与证据修复：披露边界表达不再触发价格异动压缩；主营专项保留完整分部、地区和毛利率数据，移除旧选股入口及季度净利润等无关线索，并新增 `coverage_limits`。
+- 生成质量修复：主营回答必须使用至少一个当前公司的真实分部名称；多项错误数字触发一次基于当前证据包的聚焦重试，并在重试前清除错误流式草稿。轻微单句数字问题按句修复，不再删除整个回答段落。
+- 数字校验修复：已覆盖“从12.043%跌到8.68%”“约9个百分点”“提升2.8个百分点”“下降3.4个百分点”“同比下降近4成”等正常表述。
+- Skill边界：毛利贡献不得写成净利润，产品、地区、行业不得拼接，分部毛利率上升不得外推为整体盈利质量改善；缺少交叉分部和订单数据时必须使用真实 `coverage_limits`。
+- 最终真实 Run `9f07844b-9410-48c6-98a6-f4c9c7ae2995`：`business_structure / completed / deepseek-v4-pro`；首 Token `2.744s`、首可见正文 `3.194s`、总耗时 `9.438s`、Prompt `19,471` 字符。无相关性重试、无模型 Guard 重试，最终输出守卫通过；回答形成收入来源、结构变化、反方证据和当前不能确认四部分。
+- 864px浏览器复验：长回答完成后顶部位于消息容器约 `11.91px`，用户无需向上拖动；页面没有“本轮仅展示已核验事实”横幅，回答未携带旧候选入口或季度净利润污染。
+- 回归测试覆盖连续两轮主营追问、披露边界不触发价格异动压缩、第二轮Prompt保留真实分部、错误数字聚焦重试、正常金融数字不被误杀、专项上下文不携带旧筛选入口以及 `coverage_limits` 进入Prompt。
+- 当前全量收集 `876` 项并执行至100%通过；`uv run ruff check app tests`、Python `compileall`、全部 `app/static/*.js` 的 `node --check`、`uv lock --check` 和 `git diff --check` 全部通过。唯一提示仍为Starlette TestClient/httpx上游弃用警告。
+
+当前边界：该验收只证明主营结构连续追问链路已恢复，不能视为经营改善、相对行业增强和估值约束三个模板完成。三个模板仍须分别取得真实候选、真实DeepSeek Run、Prompt、最终回答、截图和人工评分；基金正式文件、债券与利率数据、十轮长会话和直接事件原文证据仍未完成。
+
+## 2026-07-29 W26 经营改善单模型生成与局部修复验证
+
+- 基线真实 Run `d54ecc33-6603-4643-8ad4-37c2f3116c94`：Prompt 39,560 字符、输入 20,951 tokens、2 次 API 调用、首个安全正文 11.194 秒、总耗时 48.802 秒。
+- 压缩后但仍二次编辑的 Run `ce51b2e4-95ee-4799-8e9a-695b8635d171`：Prompt 29,648 字符、输入 16,478 tokens、2 次 API 调用、首个安全正文 10.332 秒、总耗时 45.794 秒；浏览器首个可见正文约 18.95 秒、最终约 46.33 秒。
+- 单模型 Run `afac8ea8-ab8b-47f2-a77b-4134d0157474`：Prompt 29,918 字符、输入 12,668 tokens、输出 563 tokens、1 次 API 调用，模型 `deepseek-v4-pro`；模型首个安全正文 12.245 秒、请求总耗时 32.716 秒，浏览器首个可见约 17.13 秒、最终约 33.15 秒。
+- 单模型回答使用了宁德时代公告原文“库存增加主要是为下半年市场需求而提前备货”，以及收入、归母净利润、经营现金流、两期现金流/利润比率、两期销售收现率、动力电池和储能分部、同行边界与反方证据。`usage.api_calls=1`，没有第二次 `quality_editor` 调用。
+- 新增回归覆盖跨口径句“利润增长尚未得到经营现金流和回款节奏的同等确认”。最新修复器只替换该局部句子，不删除公告、财务、现金流、主营或行业内容；修复后 `stock_specialist_relevance_issue=None`。
+- 以 Run `afac8ea8-ab8b-47f2-a77b-4134d0157474` 的 `answer.irrelevant.md` 和 `evidence.json` 离线复验：保留“提前备货”、`2769.2亿元`收入、`432.8亿元`归母净利润、`602.2亿元`经营现金流、覆盖比率 `1.925→1.391`、销售收现率 `124.6%→94.8%`、动力电池和储能分部及行业比较边界；删除“回款节奏的同等确认”，并以公司名开头。
+- 自动化：`uv run pytest -q tests/test_agent_evidence_compaction.py tests/test_agent_prompt_contracts.py tests/test_agent_guard.py` 执行至 100% 通过；`uv run ruff check app/services/agent_response_relevance.py app/services/agent_prompt_contracts.py tests/test_agent_guard.py tests/test_agent_prompt_contracts.py` 通过。唯一提示为 Starlette TestClient/httpx 上游弃用警告。
+- 运行态复核：`/health=ok`、`/ready=HTTP 200`、Hermes 已启用，PostgreSQL 领域库 Schema v5、运维库 Schema v4，外部 Worker 2 个；数据健康 65 healthy、2 attention、0 critical，过去 24 小时队列失败率 0。检查时有 16 个 ready 后台任务、最老约 165 秒，仍低于 600 秒就绪阈值，因此系统可用但后台队列当时处于短时追赶状态。
+
+当前边界：上述新增代码已通过定向回归和真实历史 Run 离线复验，但需要重启服务后再进行一次最新真实 DeepSeek 页面验收，才能确认新 Prompt 的首句标的名要求和最终 DOM 原位完成。尚未执行本轮全量测试、完整静态门禁或 Git 提交；`artifacts/`继续排除在交付范围外。
+
+## 2026-07-29 W26 经营改善最终真实页面验收
+
+- 验收页面：`http://127.0.0.1:8773/stocks/300750.SZ?tab=ai`，沿用已有 60 条消息的宁德时代个股研究会话；输入框使用 Enter 直接发送。
+- 真实 Run：`b1686023-3727-431a-8cce-d5568f4f35d0`，状态 `completed`，模型 `deepseek-v4-pro`，`api_calls=1`，未调用二次质量编辑模型。
+- 用量与耗时：Prompt 29,659 字符，输入 11,366 tokens、输出 448 tokens；路由与证据 6.707 秒，模型 18.984 秒，首 Token 9.156 秒，首个安全正文 10.682 秒，请求总耗时 25.748 秒。浏览器从 Enter 到首个安全正文约 18.067 秒、最终约 26.584 秒。
+- 内容验收：第一句以“宁德时代”开头；回答包含投资者关系活动记录表原文“库存增加主要是为下半年市场需求而提前备货”、经营现金流 602.2 亿元及同比 2.6%、覆盖比率 1.93→1.39、销售收现率 124.6%→94.8%、动力电池毛利率 22.4%→20.6%、储能毛利率 25.5%→24.0%、同行同期数据缺失边界和明确的“最重要的反方事实是”。
+- 流式验收：浏览器轮询记录到正文 86→143→205→270→334→406→477→530→584→680→754 字累计追加；最终事件正文仍为 754 字，只移除生成标签与追加元数据，没有整篇 DOM 内容替换、数字精度跳变或残缺 Markdown。
+- 质量验收：`usage.relevance_repair.method=neutralize_quality_review_overclaims_v1`，局部修复耗时纳入 `guard_seconds=0.011`；没有出现“现金流整体充裕”、无依据回款改善、存货积压定性或行业领先结论。
+- 自动化：`.venv/bin/pytest -q tests/test_agent_guard.py tests/test_agent_prompt_contracts.py tests/test_chat_streaming.py tests/test_api.py` 执行至 100%，退出码 0；相关 Ruff、`node --check app/static/qs-agent-ui.js app/static/qs-chat-runtime.js` 与 `git diff --check` 均通过。唯一提示为 Starlette TestClient/httpx 上游弃用警告。
+
+当前边界：经营改善模板完成真实长期会话闭环，但用户端首段总等待仍约 18 秒；相对行业增强和估值约束还需按同样标准完成真实 Run 与页面采样。基金产品正式事实、债券与利率、更多直接事件原文和成熟长会话分层记忆仍需扩充。
+
+## 2026-07-29 W26 相对行业自然问题与真实 DeepSeek 验收
+
+- 验收问题：`宁德时代今天相对CS电池指数是增强、同步还是走弱？请给出个股、官方指数和成分分布证据，并说明反方证据与失效条件。`
+- 路由与取证：`research_plan.focus=relative_industry`；`stock_market_context.exact_industry_index` 映射到 `931719 / CS电池 / 中证电池主题指数`。目标日官方指数收益尚未取得，状态为 `unavailable_for_target_date`；成分样本和权重日期分别为 `2026-07-28`、`2026-06-30`。
+- 成分证据：目标日有效收益 `50/50`，上涨41只、下跌9只、平盘0只，中位数 `2.0021%`，固定分类为“普涨”；宁德时代同日上涨 `1.53%`。49只成分使用新浪公开未复权日线补充，1只使用前复权日线。
+- 真实 Run：`bc7fcb24-58d6-47c7-b50e-4c35b9f81dd2`，状态 `completed`，模型 `deepseek-v4-pro`，`api_calls=1`。输入4,489 tokens、输出1,204 tokens、缓存读取3,200 tokens；路由与证据1.269秒、模型27.912秒、总请求29.235秒。
+- 回答边界：第一段明确说明官方指数同日收益缺失，不能形成正式指数相对判断；随后将1.53%低于2.00%表述为成分分布旁证，而不是正式跑输指数。回答保留60日收益-8.98%、最大回撤24.18%、分类体系差异、未复权风险和可观察失效条件。
+- 后处理：没有相关性重试、没有第二次DeepSeek；输出守卫通过。确定性口径附录仅补充“共49只未复权、另1只前复权”，不替换模型主体回答。
+- 自动化：`.venv/bin/pytest -q tests/test_agent_guard.py tests/test_agent_prompt_contracts.py tests/test_research_plan.py tests/test_chat_routing_modules.py tests/test_agent_evidence_compaction.py` 执行至100%，退出码0；相关Ruff和 `git diff --check` 通过。唯一提示为Starlette TestClient/httpx上游弃用警告。
+
+当前边界：相对行业模板已完成自然问题、真实行业证据、真实单次DeepSeek和最终回答的API闭环；最新代码下的桌面/390px流式页面与截图尚待验收。估值约束模板、基金正式事实、债券与利率、直接事件原文和长会话效率仍需继续推进。
+
+## 2026-07-30 W26 估值对话与 GitHub 阶段门禁
+
+- 估值定向回归：`uv run pytest -q tests/test_agent_guard.py -k 'valuation_review'`，`23 passed`。
+- Prompt 合同：`uv run pytest -q tests/test_agent_prompt_contracts.py`，`17 passed`。
+- 全量回归：`977 tests collected`，执行至 100% 通过；唯一提示为 Starlette TestClient/httpx 上游弃用警告。
+- 静态门禁：Ruff、Python `compileall`、全部静态 JavaScript `node --check`、`uv lock --check`、`git diff --check` 全部通过。
+- 真实 evaluation Run `a4f79acd-a7ca-4dae-9332-8f764986c8be`：`completed`，模型 `deepseek-v4-pro`，`api_calls=1`，无模型相关性重试，输出守卫终态通过；首 Token `27.119s`，首可见正文 `27.664s`，总请求 `43.180s`。
+- 该 Run 暴露的局部估值成因、利润与现金流口径和负债率措辞已加入回归并可离线修复；用户明确要求不再继续扩大 Guard，本次按阶段可用版本交付。
+- `.runtime/`、`artifacts/`、本地数据库、日志、缓存、用户工作区和真实 `.env` 不进入 GitHub 交付。
+
+## 2026-07-30 “什么时候需要重新判断”用户语言验证
+
+- 页面标题、快捷问题、股票空间、关注报告与 Agent 预览统一使用“什么时候需要重新判断”或“什么情况会推翻当前判断”；`app/static` 用户界面不再出现“失效条件”。
+- 模型仍返回旧词时，流式和最终展示都会自动转换；用户直接使用“重新判断”或“什么情况会推翻”时，市场/个股路由、证据压缩、Prompt 合同和输出完整性校验继续生效。
+- 定向 Guard、API、深度研究和前端合同回归通过；Ruff、Python 编译、全部静态 JavaScript、依赖锁与差异检查通过。发布前全量测试按用户“立即上传”的优先级停止重复执行，最近一次完整基线仍为 `977 tests collected / 100% passed`。

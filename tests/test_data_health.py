@@ -7,6 +7,93 @@ from app.services.data_health import DataHealthService
 from app.services.earnings_quality import EarningsQualityService
 
 
+class PeerOperatingHealthDatabase:
+    def __init__(self, snapshot):
+        self.snapshot = snapshot
+
+    def latest_peer_operating_snapshot(self, symbol):
+        return self.snapshot
+
+    def list_financial_periods(self, symbol, limit=1):
+        return [{"report_date": "2026-06-30"}]
+
+
+class PeerOperatingHealthSettings:
+    default_research_symbols = ("300750.SZ",)
+
+
+def test_peer_operating_health_treats_normal_disclosure_lag_as_attention():
+    snapshot = {
+        "payload": {
+            "anchor_report_date": "2026-06-30",
+            "coverage": {
+                "requested_peers": 3,
+                "same_period_financial_peers": 0,
+                "business_profile_peers": 3,
+            },
+            "peers": [
+                {
+                    "status": "period_mismatch",
+                    "latest_available_financial": {
+                        "report_date": "2026-03-31"
+                    },
+                }
+                for _ in range(3)
+            ],
+        }
+    }
+    service = DataHealthService(
+        PeerOperatingHealthDatabase(snapshot),  # type: ignore[arg-type]
+        PeerOperatingHealthSettings(),  # type: ignore[arg-type]
+    )
+
+    check = service._peer_operating_checks()[0]
+
+    assert check["status"] == "attention"
+    assert check["label"] == "300750.SZ同行尚未披露同报告期数据"
+    assert check["period_mismatch_peers"] == 3
+
+
+def test_peer_operating_health_keeps_true_missing_peer_data_critical():
+    snapshot = {
+        "payload": {
+            "anchor_report_date": "2026-06-30",
+            "coverage": {
+                "requested_peers": 3,
+                "same_period_financial_peers": 0,
+                "business_profile_peers": 2,
+            },
+            "peers": [
+                {
+                    "status": "period_mismatch",
+                    "latest_available_financial": {
+                        "report_date": "2026-03-31"
+                    },
+                },
+                {
+                    "status": "period_mismatch",
+                    "latest_available_financial": None,
+                },
+                {
+                    "status": "period_mismatch",
+                    "latest_available_financial": {
+                        "report_date": "2026-03-31"
+                    },
+                },
+            ],
+        }
+    }
+    service = DataHealthService(
+        PeerOperatingHealthDatabase(snapshot),  # type: ignore[arg-type]
+        PeerOperatingHealthSettings(),  # type: ignore[arg-type]
+    )
+
+    check = service._peer_operating_checks()[0]
+
+    assert check["status"] == "critical"
+    assert check["label"] == "300750.SZ同行经营样本不足"
+
+
 def test_data_health_audit_persists_detailed_snapshot(settings):
     database = Database(settings.workspace_root)
     database.initialize()

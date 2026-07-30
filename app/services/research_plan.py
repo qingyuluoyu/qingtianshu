@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -24,9 +25,58 @@ class ResearchPlanService:
 
     _FOCUS_RULES = (
         (
+            "relative_industry",
+            "相对行业表现",
+            (
+                "相对行业",
+                "相对板块",
+                "行业指数",
+                "行业增强",
+                "行业走弱",
+                "跑赢行业",
+                "跑输行业",
+                "超额收益",
+            ),
+        ),
+        (
+            "valuation_review",
+            "估值约束质量核验",
+            (
+                "估值约束候选",
+                "估值处于约束范围",
+                "估值约束质量",
+                "估值是否有支撑",
+                "估值有没有支撑",
+                "估值陷阱",
+                "低估值陷阱",
+            ),
+        ),
+        (
+            "quality_review",
+            "经营改善质量核验",
+            (
+                "经营改善候选",
+                "经营指标开始改善",
+                "经营指标改善",
+                "改善是否有质量",
+                "改善有没有质量",
+                "改善质量",
+            ),
+        ),
+        (
             "shareholder",
             "股东与持有人变化",
-            ("股东", "户数", "十大股东", "持有人", "筹码", "人均持股"),
+            (
+                "股东",
+                "户数",
+                "十大股东",
+                "持有人",
+                "筹码",
+                "人均持股",
+                "机构持仓",
+                "机构股东",
+                "主要股东",
+            ),
         ),
         (
             "business",
@@ -37,6 +87,10 @@ class ResearchPlanService:
                 "产品结构",
                 "收入构成",
                 "收入结构",
+                "收入来源",
+                "收入来自哪里",
+                "靠什么赚钱",
+                "靠什么业务赚钱",
                 "毛利来源",
                 "地区收入",
                 "分部",
@@ -51,6 +105,8 @@ class ResearchPlanService:
             "financial",
             "财务质量、利润与现金流",
             (
+                "财务",
+                "财务压力",
                 "财报",
                 "业绩",
                 "营收",
@@ -76,7 +132,6 @@ class ResearchPlanService:
                 "贵不贵",
                 "同行",
                 "可比公司",
-                "同报告期",
                 "比较",
                 "对比",
                 "经营差异",
@@ -118,6 +173,9 @@ class ResearchPlanService:
                 "涨停",
                 "跌停",
                 "涨跌原因",
+                "回撤原因",
+                "回撤最可能",
+                "下跌最可能",
             ),
         ),
         (
@@ -135,6 +193,12 @@ class ResearchPlanService:
                 "报价",
                 "均线",
                 "涨跌",
+                "企稳",
+                "止跌",
+                "反转",
+                "见底",
+                "走平",
+                "横盘",
                 "今天表现",
                 "今日表现",
                 "今天怎么样",
@@ -144,6 +208,14 @@ class ResearchPlanService:
     )
 
     _FOCUS_MODULES = {
+        "relative_industry": {
+            "required": ("market", "analyst_expectations"),
+            "optional": (),
+            # The analyst packet currently stores the verified industry mapping
+            # and index constituents, but its consensus skill is irrelevant to
+            # a same-day relative-performance answer.
+            "skills": (),
+        },
         "price_cause": {
             "required": (
                 "market",
@@ -160,16 +232,11 @@ class ResearchPlanService:
             "required": (
                 "market",
                 "fundamentals",
-                "company_information",
-                "event_timeline",
             ),
-            "optional": ("outlook_calibration",),
+            "optional": (),
             "skills": (
-                "a-share-information",
-                "event-timeline",
                 "fundamental-evidence",
                 "evidence-debate",
-                "conditional-outlook",
             ),
         },
         "financial": {
@@ -179,12 +246,50 @@ class ResearchPlanService:
                 "earnings_quality",
                 "financial_drivers",
             ),
-            "optional": ("company_information", "event_timeline"),
+            "optional": (),
             "skills": (
                 "a-share-filing-evidence",
                 "fundamental-evidence",
                 "earnings-quality",
                 "financial-drivers",
+                "evidence-debate",
+            ),
+        },
+        "quality_review": {
+            "required": (
+                "fundamentals",
+                "earnings_quality",
+                "financial_drivers",
+                "business_structure",
+                "company_information",
+                "event_timeline",
+            ),
+            "optional": (),
+            "skills": (
+                "quality-review",
+                "a-share-filing-evidence",
+            ),
+        },
+        "valuation_review": {
+            "required": (
+                "market",
+                "fundamentals",
+                "earnings_quality",
+                "financial_drivers",
+                "business_structure",
+                "analyst_expectations",
+                "peer_comparison",
+                "company_information",
+                "event_timeline",
+            ),
+            "optional": (),
+            "skills": (
+                "a-share-filing-evidence",
+                "fundamental-evidence",
+                "earnings-quality",
+                "financial-drivers",
+                "business-structure",
+                "analyst-expectations",
                 "evidence-debate",
             ),
         },
@@ -277,6 +382,79 @@ class ResearchPlanService:
             for key, label, terms in self._FOCUS_RULES
             if any(term.lower() in effective_text.lower() for term in terms)
         ]
+        if self._is_relative_industry_question(effective_text):
+            relative_item = ("relative_industry", "相对行业表现")
+            matched = [
+                relative_item,
+                *[
+                    item
+                    for item in matched
+                    if item[0] not in {"relative_industry", "price_action"}
+                ],
+            ]
+        if any(key == "valuation_review" for key, _ in matched):
+            # “估值约束候选”本身自然包含估值、财务、盈利、现金流、负债、
+            # 同行和主营等词。这些维度已经由专项证据链覆盖，不应因此退化
+            # 为 mixed。只有用户同时明确追问股价原因、股东或额外事件时，
+            # 才在专项之外保留相应焦点。
+            explicit_extra_focuses: set[str] = set()
+            lowered = effective_text.lower()
+            for key in (
+                "price_cause",
+                "price_action",
+                "shareholder",
+                "events",
+            ):
+                terms = next(
+                    rule_terms
+                    for rule_key, _, rule_terms in self._FOCUS_RULES
+                    if rule_key == key
+                )
+                if any(term.lower() in lowered for term in terms):
+                    explicit_extra_focuses.add(key)
+            matched = [
+                item
+                for item in matched
+                if item[0] == "valuation_review" or item[0] in explicit_extra_focuses
+            ]
+        if any(key == "quality_review" for key, _ in matched):
+            # “经营改善候选”本身会自然带出财务、利润、主营和同报告期等词。
+            # 这些维度已经包含在专项证据链中，不能因此退化成 mixed 或额外加载
+            # 同行估值、技术行情与分析师预期。只有用户明确另问估值、股价、股东
+            # 或机构预期时，才保留相应的额外焦点。
+            explicit_extra_focuses: set[str] = set()
+            lowered = effective_text.lower()
+            if any(
+                term in lowered
+                for term in (
+                    "估值",
+                    "市盈率",
+                    "市净率",
+                    "pe",
+                    "pb",
+                    "贵不贵",
+                    "低估",
+                )
+            ):
+                explicit_extra_focuses.add("valuation")
+            for key in (
+                "price_cause",
+                "price_action",
+                "shareholder",
+                "expectations",
+            ):
+                terms = next(
+                    rule_terms
+                    for rule_key, _, rule_terms in self._FOCUS_RULES
+                    if rule_key == key
+                )
+                if any(term.lower() in lowered for term in terms):
+                    explicit_extra_focuses.add(key)
+            matched = [
+                item
+                for item in matched
+                if item[0] == "quality_review" or item[0] in explicit_extra_focuses
+            ]
         if any(key == "price_cause" for key, _ in matched):
             matched = [item for item in matched if item[0] != "price_action"]
         comprehensive = any(
@@ -309,10 +487,28 @@ class ResearchPlanService:
                 self._extend_unique(required, config["required"])
                 self._extend_unique(optional, config["optional"])
                 self._extend_unique(skills, config["skills"])
+            if "price_action" in focus_keys and any(
+                term in effective_text
+                for term in (
+                    "后续",
+                    "未来",
+                    "走势",
+                    "展望",
+                    "情景",
+                    "支撑",
+                    "阻力",
+                    "怎么看",
+                )
+            ):
+                self._extend_unique(optional, ("outlook_calibration",))
+                self._extend_unique(skills, ("conditional-outlook",))
             optional = [item for item in optional if item not in required]
 
         selected_modules = [*required, *optional]
-        labels = [self.MODULE_LABELS[item] for item in selected_modules]
+        module_labels = {key: self.MODULE_LABELS[key] for key in selected_modules}
+        if focus == "relative_industry" and "analyst_expectations" in module_labels:
+            module_labels["analyst_expectations"] = "所属行业指数与成分"
+        labels = [module_labels[item] for item in selected_modules]
         return {
             "contract_version": self.CONTRACT_VERSION,
             "focus": focus,
@@ -323,7 +519,7 @@ class ResearchPlanService:
             "optional_modules": optional,
             "selected_modules": selected_modules,
             "selected_skills": skills,
-            "module_labels": {key: self.MODULE_LABELS[key] for key in selected_modules},
+            "module_labels": module_labels,
             "module_max_age_hours": {
                 key: self.MODULE_MAX_AGE_HOURS[key] for key in selected_modules
             },
@@ -344,7 +540,7 @@ class ResearchPlanService:
         history: list[dict[str, Any]],
     ) -> str:
         lowered = question.lower()
-        has_explicit_focus = any(
+        has_explicit_focus = cls._is_relative_industry_question(question) or any(
             term.lower() in lowered
             for _, _, terms in cls._FOCUS_RULES
             for term in terms
@@ -357,6 +553,24 @@ class ResearchPlanService:
             if item.get("role") == "user" and str(item.get("content") or "").strip()
         ][-2:]
         return " ".join([*previous_user_questions, question]).strip()
+
+    @staticmethod
+    def _is_relative_industry_question(text: str) -> bool:
+        folded = re.sub(r"\s+", "", str(text or "")).casefold()
+        return bool(
+            re.search(r"相对[^，。；,]{0,12}(?:行业|板块)", folded)
+            or re.search(r"相对[^，。；,]{0,12}(?:cs|中证)[^，。；,]{0,8}指数", folded)
+            or any(
+                term in folded
+                for term in (
+                    "行业增强",
+                    "行业走弱",
+                    "跑赢行业",
+                    "跑输行业",
+                    "超额收益",
+                )
+            )
+        )
 
     @staticmethod
     def _extend_unique(target: list[str], values: Any) -> None:

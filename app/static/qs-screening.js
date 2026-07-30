@@ -447,6 +447,7 @@ function liZongStatusLabel(value) {
           source_kind: "li_zong_strategy",
           source_label: observationBand ? "李总策略接近满足观察池" : "李总策略",
           display_name: item.name,
+          industry: item.industry || null,
           profile_key: item.parameter_version || item.strategy_version,
           as_of_date: item.as_of_date,
           candidate_status: observationBand || item.status,
@@ -461,8 +462,8 @@ function liZongStatusLabel(value) {
         const research = document.createElement("button"); research.type = "button"; research.className = "btn primary"; research.textContent = observationBand ? "保存观察线索并研究" : "保存线索并研究";
         research.addEventListener("click", () => { void enterScreenCandidateResearch(item, research, entryContext); });
         const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn"; ask.textContent = "让 Agent 核验"; ask.addEventListener("click", () => { void researchCandidateWithAgent(item, ask, entryContext, observationBand
-          ? `请核验${item.name}（${item.internal_symbol}）当前李总策略${liZongStatusLabel(observationBand)}的结果。它只通过${item.candidate_rule_pass_count || 0}/9条候选规则，明确未通过${(item.failed_candidate_rule_ids || []).map(liZongRuleLabel).join("、") || "待确认规则"}，不是候选。请说明通过规则的证据、未通过规则、反方证据、数据时间、失效条件与下一步核验；明确候选资格只由9条候选规则决定，3条触发规则只决定候选后的人工复核层级；不要把观察池写成荐股或买卖指令。`
-          : `请核验${item.name}（${item.internal_symbol}）的李总策略结果。逐条说明基本面、股性、量价和触发规则的证据时间、反方证据、数据缺口、失效条件与下一步需要核验什么；不要输出买卖指令。`); });
+          ? `请核验${item.name}（${item.internal_symbol}）当前李总策略${liZongStatusLabel(observationBand)}的结果。它只通过${item.candidate_rule_pass_count || 0}/9条候选规则，明确未通过${(item.failed_candidate_rule_ids || []).map(liZongRuleLabel).join("、") || "待确认规则"}，不是候选。请说明通过规则的证据、未通过规则、反方证据、数据时间、什么情况需要重新判断与下一步核验；明确候选资格只由9条候选规则决定，3条触发规则只决定候选后的人工复核层级；不要把观察池写成荐股或买卖指令。`
+          : `请核验${item.name}（${item.internal_symbol}）的李总策略结果。逐条说明基本面、股性、量价和触发规则的证据时间、反方证据、数据缺口、什么情况需要重新判断与下一步需要核验什么；不要输出买卖指令。`); });
         actions.append(detail, follow, research, ask); card.appendChild(actions); container.appendChild(card);
       });
       if (state.liZongHistory) renderLiZongHistory(state.liZongHistory);
@@ -778,6 +779,7 @@ function liZongStatusLabel(value) {
           source_kind: "stock_screen",
           source_label: presentation.label,
           display_name: item.name,
+          industry: item.industry || null,
           profile_key: profile.key,
           as_of_date: meta.latest_completed_trade_date,
           candidate_status: payload?.status,
@@ -867,7 +869,11 @@ function liZongStatusLabel(value) {
       try {
         const session = await api("/me/deep-stock", {
           method: "POST",
-          body: JSON.stringify({symbol, entry_context: entryContext})
+          body: JSON.stringify({
+            symbol,
+            entry_context: entryContext,
+            quality_scope: state.evaluationMode ? "evaluation" : "user"
+          })
         });
         state.deepStock = session;
         await loadConversations(false);
@@ -890,7 +896,11 @@ function liZongStatusLabel(value) {
       try {
         const session = await api("/me/deep-stock", {
           method: "POST",
-          body: JSON.stringify({symbol, entry_context: entryContext})
+          body: JSON.stringify({
+            symbol,
+            entry_context: entryContext,
+            quality_scope: state.evaluationMode ? "evaluation" : "user"
+          })
         });
         state.deepStock = session;
         await loadConversations(false);

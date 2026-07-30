@@ -39,7 +39,9 @@ _PRIVATE_OPERATIONAL_OUTPUT_PATTERNS = (
         re.IGNORECASE,
     ),
     re.compile(
-        r"(?:数据源|行情源|主源|备用源|上游|降级|缓存(?:命中|回退)?|"
+        r"(?:数据源|行情源|主源|备用源|"
+        r"上游(?:接口|数据(?:源)?|服务|系统|行情|请求|响应|任务)|"
+        r"降级|缓存(?:命中|回退)?|"
         r"接口(?:失败|错误)|请求失败|不可用|内部任务|job_name|ProxyError|WAF|"
         r"HTTP\s*[45]\d\d|usage limit|billing cycle|quota|purchase extra usage|"
         r"upgrade your plan|kimi\.com/code)",

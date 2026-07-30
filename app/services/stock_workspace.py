@@ -188,7 +188,7 @@ class StockWorkspaceService:
                     "source": "li_zong_strategy",
                     "next_step": (
                         "逐条复核触发日行情、基本面、股性和量价证据，"
-                        "确认数据时间与失效条件。"
+                        "确认数据时间，以及什么情况需要重新判断。"
                     ),
                 },
                 *pending_actions,

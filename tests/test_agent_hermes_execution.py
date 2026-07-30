@@ -63,7 +63,7 @@ def test_agent_service_injects_financial_guards_into_stream_transport(
     assert captured["stream_callback"].__self__ is updates
     callbacks = captured["callbacks"]
     assert isinstance(callbacks, GuardedStreamCallbacks)
-    assert callbacks.validate_output is AgentService._validate_model_output
+    assert callbacks.validate_output.__func__ is AgentService._validate_stream_output
     assert (
         callbacks.partial_has_blocker
         is AgentService._stream_partial_guard_has_blocker

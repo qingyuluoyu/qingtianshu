@@ -8,6 +8,1492 @@ from pathlib import Path
 import app.services.agent as agent_module
 from app.db import Database
 from app.services.agent import AgentService
+from app.services.agent_output_guard import AgentOutputGuard
+from app.services.agent_response_relevance import (
+    _drop_redundant_valuation_summary,
+    _normalize_valuation_review_language,
+    build_quality_review_editor_prompt,
+    normalize_quality_review_language,
+    peer_valuation_required_fact_issue,
+    relative_industry_required_fact_issue,
+    repair_peer_valuation_answer,
+    repair_quality_review_answer,
+    repair_relative_industry_answer,
+    repair_valuation_review_answer,
+    stock_specialist_relevance_issue,
+    valuation_review_required_fact_issue,
+)
+
+
+def test_peer_valuation_required_fact_check_keeps_compact_decision_facts():
+    evidence = {
+        "type": "stock_research",
+        "user_question": "宁德时代的PE和PB相对同行处于什么位置？",
+        "peer_comparison": {
+            "subject": {
+                "name": "宁德时代",
+                "symbol": "300750.SZ",
+                "pe_ttm": 21.27,
+                "pb": 4.77,
+            },
+            "metrics": {
+                "pe_ttm": {
+                    "subject_value": 21.27,
+                    "peer_median": 26.24,
+                    "subject_to_peer_median": 0.811,
+                },
+                "pb": {
+                    "subject_value": 4.77,
+                    "peer_median": 1.71,
+                    "subject_to_peer_median": 2.789,
+                },
+            },
+            "peers": [
+                {"name": "亿纬锂能", "pe_ttm": 26.24, "pb": 2.72},
+                {"name": "国轩高科", "pe_ttm": 21.3, "pb": 1.71},
+                {"name": "欣旺达", "pe_ttm": 42.32, "pb": 1.36},
+            ],
+            "operating_comparison": {"status": "unavailable"},
+        },
+    }
+    incomplete = (
+        "宁德时代PE 21.27，接近国轩高科；PB 4.77，同行中位数1.71。"
+        "亿纬锂能PB 2.72，国轩高科PB 1.71，欣旺达PB 1.36。"
+        "同报告期经营数据不足，不能把倍数差异解释为经营质量。"
+    )
+    complete = (
+        "宁德时代TTM市盈率21.27，亿纬锂能26.24、国轩高科21.3、"
+        "欣旺达42.32，同行中位数26.24；宁德时代/中位数比值0.811。"
+        "宁德时代市净率4.77，亿纬锂能2.72、国轩高科1.71、"
+        "欣旺达1.36，同行中位数1.71；宁德时代/中位数比值2.789。"
+        "同报告期经营数据不足，不能把倍数差异解释为经营质量。"
+    )
+    compact_complete = (
+        "宁德时代TTM市盈率21.27，同行亿纬锂能、国轩高科、欣旺达的"
+        "中位数为26.24，宁德时代/中位数比值0.811；宁德时代市净率"
+        "4.77，同行中位数1.71，宁德时代/中位数比值2.789。"
+        "同报告期经营数据不足，不能把倍数差异解释为经营质量。"
+    )
+
+    assert "TTM市盈率" in peer_valuation_required_fact_issue(incomplete, evidence)
+    assert peer_valuation_required_fact_issue(complete, evidence) is None
+    assert peer_valuation_required_fact_issue(compact_complete, evidence) is None
+
+    trailing_zero_complete = complete.replace("国轩高科21.3", "国轩高科21.30")
+    assert peer_valuation_required_fact_issue(trailing_zero_complete, evidence) is None
+
+    missing_ratio = complete.replace("；宁德时代/中位数比值0.811", "").replace(
+        "；宁德时代/中位数比值2.789", ""
+    )
+    assert peer_valuation_required_fact_issue(missing_ratio, evidence) is None
+
+    repaired = repair_peer_valuation_answer(incomplete, evidence)
+    assert repaired is not None
+    assert "固定同行估值截面（已核验数字）" in repaired
+    assert "国轩高科：TTM市盈率 21.30，市净率 1.71" in repaired
+    assert "本标的/同行中位数" not in repaired
+    assert peer_valuation_required_fact_issue(repaired, evidence) is None
+
+
+def test_valuation_review_rejects_unit_mismatch_dynamic_pe_bridge_and_hallucinated_event():
+    evidence = {
+        "type": "stock_research",
+        "display_name": "动力新科",
+        "user_question": "动力新科为什么进入估值约束候选？请结合同行、现金流和负债核验。",
+        "research_plan": {"focus": "valuation_review"},
+        "fundamentals": {"valuation": {"pe_ttm": 2.5, "pb": 1.21, "pe_dynamic": 53.77}},
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "operating_cashflow": -452_997_686.85,
+                "operating_cashflow_to_net_profit": -12.514,
+            },
+            "filing_evidence": {"explicit_company_explanations": []},
+        },
+        "earnings_quality": {"latest_report": {"debt_asset_ratio_pct": 42.480874}},
+        "peer_comparison": {
+            "subject": {"name": "动力新科", "pe_ttm": 2.43, "pb": 1.18},
+            "metrics": {
+                "pe_ttm": {
+                    "subject_value": 2.43,
+                    "peer_median": 10.0,
+                    "subject_to_peer_median": 0.243,
+                },
+                "pb": {
+                    "subject_value": 1.18,
+                    "peer_median": 1.5,
+                    "subject_to_peer_median": 0.787,
+                },
+            },
+            "peers": [
+                {"name": "上汽集团", "pe_ttm": 8.0, "pb": 0.8},
+                {"name": "潍柴动力", "pe_ttm": 10.0, "pb": 1.5},
+                {"name": "长安汽车", "pe_ttm": 12.0, "pb": 1.9},
+            ],
+            "operating_comparison": {"status": "unavailable"},
+        },
+        "a_share_information": {"announcements": []},
+        "event_timeline": {"events": []},
+    }
+    valid = (
+        "命中估值约束不等于便宜。动力新科最新估值快照的PE TTM为2.50，PB为1.21。"
+        "同日同行截面中，动力新科TTM市盈率2.43，上汽集团8.00、"
+        "潍柴动力10.00、长安汽车12.00，同行中位数10.00，"
+        "本标的/中位数比值0.243；动力新科市净率1.18，上汽集团0.80、"
+        "潍柴动力1.50、长安汽车1.90，同行中位数1.50，"
+        "本标的/中位数比值0.787。同报告期经营数据不足，不能把倍数差异"
+        "直接解释为经营质量。最新报告期经营现金流为-4.53亿元，"
+        "经营现金流/归母净利润为-12.514，资产负债率42.48%。"
+    )
+
+    assert valuation_review_required_fact_issue(valid, evidence) is None
+    assert "每股收益与利润金额单位" in valuation_review_required_fact_issue(
+        valid + "2025年有29.7亿元的每股收益。", evidence
+    )
+    assert "动态市盈率" in valuation_review_required_fact_issue(
+        valid + "按此计算，动态市盈率为53.77倍。", evidence
+    )
+    assert (
+        valuation_review_required_fact_issue(
+            valid + "因此不能将低PE、低PB直接解释为低估。", evidence
+        )
+        is None
+    )
+    assert "滚动十二个月市盈率" in valuation_review_required_fact_issue(
+        valid + "PE TTM 2.50对应的是刚扭亏的低利润基数。", evidence
+    )
+    assert "滚动十二个月市盈率" in valuation_review_required_fact_issue(
+        valid + "低利润基数导致TTM市盈率被压缩。", evidence
+    )
+    assert "历史利润错误解释低PE" in valuation_review_required_fact_issue(
+        valid + "历史亏损可能在分母中残留，导致PE倍数被压得很低。", evidence
+    )
+    assert (
+        valuation_review_required_fact_issue(
+            valid + "当前极低的PE不能直接等同于便宜。", evidence
+        )
+        is None
+    )
+    assert (
+        valuation_review_required_fact_issue(
+            valid + "极低倍数需要结合现金流核验。", evidence
+        )
+        is None
+    )
+    assert (
+        valuation_review_required_fact_issue(
+            valid + "当前倍数在同行中处于极低位置，但不能据此确认低估。", evidence
+        )
+        is None
+    )
+    assert "确定性价值结论" in valuation_review_required_fact_issue(
+        valid + "动力新科属于极低估值。", evidence
+    )
+    assert "确定性价值结论" in valuation_review_required_fact_issue(
+        valid + "动力新科已经成为价值洼地。", evidence
+    )
+    assert "分母因素解释低PE" in valuation_review_required_fact_issue(
+        valid + "如果包含大量非经常性损益，PE会被动拉低。", evidence
+    )
+    assert "分母因素解释低PE" in valuation_review_required_fact_issue(
+        valid + "目前PE的低位更多源于分母端不透明。", evidence
+    )
+    assert "趋势延续" in valuation_review_required_fact_issue(
+        valid + "半年度预告说明盈利改善趋势可能延续。", evidence
+    )
+    assert "盈利延续" in valuation_review_required_fact_issue(
+        valid + "这份预告确实表明盈利方向在延续。", evidence
+    )
+    assert "盈利延续" in valuation_review_required_fact_issue(
+        valid + "半年度业绩预告确认盈利延续。", evidence
+    )
+    assert "整体财务杠杆下降" in valuation_review_required_fact_issue(
+        valid + "资产负债率下降说明整体财务杠杆明显下降。", evidence
+    )
+    assert "现金回收压力" in valuation_review_required_fact_issue(
+        valid + "销售收现率下降印证了现金回收节奏存在压力。", evidence
+    )
+    assert "经营质量因素解释低倍数" in valuation_review_required_fact_issue(
+        valid + "低倍数也可能来自一次性或不可持续因素。", evidence
+    )
+    assert "现金支撑结论" in valuation_review_required_fact_issue(
+        valid + "盈利的现金兑现严重偏离，现金流尚不能为利润提供支撑。", evidence
+    )
+    assert "单一年度利润" in valuation_review_required_fact_issue(
+        valid + "PE TTM是以2025年全年利润为基础计算的。", evidence
+    )
+    assert "股权处置" in valuation_review_required_fact_issue(
+        valid + "利润来自股权处置。", evidence
+    )
+    assert (
+        valuation_review_required_fact_issue(
+            valid + "下一步需要核验非经常性收益明细。", evidence
+        )
+        is None
+    )
+    assert "确定性价值结论" in valuation_review_required_fact_issue(
+        valid + "因此它就是财务陷阱。", evidence
+    )
+
+
+def _same_day_valuation_review_case() -> tuple[dict, str]:
+    evidence = {
+        "type": "stock_research",
+        "symbol": "600841.SS",
+        "display_name": "动力新科",
+        "user_question": "动力新科进入估值约束候选，是不是说明它便宜？",
+        "research_plan": {"focus": "valuation_review"},
+        "fundamentals": {"valuation": {"pe_ttm": 2.61, "pb": 1.27}},
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "operating_cashflow": -452_997_686.85,
+                "operating_cashflow_to_net_profit": -12.5139,
+            }
+        },
+        "earnings_quality": {"latest_report": {"debt_asset_ratio_pct": 42.4809}},
+        "peer_comparison": {
+            "method": "dynamic_same_day_peer_valuation_snapshot_v1",
+            "as_of": "2026-07-29",
+            "group_label": "汽车配件同日估值样本",
+            "selection_basis": "在2026-07-29同一交易日选择同行估值样本。",
+            "subject": {
+                "name": "动力新科",
+                "pe_ttm": 2.4967,
+                "pb": 1.2128,
+                "market_timestamp": "2026-07-29T15:00:00+08:00",
+            },
+            "metrics": {
+                "pe_ttm": {
+                    "subject_value": 2.4967,
+                    "peer_median": 39.3922,
+                    "subject_to_peer_median": 0.063,
+                },
+                "pb": {
+                    "subject_value": 1.2128,
+                    "peer_median": 2.2582,
+                    "subject_to_peer_median": 0.537,
+                },
+            },
+            "peers": [
+                {
+                    "name": "沪光股份",
+                    "market_timestamp": "2026-07-29T15:00:00+08:00",
+                },
+                {
+                    "name": "美湖股份",
+                    "market_timestamp": "2026-07-29T15:00:00+08:00",
+                },
+                {
+                    "name": "旷达科技",
+                    "market_timestamp": "2026-07-29T15:00:00+08:00",
+                },
+            ],
+            "operating_comparison": {"status": "unavailable"},
+        },
+    }
+    answer = (
+        "不是。数据日期为2026年7月29日收盘，动力新科PE TTM约2.50，"
+        "PB约1.21；沪光股份、美湖股份和旷达科技的同行PE TTM中位数"
+        "为39.39，PB中位数为2.26。本标的PE TTM约为同行中位数的6%，"
+        "PB约为同行中位数的54%。同报告期经营数据不足，不能把倍数差异"
+        "直接解释为经营质量。最新报告期经营现金流为-4.53亿元，"
+        "经营现金流/归母净利润为-12.51，资产负债率42.48%。"
+    )
+    return evidence, answer
+
+
+def _valuation_review_local_overclaim_draft() -> str:
+    return (
+        "动力新科进入估值约束候选不说明它便宜。当前PE TTM为2.61，PB为1.27，"
+        "表面看起来估值极低；低倍数也可能是盈利恶化、资产质量差或一次性收益造成的，"
+        "必须用正式财务报表核验才能判断。同行样本基于2026年7月29日，包含沪光股份、美湖股份"
+        "和旷达科技，PE TTM中位数39.39，PB中位数2.26；本标的约为中位数的6%和54%。"
+        "PE TTM只有2.61倍，这通常暗示市场认为盈利不可持续。最新报告期归母净利润"
+        "3620万元，较上年同期亏损2,101万元实现扭亏；经营现金流-4.53亿元，"
+        "经营现金流/归母净利润-12.51，资产负债率42.48%。这意味着利润尚未转化为现金，"
+        "现金兑现质量存疑。TTM口径下盈利可能受到一次性因素影响，下一步应核验扣非利润。"
+        "一致预期大幅下降，可能与上汽红岩出表带来的一次性会计因素有关。"
+        "当前价格包含的盈利和净资产预期极低。"
+        "它反映的更有可能是市场对盈利持续性持谨慎态度。"
+    )
+
+
+def test_valuation_review_accepts_dated_same_day_peer_values_and_percent_ratios():
+    evidence, answer = _same_day_valuation_review_case()
+
+    assert peer_valuation_required_fact_issue(answer, evidence) is None
+    assert valuation_review_required_fact_issue(answer, evidence) is None
+    assert stock_specialist_relevance_issue(answer, evidence) is None
+
+    undated = answer.replace("数据日期为2026年7月29日收盘，", "")
+    assert "带日期的同日同行口径" in valuation_review_required_fact_issue(
+        undated, evidence
+    )
+
+    naturally_rounded = answer.replace("为39.39", "约39")
+    assert peer_valuation_required_fact_issue(naturally_rounded, evidence) is None
+
+
+def test_valuation_review_repair_keeps_first_draft_and_fixes_local_overclaims():
+    evidence, _ = _same_day_valuation_review_case()
+    repaired = repair_valuation_review_answer(
+        _valuation_review_local_overclaim_draft(),
+        evidence,
+    )
+
+    assert repaired is not None
+    assert repaired.startswith("动力新科进入估值约束候选不说明它便宜")
+    assert "估值极低" not in repaired
+    assert "一次性收益造成" not in repaired
+    assert "滚动盈利分母尚未拆解" in repaired
+    assert "通常暗示市场认为盈利不可持续" not in repaired
+    assert "2,101" not in repaired
+    assert "可能与上汽红岩出表" not in repaired
+    assert "不能据此归因于一次性会计因素" in repaired
+    assert "盈利和净资产预期极低" not in repaired
+    assert "市场对盈利持续性持谨慎态度" not in repaired
+    assert "不能据此推断市场意图" in repaired
+    assert "2026-07-29 收盘，动力新科 PE TTM 2.50、PB 1.21" in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+    assert AgentService._validate_model_output(repaired, evidence)["passed"] is True
+
+
+def test_valuation_review_accepts_negative_cashflow_written_as_net_outflow():
+    evidence, answer = _same_day_valuation_review_case()
+    answer = answer.replace(
+        "最新报告期经营现金流为-4.53亿元",
+        "最新报告期经营活动现金净流出4.53亿元",
+    )
+
+    assert valuation_review_required_fact_issue(answer, evidence) is None
+
+
+def test_valuation_review_repair_neutralizes_pricing_cash_and_debt_overclaims():
+    evidence, answer = _same_day_valuation_review_case()
+    draft = (
+        f"{answer}低 PB 更多反映了市场对盈利差的定价，而非明确低估。"
+        "盈利在持续，业务结构简单且方向明确。"
+        "这意味着账面盈利还没有变成经营活动的现金净流入。"
+        "综合来看，业绩扭亏和负债率下降是积极信号，但盈利的现金兑现能力弱。"
+    )
+
+    assert "市场定价意图" in valuation_review_required_fact_issue(draft, evidence)
+    repaired = repair_valuation_review_answer(draft, evidence)
+
+    assert repaired is not None
+    assert "市场对盈利差的定价" not in repaired
+    assert "现金兑现能力弱" not in repaired
+    assert "负债率下降是积极信号" not in repaired
+    assert "盈利在持续" not in repaired
+    assert "业务结构简单且方向明确" not in repaired
+    assert "还没有变成经营活动的现金净流入" not in repaired
+    assert "不能据此推断市场意图" in repaired
+    assert "经营现金流与利润方向相反，原因仍需核验" in repaired
+    assert valuation_review_required_fact_issue(repaired, evidence) is None
+
+
+def test_valuation_review_repair_handles_latest_real_failure_phrases():
+    evidence, answer = _same_day_valuation_review_case()
+    draft = (
+        f"{answer}低倍数也可能是盈利恶化、资产质量差或一次性收益造成的，"
+        "必须用正式财务报表核验才能判断。经营现金流/归母净利润为-12.51，"
+        "说明账面利润在本期并未转化为正向经营现金流入。当前只能确认公司刚扭亏，"
+        "历史基数可能包含亏损，这些都会让TTM盈利很低从而拉低PE倍数。"
+        "PE低可能恰恰是因为过去四个季度总体赚得很少。"
+        "一季度刚刚扭亏，历史亏损可能在分母中残留，导致PE倍数被压得很低。"
+        "主营业务集中度虽然高但方向清晰。相比之下动力新科极低。"
+        "如果盈利本身靠一次性收益支撑，低倍数反而可能提示风险。"
+        "如果包含大量非经常性损益，PE会被动拉低。"
+        "目前PE的低位更多源于分母端不透明和现金流异常。"
+        "半年度预告说明盈利改善趋势可能延续。"
+        "这份预告确实表明盈利方向在延续。"
+        "半年度业绩预告确认盈利延续。"
+        "利润变薄或者有一次性大额收益都可能让数字看起来很极端。"
+        "半年度预告说明主业盈利修复，不是纯粹靠非经常项目维持。"
+        "滚动四个季度盈利可能包含大额资产处置或受基数极低影响。"
+        "资产负债率从上一季度的水平降到42.48%，整体财务杠杆明显下降，"
+        "偿债压力的相对比例减少了。"
+        "这表示利润尚未变成真实的现金流入，并印证了现金回收节奏存在压力。"
+        "目前低倍数在同行中处于极低位置。"
+        "当前只能确认倍数处在极低水平。"
+        "综合来看，当前 PE TTM 极低。"
+        "低倍数也可能来自盈利分母中隐含的一次性或不可持续因素。"
+        "TTM分母包含多少历史亏损、是否有非经常性收益尚未拆解。"
+        "盈利的现金兑现严重偏离，现金流尚不能为利润提供支撑。"
+        "低倍数是否被一次性收益或低利润基数扭曲无法确认。"
+    )
+
+    repaired = repair_valuation_review_answer(draft, evidence)
+
+    assert repaired is not None
+    assert "一次性收益造成" not in repaired
+    assert "并未转化为正向经营现金流入" not in repaired
+    assert "TTM盈利很低从而拉低PE" not in repaired
+    assert "过去四个季度总体赚得很少" not in repaired
+    assert "历史亏损可能在分母中残留" not in repaired
+    assert "方向清晰" not in repaired
+    assert "动力新科极低" not in repaired
+    assert "极低" not in repaired
+    assert "靠一次性收益支撑" not in repaired
+    assert "PE会被动拉低" not in repaired
+    assert "低位更多源于" not in repaired
+    assert "盈利改善趋势可能延续" not in repaired
+    assert "盈利方向在延续" not in repaired
+    assert "确认盈利延续" not in repaired
+    assert "半年度业绩预告给出预计盈利区间" in repaired
+    assert "一次性大额收益" not in repaired
+    assert "非经常项目维持" not in repaired
+    assert "基数极低" not in repaired
+    assert "上一季度" not in repaired
+    assert "整体财务杠杆明显下降" not in repaired
+    assert "真实的现金流入" not in repaired
+    assert "现金回收节奏存在压力" not in repaired
+    assert "极低位置" not in repaired
+    assert "极低水平" not in repaired
+    assert "PE TTM 极低" not in repaired
+    assert "低倍数也可能来自" not in repaired
+    assert "非经常性收益尚未拆解" not in repaired
+    assert "现金兑现严重偏离" not in repaired
+    assert "不能为利润提供支撑" not in repaired
+    assert "低倍数是否被" not in repaired
+    assert "需核验扣非利润和非经常性损益明细" in repaired
+    assert "不能直接解释为利润尚未兑现为现金" in repaired
+    assert valuation_review_required_fact_issue(repaired, evidence) is None
+    assert AgentService._validate_model_output(repaired, evidence)["passed"] is True
+
+
+def test_valuation_review_accepts_opening_synonym_and_debt_boundary():
+    evidence, answer = _same_day_valuation_review_case()
+    evidence["earnings_quality"]["comparable_report"] = {
+        "debt_asset_ratio_pct": 74.9
+    }
+    answer = answer.replace(
+        "不是。",
+        "命中估值约束候选≠便宜。",
+        1,
+    ) + (
+        "资产负债率下降只表示资产结构变化，不能直接等同于负债总量或"
+        "偿债压力已下降。"
+    )
+
+    assert valuation_review_required_fact_issue(answer, evidence) is None
+
+    ratio_only = answer + (
+        "资产负债率从74.90%降至42.48%，这是负债占资产的比例在下降。"
+    )
+    assert valuation_review_required_fact_issue(ratio_only, evidence) is None
+
+
+def test_valuation_review_repair_does_not_force_peer_ratios_and_fixes_cash_shortcut():
+    evidence, answer = _same_day_valuation_review_case()
+    evidence["earnings_quality"]["comparable_report"] = {
+        "debt_asset_ratio_pct": 74.9
+    }
+    draft = answer.replace(
+        "本标的PE TTM约为同行中位数的6%，PB约为同行中位数的54%。",
+        "",
+    ).replace(
+        "最新报告期经营现金流为-4.53亿元，经营现金流/归母净利润为-12.51，",
+        "最新报告期经营现金流为-4.53亿元，经营现金流/归母净利润为-12.51，"
+        "这说明报告期内的盈利还没有以现金形式回到公司，",
+    )
+    draft += (
+        "低倍数也可能对应着盈利质量有问题，或利润里有大量一次性的非经常项目。"
+        "资产负债率从74.90%降至42.48%，这是负债占资产的比例在下降。"
+    )
+
+    repaired = repair_valuation_review_answer(draft, evidence)
+
+    assert repaired is not None
+    assert "本标的/中位数比值分别为" not in repaired
+    assert "盈利还没有以现金形式回到公司" not in repaired
+    assert "低倍数也可能对应着" not in repaired
+    assert repaired.count("**") % 2 == 0
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+    assert AgentService._validate_model_output(repaired, evidence)["passed"] is True
+
+
+def test_valuation_review_repair_compacts_latest_real_readability_failure():
+    evidence, _ = _same_day_valuation_review_case()
+    evidence["financial_drivers"]["cashflow_analysis"].update(
+        {
+            "comparable_operating_cashflow_to_net_profit": 2.331,
+        }
+    )
+    evidence["earnings_quality"]["latest_report"].update(
+        {
+            "report_date": "2026-03-31",
+            "parent_net_profit": 36_199_600.85,
+        }
+    )
+    evidence["earnings_quality"]["comparable_report"] = {
+        "report_date": "2025-03-31",
+        "parent_net_profit": -210_165_309.62,
+        "debt_asset_ratio_pct": 74.9,
+    }
+    evidence["a_share_information"] = {
+        "announcements": [
+            {
+                "published_at": "2026-07-14T00:00:00+08:00",
+                "summary": "预计上半年归母净利润为7000万元至9000万元。",
+            }
+        ]
+    }
+    evidence["business_structure"] = {
+        "anchor_report_date": "2025-12-31",
+        "dimensions": [
+            {
+                "classification": "product",
+                "segments": [
+                    {
+                        "item_name": "发动机",
+                        "revenue_share_pct": 94.0752,
+                        "gross_margin_pct": 12.4359,
+                    },
+                    {
+                        "item_name": "重卡",
+                        "revenue_share_pct": 5.9248,
+                        "gross_margin_pct": -57.8053,
+                    },
+                ],
+            }
+        ],
+    }
+    draft = """命中估值约束不等于便宜。
+
+动力新科当前 PE TTM 为 2.50 倍，PB 为 1.21 倍，相比同日市值相近的三个汽车配件样本（沪光股份、美湖股份、旷达科技），PE 中位数为 39.39 倍、PB 中位数为 2.26 倍，本标的数值明显偏低。但低倍数能确认的只是当前价格相对于滚动盈利和净资产的比值较低，不等于公司已经被低估。关键在于这个低倍数背后是真实的持续盈利支撑，还是由一次性收益、利润波动或资产质量隐患造成的数字假象。
+
+**盈利已经扭亏，但现金兑现仍需复核**
+
+2026 年一季报（2026 年 3 月 31 日）显示归母净利润约 3620 万元，而上一年同期为亏损约 2.1 亿元，同比扭亏。公司 2026 年 7 月 14 日披露的半年度业绩预告预计上半年归母净利润为 7000 万至 9000 万元，也已实现扭亏。这些是支持继续研究的事实：利润层面确实从亏损转向盈利。
+
+但经营现金流与利润方向完全相反。2026 年一季报经营现金流净额为 -4.53 亿元，与归母净利润的覆盖比率为 -12.5 倍（去年同期为 2.33 倍）。经营现金流为负、与利润方向背离，意味着当季账面利润尚未转化为经营活动净现金流入，这是判断估值质量时必须优先复核的风险点。
+
+**负债率下降，但现金流偿债能力仍需验证**
+
+资产负债率从去年同期的 74.90% 降至当前的 42.48%，负债占资产的比例明显下降。这一变化是财务结构上的积极事实，但仅凭资产负债率本身不能确认偿债压力已经减轻，尤其是经营现金流净额仍然为负。负债率的下降能否转化为真实的财务安全，还需要核对总负债的绝对规模变化以及后续现金流改善。
+
+**主营高度集中于发动机，但高集中度不等于方向明确**
+
+最新主营构成来自 2025 年年报，发动机业务占总收入 94.08%，毛利率约 12.44%；重卡业务占比 5.92%，毛利率为 -57.81%。收入高度集中意味着公司盈利几乎完全依赖单一产品线的表现，一旦发动机需求或竞争格局变化，影响将被放大。重卡业务毛利为负也在拖累整体盈利。这些事实构成了待核验的经营风险，不能因为利润近期扭亏就忽略。
+
+**尚不能确认低估，核心缺口在盈利质量核验**
+
+当前证据无法确认低倍数是否合理。滚动十二个月盈利 TTM 的分母尚未拆解，无法判断低 PE 是否由一次性非经常性收益或利润低基数造成。同时，同报告期同行的经营数据（营收、利润率、现金流）均缺失，无法用经营质量截面验证倍数差异是否有业务基本面支撑。要判断估值约束是否对应真实低估，需要交叉核对扣非净利润与非经常性损益明细、经营现金流变化的附注解释、应收与存货周转的具体数字，以及下一份定期报告中经营现金流能否跟着利润一起转正。"""
+
+    repaired = repair_valuation_review_answer(draft, evidence)
+
+    assert repaired is not None
+    paragraphs = [item for item in repaired.split("\n\n") if item.strip()]
+    assert 4 <= len(paragraphs) <= 6
+    assert repaired.count("**") % 2 == 0
+    assert repaired.count("**") <= 6
+    assert "**利润已扭亏，但经营现金流仍为负**" in repaired
+    assert "**资产负债率下降，不等于负债总量减少**" in repaired
+    assert "**主营集中于发动机，重卡业务仍亏损**" in repaired
+    assert "积极事实" not in repaired
+    assert "真实的财务安全" not in repaired
+    assert "现金流偿债能力" not in repaired
+    assert "经营现金流为负、与利润方向背离，经营现金流与利润方向相反" not in repaired
+    assert repaired.count("当前估值截面偏低") == 1
+    assert repaired.count("42.48%") == 1
+    assert "较可比期下降约 32.42 个百分点" in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+    assert AgentService._validate_model_output(repaired, evidence)["passed"] is True
+
+
+def test_valuation_review_markdown_cleanup_preserves_valid_heading_lines():
+    repaired = _normalize_valuation_review_language(
+        "**未闭合标题\n\n**有效标题**\n\n正文保持不变。"
+    )
+
+    assert repaired.startswith("未闭合标题")
+    assert "**有效标题**" in repaired
+    assert repaired.count("**") == 2
+
+
+def test_valuation_review_readability_removes_pb_and_margin_causal_shortcuts():
+    draft = """**命中估值约束不等于便宜。** 当前倍数低于同行。
+
+**变动的负债率提醒我们，低 PB 来自高股东权益，不自动等于资产便宜。** 最新资产负债率从同期74.9%降至42.48%，这与资产总量或负债结构变动有关。PB只有1.24，本质上是因为每股净资产比同行高；而负债率骤降若来自一次性权益变动，PB就容易在事后被动抬升。
+
+**刚扭亏的盈利还谈不上扎实，滚动 PE 的分母仍待拆解。** 这表示净利润虽已转正，但与同期经营活动净现金流入完全是两个方向；利润还没有被实实在在的经营现金流入覆盖。
+**主营高度依赖发动机，毛利率刚回升但还很低。** 2026年一季报毛利率回升到10.37%，是利润率改善的关键驱动力，但 10% 的毛利率在制造业中仍属偏薄。
+**综合判断**：仍需核验。"""
+
+    repaired = _drop_redundant_valuation_summary(
+        _normalize_valuation_review_language(draft)
+    )
+
+    paragraphs = [item for item in repaired.split("\n\n") if item.strip()]
+    assert 4 <= len(paragraphs) <= 6
+    assert repaired.count("**") <= 6
+    assert "低 PB 来自高股东权益" not in repaired
+    assert "本质上是因为每股净资产比同行高" not in repaired
+    assert "被动抬升" not in repaired
+    assert "实实在在的经营现金流入覆盖" not in repaired
+    assert "关键驱动力" not in repaired
+    assert "制造业中仍属偏薄" not in repaired
+    assert "**资产负债率下降，不等于负债总量减少**" in repaired
+    assert "**主营集中于发动机，重卡业务毛利仍为负**" in repaired
+
+
+def test_valuation_review_repairs_only_hard_financial_math_errors():
+    evidence, answer = _same_day_valuation_review_case()
+    draft = answer + (
+        "这个极低的PE（TTM）主要来自公司刚脱离巨亏、现在盈利还很薄。"
+        "销售收现率从79.43%下降到67.95%，说明更多营收尚未转化为现金回款。"
+        "资产负债率从74.90%下降到42.48%，表面上负债压力减轻，但仍需核验。"
+    )
+    evidence["earnings_quality"]["comparable_report"] = {
+        "debt_asset_ratio_pct": 74.901016
+    }
+    evidence["financial_drivers"]["cashflow_analysis"].update(
+        {
+            "cash_received_from_sales_to_revenue_pct": 67.948,
+            "comparable_cash_received_from_sales_to_revenue_pct": 79.429,
+        }
+    )
+
+    repaired = repair_valuation_review_answer(draft, evidence)
+
+    assert repaired is not None
+    assert "主要来自公司刚脱离巨亏" not in repaired
+    assert "更多营收尚未转化为现金回款" not in repaired
+    assert "表面上负债压力减轻" not in repaired
+    assert "不能用单季扭亏、历史亏损或利润规模直接解释当前倍数" in repaired
+    assert "这一比率变化的原因尚未确认" in repaired
+    assert valuation_review_required_fact_issue(repaired, evidence) is None
+    assert AgentService._validate_model_output(repaired, evidence)["passed"] is True
+
+
+def test_valuation_review_repairs_latest_natural_draft_without_duplicate_appendix():
+    evidence, _ = _same_day_valuation_review_case()
+    evidence["earnings_quality"]["comparable_report"] = {
+        "debt_asset_ratio_pct": 74.9
+    }
+    draft = (
+        "动力新科的PE TTM约2.50倍、PB约1.21倍，相比沪光股份、美湖股份和"
+        "旷达科技的同行中位数39.39倍、2.26倍，倍数确实很低。但从目前证据看，"
+        "这个低估值更像是盈利刚刚扭亏、现金流尚未跟上的阶段特征，还不能直接"
+        "等同于便宜。\n\n"
+        "经营现金流为-4.53亿元，经营现金流/归母净利润为-12.51。"
+        "资产负债率42.48%。\n\n"
+        "负债率下降也不宜简单视为财务结构改善。不能仅凭比例下降就得出负债压力"
+        "减轻的结论。\n\n"
+        "同报告期经营数据不足，不能把倍数差异直接解释为经营质量。"
+    )
+
+    assert "同日估值日期" in stock_specialist_relevance_issue(draft, evidence)
+    repaired = repair_valuation_review_answer(draft, evidence)
+
+    assert repaired is not None
+    assert repaired.startswith("截至 2026-07-29 收盘，动力新科的PE TTM")
+    assert "本标的/中位数比值分别为" not in repaired
+    assert "同日同行口径：" not in repaired
+    assert "更像是盈利刚刚扭亏" not in repaired
+    assert "是否解释估值差异仍未确认" in repaired
+    assert "不能据此认定便宜" in repaired
+    assert "负债率下降也不宜简单视为资产负债率下降" not in repaired
+    assert "资产负债率下降只说明负债占资产比例下降" in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+
+
+def test_valuation_review_repairs_v4_natural_draft_without_discarding_it():
+    evidence, _ = _same_day_valuation_review_case()
+    evidence["fundamentals"]["valuation"]["pe_dynamic"] = 55.11
+    evidence["earnings_quality"]["comparable_report"] = {
+        "debt_asset_ratio_pct": 74.9
+    }
+    evidence["financial_drivers"]["cashflow_analysis"].update(
+        {
+            "cash_received_from_sales_to_revenue_pct": 67.95,
+            "comparable_cash_received_from_sales_to_revenue_pct": 79.43,
+        }
+    )
+    evidence["business_structure"] = {
+        "dimensions": [
+            {
+                "classification": "product",
+                "segments": [
+                    {
+                        "item_name": "发动机",
+                        "revenue_share_pct": 94.0,
+                        "gross_margin_pct": 12.4,
+                    }
+                ],
+            }
+        ]
+    }
+    draft = """动力新科因为 PE TTM 2.50、PB 1.21 进入估值约束候选，这只能说明当前倍数在数字上处于很低的位置，并不能直接等同于“股票便宜”。
+
+沪光股份、美湖股份和旷达科技的 PE TTM 中位数为39.39倍、PB中位数为2.26倍，动力新科的倍数明显更低，但同报告期经营数据不足，不能把倍数差异直接解释为经营质量。
+
+公司一季报归母净利润已经扭亏。发动机业务收入占比94%、毛利率约12.4%，说明核心业务具备毛利产出能力，并非完全依赖非经常性项目。
+
+经营现金流为-4.53亿元，经营现金流/归母净利润为-12.51。销售收现率从79.43%下降到67.95%。这组数据提示现金回款比例在走低，利润的“含金量”还不能认可，需要核验是否存在真实财务压力。
+
+动态市盈率55.11倍侧面印证了市场对全年盈利体量的保守预期。TTM市盈率2.50倍的极低值，很可能与滚动十二个月盈利中仍包含历史亏损或大额非经常性损益有关，但当前证据尚未拆清具体构成。
+
+资产负债率从74.90%下降到42.48%，是一个积极变化，但无法确认这一下降是来自负债减少还是资产扩张，还不能直接等同于偿债压力减轻。
+
+综合来看，动力新科的低估值更像是一个需要交叉验证的信号，而不是一个已经确认的结论。交叉验证的信号，而不是一个已经确认的结论。在这些问题没有答案之前，它更像危险信号灯，而不是已确认的价值洼地。"""
+
+    repaired = repair_valuation_review_answer(draft, evidence)
+
+    assert repaired is not None
+    assert repaired.startswith("动力新科因为 PE TTM")
+    assert "截至 2026-07-29 收盘，沪光股份、美湖股份和旷达科技" in repaired
+    assert "处于很低的位置" in repaired
+    assert "市场对全年盈利体量的保守预期" not in repaired
+    assert "历史亏损或大额非经常性损益有关" not in repaired
+    assert "利润的“含金量”" not in repaired
+    assert "真实财务压力" not in repaired
+    assert "是一个积极变化" not in repaired
+    assert "来自负债减少还是资产扩张" not in repaired
+    assert "并非完全依赖非经常性项目" not in repaired
+    assert repaired.count("交叉验证的信号，而不是一个已经确认的结论") == 1
+    assert "危险信号灯" not in repaired
+    assert "价值洼地" not in repaired
+    assert "同日同行口径：" not in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+    assert AgentService._validate_model_output(repaired, evidence)["passed"] is True
+
+
+def test_valuation_review_repairs_v5_hard_errors_without_duplicate_peer_snapshot():
+    evidence, _ = _same_day_valuation_review_case()
+    evidence["earnings_quality"]["comparable_report"] = {
+        "debt_asset_ratio_pct": 74.9
+    }
+    evidence["financial_drivers"]["cashflow_analysis"].update(
+        {
+            "cash_received_from_sales_to_revenue_pct": 67.95,
+            "comparable_cash_received_from_sales_to_revenue_pct": 79.43,
+        }
+    )
+    draft = (
+        "动力新科的PE TTM只有2.50倍、PB不到1.25倍，放在同行汽车配件公司里"
+        "确实低得很突出。今天同一行业标签下，市值相近的沪光股份、美湖股份、"
+        "旷达科技三家，PE TTM中位数为39.39倍，PB中位数约2.26倍。"
+        "但这组倍数差距主要由利润极薄和近期刚扭亏造成，并不能直接得出便宜的结论。\n\n"
+        "经营现金流为-4.53亿元，经营现金流/归母净利润为-12.51。销售收现率"
+        "从79.43%下降到67.95%，说明销售回款与报表收入之间的差距在拉大，"
+        "盈利转化成真金白银的能力依然很弱。\n\n"
+        "PE TTM是按滚动十二个月利润计算，而动力新科刚告别亏损，滚动利润里很可能"
+        "还夹杂着非经常性损益或前期亏损。资产负债率从74.90%下降到42.48%，"
+        "不能据此确认偿债压力减轻。\n\n"
+        "综合来看，现金流负向、卖货回款变慢、主营结构脆弱、盈利基数太薄这四条，"
+        "意味着目前的低倍数还不能直接当成便宜。"
+    )
+
+    repaired = repair_valuation_review_answer(draft, evidence)
+
+    assert repaired is not None
+    assert repaired.startswith("截至 2026-07-29 收盘，动力新科的PE TTM约2.50倍")
+    assert "PB约1.21倍" in repaired
+    assert repaired.count("2026-07-29") == 1
+    assert "同日同行口径：" not in repaired
+    assert "利润极薄和近期刚扭亏造成" not in repaired
+    assert "销售回款与报表收入之间的差距在拉大" not in repaired
+    assert "真金白银" not in repaired
+    assert "刚告别亏损" not in repaired
+    assert "卖货回款变慢" not in repaired
+    assert "盈利基数太薄" not in repaired
+    assert "销售收现率下降原因未明" in repaired
+    assert "滚动盈利分母仍待拆解" in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+    assert AgentService._validate_model_output(repaired, evidence)["passed"] is True
+
+
+def test_valuation_review_repairs_v6_causal_cash_and_dynamic_pe_leaks():
+    evidence, answer = _same_day_valuation_review_case()
+    evidence["earnings_quality"]["comparable_report"] = {
+        "debt_asset_ratio_pct": 74.9
+    }
+    evidence["earnings_quality"]["latest_report"]["parent_net_profit"] = (
+        36_199_600.85
+    )
+    evidence["financial_drivers"]["cashflow_analysis"].update(
+        {
+            "cash_received_from_sales_to_revenue_pct": 67.95,
+            "comparable_cash_received_from_sales_to_revenue_pct": 79.43,
+        }
+    )
+    draft = answer + (
+        "2026年一季报刚扭亏，归母净利润约3620万元，同比增长约1.17倍。"
+        "经营现金流仍是净流出，利润增长尚未同步转化为现金回笼。"
+        "销售商品收到的现金占营业收入的比例从79.43%下降到67.95%，"
+        "显示当季现金回款比例在降低。"
+        "当前低 PE TTM 主要是因为过去十二个月可能含有大额非经常性损益，"
+        "动态市盈率55倍则反映了经常性盈利仍然偏薄。"
+        "公司盈利在改善、资产负债率下降是积极线索，但仍需继续核验。"
+    )
+
+    repaired = repair_valuation_review_answer(draft, evidence)
+
+    assert repaired is not None
+    assert "同比增长约1.17倍" not in repaired
+    assert "较上年同期实现扭亏" in repaired
+    assert "尚未同步转化为现金回笼" not in repaired
+    assert "经营现金流与利润方向相反" in repaired
+    assert "显示当季现金回款比例在降低" not in repaired
+    assert "这一比率变化的原因尚未确认" in repaired
+    assert "主要是因为过去十二个月" not in repaired
+    assert "动态市盈率55倍" not in repaired
+    assert "资产负债率下降是积极线索" not in repaired
+    assert "资产负债率下降则只是报表比率变化" in repaired
+    assert "滚动盈利分母尚未拆解" in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+    assert AgentService._validate_model_output(repaired, evidence)["passed"] is True
+
+
+def test_valuation_review_repairs_rich_first_draft_without_model_retry():
+    evidence, answer = _same_day_valuation_review_case()
+    draft = (
+        "直接回答：进入估值约束候选不等于便宜。"
+        "一季报扭亏，半年度预告延续盈利；这显示公司经营层面出现了方向性变化，"
+        "而不仅是单季波动。资产负债率从74.90%降至42.48%，财务结构相较一年前"
+        "有所收缩。"
+        f"{answer}经营现金流/归母净利润为-12.51，说明本报告期净利润尚未转化为"
+        "经营性现金净流入。低PE可能是利润基数偏低造成的。"
+    )
+
+    repaired = repair_valuation_review_answer(draft, evidence)
+
+    assert repaired is not None
+    assert "半年度预告延续盈利" not in repaired
+    assert "方向性变化" not in repaired
+    assert "财务结构相较一年前有所收缩" not in repaired
+    assert "尚未转化为经营性现金净流入" not in repaired
+    assert "低PE可能是利润基数偏低" not in repaired
+    assert "持续性仍需核验" in repaired
+    assert "不能据此判断负债绝对规模" in repaired
+    assert "滚动盈利分母尚未拆解" in repaired
+    assert "需核验扣非利润和非经常性损益明细" in repaired
+    assert valuation_review_required_fact_issue(repaired, evidence) is None
+
+
+def test_valuation_review_repair_adds_direct_answer_before_a_heading():
+    evidence, _ = _same_day_valuation_review_case()
+    draft = _valuation_review_local_overclaim_draft().replace(
+        "动力新科进入估值约束候选不说明它便宜。",
+        "**动力新科估值到底有多低**\n\n",
+        1,
+    )
+
+    repaired = repair_valuation_review_answer(draft, evidence)
+
+    assert repaired is not None
+    assert repaired.startswith("动力新科进入估值约束候选，不等于它便宜。")
+    assert valuation_review_required_fact_issue(repaired, evidence) is None
+    assert AgentService._validate_model_output(repaired, evidence)["passed"] is True
+
+
+def test_valuation_review_good_first_draft_completes_without_model_retry(
+    tmp_path: Path, settings, monkeypatch
+):
+    evidence, _ = _same_day_valuation_review_case()
+    answer = (
+        _valuation_review_local_overclaim_draft()
+        .replace("动力新科", "本标的")
+        .replace("；本标的约为中位数的6%和54%。", "。")
+        + "半年度业绩预告均预示扭亏持续。"
+        "资产负债率下降，但未提供负债绝对额变化，尚不能确认财务结构是否真正改善。"
+    )
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "valuation-first-draft-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Valuation First Draft User")
+    service = AgentService(database, guarded_settings)
+    calls = []
+
+    def fake_stream(**kwargs):
+        calls.append(kwargs.get("prompt_path"))
+        return answer, {"model": "fake-deepseek", "streaming": {"enabled": True}}
+
+    monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
+
+    run = service.run(
+        user=user,
+        intent="stock_research",
+        message=evidence["user_question"],
+        evidence=evidence,
+        model_tier="deep",
+        execute_agent=True,
+        stream_callback=lambda _event: None,
+    )
+
+    assert calls == [None]
+    assert run["status"] == "completed"
+    assert run["answer"].startswith("动力新科：")
+    assert "预示扭亏持续" not in run["answer"]
+    assert "本标的/中位数比值分别为" not in run["answer"]
+    assert "relevance_retry" not in run["usage"]
+    assert run["usage"]["relevance_repair"]["method"] == (
+        "normalize_and_append_verified_valuation_facts_v1"
+    )
+    assert run["usage"]["output_guard"]["passed"] is True
+
+
+def test_valuation_review_retry_failure_recovers_best_generated_draft(
+    tmp_path: Path, settings, monkeypatch
+):
+    evidence, answer = _same_day_valuation_review_case()
+    first_draft = answer.replace("数据日期为2026年7月29日收盘，", "") + (
+        "低PE主要来自公司刚刚扭亏、利润规模很薄。"
+    )
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "valuation-best-draft-recovery-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Valuation Best Draft Recovery User")
+    service = AgentService(database, guarded_settings)
+    calls = []
+    real_repair = agent_module.repair_valuation_review_answer
+    repair_calls = 0
+
+    def fail_initial_local_repair(text, current_evidence):
+        nonlocal repair_calls
+        repair_calls += 1
+        if repair_calls == 1:
+            return None
+        return real_repair(text, current_evidence)
+
+    def fake_stream(**kwargs):
+        calls.append(kwargs.get("prompt_path"))
+        if len(calls) == 1:
+            return first_draft, {
+                "model": "fake-deepseek",
+                "api_calls": 1,
+                "streaming": {"enabled": True},
+            }
+        raise RuntimeError("retry transport failed")
+
+    monkeypatch.setattr(
+        agent_module,
+        "repair_valuation_review_answer",
+        fail_initial_local_repair,
+    )
+    monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
+
+    run = service.run(
+        user=user,
+        intent="stock_research",
+        message=evidence["user_question"],
+        evidence=evidence,
+        model_tier="deep",
+        execute_agent=True,
+        stream_callback=lambda _event: None,
+    )
+
+    assert len(calls) == 2
+    assert calls[0] is None
+    assert calls[1].name == "prompt.retry.md"
+    assert run["status"] == "completed"
+    assert "当前价格证据：" not in run["answer"]
+    assert "低PE主要来自公司刚刚扭亏" not in run["answer"]
+    assert run["usage"]["relevance_fallback"]["source"] == "initial"
+    assert run["usage"]["relevance_fallback"]["passed"] is True
+    assert run["usage"]["output_guard"]["passed"] is True
+    run_dir = Path(run["workspace_path"]) / "runs" / run["id"]
+    assert (run_dir / "answer.relevance_fallback.md").is_file()
+
+
+def test_valuation_review_numeric_guard_repairs_only_the_bad_clause(
+    tmp_path: Path, settings, monkeypatch
+):
+    evidence, answer = _same_day_valuation_review_case()
+    evidence["earnings_quality"]["comparable_report"] = {
+        "debt_asset_ratio_pct": 74.9
+    }
+    answer += (
+        "资产负债率虽然下降但绝对水平仍在42%以上，仍需核对是否涉及资产重组或"
+        "负债结构实质性变化。"
+    )
+    assert stock_specialist_relevance_issue(answer, evidence) is None
+    assert AgentService._validate_model_output(answer, evidence)["passed"] is False
+
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "valuation-final-normalization-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Valuation Final Normalization User")
+    service = AgentService(database, guarded_settings)
+    calls = []
+
+    def fake_stream(**kwargs):
+        calls.append(kwargs.get("prompt_path"))
+        return answer, {"model": "fake-deepseek", "streaming": {"enabled": True}}
+
+    monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
+
+    run = service.run(
+        user=user,
+        intent="stock_research",
+        message=evidence["user_question"],
+        evidence=evidence,
+        model_tier="economy",
+        execute_agent=True,
+        stream_callback=lambda _event: None,
+    )
+
+    assert calls == [None]
+    assert run["status"] == "completed"
+    assert "42%以上" not in run["answer"]
+    assert "资产重组" not in run["answer"]
+    assert "valuation_normalization" not in run["usage"]
+    assert run["usage"]["output_guard"]["repair"]["method"] == (
+        "drop_unsupported_numeric_lines_v1"
+    )
+    assert run["usage"]["output_guard"]["passed"] is True
+
+
+def test_valuation_review_preserves_a_valid_natural_first_draft(
+    tmp_path: Path, settings, monkeypatch
+):
+    evidence, answer = _same_day_valuation_review_case()
+    answer += "换句话说，低倍数值得继续研究，但现有证据还不能直接下低估结论。"
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "valuation-natural-first-draft-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Valuation Natural Draft User")
+    service = AgentService(database, guarded_settings)
+
+    monkeypatch.setattr(
+        service,
+        "_execute_hermes_streaming",
+        lambda **_kwargs: (
+            answer,
+            {"model": "fake-deepseek", "streaming": {"enabled": True}},
+        ),
+    )
+
+    run = service.run(
+        user=user,
+        intent="stock_research",
+        message=evidence["user_question"],
+        evidence=evidence,
+        model_tier="economy",
+        execute_agent=True,
+        stream_callback=lambda _event: None,
+    )
+
+    assert run["status"] == "completed"
+    assert run["answer"] == answer
+    assert "valuation_normalization" not in run["usage"]
+    assert "relevance_retry" not in run["usage"]
+    assert run["usage"]["output_guard"]["passed"] is True
+
+
+def test_valuation_review_repair_restores_dated_peer_context_after_local_cleanup():
+    evidence, answer = _same_day_valuation_review_case()
+    evidence["earnings_quality"]["comparable_report"] = {
+        "debt_asset_ratio_pct": 74.901016
+    }
+    undated = answer.replace("不是。数据日期为2026年7月29日收盘，", "命中估值约束不等于便宜。")
+    undated += (
+        "资产负债率从上年同期74.9%下降。资产负债率虽然下降但绝对水平仍在42%以上，"
+        "不能据此判断负债绝对规模。"
+    )
+
+    repaired = repair_valuation_review_answer(undated, evidence)
+
+    assert repaired is not None
+    assert "42%以上" not in repaired
+    assert "74.90%" not in repaired
+    assert "最新资产负债率为 42.48%，较可比期下降约 32.42 个百分点" in repaired
+    assert repaired.startswith("截至 2026-07-29 收盘，")
+    assert "同日同行口径：" not in repaired
+    assert valuation_review_required_fact_issue(repaired, evidence) is None
+    assert AgentService._validate_model_output(repaired, evidence)["passed"] is True
+
+
+def test_numeric_guard_treats_from_ratio_as_absolute_transition_value():
+    evidence = {
+        "type": "stock_research",
+        "earnings_quality": {
+            "latest_report": {"debt_asset_ratio_pct": 42.480874},
+            "comparable_report": {"debt_asset_ratio_pct": 74.901016},
+            "drivers": [
+                {
+                    "key": "leverage",
+                    "change_pp": -32.4201,
+                }
+            ],
+        },
+    }
+
+    valid = AgentService._validate_model_output(
+        "资产负债率从同期74.90%下降约32.42个百分点至42.48%。",
+        evidence,
+    )
+    valid_after_heading = AgentService._validate_model_output(
+        "**资产负债率下降，不等于负债减少** 最新资产负债率为42.48%，"
+        "较可比期下降约32.42个百分点。",
+        evidence,
+    )
+    invented = AgentService._validate_model_output(
+        "资产负债率从同期76.90%下降约32.42个百分点至42.48%。",
+        evidence,
+    )
+
+    assert valid["passed"] is True
+    assert valid["unsupported_numbers"] == []
+    assert valid_after_heading["passed"] is True
+    assert valid_after_heading["unsupported_numbers"] == []
+    assert invented["passed"] is False
+    assert invented["unsupported_numbers"] == ["76.90%"]
+
+
+def test_relative_industry_required_fact_check_uses_index_and_coverage():
+    evidence = {
+        "type": "stock_research",
+        "user_question": "宁德时代相对电池行业是增强还是走弱？",
+        "research_plan": {"focus": "relative_industry"},
+        "stock_market_context": {
+            "exact_industry_index": {
+                "status": "same_market_date",
+                "name": "中证电池产业指数",
+                "return_1d_pct": -1.42,
+                "stock_return_1d_pct": -2.29,
+                "stock_minus_industry_pct": -0.87,
+                "component_breadth": {
+                    "status": "available",
+                    "coverage": {"available_returns": 50, "constituents": 50},
+                },
+            }
+        },
+    }
+    incomplete = (
+        "宁德时代今天相对行业走弱，最重要的风险是中期价格仍弱，"
+        "如果后续重新跑赢行业就会推翻当前判断。"
+    )
+    complete = (
+        "中证电池产业指数同日收益-1.42%，宁德时代同日收益-2.29%，"
+        "公司相对行业差值-0.87个百分点，属于相对走弱。行业成分有效收益覆盖"
+        "50/50只。反方证据是单日差值不能代表中期趋势；如果后续同口径交易日"
+        "相对差值反向并持续，当前判断将被推翻。"
+    )
+
+    assert "官方行业指数名称" in relative_industry_required_fact_issue(
+        incomplete, evidence
+    )
+    assert relative_industry_required_fact_issue(complete, evidence) is None
+
+    directional_wording = (
+        complete.replace(
+            "宁德时代同日收益-2.29%",
+            "宁德时代同日下跌2.29%",
+        )
+        .replace(
+            "中证电池产业指数同日收益-1.42%",
+            "中证电池产业指数同日跌幅1.42%",
+        )
+        .replace(
+            "公司相对行业差值-0.87个百分点",
+            "公司跑输行业0.87个百分点",
+        )
+    )
+    assert relative_industry_required_fact_issue(directional_wording, evidence) is None
+
+    wrong_direction = directional_wording.replace(
+        "宁德时代同日下跌2.29%",
+        "宁德时代同日上涨2.29%",
+    )
+    assert "公司同日收益" in relative_industry_required_fact_issue(
+        wrong_direction,
+        evidence,
+    )
+
+
+def test_relative_industry_scope_cleanup_hides_unselected_module_gaps():
+    evidence = {
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "relative_industry"},
+        "stock_market_context": {"exact_industry_index": {"subject_weight_pct": 9.477}},
+    }
+    answer = (
+        "宁德时代相对CS电池指数增强0.54个百分点。\n"
+        "宁德时代作为权重最大的第九个成分股表现出一定抗跌性。\n"
+        "公司最新公告、结构化财务与估值数据尚未接入。\n"
+        "反方证据是行业多数成分同日下跌。\n"
+        "单纯一两日的反转不足以改变当前判断。\n"
+        "若差值转负且持续多个交易日，就推翻当前判断。"
+    )
+
+    cleaned = AgentService._normalize_specialist_scope_language(answer, evidence)
+
+    assert "增强0.54个百分点" in cleaned
+    assert "尚未接入" not in cleaned
+    assert "结构化财务" not in cleaned
+    assert "反方证据" in cleaned
+    assert "第九个成分股" not in cleaned
+    assert "权重约9.48%" in cleaned
+    assert "一两日" not in cleaned
+    assert "持续多个交易日" not in cleaned
+    assert "同日复权数据" in cleaned
+    assert "后续交易日只形成新的同日判断" in cleaned
+
+
+def test_relative_industry_prompt_evidence_keeps_index_and_drops_unrelated_bulk():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "user_question": "宁德时代相对电池行业是增强还是走弱？",
+        "research_plan": {
+            "focus": "relative_industry",
+            "selected_modules": ["market", "analyst_expectations"],
+            "selected_skills": ["online-stock-research"],
+        },
+        "metrics": {
+            "latest_close": 390.86,
+            "return_1d_pct": -2.285,
+            "return_60d_pct": -12.1663,
+            "volatility_20d_annualized_pct": 48.4048,
+            "max_drawdown_60d_pct": -24.1826,
+            "rsi_14": 59.7,
+        },
+        "research_frame": {"missing_information": ["公司最新公告尚未接入"]},
+        "analyst_expectations": {
+            "rating_counts": {"buy": 28},
+            "forecast_eps": [{"fiscal_year": 2026, "value": 20.74}],
+        },
+        "fundamentals": {"summary": {"latest_report": {"revenue": 1}}},
+        "stock_market_context": {
+            "company_industry": "电池",
+            "exact_industry_match_available": True,
+            "exact_industry_index": {
+                "status": "same_market_date",
+                "index_code": "931719",
+                "name": "CS电池",
+                "return_1d_pct": -2.82,
+                "stock_return_1d_pct": -2.285,
+                "stock_minus_industry_pct": 0.535,
+                "subject_weight_pct": 9.477,
+                "component_breadth": {
+                    "status": "available",
+                    "advancers": 6,
+                    "decliners": 44,
+                    "unchanged": 0,
+                    "median_pct_change": -2.2885,
+                    "coverage": {
+                        "constituents": 50,
+                        "available_returns": 50,
+                        "primary_adjusted_returns": 49,
+                        "fallback_unadjusted_returns": 1,
+                    },
+                    "source_fallbacks": [
+                        {
+                            "symbol": "920185.BJ",
+                            "name": "贝特瑞",
+                            "public_source_label": "新浪公开日线",
+                            "adjustment": "unadjusted",
+                            "internal_reason": "provider_error",
+                        }
+                    ],
+                },
+            },
+        },
+    }
+
+    compact = AgentService._compact_stock_research_evidence(evidence)
+
+    index = compact["stock_market_context"]["exact_industry_index"]
+    assert index["return_1d_pct"] == -2.82
+    assert index["stock_return_1d_pct"] == -2.29
+    assert index["stock_minus_industry_pct"] == 0.54
+    assert index["subject_weight_pct"] == 9.48
+    assert index["component_breadth"]["coverage"]["available_returns"] == 50
+    assert index["component_breadth"]["source_fallbacks"][0]["name"] == "贝特瑞"
+    assert "internal_reason" not in index["component_breadth"]["source_fallbacks"][0]
+    assert "analyst_expectations" not in compact
+    assert "fundamentals" not in compact
+    assert "research_frame" not in compact
+    assert "rsi_14" not in compact["metrics"]
+
+
+def test_relative_industry_required_fact_accepts_index_name_spacing():
+    evidence = {
+        "type": "stock_research",
+        "user_question": "宁德时代相对CS电池行业表现如何？",
+        "research_plan": {"focus": "relative_industry"},
+        "stock_market_context": {
+            "exact_industry_index": {
+                "status": "same_market_date",
+                "name": "CS电池",
+                "return_1d_pct": -2.82,
+                "stock_return_1d_pct": -2.29,
+                "stock_minus_industry_pct": 0.54,
+                "component_breadth": {
+                    "status": "available",
+                    "coverage": {"available_returns": 50, "constituents": 50},
+                },
+            }
+        },
+    }
+    answer = (
+        "宁德时代相对 CS 电池增强：公司同日下跌2.29%，指数下跌2.82%，"
+        "公司跑赢行业0.54个百分点，有效收益覆盖50/50只。"
+        "反方证据是60日表现仍弱；若历史同日数据更正后差值转负，当前判断将被推翻。"
+    )
+
+    assert relative_industry_required_fact_issue(answer, evidence) is None
+
+
+def test_relative_industry_near_miss_spread_is_repaired_without_regeneration():
+    evidence = {
+        "type": "stock_research",
+        "display_name": "宁德时代",
+        "user_question": "宁德时代相对CS电池行业表现如何？",
+        "research_plan": {"focus": "relative_industry"},
+        "stock_market_context": {
+            "exact_industry_index": {
+                "status": "same_market_date",
+                "name": "CS电池",
+                "return_1d_pct": -2.82,
+                "stock_return_1d_pct": -2.29,
+                "stock_minus_industry_pct": 0.54,
+                "component_breadth": {
+                    "status": "available",
+                    "coverage": {"available_returns": 50, "constituents": 50},
+                },
+            }
+        },
+    }
+    answer = (
+        "宁德时代相对CS电池增强。公司同日下跌2.29%，指数下跌2.82%，"
+        "个股跑赢行业0.53个百分点；成分有效收益覆盖50/50只。"
+        "反方证据是60日表现仍弱，单日增强不能代表中期趋势。"
+        "若历史同日数据更正后差值转负，当前判断将被推翻。"
+    )
+
+    repaired = repair_relative_industry_answer(answer, evidence)
+
+    assert repaired is not None
+    assert "跑赢行业0.54个百分点" in repaired
+    assert relative_industry_required_fact_issue(repaired, evidence) is None
+
+
+def test_relative_industry_unavailable_index_requires_honest_boundary():
+    evidence = {
+        "type": "stock_research",
+        "display_name": "宁德时代",
+        "user_question": "宁德时代相对CS电池行业是增强还是跟随？",
+        "research_plan": {"focus": "relative_industry"},
+        "stock_market_context": {
+            "analysis_target": {"market_date": "2026-07-29"},
+            "exact_industry_index": {
+                "status": "unavailable_for_target_date",
+                "name": "CS电池",
+                "return_1d_pct": None,
+                "stock_return_1d_pct": 1.53,
+                "stock_minus_industry_pct": None,
+                "component_breadth": {
+                    "status": "available",
+                    "market_date": "2026-07-29",
+                    "median_pct_change": 2.0021,
+                    "advancers": 41,
+                    "decliners": 9,
+                    "unchanged": 0,
+                    "coverage": {"available_returns": 50, "constituents": 50},
+                },
+            },
+        },
+    }
+    unsupported = (
+        "宁德时代相对CS电池指数增强0.47个百分点，公司当日上涨1.53%。\n"
+        "CS电池指数50只成分股全部取得有效收益，中位数上涨2.00%。\n"
+        "反方证据是60日表现仍弱；若同日数据更正，当前判断需要改写。"
+    )
+    honest = (
+        "宁德时代在2026年7月29日相对CS电池指数是增强还是走弱，当前不能确认："
+        "公司当日上涨1.53%，但CS电池指数目标日官方收益尚未取得。"
+        "行业成分有效收益覆盖50/50只，中位数上涨2.00%。"
+        "反方边界是当前分布旁证不能直接等同于跑输行业；若复权数据更正，"
+        "旁证需要改写。"
+    )
+
+    assert "不可用边界" in relative_industry_required_fact_issue(unsupported, evidence)
+    assert relative_industry_required_fact_issue(honest, evidence) is None
+    generated_style = (
+        "目前不能确认宁德时代在2026年7月29日相对CS电池指数是增强还是走弱，"
+        "公司当日上涨1.53%，指数官方收益尚未取得。"
+        "同日50只成分股中41只上涨、9只下跌、0只平盘，中位数上涨2.00%；"
+        "这只是分布旁证，不能直接等同于跑输行业。"
+        "当前尚未形成正式的相对行业增强或走弱结论。"
+        "反方边界是未复权数据可能影响分布；若复权数据更正，旁证需要改写。"
+    )
+    assert relative_industry_required_fact_issue(generated_style, evidence) is None
+    natural_boundary_style = (
+        "当前无法直接判定宁德时代相对CS电池指数是增强还是走弱，因为公司当日"
+        "上涨1.53%，但CS电池指数目标日官方收益尚未取得。"
+        "同日50只成分股中41只上涨、9只下跌、0只平盘，中位数上涨2.00%；"
+        "这只是分布旁证，不能直接等同于跑输行业。"
+        "反方边界是未复权数据可能影响分布；若复权数据更正，旁证需要改写。"
+    )
+    assert (
+        relative_industry_required_fact_issue(natural_boundary_style, evidence) is None
+    )
+    conditional_completion_style = (
+        natural_boundary_style + "若后续取得CS电池指数同日收益，且公司减指数差值为负，"
+        "则当日判断应改为走弱。"
+    )
+    assert (
+        relative_industry_required_fact_issue(conditional_completion_style, evidence)
+        is None
+    )
+    distribution_boundary_style = (
+        natural_boundary_style
+        + "个股低于成分中位数只能描述分布位置，不能直接等同为相对指数走弱；"
+        "在官方收益补齐前，无法升级为确切的相对增强、同步或走弱判断。"
+    )
+    assert (
+        relative_industry_required_fact_issue(distribution_boundary_style, evidence)
+        is None
+    )
+    zero_flat_may_be_omitted_style = (
+        "当前不能确认宁德时代相对CS电池指数是增强还是走弱，公司上涨1.53%，"
+        "但指数官方收益尚未取得。50只成分中41只上涨、9只下跌，"
+        "中位数上涨2.00%；这只是分布旁证，不能直接等同为相对指数走弱。"
+        "反方边界是未复权数据可能影响分布；若复权数据更正，旁证需要改写。"
+    )
+    assert (
+        relative_industry_required_fact_issue(zero_flat_may_be_omitted_style, evidence)
+        is None
+    )
+    natural_calculation_boundary_style = (
+        zero_flat_may_be_omitted_style
+        + "官方指数缺失时无法直接计算个股减指数差值，也不能据此断定相对指数走弱。"
+    )
+    assert (
+        relative_industry_required_fact_issue(
+            natural_calculation_boundary_style, evidence
+        )
+        is None
+    )
+
+    repaired = repair_relative_industry_answer(unsupported, evidence)
+    assert repaired is not None
+    assert repaired.startswith("宁德时代在2026-07-29相对CS电池")
+    assert "当前不能确认" in repaired
+    assert "目标日官方收益尚未取得" in repaired
+    assert "0.47" not in repaired
+    assert "相对CS电池指数增强" not in repaired
+    assert relative_industry_required_fact_issue(repaired, evidence) is None
 
 
 class _FakeStreamingProcess:
@@ -79,13 +1565,10 @@ def test_hermes_reasoning_effort_keeps_standard_turns_faster(monkeypatch):
     monkeypatch.delenv("HERMES_DEEP_REASONING_EFFORT", raising=False)
 
     assert agent_module._hermes_reasoning_effort("economy") == "low"
+    assert agent_module._hermes_reasoning_effort("economy", "stock_research") == "none"
+    assert agent_module._hermes_reasoning_effort("economy", "market_brief") == "none"
     assert (
-        agent_module._hermes_reasoning_effort("economy", "stock_research")
-        == "none"
-    )
-    assert (
-        agent_module._hermes_reasoning_effort("economy", "market_brief")
-        == "none"
+        agent_module._hermes_reasoning_effort("economy", "business_structure") == "none"
     )
     assert agent_module._hermes_reasoning_effort("deep") == "medium"
 
@@ -137,9 +1620,7 @@ def test_hermes_oneshot_fallback_disables_all_tools(
         captured["command"] = command
         return Result()
 
-    monkeypatch.setattr(
-        "app.services.agent_hermes_execution.subprocess.run", fake_run
-    )
+    monkeypatch.setattr("app.services.agent_hermes_execution.subprocess.run", fake_run)
 
     answer, _ = service._execute_hermes(
         prompt="整理待确认任务，不要执行写入。",
@@ -275,6 +1756,127 @@ def test_stock_research_number_precision_is_limited_to_two_decimals():
     )
 
 
+def test_streaming_stock_precision_matches_final_normalization(
+    tmp_path: Path, settings, monkeypatch
+):
+    bin_dir = tmp_path / "hermes" / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    hermes_bin = bin_dir / "hermes"
+    python_bin = bin_dir / "python"
+    hermes_bin.touch()
+    python_bin.touch()
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "stream-stock-precision-workspaces",
+        hermes_bin=hermes_bin,
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    service = AgentService(database, guarded_settings)
+    run_dir = tmp_path / "run-stock-precision"
+    run_dir.mkdir()
+    (run_dir / "prompt.md").write_text("测试个股数字精度", encoding="utf-8")
+    raw_answer = (
+        "宁德时代经营现金流/归母净利润从1.925降至1.391，"
+        "销售收现率从124.618%降至94.773%。"
+    )
+    lines = [
+        json.dumps(
+            {"type": "delta", "text": raw_answer},
+            ensure_ascii=False,
+        )
+        + "\n",
+        json.dumps(
+            {
+                "type": "final",
+                "answer": raw_answer,
+                "usage": {"model": "fake-stream"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+    ]
+    monkeypatch.setattr(
+        "app.services.agent_hermes_execution.subprocess.Popen",
+        lambda *args, **kwargs: _FakeStreamingProcess(lines),
+    )
+    updates = []
+
+    answer, usage = service._execute_hermes_streaming(
+        model_tier="economy",
+        run_dir=run_dir,
+        user_workspace=tmp_path,
+        evidence={
+            "type": "stock_research",
+            "symbol": "300750.SZ",
+            "display_name": "宁德时代",
+            "financial_drivers": {
+                "cashflow_analysis": {
+                    "operating_cashflow_to_net_profit": 1.391,
+                    "comparable_operating_cashflow_to_net_profit": 1.925,
+                    "cash_received_from_sales_to_revenue_pct": 94.773,
+                    "comparable_cash_received_from_sales_to_revenue_pct": 124.618,
+                }
+            },
+        },
+        trusted_context=None,
+        stream_callback=updates.append,
+    )
+
+    expected = (
+        "宁德时代经营现金流/归母净利润从1.93降至1.39，销售收现率从124.62%降至94.77%。"
+    )
+    assert updates[-1]["draft"] == expected
+    assert agent_module._normalize_stock_research_number_precision(answer) == expected
+    assert usage["streaming"]["visible_events"] == 1
+
+
+def test_quality_review_stream_guard_blocks_model_calculated_margin_range(
+    tmp_path: Path, settings
+):
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "quality-margin-range-workspaces",
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    service = AgentService(database, guarded_settings)
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "business_structure": {
+            "dimensions": [
+                {
+                    "classification": "product",
+                    "segments": [
+                        {
+                            "item_name": "动力电池系统",
+                            "gross_margin_pct": 20.63,
+                            "comparable_gross_margin_pct": 22.41,
+                        },
+                        {
+                            "item_name": "储能电池系统",
+                            "gross_margin_pct": 23.96,
+                            "comparable_gross_margin_pct": 25.52,
+                        },
+                    ],
+                }
+            ]
+        },
+    }
+
+    guard = service._validate_stream_output(
+        "两个核心产品分部的毛利率同步下降约1.5至1.8个百分点。",
+        evidence,
+    )
+
+    assert "1.5" in guard["unsupported_numbers"]
+    assert service._stream_partial_guard_has_blocker(guard) is True
+
+
 def test_numeric_guard_understands_directional_percentage_language():
     evidence = {
         "type": "market_brief",
@@ -391,6 +1993,27 @@ def test_numeric_guard_accepts_one_decimal_percentage_rounding():
     assert valid["passed"] is True
     assert invalid["passed"] is False
     assert "+4.4%" in invalid["unsupported_numbers"]
+
+
+def test_numeric_guard_accepts_approximate_integer_percentage_wording():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "fundamentals": {"summary": {"latest_report": {"revenue_yoy_pct": -35.564822}}},
+    }
+
+    valid = AgentService._validate_model_output(
+        "北方国际一季度营收同比下滑超过35%。",
+        evidence,
+    )
+    invented = AgentService._validate_model_output(
+        "北方国际一季度营收同比下滑超过37%。",
+        evidence,
+    )
+
+    assert valid["passed"] is True
+    assert invented["passed"] is False
+    assert invented["unsupported_numbers"] == ["37%"]
 
 
 def test_numeric_guard_accepts_integer_range_derived_from_evidence():
@@ -1015,6 +2638,24 @@ def test_prompt_evidence_and_output_guard_hide_provider_operations():
     assert incomplete["private_operational_patterns"]
 
 
+def test_output_guard_preserves_financial_upstream_wording_but_blocks_ops_context():
+    evidence = {"type": "stock_research", "symbol": "601138.SS"}
+
+    financial = AgentService._validate_model_output(
+        "反方证据是产业链上游的资金占用增加，仍需核验应付款与合同负债。",
+        evidence,
+    )
+    operational = AgentService._validate_model_output(
+        "上游接口不可用，系统已降级处理。",
+        evidence,
+    )
+
+    assert financial["passed"] is True
+    assert financial["private_operational_patterns"] == []
+    assert operational["passed"] is False
+    assert operational["private_operational_patterns"]
+
+
 def test_failed_model_guard_falls_back_to_deterministic_preview(
     tmp_path: Path, settings, monkeypatch
 ):
@@ -1209,9 +2850,7 @@ def test_stock_cause_prompt_drops_noncausal_bulk_and_duplicate_provenance():
                     "source_key": "internal-source",
                     "next_step": "核验原文",
                 }
-                for i, relation in enumerate(
-                    ["supports", "weakens", "unresolved"] * 4
-                )
+                for i, relation in enumerate(["supports", "weakens", "unresolved"] * 4)
             ],
         },
         "stock_market_context": {
@@ -1242,6 +2881,7 @@ def test_stock_cause_prompt_drops_noncausal_bulk_and_duplicate_provenance():
                     "title": "同日盘中公告",
                     "published_at": "2026-07-24T14:00:00+08:00",
                     "source": "深交所",
+                    "summary": "公司公告原文摘录：公司披露本次合同金额及履约期限。",
                 },
                 {
                     "title": "前一日公告",
@@ -1292,19 +2932,125 @@ def test_stock_cause_prompt_drops_noncausal_bulk_and_duplicate_provenance():
     assert packet["target_market_date"] == "2026-07-24"
     assert packet["strict_same_date_only"] is True
     assert packet["coverage_status"] == "same_date_official_disclosure"
-    assert [
-        item["title"] for item in packet["same_date_official_disclosures"]
-    ] == ["同日盘中公告"]
+    assert [item["title"] for item in packet["same_date_official_disclosures"]] == [
+        "同日盘中公告"
+    ]
+    assert packet["same_date_official_disclosures"][0]["direct_excerpt"] == (
+        "公司披露本次合同金额及履约期限。"
+    )
     assert [item["title"] for item in packet["same_date_media_clues"]] == [
         "同日盘中媒体线索"
     ]
-    assert [
-        item["title"] for item in packet["same_date_after_close_events"]
-    ] == ["同日收盘后报道"]
-    assert [item["title"] for item in packet["adjacent_date_events"]] == [
-        "前一日公告"
+    assert [item["title"] for item in packet["same_date_after_close_events"]] == [
+        "同日收盘后报道"
     ]
+    assert [item["title"] for item in packet["adjacent_date_events"]] == ["前一日公告"]
     assert packet["same_date_media_source_count"] == 1
+
+
+def test_mixed_stock_prompt_compacts_duplicate_financial_and_market_context():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "user_question": "回撤与财务、现金流和公司事件有什么关系？",
+        "research_plan": {"focus": "mixed"},
+        "stock_market_context": {
+            "indices": [
+                {"name": f"指数{i}", "metrics": {"latest_close": i}} for i in range(4)
+            ],
+            "market_breadth": {"breadth": {"total": 5000}},
+        },
+        "evidence_debate": {
+            "bull_case": ["支持" * 100],
+            "bear_case": ["反方" * 100],
+        },
+        "research_claims": {
+            "status": "available",
+            "claims": [
+                {
+                    "relation": "weakens",
+                    "claim": "营收承压",
+                    "evidence_summary": "同比下降",
+                }
+            ],
+        },
+        "fundamentals": {
+            "valuation": {"pe_ttm": 15.98},
+            "summary": {
+                "latest_report": {
+                    "report_date": "2026-03-31",
+                    "revenue_yoy_pct": -35.56,
+                    "operating_cashflow": 216477658.72,
+                    "unused_field": "x" * 1000,
+                },
+                "latest_annual_report": {"unused_field": "y" * 1000},
+                "facts": [{"statement": "z" * 1000}],
+                "operating_cashflow_to_net_profit": 1.96,
+            },
+        },
+        "earnings_quality": {
+            "latest_report": {
+                "report_date": "2026-03-31",
+                "revenue_yoy_pct": -35.56,
+                "unused_field": "x" * 1000,
+            },
+            "comparable_report": {
+                "report_date": "2025-03-31",
+                "revenue_yoy_pct": -27.22,
+                "unused_field": "x" * 1000,
+            },
+            "factors": [
+                {
+                    "key": "cashflow",
+                    "label": "现金流覆盖",
+                    "status": "support",
+                    "interpretation": "接近2倍",
+                    "unused_field": "x" * 1000,
+                }
+            ],
+        },
+        "financial_drivers": {
+            "latest_period": {
+                "report_date": "2026-03-31",
+                "revenue_growth_pct": -35.56,
+                "unused_field": "x" * 1000,
+            },
+            "comparable_period": {
+                "report_date": "2025-03-31",
+                "unused_field": "x" * 1000,
+            },
+            "expense_analysis": [{"unused_field": "x" * 2000}],
+            "working_capital_analysis": [{"unused_field": "x" * 2000}],
+            "confirmed_mechanical_drivers": [
+                {
+                    "key": "finance_expense",
+                    "label": "财务费用变化",
+                    "amount": -96755056.24,
+                    "direction": "negative",
+                    "statement": "财务费用同比增加。",
+                }
+            ],
+            "cashflow_analysis": {
+                "operating_cashflow": 216477658.72,
+                "operating_cashflow_to_net_profit": 1.96,
+                "unused_field": "x" * 1000,
+            },
+        },
+    }
+
+    compact = AgentService._compact_stock_research_evidence(evidence)
+
+    assert "stock_market_context" not in compact
+    assert "evidence_debate" not in compact
+    assert "valuation" not in compact["fundamentals"]
+    assert "latest_annual_report" not in compact["fundamentals"]["summary"]
+    assert "unused_field" not in compact["earnings_quality"]["latest_report"]
+    assert "expense_analysis" not in compact["financial_drivers"]
+    assert "working_capital_analysis" not in compact["financial_drivers"]
+    assert compact["financial_drivers"]["cashflow_analysis"] == {
+        "operating_cashflow": 216477658.72,
+        "operating_cashflow_to_net_profit": 1.96,
+    }
 
 
 def test_stock_cause_prompt_limits_headlines_without_changing_full_ui_evidence():
@@ -1312,9 +3058,7 @@ def test_stock_cause_prompt_limits_headlines_without_changing_full_ui_evidence()
         "type": "stock_research",
         "symbol": "000063.SZ",
         "user_question": "中兴通讯7月24日为什么下跌？只使用同日事实。",
-        "stock_market_context": {
-            "analysis_target": {"market_date": "2026-07-24"}
-        },
+        "stock_market_context": {"analysis_target": {"market_date": "2026-07-24"}},
         "a_share_information": {
             "news": [
                 {
@@ -1338,9 +3082,7 @@ def test_stock_cause_prompt_excludes_low_signal_financing_and_record_date_headli
         "type": "stock_research",
         "symbol": "000063.SZ",
         "user_question": "中兴通讯今天为什么跌？",
-        "stock_market_context": {
-            "analysis_target": {"market_date": "2026-07-28"}
-        },
+        "stock_market_context": {"analysis_target": {"market_date": "2026-07-28"}},
         "a_share_information": {
             "news": [
                 {
@@ -1513,9 +3255,7 @@ def test_stock_cause_guard_rejects_media_sentiment_labels_and_unpublished_checks
         "metrics": {"latest_close": 35.0, "return_1d_pct": -2.56},
         "stock_market_context": {
             "analysis_target": {"market_date": "2026-07-24"},
-            "exact_industry_index": {
-                "component_breadth": {"status": "available"}
-            },
+            "exact_industry_index": {"component_breadth": {"status": "available"}},
         },
     }
 
@@ -1543,9 +3283,7 @@ def test_stock_cause_guard_rejects_indirect_media_sentiment_wording():
         "metrics": {"latest_close": 35.0, "return_1d_pct": -2.56},
         "stock_market_context": {
             "analysis_target": {"market_date": "2026-07-24"},
-            "exact_industry_index": {
-                "component_breadth": {"status": "available"}
-            },
+            "exact_industry_index": {"component_breadth": {"status": "available"}},
         },
     }
     answer = (
@@ -1582,9 +3320,7 @@ def test_stock_cause_guard_rejects_generic_positive_report_label():
         "metrics": {"latest_close": 35.0, "return_1d_pct": -2.56},
         "stock_market_context": {
             "analysis_target": {"market_date": "2026-07-24"},
-            "exact_industry_index": {
-                "component_breadth": {"status": "available"}
-            },
+            "exact_industry_index": {"component_breadth": {"status": "available"}},
         },
     }
     answer = (
@@ -1608,6 +3344,47 @@ def test_stock_cause_guard_rejects_generic_positive_report_label():
     assert "正面产品报道" not in repaired[0]
 
 
+def test_stock_event_repair_preserves_confirmed_disclosure_titles():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "display_name": "北方国际",
+        "user_question": "哪些公司事件与这次回撤有关？",
+        "event_timeline": {
+            "events": [
+                {
+                    "title": "000065北方国际投资者关系管理信息20260716",
+                    "event_date": "2026-07-16",
+                    "category": "announcement",
+                    "evidence_level": "official_disclosure",
+                },
+                {
+                    "title": "关于向控股股东申请借款暨关联交易的公告",
+                    "event_date": "2026-06-15",
+                    "category": "announcement",
+                    "evidence_level": "official_disclosure",
+                },
+            ]
+        },
+    }
+    answer = (
+        "公司已经披露7月投资者关系记录和6月借款公告，"
+        "这些都是中性或常规事项，没有明显催化。\n\n"
+        "财务变化仍需结合公告原文核对，不能只凭标题判断股价原因。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert guard["passed"] is False
+    assert repaired is not None
+    assert repaired[1]["passed"] is True
+    assert "000065北方国际投资者关系管理信息20260716" in repaired[0]
+    assert "关于向控股股东申请借款暨关联交易的公告" in repaired[0]
+    assert "这些正式披露确实存在" in repaired[0]
+    assert "中性或常规事项" not in repaired[0]
+
+
 def test_stock_cause_guard_allows_explicit_media_sentiment_boundary():
     evidence = {
         "type": "stock_research",
@@ -1616,9 +3393,7 @@ def test_stock_cause_guard_allows_explicit_media_sentiment_boundary():
         "metrics": {"latest_close": 35.0, "return_1d_pct": -2.56},
         "stock_market_context": {
             "analysis_target": {"market_date": "2026-07-24"},
-            "exact_industry_index": {
-                "component_breadth": {"status": "available"}
-            },
+            "exact_industry_index": {"component_breadth": {"status": "available"}},
         },
     }
 
@@ -1775,6 +3550,22 @@ def test_peer_operating_guard_rejects_rankings_and_false_business_period_claims(
     assert (
         "主营构成不得自行加总或混入非分部字段"
         in composition_math["unsupported_market_inferences"]
+    )
+
+    ordinary_cashflow_check = AgentService._validate_model_output(
+        "经营现金流为负，需要继续核验应收账款账龄和回款节奏。", evidence
+    )
+    assert (
+        "主营构成不得自行加总或混入非分部字段"
+        not in ordinary_cashflow_check["unsupported_market_inferences"]
+    )
+
+    explicit_field_mix = AgentService._validate_model_output(
+        "主营构成中还加入了应收账款字段。", evidence
+    )
+    assert (
+        "主营构成不得自行加总或混入非分部字段"
+        in explicit_field_mix["unsupported_market_inferences"]
     )
 
     wrong_margin_source = AgentService._validate_model_output(
@@ -1970,9 +3761,7 @@ def test_general_research_guard_keeps_common_named_index_label():
         "可以比较宽基指数ETF，例如沪深 300 等产品，但不能据此承诺收益。",
         {
             "type": "general_research",
-            "financial_advisor_context": {
-                "status": "ready_for_conditional_guidance"
-            },
+            "financial_advisor_context": {"status": "ready_for_conditional_guidance"},
         },
     )
 
@@ -2266,9 +4055,7 @@ def test_market_cause_prompt_keeps_structured_causal_evidence():
 
     compact = AgentService._compact_market_brief_evidence(evidence)
 
-    assert compact["causal_evidence"]["coverage_status"] == (
-        "same_date_multi_source"
-    )
+    assert compact["causal_evidence"]["coverage_status"] == ("same_date_multi_source")
     assert compact["causal_evidence"]["corroborated_categories"][0] == {
         "category": "monetary_policy",
         "category_label": "货币政策与央行表态",
@@ -2277,9 +4064,7 @@ def test_market_cause_prompt_keeps_structured_causal_evidence():
     assert compact["causal_evidence"]["candidates"][0]["title"] == (
         "Fed signals rates may stay high"
     )
-    assert compact["causal_evidence"]["candidates"][0]["source"] == (
-        "Example Wire"
-    )
+    assert compact["causal_evidence"]["candidates"][0]["source"] == ("Example Wire")
 
 
 def test_market_answer_removes_internal_routing_preamble():
@@ -3360,6 +5145,69 @@ def test_market_prompt_history_keeps_user_questions_but_drops_prior_answers():
     ]
 
 
+def test_stock_prompt_history_keeps_questions_but_drops_saved_reports():
+    history = [
+        {"role": "user", "content": "北方国际为什么进入候选"},
+        {
+            "role": "assistant",
+            "content": "北方国际 当前价格证据：\n- 一整份服务器确定性报告正文",
+        },
+        {"role": "user", "content": "那现金流和借款公告说明什么"},
+        {
+            "role": "assistant",
+            "content": "上一轮DeepSeek回答，其中可能有需要重新核验的数字。",
+        },
+        {"role": "user", "content": "近5日走平能叫企稳吗"},
+    ]
+
+    compact = AgentService._compact_stock_conversation_history(history)
+
+    assert compact == [
+        {"role": "user", "content": "北方国际为什么进入候选"},
+        {"role": "user", "content": "那现金流和借款公告说明什么"},
+        {"role": "user", "content": "近5日走平能叫企稳吗"},
+    ]
+
+
+def test_stock_prompt_history_deduplicates_repeated_questions():
+    repeated = "请基于最新数据重新回答北方国际现金流和公告问题"
+    history = [
+        {"role": "user", "content": "北方国际为什么进入候选"},
+        {"role": "assistant", "content": "旧回答"},
+        {"role": "user", "content": repeated},
+        {"role": "assistant", "content": "另一份旧回答"},
+        {"role": "user", "content": repeated},
+    ]
+
+    compact = AgentService._compact_stock_conversation_history(history)
+
+    assert compact == [
+        {"role": "user", "content": "北方国际为什么进入候选"},
+        {"role": "user", "content": repeated},
+    ]
+
+
+def test_stock_guard_keeps_explicit_rejection_of_disclosure_as_direct_cause():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "user_question": "借款公告是不是这次回撤的直接原因？",
+        "research_plan": {"focus": "price_cause"},
+    }
+    answer = (
+        "这些公告确实存在，但仅凭标题无法确认它们是本次回撤的直接原因，"
+        "其中借款类公告也不能直接解读为资金链紧张或股价下跌驱动。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is True
+    assert (
+        "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
+        not in guard["unsupported_market_inferences"]
+    )
+
+
 def test_market_guard_rejects_max_drawdown_position_and_loss_overclaims():
     evidence = {
         "type": "market_brief",
@@ -3895,6 +5743,17 @@ def test_model_language_cleanup_translates_raw_return_field_names():
     assert cleaned == "20日累计收益为负，60日累计收益为正。"
 
 
+def test_model_language_cleanup_explains_invalidation_as_reassessment():
+    cleaned = AgentService._clean_user_facing_model_language(
+        "### 失效条件\n- 后续事实与当前证据冲突时，需要重新评估。"
+    )
+
+    assert cleaned == (
+        "### 什么时候需要重新判断\n"
+        "- 后续事实与当前证据冲突时，需要重新评估。"
+    )
+
+
 def test_market_guard_rejects_moving_average_status_conflict():
     evidence = {
         "type": "market_brief",
@@ -3936,7 +5795,7 @@ def test_market_guard_rejects_moving_average_status_conflict():
 def test_market_guard_requires_explicit_failure_conditions_when_asked():
     evidence = {
         "type": "market_brief",
-        "user_question": "这段判断的反方证据和失效条件是什么？",
+        "user_question": "这段判断的反方证据是什么？什么时候需要重新判断？",
         "indices": [],
     }
 
@@ -3944,7 +5803,7 @@ def test_market_guard_requires_explicit_failure_conditions_when_asked():
 
     assert guard["passed"] is False
     assert guard["unsupported_market_inferences"] == [
-        "用户明确询问失效条件时回答必须包含失效条件"
+        "用户明确询问何时需要重新判断时回答必须说明对应情况"
     ]
 
 
@@ -3989,7 +5848,7 @@ def test_stock_guard_accepts_deterministic_failure_condition_from_outlook():
     evidence = {
         "type": "stock_research",
         "symbol": "000063.SZ",
-        "user_question": "中兴通讯的失效条件是什么？",
+        "user_question": "中兴通讯什么时候需要重新判断？",
         "price_levels": {"recent_20d_low": 32.39, "ma20": 37.2805},
         "conditional_outlook": {
             "horizon": "未来 5—20 个交易日",
@@ -4003,10 +5862,13 @@ def test_stock_guard_accepts_deterministic_failure_condition_from_outlook():
             "invalidation": "价格跨越关键参考位后必须重算。",
         },
         "analysis_board": {"tracking_plan": []},
+        "stock_market_context": {"analysis_target": {"market_date": "2026-07-29"}},
     }
 
     guard = AgentService._validate_model_output(
-        "### 失效条件\n- 收盘跌破关键参考位32.39，同时20日收益继续恶化。",
+        "### 什么时候需要重新判断\n"
+        "- 收盘跌破关键参考位32.39，同时20日收益继续恶化。\n"
+        "**注意**：以上情况仅针对2026-07-29同日判断。",
         evidence,
     )
 
@@ -4145,6 +6007,77 @@ def test_stock_guard_does_not_treat_percentage_near_announcement_as_notice_date(
     assert (
         "财报公告日期必须与结构化报告一致" not in guard["unsupported_market_inferences"]
     )
+
+
+def test_stock_guard_does_not_treat_report_period_as_notice_date():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "fundamentals": {
+            "summary": {
+                "latest_report": {
+                    "report_date": "2026-06-30",
+                    "report_date_name": "2026中报",
+                    "report_type": "中报",
+                    "notice_date": "2026-07-25",
+                }
+            }
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "2026年中报（截至6月30日）披露，公司营收保持增长。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+    assert (
+        "财报公告日期必须与结构化报告一致" not in guard["unsupported_market_inferences"]
+    )
+
+
+def test_stock_guard_accepts_rounded_ratio_endpoints_and_coarse_summary():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "cash_received_from_sales_to_revenue_pct": 94.769,
+                "comparable_cash_received_from_sales_to_revenue_pct": 124.622,
+            }
+        },
+        "business_structure": {
+            "dimensions": [
+                {
+                    "segments": [
+                        {
+                            "gross_margin_pct": 20.6287,
+                            "gross_margin_change_pp": -1.783,
+                        },
+                        {
+                            "gross_margin_pct": 23.9577,
+                            "gross_margin_change_pp": -1.56,
+                        },
+                        {
+                            "gross_margin_pct": 21.1557,
+                            "gross_margin_change_pp": -1.786,
+                        },
+                    ]
+                }
+            ]
+        },
+    }
+    answer = (
+        "动力电池系统毛利率下降1.78个百分点至20.63%，"
+        "储能电池系统毛利率下降1.56个百分点至23.96%，"
+        "境内毛利率下降1.79个百分点至21.16%。"
+        "销售收现率从超过120%跌到不足95%。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is True
+    assert guard["unsupported_numbers"] == []
 
 
 def test_stock_guard_rejects_relabeling_stale_daily_bar_as_today():
@@ -4495,6 +6428,27 @@ def test_current_quote_ma20_relation_is_normalized_and_guarded():
     )
 
 
+def test_current_quote_ma20_guard_accepts_explicit_not_above_when_quote_is_below():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "metrics": {"ma20": 9.10},
+        "price_levels": {"ma20": 9.10},
+        "current_quote": {
+            "price": 9.04,
+            "pct_change": -1.53,
+            "market_timestamp": "2026-07-28T16:14:57+08:00",
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "最新报价9.04元仍在20日均线9.10元附近，并未有效站上。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
 def test_current_limit_status_is_rewritten_after_price_falls_off_limit():
     evidence = {
         "type": "stock_research",
@@ -4686,6 +6640,149 @@ def test_stock_guard_requires_current_quote_when_user_asks_about_today():
         "用户询问今日时必须给出更新报价并区分历史日线"
         in guard["unsupported_market_inferences"]
     )
+
+
+def test_stock_guard_repairs_missing_quote_change_without_replacing_model_answer():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "display_name": "北方国际",
+        "user_question": "请基于最新数据说明回撤与现金流、借款公告的关系。",
+        "provenance": {"market_timestamp": "2026-07-28T01:30:00+00:00"},
+        "current_quote": {
+            "name": "北方国际",
+            "currency": "CNY",
+            "price": 9.04,
+            "pct_change": -1.53,
+            "market_timestamp": "2026-07-28T16:14:57+08:00",
+            "market_date": "2026-07-28",
+            "quote_label": "收盘后最新报价",
+        },
+        "financial_drivers": {
+            "cashflow_analysis": {"operating_cashflow": 216477658.72}
+        },
+    }
+    answer = (
+        "北方国际最新报价9.04元。经营现金流净额约2.16亿元，"
+        "但现金流净额本身较可比期收缩。"
+        "没有正文依据能把借款公告直接解释为资金压力加剧或回撤的触发事件，"
+        "也不能把它和这次股价下跌建立因果。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert guard["passed"] is False
+    assert guard["unsupported_market_inferences"] == [
+        "用户询问今日时必须给出更新报价并区分历史日线"
+    ]
+    assert repaired is not None
+    assert repaired[1]["passed"] is True
+    assert repaired[0].startswith(
+        "最新行情：北方国际收盘后最新报价（2026-07-28）为9.04元，较前收盘下跌1.53%。"
+    )
+    assert "经营现金流净额约2.16亿元" in repaired[0]
+    assert "没有正文依据能把借款公告直接解释为资金压力加剧" in repaired[0]
+
+
+def test_stock_quote_guard_does_not_treat_return_percentage_as_share_price():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "user_question": "请基于最新数据判断近5日走平能不能叫企稳。",
+        "provenance": {"market_timestamp": "2026-07-28T01:30:00+00:00"},
+        "current_quote": {
+            "price": 9.04,
+            "pct_change": -1.53,
+            "market_timestamp": "2026-07-28T16:14:57+08:00",
+        },
+        "metrics": {
+            "return_5d_pct": 0.0,
+            "return_60d_pct": -28.54,
+            "ma20": 9.10,
+        },
+    }
+    answer = (
+        "近5日价格0.00%不能叫企稳。北方国际最新报价9.04元，"
+        "较前收盘下跌1.53%，仍在20日均线9.10元附近；"
+        "60日累计收益为-28.54%。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is True
+
+
+def test_stock_quote_guard_does_not_treat_latest_financial_report_year_as_price():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "user_question": "请分析最新报告期利润质量和资产负债率。",
+        "provenance": {"market_timestamp": "2026-07-28T01:30:00+00:00"},
+        "current_quote": {
+            "price": 9.04,
+            "pct_change": -1.53,
+            "market_timestamp": "2026-07-28T16:14:57+08:00",
+        },
+        "earnings_quality": {
+            "latest_report": {
+                "revenue_yoy_pct": -35.56,
+                "parent_net_profit_yoy_pct": -37.54,
+            }
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "最新财报是2026年一季报，营收同比减少35.56%，归母净利润同比减少37.54%。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
+def test_stock_quote_guard_does_not_treat_quote_timestamp_as_share_price():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "600841.SS",
+        "user_question": "请分析最新报告期利润质量和估值数据日期。",
+        "provenance": {"market_timestamp": "2026-07-29T01:30:00+00:00"},
+        "current_quote": {
+            "price": 5.87,
+            "pct_change": 4.63,
+            "market_timestamp": "2026-07-30T13:42:01+08:00",
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "最新盘中报价在7月30日13:42为5.87元。",
+        evidence,
+    )
+
+    assert (
+        "今日或当前价格必须优先使用更新的报价快照"
+        not in guard["unsupported_market_inferences"]
+    )
+    assert (
+        "用户询问今日时必须给出更新报价并区分历史日线"
+        not in guard["unsupported_market_inferences"]
+    )
+
+
+def test_stock_guard_accepts_explicit_borrowing_noncausality_boundary():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "user_question": "借款公告和这次回撤有什么关系？",
+        "research_plan": {"focus": "mixed"},
+    }
+
+    guard = AgentService._validate_model_output(
+        "没有正文依据能把借款公告直接解释为资金压力加剧或回撤的触发事件，"
+        "也不能把它和这次股价下跌建立因果。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
 
 
 def test_stock_guard_accepts_unsigned_quote_change_with_matching_direction():
@@ -5093,6 +7190,267 @@ def test_stock_guard_does_not_let_indices_alone_exclude_systemic_drag():
     )
 
 
+def test_stock_guard_removes_unproven_financial_reaction_and_borrowing_story():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "display_name": "北方国际",
+        "user_question": "这次回撤和财务、现金流、借款公告有什么关系？",
+        "research_plan": {"focus": "mixed"},
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "operating_cashflow": 216477658.72,
+                "comparable_operating_cashflow": 333946803.6,
+                "operating_cashflow_change": -117469144.88,
+                "operating_cashflow_to_net_profit": 1.96,
+            }
+        },
+        "event_timeline": {
+            "events": [
+                {
+                    "event_date": "2026-07-16",
+                    "title": "北方国际投资者关系管理信息",
+                    "evidence_level": "official_disclosure",
+                },
+                {
+                    "event_date": "2026-06-15",
+                    "title": "向控股股东申请借款暨关联交易公告",
+                    "evidence_level": "official_disclosure",
+                },
+            ]
+        },
+    }
+    answer = (
+        "最新一季报经营现金流为2.16亿元，较可比期减少约1.17亿元，"
+        "经营现金流对净利润覆盖约1.96倍。"
+        "这两三周的回撤很大程度上可能是市场对一季报弱势的延续反应。"
+        "向控股股东申请借款的关联交易公告可能加剧市场对资金面的担忧。"
+        "已确认的是财务变化；它是否造成这段股价变化仍未确认。"
+        "经营现金流仍为正，且覆盖净利润，因此不能把同比减少自动写成现金流为负。"
+        "公告标题只能证明事项已经披露，仍需阅读用途和偿付安排才能判断财务含义。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert guard["passed"] is False
+    assert (
+        "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
+        in guard["unsupported_market_inferences"]
+    )
+    assert repaired is not None
+    assert "延续反应" not in repaired[0]
+    assert "加剧市场对资金面的担忧" not in repaired[0]
+    assert "经营现金流为2.16亿元" in repaired[0]
+    assert "是否造成这段股价变化仍未确认" in repaired[0]
+    assert "2026-07-16：北方国际投资者关系管理信息" in repaired[0]
+    assert "2026-06-15：向控股股东申请借款暨关联交易公告" in repaired[0]
+    assert "标题本身不能证明" in repaired[0]
+    assert repaired[1]["passed"] is True
+
+
+def test_stock_guard_rejects_debt_ratio_as_absolute_debt_scale_claim():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "earnings_quality": {
+            "latest_report": {
+                "debt_asset_ratio_pct": 53.47,
+                "total_liabilities": None,
+            },
+            "comparable_report": {
+                "debt_asset_ratio_pct": 57.23,
+                "total_liabilities": None,
+            },
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "资产负债率从57.23%降至53.47%，负债整体规模有所下降。",
+        evidence,
+    )
+
+    assert guard["passed"] is False
+    assert (
+        "资产负债率变化不能直接改写为负债绝对规模变化"
+        in guard["unsupported_market_inferences"]
+    )
+
+
+def test_stock_guard_accepts_debt_ratio_percentage_point_change_without_scale_claim():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "earnings_quality": {
+            "latest_report": {
+                "debt_asset_ratio_pct": 53.47,
+                "total_liabilities": None,
+            },
+            "comparable_report": {
+                "debt_asset_ratio_pct": 57.23,
+                "total_liabilities": None,
+            },
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "资产负债率从57.23%降至53.47%。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
+def test_stock_guard_accepts_explicit_debt_to_asset_ratio_direction():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "600841.SS",
+        "earnings_quality": {
+            "latest_report": {
+                "debt_asset_ratio_pct": 42.48,
+                "total_liabilities": None,
+            },
+            "comparable_report": {
+                "debt_asset_ratio_pct": 74.9,
+                "total_liabilities": None,
+            },
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "资产负债率从74.9%降至42.48%，负债占资产的比例明显下降。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
+def test_stock_guard_accepts_explicit_debt_scale_rejection():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "earnings_quality": {
+            "latest_report": {
+                "debt_asset_ratio_pct": 53.47,
+                "total_liabilities": None,
+            },
+            "comparable_report": {
+                "debt_asset_ratio_pct": 57.23,
+                "total_liabilities": None,
+            },
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "资产负债率从57.23%降至53.47%，并非必然说明负债总量已经减少。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
+def test_stock_guard_accepts_debt_scale_question_requiring_verification():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "600841.SS",
+        "earnings_quality": {
+            "latest_report": {
+                "debt_asset_ratio_pct": 42.48,
+                "total_liabilities": None,
+            },
+            "comparable_report": {
+                "debt_asset_ratio_pct": 74.9,
+                "total_liabilities": None,
+            },
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "资产负债率从74.9%降至42.48%，比例明显下降，但总负债金额是否一同下降仍需核对。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
+def test_stock_guard_accepts_explicit_rejection_of_financial_price_causality():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "user_question": "这些财务压力和近20日回撤有什么关系？",
+        "research_plan": {"focus": "mixed"},
+    }
+
+    guard = AgentService._validate_model_output(
+        "这些财务压力是已经确认的事实，不等于它们就是近20日回撤的直接原因；"
+        "目前没有事件研究或公司原文支持这一因果，只能作为基本面反方事实。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
+def test_stock_guard_rejects_unproven_revenue_to_cashflow_cause():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "financial_drivers": {
+            "filing_evidence": {
+                "status": "insufficient",
+                "explicit_company_explanations": [],
+            }
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "经营现金流同比下降约1.17亿元，主要原因是收入规模收缩。",
+        evidence,
+    )
+
+    assert guard["passed"] is False
+    assert (
+        "缺少公司原文时不能把经营现金流变化归因于收入收缩"
+        in guard["unsupported_market_inferences"]
+    )
+
+
+def test_stock_guard_removes_static_bridge_business_cause_but_keeps_financial_facts():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "financial_drivers": {
+            "confirmed_mechanical_drivers": [
+                {
+                    "label": "毛利率变化对毛利的机械影响",
+                    "calculation_nature": "static_counterfactual",
+                    "statement": "按本期收入静态测算对应毛利增加0.98亿元。",
+                }
+            ]
+        },
+    }
+    answer = (
+        "营收与净利润同比下降，增长事实承压。"
+        "毛利率提高按本期收入静态测算对应毛利增加0.98亿元，"
+        "说明利润下滑并非来自成本端恶化。"
+        "这一测算不是已确认的经营原因。"
+        "经营现金流仍需与可比报告期分别核对，不能由毛利桥代替。"
+        "公司原文尚未说明毛利率变化来自价格、结构、成本还是交付。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert guard["passed"] is False
+    assert (
+        "静态毛利桥不能改写为已确认经营原因" in guard["unsupported_market_inferences"]
+    )
+    assert repaired is not None
+    assert "说明利润下滑并非来自成本端恶化" not in repaired[0]
+    assert "营收与净利润同比下降" in repaired[0]
+    assert "不是已确认的经营原因" in repaired[0]
+    assert repaired[1]["passed"] is True
+
+
 def test_stock_guard_requires_public_boundary_for_unadjusted_component_fallback():
     evidence = {
         "type": "stock_research",
@@ -5178,7 +7536,7 @@ def test_stock_guard_requires_public_boundary_for_unadjusted_component_fallback(
     assert repaired is not None
     assert "成分行情口径补充" in repaired[0]
     assert "贝特瑞（920185.BJ）使用新浪公开未复权日线补充" in repaired[0]
-    assert "其余 49 只使用前复权日线" in repaired[0]
+    assert "另有 49 只使用前复权日线" in repaired[0]
     assert "除权除息" in repaired[0]
     assert repaired[1]["passed"] is True
     assert safe["passed"] is True
@@ -5199,6 +7557,36 @@ def test_stock_guard_requires_public_boundary_for_unadjusted_component_fallback(
         "贝特瑞（920185.BJ）使用新浪公开未复权日线补充" in (combined_unsafe_repaired[0])
     )
     assert combined_unsafe_repaired[1]["passed"] is True
+
+
+def test_component_source_appendix_summarizes_truncated_fallback_names():
+    evidence = {
+        "type": "stock_research",
+        "stock_market_context": {
+            "exact_industry_index": {
+                "component_breadth": {
+                    "status": "available",
+                    "coverage": {
+                        "constituents": 50,
+                        "available_returns": 50,
+                        "primary_adjusted_returns": 1,
+                        "fallback_unadjusted_returns": 49,
+                    },
+                    "source_fallbacks": [
+                        {"symbol": "000009.SZ", "name": "中国宝安"},
+                        {"symbol": "000973.SZ", "name": "佛塑科技"},
+                    ],
+                }
+            }
+        },
+    }
+
+    appendix = AgentService._stock_component_source_boundary_appendix(evidence)
+
+    assert appendix is not None
+    assert "共 49 只成分" in appendix
+    assert "例如 中国宝安（000009.SZ）、佛塑科技（000973.SZ）" in appendix
+    assert "另有 1 只使用前复权日线" in appendix
 
 
 def test_stock_guard_requires_requested_subject_contribution_and_binds_60d_return():
@@ -6019,7 +8407,7 @@ def test_market_guard_falls_back_when_metric_conflicts_dominate(
     run = service.run(
         user=user,
         intent="market_brief",
-        message="这段判断的反方证据和失效条件是什么？",
+        message="这段判断的反方证据是什么？什么时候需要重新判断？",
         evidence=evidence,
         model_tier="economy",
         execute_agent=True,
@@ -6027,14 +8415,14 @@ def test_market_guard_falls_back_when_metric_conflicts_dominate(
 
     assert run["status"] == "guarded"
     assert "代表性指数可用 4/4 个" in run["answer"]
-    assert "失效条件：" in run["answer"]
+    assert "什么时候需要重新判断：" in run["answer"]
     assert "两条均线均未被跌破" not in run["answer"]
     assert "罗素2000已经在60日线下方" not in run["answer"]
     assert "四个指数中最低" not in run["answer"]
     assert set(run["usage"]["output_guard"]["unsupported_market_inferences"]) == {
         "指数波动率最高最低表述必须与当前证据排序一致",
         "均线是否跌破的表述必须与最新收盘和均线位置一致",
-        "用户明确询问失效条件时回答必须包含失效条件",
+        "用户明确询问何时需要重新判断时回答必须说明对应情况",
     }
 
 
@@ -6090,6 +8478,36 @@ def test_numeric_guard_uses_structural_numbers_only_from_evidence_keys():
     assert valid["passed"] is True
     assert invented_ratio["passed"] is False
     assert "1.9" in invented_ratio["unsupported_numbers"]
+
+
+def test_stock_numeric_guard_does_not_trust_cross_stock_knowledge_numbers():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "display_name": "北方国际",
+        "metrics": {"volatility_20d_annualized_pct": 32.9162},
+        "knowledge_context": {
+            "items": [
+                {
+                    "title": "我的最新研究行动与观察条件",
+                    "excerpt": ("另一只股票最新价135.92元，20日年化波动率115.10%。"),
+                }
+            ]
+        },
+    }
+
+    current_stock = AgentService._validate_model_output(
+        "北方国际20日年化波动率约32.92%。",
+        evidence,
+    )
+    polluted = AgentService._validate_model_output(
+        "北方国际20日年化波动率超过115.10%。",
+        evidence,
+    )
+
+    assert current_stock["passed"] is True
+    assert polluted["passed"] is False
+    assert polluted["unsupported_numbers"] == ["115.10%"]
 
 
 def test_numeric_guard_accepts_market_ma_distance_derived_from_evidence():
@@ -6672,6 +9090,73 @@ def test_streaming_bridge_publishes_only_guarded_cumulative_sentences(
     assert captured["command"][reasoning_index + 1] == "none"
 
 
+def test_streaming_bridge_keeps_standalone_markdown_heading_as_final_prefix(
+    tmp_path: Path, settings, monkeypatch
+):
+    bin_dir = tmp_path / "hermes-heading" / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    hermes_bin = bin_dir / "hermes"
+    python_bin = bin_dir / "python"
+    hermes_bin.touch()
+    python_bin.touch()
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "stream-heading-workspaces",
+        hermes_bin=hermes_bin,
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    service = AgentService(database, guarded_settings)
+    run_dir = tmp_path / "run-heading"
+    run_dir.mkdir()
+    (run_dir / "prompt.md").write_text("测试标题流式协议", encoding="utf-8")
+    final_answer = "**直接回答：当前证据不足。** 后续仍需核验。"
+    lines = [
+        json.dumps(
+            {"type": "delta", "text": "**直接回答：当前证据不足。** "},
+            ensure_ascii=False,
+        )
+        + "\n",
+        json.dumps(
+            {"type": "delta", "text": "后续仍需核验。"},
+            ensure_ascii=False,
+        )
+        + "\n",
+        json.dumps(
+            {
+                "type": "final",
+                "answer": final_answer,
+                "usage": {"model": "fake-stream"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+    ]
+    monkeypatch.setattr(
+        "app.services.agent_hermes_execution.subprocess.Popen",
+        lambda *args, **kwargs: _FakeStreamingProcess(lines),
+    )
+    updates = []
+
+    answer, usage = service._execute_hermes_streaming(
+        model_tier="economy",
+        run_dir=run_dir,
+        user_workspace=tmp_path,
+        evidence={"type": "market_brief"},
+        trusted_context=None,
+        stream_callback=updates.append,
+    )
+
+    assert [item["draft"] for item in updates] == [
+        "**直接回答：当前证据不足。**",
+        final_answer,
+    ]
+    assert answer == final_answer
+    assert answer.startswith(updates[-1]["draft"])
+    assert usage["streaming"]["withheld_segments"] == 0
+
+
 def test_streaming_bridge_defers_whole_answer_completeness_checks(
     tmp_path: Path, settings, monkeypatch
 ):
@@ -6741,7 +9226,7 @@ def test_streaming_bridge_defers_whole_answer_completeness_checks(
 
     assert [item["draft"] for item in updates] == [
         "当前反弹尚未扭转短期回落格局。",
-        "当前反弹尚未扭转短期回落格局。失效条件：后续事实若与当前证据冲突，就需要重新评估。",
+        "当前反弹尚未扭转短期回落格局。需要重新判断的情况：后续事实若与当前证据冲突，就需要重新评估。",
     ]
     assert usage["streaming"]["mode"] == "guarded_cumulative_stream_v3"
     assert usage["streaming"]["visible_events"] == 2
@@ -6873,7 +9358,7 @@ def test_streaming_bridge_defers_requested_industry_counts_and_contribution(
     drafts = [item["draft"] for item in updates]
     assert drafts[0] == "7月20日中兴通讯收盘33.73元，下跌6.31%。"
     assert "上涨16只、下跌34只（占68%）、平盘0只" in drafts[-1]
-    assert "静态估算贡献-0.2359个百分点" in drafts[-1]
+    assert "静态估算贡献-0.24个百分点" in drafts[-1]
     assert all("没有系统性拖累" not in draft for draft in drafts)
     assert usage["streaming"]["visible_events"] == 3
     assert usage["streaming"]["withheld_segments"] == 1
@@ -6976,6 +9461,90 @@ def test_streaming_bridge_waits_for_current_quote_then_keeps_growing(
     assert usage["streaming"]["deferred_segments"] == 1
 
 
+def test_streaming_bridge_injects_short_quote_anchor_when_model_omits_it(
+    tmp_path: Path, settings, monkeypatch
+):
+    bin_dir = tmp_path / "hermes" / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    hermes_bin = bin_dir / "hermes"
+    python_bin = bin_dir / "python"
+    hermes_bin.touch()
+    python_bin.touch()
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "stream-quote-anchor-workspaces",
+        hermes_bin=hermes_bin,
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    service = AgentService(database, guarded_settings)
+    run_dir = tmp_path / "run-quote-anchor"
+    run_dir.mkdir()
+    (run_dir / "prompt.md").write_text("测试补充短报价锚点", encoding="utf-8")
+    lines = [
+        json.dumps(
+            {"type": "delta", "text": "北方国际近20日仍处于回撤区间。"},
+            ensure_ascii=False,
+        )
+        + "\n",
+        json.dumps(
+            {"type": "delta", "text": "财务变化已经确认，但股价因果仍未确认。"},
+            ensure_ascii=False,
+        )
+        + "\n",
+        json.dumps(
+            {
+                "type": "final",
+                "answer": (
+                    "北方国际近20日仍处于回撤区间。"
+                    "财务变化已经确认，但股价因果仍未确认。"
+                ),
+                "usage": {"model": "fake-stream"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+    ]
+    monkeypatch.setattr(
+        "app.services.agent_hermes_execution.subprocess.Popen",
+        lambda *args, **kwargs: _FakeStreamingProcess(lines),
+    )
+    updates = []
+
+    answer, usage = service._execute_hermes_streaming(
+        model_tier="economy",
+        run_dir=run_dir,
+        user_workspace=tmp_path,
+        evidence={
+            "type": "stock_research",
+            "symbol": "000065.SZ",
+            "display_name": "北方国际",
+            "user_question": "请基于最新数据说明北方国际的回撤。",
+            "current_quote": {
+                "name": "北方国际",
+                "currency": "CNY",
+                "price": 9.04,
+                "pct_change": -1.53,
+                "market_timestamp": "2026-07-28T16:14:57+08:00",
+                "market_date": "2026-07-28",
+                "quote_label": "收盘后最新报价",
+            },
+            "provenance": {"market_timestamp": "2026-07-28T01:30:00+00:00"},
+        },
+        trusted_context=None,
+        stream_callback=updates.append,
+    )
+
+    assert answer.startswith("北方国际近20日仍处于回撤区间")
+    assert len(updates) == 1
+    assert updates[0]["draft"].startswith(
+        "最新行情：北方国际收盘后最新报价（2026-07-28）为9.04元，较前收盘下跌1.53%。"
+    )
+    assert "财务变化已经确认，但股价因果仍未确认" in updates[0]["draft"]
+    assert usage["streaming"]["required_context_prefix_injected"] is True
+
+
 def test_streaming_bridge_does_not_wait_for_component_source_appendix(
     tmp_path: Path, settings, monkeypatch
 ):
@@ -7056,9 +9625,7 @@ def test_streaming_bridge_does_not_wait_for_component_source_appendix(
                         "fallback_unadjusted_returns": 1,
                         "primary_adjusted_returns": 49,
                     },
-                    "source_fallbacks": [
-                        {"symbol": "000063.SZ", "name": "中兴通讯"}
-                    ],
+                    "source_fallbacks": [{"symbol": "000063.SZ", "name": "中兴通讯"}],
                 },
             }
         },
@@ -7191,6 +9758,1243 @@ def test_streamed_unverified_draft_is_followed_by_final_guarded_answer(
     assert run["usage"]["output_guard"]["passed"] is True
     assert run["usage"]["timings"]["first_token_seconds"] == 0.25
     assert run["usage"]["timings"]["first_visible_seconds"] == 0.75
+
+
+def test_non_prefix_final_answer_is_reconciled_by_http_without_sse_replacement(
+    tmp_path: Path, settings, monkeypatch
+):
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "stream-final-http-reconcile-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Stream Final HTTP Reconcile User")
+    service = AgentService(database, guarded_settings)
+
+    def fake_stream(**kwargs):
+        kwargs["stream_callback"](
+            {
+                "type": "delta",
+                "draft": "当前证据不足，后续仍需核验。",
+                "is_unverified": True,
+                "is_guarded_partial": True,
+            }
+        )
+        return (
+            "**直接回答：不能确认。** 当前证据不足，后续仍需核验。",
+            {
+                "model": "fake-stream",
+                "streaming": {
+                    "enabled": True,
+                    "first_token_seconds": 0.2,
+                    "first_visible_seconds": 0.4,
+                },
+            },
+        )
+
+    monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
+    streamed = []
+    run = service.run(
+        user=user,
+        intent="market_brief",
+        message="当前能否确认趋势？",
+        evidence={"type": "market_brief", "indices": []},
+        model_tier="economy",
+        execute_agent=True,
+        stream_callback=streamed.append,
+    )
+
+    assert run["status"] == "completed"
+    assert run["answer"].startswith("**直接回答：不能确认。**")
+    assert streamed == [
+        {
+            "type": "delta",
+            "draft": "当前证据不足，后续仍需核验。",
+            "is_unverified": True,
+            "is_guarded_partial": True,
+        }
+    ]
+    assert run["usage"]["streaming"]["final_delivery"] == (
+        "http_reconcile_non_prefix"
+    )
+
+
+def test_stock_specialist_off_topic_answer_is_retried_with_focused_prompt(
+    tmp_path: Path, settings, monkeypatch
+):
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "specialist-retry-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Specialist Retry User")
+    service = AgentService(database, guarded_settings)
+    calls = []
+
+    def fake_stream(**kwargs):
+        calls.append(kwargs.get("prompt_path"))
+        if len(calls) == 1:
+            return (
+                "您好，您的消息可能被截断了。如果是手机屏幕太暗，请重新发送一次完整的消息。",
+                {"model": "fake-first", "streaming": {"enabled": True}},
+            )
+        return (
+            "北方国际主要依靠工程建设与服务、资源设备供应链形成收入；"
+            "反方证据是业务分类口径仍需结合最新正式报告复核。",
+            {"model": "fake-retry", "streaming": {"enabled": True}},
+        )
+
+    monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
+    streamed = []
+    run = service.run(
+        user=user,
+        intent="business_structure",
+        message="北方国际靠什么业务赚钱？",
+        evidence={
+            "type": "business_structure",
+            "symbol": "000065.SZ",
+            "name": "北方国际",
+            "summary": "最大业务为工程建设与服务。",
+            "dimensions": [
+                {
+                    "classification": "product",
+                    "segments": [
+                        {"item_name": "工程建设与服务"},
+                        {"item_name": "资源设备供应链"},
+                    ],
+                }
+            ],
+            "research_plan": {
+                "focus": "business",
+                "focus_label": "主营业务与收入结构",
+            },
+        },
+        model_tier="economy",
+        execute_agent=True,
+        stream_callback=streamed.append,
+    )
+
+    assert len(calls) == 2
+    assert calls[0] is None
+    assert calls[1].name == "prompt.retry.md"
+    assert run["status"] == "completed"
+    assert "工程建设与服务" in run["answer"]
+    assert "手机屏幕" not in run["answer"]
+    assert run["usage"]["relevance_retry"]["passed"] is True
+    assert any(item.get("type") == "reset" for item in streamed)
+    run_dir = Path(run["workspace_path"]) / "runs" / run["id"]
+    assert (run_dir / "answer.irrelevant.md").is_file()
+    assert (run_dir / "prompt.retry.md").is_file()
+
+
+def test_relative_industry_rounding_near_miss_keeps_single_model_call(
+    tmp_path: Path, settings, monkeypatch
+):
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "relative-industry-repair-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Relative Industry Repair User")
+    service = AgentService(database, guarded_settings)
+    calls = []
+
+    def fake_stream(**kwargs):
+        calls.append(kwargs.get("prompt_path"))
+        return (
+            "宁德时代在2026年7月28日相对CS电池增强。公司同日下跌2.29%，"
+            "指数下跌2.82%，个股跑赢行业0.53个百分点；成分有效收益覆盖"
+            "50/50只，其中上涨6只、下跌44只。反方证据是60日累计下跌"
+            "12.17%，单日增强不能代表中期趋势。若历史同日数据更正后差值"
+            "转负，当前判断将被推翻；后续交易日只形成新的判断。",
+            {"model": "fake-relative-industry", "api_calls": 1},
+        )
+
+    monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
+    run = service.run(
+        user=user,
+        intent="stock_research",
+        message="宁德时代相对CS电池行业是增强还是走弱？",
+        evidence={
+            "type": "stock_research",
+            "symbol": "300750.SZ",
+            "display_name": "宁德时代",
+            "user_question": "宁德时代相对CS电池行业是增强还是走弱？",
+            "research_plan": {"focus": "relative_industry"},
+            "metrics": {"return_60d_pct": -12.17},
+            "stock_market_context": {
+                "exact_industry_index": {
+                    "status": "same_market_date",
+                    "name": "CS电池",
+                    "market_date": "2026-07-28",
+                    "return_1d_pct": -2.82,
+                    "stock_return_1d_pct": -2.285,
+                    "stock_minus_industry_pct": 0.535,
+                    "constituent_count": 50,
+                    "component_breadth": {
+                        "status": "available",
+                        "advancers": 6,
+                        "decliners": 44,
+                        "unchanged": 0,
+                        "coverage": {
+                            "available_returns": 50,
+                            "constituents": 50,
+                        },
+                    },
+                }
+            },
+        },
+        model_tier="economy",
+        execute_agent=True,
+        stream_callback=lambda _event: None,
+    )
+
+    assert calls == [None]
+    assert run["status"] == "completed"
+    assert "跑赢行业0.54个百分点" in run["answer"]
+    assert run["usage"]["api_calls"] == 1
+    assert run["usage"]["relevance_repair"]["method"] == (
+        "normalize_relative_industry_spread_v1"
+    )
+    assert "relevance_retry" not in run["usage"]
+
+
+def test_quality_review_cashflow_overclaim_gets_concise_editor_pass(
+    tmp_path: Path, settings, monkeypatch
+):
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "quality-review-retry-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Quality Review Retry User")
+    service = AgentService(database, guarded_settings)
+    stream_calls = []
+    editor_prompts = []
+
+    def fake_stream(**kwargs):
+        prompt_path = kwargs.get("prompt_path")
+        stream_calls.append(prompt_path)
+        if prompt_path and Path(prompt_path).name == "prompt.quality_editor.md":
+            editor_prompts.append(Path(prompt_path).read_text(encoding="utf-8"))
+            return (
+                "工业富联的经营改善质量目前一般。营收和利润增长是已确认的报表事实。"
+                "经营现金流12亿元，同比增长3%；经营现金流与归母净利润比率从1.93"
+                "降至1.39；销售收现率从125%降至95%。三个指标口径不同，具体原因"
+                "尚未由公司解释。反方证据是资产负债率上升，而负债结构尚未拆分。",
+                {"model": "fake-editor", "api_calls": 1},
+            )
+        return (
+            "工业富联经营改善很有质量，利润有经营现金流支撑，说明利润不是纸面数字。",
+            {
+                "model": "fake-first",
+                "api_calls": 1,
+                "streaming": {"enabled": True},
+            },
+        )
+
+    monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
+    monkeypatch.setattr(
+        service,
+        "_execute_hermes",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("quality editor should use the bounded streaming bridge")
+        ),
+    )
+    streamed = []
+    run = service.run(
+        user=user,
+        intent="stock_research",
+        message="工业富联为什么进入经营改善候选，改善是否有质量？",
+        evidence={
+            "type": "stock_research",
+            "symbol": "601138.SS",
+            "display_name": "工业富联",
+            "research_plan": {
+                "focus": "quality_review",
+                "focus_label": "经营改善质量核验",
+            },
+            "earnings_quality": {
+                "latest_report": {"debt_asset_ratio_pct": 63.0},
+            },
+            "financial_drivers": {
+                "cashflow_analysis": {
+                    "operating_cashflow": 1_200_000_000,
+                    "operating_cashflow_change_pct": 3.0,
+                    "operating_cashflow_to_net_profit": 1.39,
+                    "comparable_operating_cashflow_to_net_profit": 1.93,
+                    "cash_received_from_sales_to_revenue_pct": 95.0,
+                    "comparable_cash_received_from_sales_to_revenue_pct": 125.0,
+                }
+            },
+        },
+        model_tier="economy",
+        execute_agent=True,
+        stream_callback=streamed.append,
+    )
+
+    assert len(stream_calls) == 2
+    assert len(editor_prompts) == 1
+    assert "结构化事实" in editor_prompts[0]
+    assert "经营现金流金额及同比" in editor_prompts[0]
+    assert run["status"] == "completed"
+    assert "改善质量目前一般" in run["answer"]
+    assert "纸面数字" not in run["answer"]
+    assert run["usage"]["quality_editor"]["passed"] is True
+    assert run["usage"]["quality_editor"]["model_tier"] == "economy"
+    assert run["usage"]["api_calls"] == 2
+    assert "回款质量" in run["usage"]["quality_editor"]["reason"]
+    assert not any(item.get("type") == "reset" for item in streamed)
+
+
+def test_quality_review_rich_draft_is_repaired_before_second_model_call(
+    tmp_path: Path, settings, monkeypatch
+):
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "quality-review-local-repair-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Quality Review Local Repair User")
+    service = AgentService(database, guarded_settings)
+    stream_calls = []
+
+    def fake_stream(**kwargs):
+        stream_calls.append(kwargs.get("prompt_path"))
+        if len(stream_calls) > 1:
+            raise AssertionError(
+                "a complete rich draft should not call an editor model"
+            )
+        return (
+            "工业富联的经营改善质量目前一般。营收和利润增长是已确认的报表事实。\n\n"
+            "经营现金流12亿元，同比增长3%；经营现金流与归母净利润比率从1.93"
+            "降至1.39；销售收现率从125%降至95%。利润增长的现金兑现程度正在减弱。"
+            "三项指标口径不同，具体原因尚未由公司解释。\n\n"
+            "主营披露只说明现有业务构成，不能据此确认本期增长来自哪个产品。"
+            "反方证据是资产负债率上升，而负债结构尚未拆分。\n\n"
+            "当前没有同报告期同行经营数据，不能判断改善质量是否优于行业。"
+            "下一步需要核验负债构成和现金流变化的公司原文。",
+            {
+                "model": "fake-rich-first",
+                "api_calls": 1,
+                "streaming": {"enabled": True},
+            },
+        )
+
+    monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
+
+    run = service.run(
+        user=user,
+        intent="stock_research",
+        message="工业富联为什么进入经营改善候选，改善是否有质量？",
+        evidence={
+            "type": "stock_research",
+            "symbol": "601138.SS",
+            "display_name": "工业富联",
+            "research_plan": {
+                "focus": "quality_review",
+                "focus_label": "经营改善质量核验",
+            },
+            "earnings_quality": {
+                "latest_report": {"debt_asset_ratio_pct": 63.0},
+            },
+            "financial_drivers": {
+                "cashflow_analysis": {
+                    "operating_cashflow": 1_200_000_000,
+                    "operating_cashflow_change_pct": 3.0,
+                    "operating_cashflow_to_net_profit": 1.39,
+                    "comparable_operating_cashflow_to_net_profit": 1.93,
+                    "cash_received_from_sales_to_revenue_pct": 95.0,
+                    "comparable_cash_received_from_sales_to_revenue_pct": 125.0,
+                }
+            },
+        },
+        model_tier="economy",
+        execute_agent=True,
+        stream_callback=lambda _event: None,
+    )
+
+    assert len(stream_calls) == 1
+    assert run["status"] == "completed"
+    assert "现金兑现程度" not in run["answer"]
+    assert "经营现金流12亿元" in run["answer"]
+    assert run["usage"]["api_calls"] == 1
+    assert run["usage"]["relevance_repair"]["passed"] is True
+    assert run["usage"]["relevance_repair"]["method"] == (
+        "neutralize_quality_review_overclaims_v1"
+    )
+    assert "quality_editor" not in run["usage"]
+
+
+def test_quality_review_prompt_does_not_reinject_generated_report_body(
+    tmp_path: Path, settings, monkeypatch
+):
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "quality-review-prompt-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Quality Review Prompt User")
+    service = AgentService(database, guarded_settings)
+
+    monkeypatch.setattr(
+        service,
+        "_execute_hermes_streaming",
+        lambda **kwargs: (
+            "宁德时代的经营改善质量目前仍需核验。公司原文只确认财务费用变化"
+            "主要受汇兑损失影响；反方证据是经营现金流与利润的同报告期关系"
+            "仍需结合完整报表判断。",
+            {"model": "fake-quality-review", "streaming": {"enabled": True}},
+        ),
+    )
+
+    run = service.run(
+        user=user,
+        intent="stock_research",
+        message="宁德时代为什么进入经营改善候选，改善是否有质量？",
+        evidence={
+            "type": "stock_research",
+            "symbol": "300750.SZ",
+            "display_name": "宁德时代",
+            "research_plan": {
+                "focus": "quality_review",
+                "focus_label": "经营改善质量核验",
+            },
+            "financial_drivers": {
+                "latest_period": {
+                    "report_date": "2026-06-30",
+                    "operating_cashflow": 586.9,
+                },
+                "filing_evidence": {
+                    "status": "available",
+                    "explicit_company_explanations": [
+                        {
+                            "theme": "财务费用",
+                            "statement": "主要受汇兑损失影响。",
+                        }
+                    ],
+                },
+            },
+        },
+        model_tier="economy",
+        execute_agent=True,
+        stream_callback=lambda event: None,
+        knowledge_context={
+            "items": [
+                {
+                    "scope": "common",
+                    "source_key": "research-report:300750.SZ",
+                    "title": "宁德时代利润与现金流驱动分析",
+                    "excerpt": "收入规模对应毛利增加245.301亿元。",
+                },
+                {
+                    "scope": "user",
+                    "source_key": "upload:catl-note",
+                    "title": "我的宁德时代调研笔记",
+                    "excerpt": "用户关注海外业务风险。",
+                },
+            ]
+        },
+    )
+
+    prompt = (Path(run["workspace_path"]) / "runs" / run["id"] / "prompt.md").read_text(
+        encoding="utf-8"
+    )
+    assert "245.301" not in prompt
+    assert "收入规模对应毛利增加" not in prompt
+    assert "宁德时代利润与现金流驱动分析" not in prompt
+    assert "用户关注海外业务风险" in prompt
+    assert "主要受汇兑损失影响" in prompt
+
+
+def test_quality_review_retries_unconfirmed_growth_and_cashflow_interpretations():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {
+            "focus": "quality_review",
+            "focus_label": "经营改善质量核验",
+        },
+    }
+
+    cases = {
+        "宁德时代改善质量一般，利润增长主要来自收入规模扩张。": "增长原因",
+        "宁德时代毛利率下降，意味着增长主要由规模驱动。": "增长原因",
+        "宁德时代增长有规模支撑，但原因仍需核验。": "增长原因",
+        "宁德时代改善质量一般，现金回收效率反而在走弱。": "回款质量",
+        "宁德时代经营现金流几乎停滞，改善质量仍需复核。": "可比增速",
+        "宁德时代经营现金流近乎停滞，改善质量仍需复核。": "可比增速",
+        "宁德时代经营现金流净额几乎原地踏步，改善质量仍需复核。": "可比增速",
+        "宁德时代销售收现率下降，暗示结算节奏可能存在压力。": "回款质量",
+        "宁德时代收入转化为现金的效率出现明显落差。": "回款质量",
+        "宁德时代收入的快速增长并没有同步转化为同等比例的现金流入。": "回款质量",
+        "宁德时代利润转化为现金的效率在减弱。": "回款质量",
+        "宁德时代经营现金回款效率也在下降。": "回款质量",
+        "宁德时代销售回款效率出现明显下滑。": "回款质量",
+        "宁德时代销售收现率降至94.8%，回款效率回落明显。": "回款质量",
+        "宁德时代实际收回的现金比去年少，回款节奏有所放慢。": "回款质量",
+        "宁德时代销售收现率下降则提示回款效率在降低。": "回款质量",
+        "宁德时代这三项线索提示回款和营运资金占用可能在加大。": "回款质量",
+        "宁德时代利润率、现金覆盖和销售回款匹配度都在减弱。": "回款质量",
+        "宁德时代利润增长的现金兑现程度在减弱。": "回款质量",
+        "宁德时代当前现金流压力可能会持续，因此改善质量一般。": "回款质量",
+        "宁德时代利润增长对现金流的带动作用就会更弱。": "现金流驱动",
+        "宁德时代收入增长对利润形成明显拉动。": "利润驱动",
+        "宁德时代动力电池占比下降、储能占比上升，结构有所优化。": "结构优化",
+        "宁德时代两大产品毛利率下降，增收不增利压力仍在。": "增收不增利",
+        "宁德时代存货增速较快，可能意味着产品积压。": "积压",
+        "宁德时代存货增速较快，需要警惕去库压力或备货节奏错位。": "积压",
+        "宁德时代存货增速较快，若未来需计提跌价，可能进一步影响利润。": "积压",
+        "宁德时代行业毛利率下降，改善质量一般。": "行业整体毛利率",
+        "宁德时代报表呈现量增价减，改善质量一般。": "压缩式经营标签",
+        "宁德时代仍停留在收入规模快速膨胀阶段。": "压缩式经营标签",
+        "宁德时代三项指标方向一致地说明现金流增速跟不上利润增速。": "压缩式经营标签",
+        "宁德时代毛利率、覆盖比率和销售收现率三项指标同步走弱。": "压缩式经营标签",
+        "宁德时代经营现金流绝对金额仍在正增长，并非资金紧张。": "资金压力",
+        "宁德时代这三项合在一起，说明本期利润增长尚未得到经营现金流和回款节奏的同等确认。": "回款节奏",
+    }
+    for answer, expected_reason in cases.items():
+        reason = stock_specialist_relevance_issue(answer, evidence)
+        assert reason is not None
+        assert expected_reason in reason
+
+    assert (
+        stock_specialist_relevance_issue(
+            "宁德时代改善质量目前一般。经营现金流同比增长2.6%，低于利润增速；"
+            "销售收现率下降，但公司原文尚未解释具体原因。",
+            evidence,
+        )
+        is None
+    )
+    assert (
+        stock_specialist_relevance_issue(
+            "宁德时代改善质量目前一般。覆盖倍数不能证明利润有现金支撑；"
+            "产品占比变化不代表业务结构优化，也不能把存货增速直接解释成产品积压。",
+            evidence,
+        )
+        is None
+    )
+
+
+def test_quality_review_event_appendix_uses_operating_boundary_not_price_move():
+    appendix = AgentOutputGuard._stock_event_evidence_appendix(
+        {
+            "type": "stock_research",
+            "user_question": "宁德时代经营改善是否有质量？请结合最新公告。",
+            "research_plan": {"focus": "quality_review"},
+            "event_timeline": {
+                "events": [
+                    {
+                        "evidence_level": "official_disclosure",
+                        "category": "announcement",
+                        "event_date": "2026-07-26",
+                        "title": "宁德时代:投资者关系活动记录表",
+                    }
+                ]
+            },
+        }
+    )
+
+    assert appendix is not None
+    assert "本轮相关公司披露" in appendix
+    assert "经营改善的原因或质量" in appendix
+    assert "股价回撤" not in appendix
+
+
+def test_quality_review_editor_uses_direct_inventory_explanation():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "a_share_information": {
+            "announcements": [
+                {
+                    "title": "宁德时代投资者关系活动记录表",
+                    "published_at": "2026-07-26",
+                    "summary": (
+                        "公司公告原文摘录：5、库存增加的原因？"
+                        "库存增加主要是为下半年市场需求而提前备货。"
+                    ),
+                }
+            ]
+        },
+    }
+    bad_answer = (
+        "宁德时代改善质量一般，但公司并未解释存货增长的原因。"
+        "后续需要核验存货分类和库龄。"
+    )
+
+    reason = stock_specialist_relevance_issue(bad_answer, evidence)
+    prompt = build_quality_review_editor_prompt(
+        draft=bad_answer,
+        evidence=evidence,
+    )
+
+    assert reason is not None
+    assert "已有的库存增加公司原文解释" in reason
+    assert "库存增加主要是为下半年市场需求而提前备货" in prompt
+    assert "不得再声称公司没有解释" in prompt
+
+    repaired = repair_quality_review_answer(
+        (
+            "宁德时代改善质量目前一般。营收和利润增长是已确认的报表事实，"
+            "毛利率变化仍需核验。\n\n"
+            "经营现金流金额、覆盖比率和销售收现率口径不同，具体原因尚未确认。\n\n"
+            "公司并未解释存货增长的原因。当前也没有同期同行经营数据，无法判断"
+            "改善质量是否优于行业。下一步需要核对存货和应收账款明细。"
+        ),
+        evidence,
+    )
+    assert repaired is not None
+    assert "库存增加主要是为下半年市场需求提前备货" in repaired
+    assert "仍需结合存货分类、库龄、跌价准备" in repaired
+    assert "公司并未解释存货" not in repaired
+
+
+def test_quality_review_rejects_mixed_inventory_unresolved_claim_after_direct_explanation():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "a_share_information": {
+            "announcements": [
+                {
+                    "title": "宁德时代投资者关系活动记录表",
+                    "published_at": "2026-07-26",
+                    "summary": (
+                        "公司公告原文摘录：5、库存增加的原因？"
+                        "库存增加主要是为下半年市场需求而提前备货。"
+                    ),
+                }
+            ]
+        },
+    }
+    answer = (
+        "公司解释库存增加主要是为下半年市场需求提前备货，但毛利率下滑、"
+        "销售收现率下降和存货快于收入的原因仍属`unresolved_themes`。"
+    )
+
+    assert stock_specialist_relevance_issue(answer, evidence) == (
+        "经营改善回答遗漏或否定了公告中已有的库存增加公司原文解释"
+    )
+
+
+def test_quality_review_accepts_natural_inventory_classification_wording():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "a_share_information": {
+            "announcements": [
+                {
+                    "title": "宁德时代投资者关系活动记录表",
+                    "published_at": "2026-07-24",
+                    "summary": (
+                        "公司公告原文摘录：库存增加主要是为下半年市场需求而提前备货。"
+                    ),
+                }
+            ]
+        },
+    }
+    answer = (
+        "宁德时代经营改善质量一般。公司解释库存增加主要是为下半年市场需求而"
+        "提前备货，但仍需核验存货的具体分类、库龄结构、订单覆盖比例和存货跌价"
+        "准备金额。当前没有同报告期同行经营数据，不能判断是否优于行业。"
+    )
+
+    assert stock_specialist_relevance_issue(answer, evidence) is None
+
+
+def test_quality_review_accepts_inventory_category_composition_wording():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "a_share_information": {
+            "announcements": [
+                {
+                    "title": "宁德时代投资者关系活动记录表",
+                    "published_at": "2026-07-24",
+                    "summary": (
+                        "公司公告原文摘录：库存增加主要是为下半年市场需求而提前备货。"
+                    ),
+                }
+            ]
+        },
+    }
+    answer = (
+        "宁德时代经营改善质量较强。公司解释库存增加主要是为下半年市场需求而"
+        "提前备货。下一步需核验存货中原材料、在产品和产成品的构成比例、各类"
+        "库存的库龄、订单覆盖和存货跌价准备。"
+    )
+
+    assert stock_specialist_relevance_issue(answer, evidence) is None
+
+
+def test_quality_review_repair_drops_unverified_not_backlog_claim():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "a_share_information": {
+            "announcements": [
+                {
+                    "title": "宁德时代投资者关系活动记录表",
+                    "published_at": "2026-07-24",
+                    "summary": (
+                        "公司公告原文摘录：库存增加主要是为下半年市场需求而提前备货。"
+                    ),
+                }
+            ]
+        },
+    }
+    answer = (
+        "宁德时代经营改善质量较强。营收和利润增长是已确认的报表事实，毛利率"
+        "变化的具体原因仍需公司原文确认。公司解释库存增加主要是为下半年市场需求而"
+        "提前备货。这是公司管理层的正式口径，可以确认公司当时的备货意图，而非"
+        "被动积压。下一步需核验存货中原材料、在产品和产成品的构成比例、各类"
+        "库存的库龄、订单覆盖和存货跌价准备。当前没有同报告期同行经营数据，"
+        "不能判断是否优于行业。最重要的反方事实仍是毛利率和销售收现率变化，"
+        "但这些指标不能合并成同一个经营原因。"
+    )
+
+    repaired = repair_quality_review_answer(answer, evidence)
+
+    assert repaired is not None
+    assert "而非被动积压" not in repaired
+    assert "原材料、在产品和产成品的构成比例" in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+
+
+def test_quality_review_local_language_normalization_keeps_counter_fact():
+    answer = (
+        "**现金流整体充裕，但回款节奏需核验。** 三项现金流指标变化方向和"
+        "幅度不同，表明利润增长与现金回笼节奏出现差异。"
+        "不能简单概括为“现金质量恶化”或“具体原因尚未确认”。"
+        "**最重要反方事实与行业边界。** 利润增速明显快于经营现金流增速，"
+        "这意味着净利润增长中有部分尚未在同期现金回款中完全体现。"
+    )
+
+    normalized = normalize_quality_review_language(answer)
+
+    assert "现金流整体充裕" not in normalized
+    assert "现金流数据需分项理解" in normalized
+    assert "现金回笼节奏出现差异" not in normalized
+    assert "不能简单概括" not in normalized
+    assert "具体原因尚未确认" in normalized
+    assert "最重要的反方事实是利润增速明显快于经营现金流" in normalized
+    assert "具体原因仍需核验" in normalized
+
+
+def test_stream_segmenter_keeps_bold_heading_markers_together():
+    segments, pending = AgentService._take_complete_stream_segments(
+        "**最重要反方事实与行业边界。** 利润增速快于经营现金流增速。"
+    )
+
+    assert segments == [
+        "**最重要反方事实与行业边界。**",
+        " 利润增速快于经营现金流增速。",
+    ]
+    assert pending == ""
+
+
+def test_quality_review_rejects_missing_sales_cash_values_and_all_product_claim():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "operating_cashflow": 60_216_851_000,
+                "operating_cashflow_change_pct": 2.607,
+                "operating_cashflow_to_net_profit": 1.391,
+                "comparable_operating_cashflow_to_net_profit": 1.925,
+                "cash_received_from_sales_to_revenue_pct": 94.769,
+                "comparable_cash_received_from_sales_to_revenue_pct": 124.622,
+            }
+        },
+        "business_structure": {
+            "dimensions": [
+                {
+                    "classification": "product",
+                    "segments": [
+                        {
+                            "item_name": "动力电池系统",
+                            "gross_margin_pct": 20.63,
+                            "comparable_gross_margin_pct": 22.41,
+                        },
+                        {
+                            "item_name": "电池材料及回收、矿产资源",
+                            "gross_margin_pct": 27.04,
+                            "comparable_gross_margin_pct": None,
+                        },
+                    ],
+                }
+            ]
+        },
+    }
+    missing_sales_cash = (
+        "宁德时代改善质量一般。经营现金流602.17亿元，同比增长2.61%；"
+        "经营现金流与归母净利润比率从1.93降至1.39。销售收现率下降。"
+    )
+    all_products = (
+        "宁德时代改善质量一般。全部产品分部毛利率均有所下降。"
+        "经营现金流602.17亿元，同比增长2.61%；经营现金流与归母净利润比率"
+        "从1.93降至1.39；销售收现率从124.62%降至94.77%。"
+    )
+
+    assert stock_specialist_relevance_issue(missing_sales_cash, evidence) == (
+        "经营改善回答遗漏销售收现率的本期或可比期数值"
+    )
+    assert stock_specialist_relevance_issue(all_products, evidence) == (
+        "经营改善回答把缺少可比数据的产品分部也写成了毛利率下降"
+    )
+
+
+def test_quality_review_numeric_repair_keeps_cashflow_fact_paragraph():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "earnings_quality": {
+            "latest_report": {
+                "revenue": 276_917_000_000,
+                "revenue_yoy_pct": 54.80,
+                "net_profit": 43_284_000_000,
+                "net_profit_yoy_pct": 41.98,
+            }
+        },
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "operating_cashflow": 60_217_000_000,
+                "operating_cashflow_change_pct": 2.61,
+                "operating_cashflow_to_net_profit": 1.39,
+                "comparable_operating_cashflow_to_net_profit": 1.93,
+                "cash_received_from_sales_to_revenue_pct": 94.77,
+                "comparable_cash_received_from_sales_to_revenue_pct": 124.62,
+            }
+        },
+    }
+    answer = (
+        "宁德时代改善质量一般。\n\n"
+        "营收同比54.80%，归母净利润同比41.98%，两者相差12.82个百分点；"
+        "经营现金流602.17亿元，同比增长2.61%；经营现金流与归母净利润比率"
+        "从1.93降至1.39；销售收现率从124.62%降至94.77%。"
+    )
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert guard["unsupported_numbers"] == ["12.82"]
+    assert repaired is not None
+    repaired_answer, repaired_guard = repaired
+    assert "12.82" not in repaired_answer
+    assert "经营现金流602.17亿元" in repaired_answer
+    assert "销售收现率从124.62%降至94.77%" in repaired_answer
+    assert repaired_guard["passed"] is True
+    assert stock_specialist_relevance_issue(repaired_answer, evidence) is None
+
+
+def test_clean_user_facing_language_translates_unresolved_themes_key():
+    cleaned = AgentService._clean_user_facing_model_language(
+        "这些原因仍属`unresolved_themes`，需要继续核验。"
+    )
+
+    assert cleaned == "这些原因仍属仍待核验事项，需要继续核验。"
+    assert "unresolved_themes" not in cleaned
+
+
+def test_quality_review_repair_drops_overclaim_sentences_without_static_fallback():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+    }
+    answer = (
+        "宁德时代改善质量目前一般。2026中报营收和净利润同比增长，但毛利率与"
+        "销售收现率下降，具体经营原因仍需公司原文确认。\n\n"
+        "经营现金流净额同比增长2.61%，低于归母净利润41.98%的增速；覆盖比率"
+        "从1.93降至1.39，这些数字只说明同报告期差异。利润向现金的转化质量明显"
+        "减弱。\n\n"
+        "公司明确解释财务费用变化主要来自汇兑损失；毛利率变化、存货增速快于收入"
+        "以及销售收现率下降的原因尚未确认。产品占比变化不代表业务结构优化。\n\n"
+        "最重要的反方证据是利润与经营现金流增速差异、两项核心产品毛利率下降，"
+        "以及存货增速快于收入。下一步应核对存货分类、应收账龄和管理层原文。"
+    )
+
+    repaired = repair_quality_review_answer(answer, evidence)
+
+    assert repaired is not None
+    assert "利润向现金的转化质量明显减弱" not in repaired
+    assert "产品占比变化不代表业务结构优化" in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+
+
+def test_quality_review_repair_neutralizes_real_deepseek_cashflow_shortcuts():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+    }
+    answer = (
+        "宁德时代改善质量目前一般。增长有规模支撑，但毛利率、现金流覆盖比率和"
+        "销售收现率三项指标同步走弱。\n\n"
+        "经营现金流同比增长2.6%，覆盖比率从1.93降至1.39；销售收现率降至"
+        "94.8%，回款效率回落明显。具体原因尚未由公司解释。\n\n"
+        "最重要的反方证据是三项线索提示回款和营运资金占用可能在加大，但目前"
+        "不能证明产品积压。后续需要核验存货分类和应收账龄，才能进一步判断"
+        "现金流压力和盈利质量是否会持续。"
+    )
+
+    repaired = repair_quality_review_answer(answer, evidence)
+
+    assert repaired is not None
+    assert "增长有规模支撑" not in repaired
+    assert "三项指标同步走弱" not in repaired
+    assert "回款效率回落明显" not in repaired
+    assert "提示回款和营运资金占用可能在加大" not in repaired
+    assert "现金流压力" not in repaired
+    assert "营收和利润增长是已确认的报表事实" in repaired
+    assert "具体原因尚未确认" in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+
+
+def test_quality_review_repair_neutralizes_cross_metric_confirmation_shortcut():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+    }
+    answer = (
+        "宁德时代改善质量目前一般。经营现金流同比增长2.6%，覆盖比率从1.93降至"
+        "1.39，销售收现率从125.0%降至94.8%。\n\n"
+        "这三项合在一起，说明本期利润增长尚未得到经营现金流和回款节奏的同等确认。"
+        "公司原文已说明库存增加主要是为下半年市场需求而提前备货。公司尚未解释"
+        "毛利率下降，也不排除产品组合、原材料价格或交付批次的影响。\n\n"
+        "反方事实是动力电池和储能系统毛利率均较可比期下降；当前没有同报告期同行"
+        "经营数据，不能判断改善质量是否优于行业。下一步需核验存货分类、库龄、订单"
+        "覆盖和跌价准备，并继续查找销售收现率变化的公司原文。"
+    )
+
+    repaired = repair_quality_review_answer(answer, evidence)
+
+    assert repaired is not None
+    assert "回款节奏的同等确认" not in repaired
+    assert "不能合并推断回款节奏" in repaired
+    assert "提前备货" in repaired
+    assert "不排除产品组合" not in repaired
+    assert "具体原因仍需公司原文或分部数据确认" in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+
+
+def test_quality_review_stream_guard_withholds_overclaim_sentence(
+    tmp_path: Path, settings
+):
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "quality-review-stream-workspaces",
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    service = AgentService(database, guarded_settings)
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+    }
+
+    guard = service._validate_stream_output(
+        "宁德时代销售收现率降至94.8%，回款效率回落明显。",
+        evidence,
+    )
+
+    assert service._stream_partial_guard_has_blocker(guard) is True
+    assert any("回款质量" in item for item in guard["unsupported_market_inferences"])
+
+
+def test_stock_specialist_many_wrong_numbers_gets_grounded_model_retry(
+    tmp_path: Path, settings, monkeypatch
+):
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "specialist-guard-retry-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Specialist Guard Retry User")
+    service = AgentService(database, guarded_settings)
+    calls = []
+
+    def fake_stream(**kwargs):
+        calls.append(kwargs.get("prompt_path"))
+        if len(calls) == 1:
+            return (
+                "北方国际的工程建设与服务占收入72%，资源设备供应链占17%，"
+                "两项毛利率分别为6.9%和4.9%。",
+                {"model": "fake-first", "streaming": {"enabled": True}},
+            )
+        return (
+            "北方国际当前最大的收入来源是工程建设与服务，"
+            "资源设备供应链也是主要组成部分。反方证据是两项业务合计占比较高，"
+            "而分部标签本身不能证明未来盈利会继续改善。",
+            {"model": "fake-retry", "streaming": {"enabled": True}},
+        )
+
+    monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
+    streamed = []
+    run = service.run(
+        user=user,
+        intent="business_structure",
+        message="请继续分析北方国际的主营业务和反方证据。",
+        evidence={
+            "type": "business_structure",
+            "symbol": "000065.SZ",
+            "name": "北方国际",
+            "summary": "最大业务为工程建设与服务。",
+            "dimensions": [
+                {
+                    "classification": "product",
+                    "segments": [
+                        {
+                            "item_name": "工程建设与服务",
+                            "revenue_share_pct": 46.629,
+                        },
+                        {
+                            "item_name": "资源设备供应链",
+                            "revenue_share_pct": 40.166,
+                        },
+                    ],
+                }
+            ],
+            "research_plan": {
+                "focus": "business",
+                "focus_label": "主营业务与收入结构",
+            },
+        },
+        model_tier="economy",
+        execute_agent=True,
+        stream_callback=streamed.append,
+    )
+
+    assert len(calls) == 2
+    assert calls[0] is None
+    assert calls[1].name == "prompt.guard_retry.md"
+    assert run["status"] == "completed"
+    assert "工程建设与服务" in run["answer"]
+    assert "72%" not in run["answer"]
+    assert run["usage"]["guard_retry"]["passed"] is True
+    assert run["usage"]["output_guard"]["passed"] is True
+    assert any(item.get("type") == "reset" for item in streamed)
+    run_dir = Path(run["workspace_path"]) / "runs" / run["id"]
+    assert (run_dir / "answer.guard_rejected.md").is_file()
+    assert (run_dir / "prompt.guard_retry.md").is_file()
+
+
+def test_two_round_business_followup_reloads_current_company_segments(
+    tmp_path: Path, settings, monkeypatch
+):
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "business-followup-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Business Followup User")
+    service = AgentService(database, guarded_settings)
+    prompts = []
+
+    def fake_stream(**kwargs):
+        prompt_path = kwargs.get("prompt_path") or (kwargs["run_dir"] / "prompt.md")
+        prompts.append(prompt_path.read_text(encoding="utf-8"))
+        return (
+            "北方国际的主要收入来源是工程建设与服务和资源设备供应链。"
+            "当前更重要的反方证据是业务集中度较高，但这不能单独证明未来盈利变化。",
+            {"model": "fake-deepseek", "streaming": {"enabled": True}},
+        )
+
+    monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
+
+    def evidence(question: str) -> dict:
+        return {
+            "type": "business_structure",
+            "symbol": "000065.SZ",
+            "name": "北方国际",
+            "user_question": question,
+            "summary": "最大业务为工程建设与服务。",
+            "dimensions": [
+                {
+                    "classification": "product",
+                    "segments": [
+                        {
+                            "item_name": "工程建设与服务",
+                            "revenue_share_pct": 46.629,
+                        },
+                        {
+                            "item_name": "资源设备供应链",
+                            "revenue_share_pct": 40.166,
+                        },
+                    ],
+                }
+            ],
+            "research_plan": {
+                "focus": "business",
+                "focus_label": "主营业务与收入结构",
+            },
+        }
+
+    first_question = "北方国际靠什么业务赚钱？"
+    first = service.run(
+        user=user,
+        intent="business_structure",
+        message=first_question,
+        evidence=evidence(first_question),
+        model_tier="economy",
+        execute_agent=True,
+        conversation_id="business-followup",
+        stream_callback=lambda _event: None,
+    )
+    second_question = (
+        "请继续分析北方国际主营业务，说明结构变化、反方证据和当前不能确认的内容。"
+    )
+    second = service.run(
+        user=user,
+        intent="business_structure",
+        message=second_question,
+        evidence=evidence(second_question),
+        model_tier="economy",
+        execute_agent=True,
+        conversation_id="business-followup",
+        conversation_history=[
+            {"role": "user", "content": first_question},
+            {"role": "assistant", "content": first["answer"]},
+        ],
+        stream_callback=lambda _event: None,
+    )
+
+    assert first["status"] == "completed"
+    assert second["status"] == "completed"
+    assert len(prompts) == 2
+    assert "工程建设与服务" in prompts[1]
+    assert "资源设备供应链" in prompts[1]
+    assert '"dimensions"' in prompts[1]
+    assert '"price_move_event_evidence"' not in prompts[1]
+    assert "本轮仅展示已核验事实" not in second["answer"]
+
+
+def test_business_structure_guard_accepts_colloquial_rounded_percentage_points():
+    evidence = {
+        "type": "business_structure",
+        "symbol": "000065.SZ",
+        "business_structure": {
+            "dimensions": [
+                {
+                    "segments": [
+                        {
+                            "item_name": "电力运营",
+                            "gross_margin_change_pp": 9.3869,
+                        },
+                        {
+                            "item_name": "资源设备供应链",
+                            "revenue_growth_pct": -39.278,
+                            "revenue_share_change_pp": 2.8297,
+                            "comparable_gross_margin_pct": 12.043,
+                            "gross_margin_pct": 8.6796,
+                            "gross_margin_change_pp": -3.3637,
+                        },
+                    ]
+                }
+            ]
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "电力运营毛利率比上一年提升了9个多百分点。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+    assert guard["unsupported_numbers"] == []
+
+    approximate_guard = AgentService._validate_model_output(
+        "电力运营毛利率比上一年提升了约9个百分点。",
+        evidence,
+    )
+
+    assert approximate_guard["passed"] is True
+    assert approximate_guard["unsupported_numbers"] == []
+
+    transition_guard = AgentService._validate_model_output(
+        "该分部毛利率从12.043%跌到8.68%，下降了3.4个百分点；"
+        "收入同比下降近4成，另一项占比提升2.8个百分点。",
+        evidence,
+    )
+
+    assert transition_guard["passed"] is True
+    assert transition_guard["unsupported_numbers"] == []
+
+
+def test_business_structure_numeric_repair_keeps_supported_sentences():
+    evidence = {
+        "type": "business_structure",
+        "business_structure": {
+            "dimensions": [
+                {
+                    "segments": [
+                        {
+                            "item_name": "工程建设与服务",
+                            "revenue_share_pct": 46.6,
+                        },
+                        {
+                            "item_name": "资源设备供应链",
+                            "revenue_share_pct": 40.2,
+                        },
+                    ]
+                }
+            ]
+        },
+    }
+    answer = (
+        "北方国际第一大业务是工程建设与服务，占46.6%。"
+        "资源设备供应链占40.2%，也是主要收入来源。"
+        "另外两块业务合计占12.8%。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert guard["unsupported_numbers"] == ["12.8%"]
+    assert repaired is not None
+    repaired_answer, repaired_guard = repaired
+    assert repaired_guard["passed"] is True
+    assert "第一大业务是工程建设与服务" in repaired_answer
+    assert "资源设备供应链占40.2%" in repaired_answer
+    assert "12.8%" not in repaired_answer
 
 
 def test_streaming_bridge_failure_falls_back_to_oneshot_cli(

@@ -27,12 +27,15 @@ class ChatResponsePersistence:
         evidence_payload: dict[str, Any],
         knowledge_context: dict[str, Any],
     ) -> list[dict[str, Any]]:
+        research_focus = str(
+            (evidence_payload.get("research_plan") or {}).get("focus") or ""
+        ).strip()
         focused_price_move = response_intent == "stock_research" and (
             is_stock_price_move_question(
                 str(evidence_payload.get("user_question") or "")
             )
         )
-        if focused_price_move:
+        if focused_price_move or research_focus == "relative_industry":
             return []
         return [
             {

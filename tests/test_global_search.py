@@ -80,6 +80,14 @@ def _seed_universe(app) -> None:
                     "exchange": "SZSE",
                 },
                 {
+                    "symbol": "000065.SZ",
+                    "ts_code": "000065.SZ",
+                    "name": "北方国际",
+                    "industry": "建筑装饰",
+                    "market": "主板",
+                    "exchange": "SZSE",
+                },
+                {
                     "symbol": "600519.SS",
                     "ts_code": "600519.SH",
                     "name": "贵州茅台",
@@ -99,13 +107,20 @@ def _group(payload: dict, key: str) -> list[dict]:
     )
 
 
-def test_security_master_prefers_local_a_share_chinese_name(app) -> None:
+def test_security_master_prefers_local_a_share_chinese_name(app, monkeypatch) -> None:
     _seed_universe(app)
     resolver = SecurityMasterService(app.state.database)
 
     assert resolver.display_name(
         "000063.SZ", "ZTE Corporation"
     ) == "中兴通讯"
+
+    assert resolver.symbols_mentioned_in(
+        "请分析中兴通讯最新财报和经营现金流"
+    ) == ["000063.SZ"]
+    assert resolver.display_name(
+        "000065.SZ", "NORINCO International Cooperation Ltd."
+    ) == "北方国际"
 
     public = app.state.research_reports.public_report(
         {
@@ -126,6 +141,21 @@ def test_security_master_prefers_local_a_share_chinese_name(app) -> None:
     assert public["name"] == "中兴通讯"
     assert public["title"] == "中兴通讯研究快照"
     assert "ZTE Corporation" not in str(public)
+
+    monkeypatch.setattr(
+        app.state.analysis,
+        "get_index_history",
+        lambda symbol, range_name: {
+            "symbol": symbol,
+            "display_name": "NORINCO International Cooperation Ltd.",
+            "points": [{"timestamp": "2026-07-28", "close": 9.04}],
+            "metrics": {},
+            "range": range_name,
+        },
+    )
+    history = TestClient(app).get("/stocks/000065.SZ/history?range=3mo")
+    assert history.status_code == 200
+    assert history.json()["display_name"] == "北方国际"
 
 
 def test_global_search_finds_market_and_private_research_assets(app) -> None:
