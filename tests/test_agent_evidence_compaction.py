@@ -52,6 +52,41 @@ def test_market_compaction_preserves_explicit_session_alignment() -> None:
     ]
 
 
+def test_market_compaction_keeps_newer_breadth_for_explicit_today_vs_yesterday() -> None:
+    compact = compact_market_brief_evidence(
+        {
+            "type": "market_brief",
+            "user_question": "今天A股普涨，但昨天指数很弱，怎么理解？",
+            "analysis_target": {"market_date": "2026-07-30", "market_key": "china"},
+            "question_focus": {"key": "market_risk"},
+            "market_drivers": {"market_key": "china", "question_focus": "market_risk"},
+            "market_breadth": {
+                "status": "available",
+                "market_date": "2026-07-31",
+                "same_date_as_analysis_target": False,
+                "coverage": {"valid_change": 5533, "coverage_ratio": 1.0},
+                "breadth": {
+                    "total": 5533,
+                    "advancers": 4517,
+                    "decliners": 902,
+                    "unchanged": 114,
+                    "state": "普涨",
+                },
+            },
+        }
+    )
+
+    assert compact["market_breadth"]["market_date"] == "2026-07-31"
+    assert compact["market_breadth"]["same_date_as_analysis_target"] is False
+    assert compact["market_breadth"]["breadth"] == {
+        "total": 5533,
+        "advancers": 4517,
+        "decliners": 902,
+        "unchanged": 114,
+        "state": "普涨",
+    }
+
+
 def test_agent_service_delegates_market_compaction_to_pure_module(
     monkeypatch,
 ) -> None:

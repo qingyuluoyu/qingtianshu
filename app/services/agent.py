@@ -178,6 +178,60 @@ _VISION_FINAL_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 
+
+def _normalize_market_reassessment_language(
+    answer: str,
+    evidence: dict[str, Any],
+) -> str:
+    """Turn invented market confirmation windows into natural evidence checks."""
+
+    if str(evidence.get("type") or "") != "market_brief":
+        return answer
+    user_question = str(evidence.get("user_question") or "")
+    user_has_window = re.search(
+        r"(?:连续|未来|后续|接下来)[^。；\n]{0,16}"
+        r"(?:\d+|一|两|二|三|四|五|几|数|若干)[^。；\n]{0,8}(?:日|交易日)",
+        user_question,
+    )
+    if user_has_window is None:
+        answer = re.sub(
+            r"(?:至少)?连续(?:\d+|一|两|二|三|四|五)"
+            r"(?:\s*(?:到|至|[-—–~～])\s*(?:\d+|一|两|二|三|四|五))?"
+            r"(?:个)?交易日",
+            "在后续完整交易日里",
+            answer,
+        )
+    user_has_breadth_threshold = re.search(
+        r"(?:上涨|下跌)(?:家数|比例|占比)?[^。；\n]{0,20}"
+        r"(?:\d+(?:\.\d+)?%|三分之二)",
+        user_question,
+    )
+    if user_has_breadth_threshold is None:
+        answer = re.sub(
+            r"上涨比例(?:仍)?(?:维持|保持)?在(?:约)?"
+            r"(?:\d+(?:\.\d+)?%|三分之二)(?:以上|左右)?",
+            "上涨家数仍占明显优势",
+            answer,
+        )
+        answer = re.sub(
+            r"全市场(?:的)?上涨家数(?:在后续完整交易日里)?"
+            r"(?:维持|保持)?在(?:约)?(?:\d+(?:\.\d+)?%|三分之二)以上",
+            "后续完整交易日里，全市场上涨家数仍占明显优势",
+            answer,
+        )
+        answer = answer.replace(
+            "上涨家数仍占明显优势、净涨跌家数仍处于较高水平",
+            "上涨家数仍占明显优势",
+        )
+    evidence_text = json.dumps(evidence, ensure_ascii=False, default=str)
+    if '"ma5"' not in evidence_text.lower() and "5日均线" not in user_question:
+        answer = re.sub(
+            r"\s*(?:或|和|以及)\s*(?:各自的)?5\s*日均线",
+            "",
+            answer,
+        )
+    return answer
+
 _MODEL_USAGE_SUM_KEYS = (
     "estimated_cost_usd",
     "input_tokens",
@@ -455,6 +509,10 @@ class AgentService:
             candidate_usage: dict[str, Any] | None,
         ) -> str:
             normalized = self._clean_user_facing_model_language(candidate)
+            normalized = _normalize_market_reassessment_language(
+                normalized,
+                prompt_evidence,
+            )
             normalized = self._normalize_specialist_scope_language(
                 normalized,
                 prompt_evidence,
@@ -1661,6 +1719,10 @@ class AgentService:
                 self._normalize_specialist_scope_language(
                     self._clean_user_facing_model_language(text), evidence
                 ),
+                evidence,
+            )
+            normalized = _normalize_market_reassessment_language(
+                normalized,
                 evidence,
             )
             if not normalized and re.fullmatch(

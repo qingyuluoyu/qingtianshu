@@ -743,7 +743,93 @@ def _market_cause_fact_required_but_missing(
     return True
 
 
-def _has_whole_market_breadth_overclaim(text: str) -> bool:
+def _market_breadth_claim_is_user_reference(clause: str) -> bool:
+    if not any(
+        term in clause
+        for term in (
+            "你说的",
+            "你所说的",
+            "你感觉的",
+            "你提到的",
+            "问题中的",
+            "按你的描述",
+            "用户所说",
+            "这个普涨快照",
+            "该普涨快照",
+            "上述普涨快照",
+            "前述普涨快照",
+        )
+    ):
+        return False
+    return "普涨" in clause
+
+
+def _market_breadth_claim_is_negated(clause: str) -> bool:
+    return (
+        re.search(
+            r"(?:并非|不是|不等于|未达到|没有达到|不能称为|不可称为|"
+            r"不应称为|而非|非)\s*(?:全市场)?\s*普涨",
+            clause,
+        )
+        is not None
+        or re.search(
+            r"普涨[^，。；\n]{0,12}(?:并不成立|不能确认|无法确认|尚待核验)",
+            clause,
+        )
+        is not None
+    )
+
+
+def _market_breadth_claim_has_matching_evidence(
+    clause: str,
+    evidence: dict[str, Any] | None,
+) -> bool:
+    if not evidence:
+        return False
+    market_breadth = evidence.get("market_breadth") or {}
+    breadth = market_breadth.get("breadth") or {}
+    if (
+        market_breadth.get("status") != "available"
+        or str(breadth.get("state") or "") != "普涨"
+    ):
+        return False
+    if market_breadth.get("same_date_as_analysis_target") is not False:
+        return True
+
+    market_date = str(market_breadth.get("market_date") or "")[:10]
+    if not market_date:
+        return False
+    try:
+        year, month, day = (int(part) for part in market_date.split("-"))
+    except (TypeError, ValueError):
+        return False
+    exact_terms = (
+        market_date,
+        f"{year}年{month}月{day}日",
+        f"{month}月{day}日",
+    )
+    if any(term in clause for term in exact_terms):
+        return True
+
+    explicit_dates = re.findall(r"(?:\d{4}年)?\d{1,2}月\d{1,2}日|\d{4}-\d{2}-\d{2}", clause)
+    if explicit_dates:
+        return False
+    user_question = str(evidence.get("user_question") or "")
+    relative_terms = ("今天", "今日", "当前", "盘中", "午间", "截至目前")
+    if any(term in clause for term in relative_terms) and any(
+        term in user_question for term in relative_terms
+    ):
+        return True
+    return any(term in user_question for term in relative_terms) and any(
+        term in user_question
+        for term in ("昨天", "昨日", "上一交易日", "前一交易日", "前日")
+    )
+
+
+def _has_whole_market_breadth_overclaim(
+    text: str,
+    evidence: dict[str, Any] | None = None,
+) -> bool:
     cautious_terms = (
         "不能确认",
         "无法确认",
@@ -759,17 +845,17 @@ def _has_whole_market_breadth_overclaim(text: str) -> bool:
         "倾向结构性行情",
     )
     for clause in re.split(r"[。；\n]", text):
-        if "普涨" not in clause and "结构性行情" not in clause:
+        if "普涨" not in clause:
             continue
         if any(term in clause for term in cautious_terms):
             continue
-        if "普涨" in clause:
-            return True
-        if re.search(
-            r"(?:是|属于|已经|可以|能够|确认|明确为)[^，。；\n]{0,12}结构性行情",
-            clause,
-        ):
-            return True
+        if _market_breadth_claim_is_negated(clause):
+            continue
+        if _market_breadth_claim_is_user_reference(clause):
+            continue
+        if _market_breadth_claim_has_matching_evidence(clause, evidence):
+            continue
+        return True
     return False
 
 
@@ -857,6 +943,9 @@ def _has_unproven_downtrend_claim(text: str) -> bool:
     cautious_terms = (
         "不等于",
         "不代表",
+        "没有形成",
+        "未形成",
+        "尚未形成",
         "不能确认",
         "不能直接确认",
         "无法直接确认",

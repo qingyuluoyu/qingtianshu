@@ -474,6 +474,9 @@ def _stock_current_quote_conflicts(
     previous_terms = (
         "上一交易日",
         "前一交易日",
+        "上一完整交易日",
+        "前一完整交易日",
+        "最近完整交易日",
         "此前交易日",
         "上一根日线",
         "完整日线",

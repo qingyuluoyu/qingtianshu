@@ -4564,7 +4564,7 @@ def test_market_guard_flags_invented_tolerance_pressure_and_systemic_claims():
     }
 
 
-def test_market_guard_rejects_whole_market_breadth_overclaim_without_breadth_data():
+def test_market_guard_keeps_negated_breadth_language_without_breadth_data():
     evidence = {
         "type": "market_brief",
         "market_state": {"whole_market_breadth_available": False},
@@ -4574,15 +4574,53 @@ def test_market_guard_rejects_whole_market_breadth_overclaim_without_breadth_dat
         "从领涨板块集中度看，更接近结构性行情；全市场广度仍待补证。",
         evidence,
     )
-    overclaim = AgentService._validate_model_output(
+    negated = AgentService._validate_model_output(
         "今天是结构性行情，并非全市场普涨。",
         evidence,
     )
 
     assert cautious["passed"] is True
-    assert overclaim["passed"] is False
-    assert overclaim["unsupported_market_inferences"] == [
-        "缺少全市场涨跌家数时不能确认是否普涨"
+    assert negated["passed"] is True
+
+
+def test_market_guard_accepts_date_bound_cross_date_breadth_evidence():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "今天A股普涨，但昨天指数很弱，怎么理解？",
+        "analysis_target": {"market_date": "2026-07-30"},
+        "market_state": {"whole_market_breadth_available": False},
+        "market_breadth": {
+            "status": "available",
+            "market_date": "2026-07-31",
+            "same_date_as_analysis_target": False,
+            "breadth": {
+                "total": 5533,
+                "advancers": 4517,
+                "decliners": 902,
+                "unchanged": 114,
+                "state": "普涨",
+            },
+        },
+    }
+
+    current_day = AgentService._validate_model_output(
+        "7月31日午间上涨4517家、下跌902家，固定分类确实是普涨。",
+        evidence,
+    )
+    wrong_day = AgentService._validate_model_output(
+        "7月30日上涨4517家、下跌902家，因此当天是普涨。",
+        evidence,
+    )
+    anaphoric_reference = AgentService._validate_model_output(
+        "7月31日午间属于普涨。这个普涨快照只能说明今天盘中发生了什么。",
+        evidence,
+    )
+
+    assert current_day["passed"] is True
+    assert anaphoric_reference["passed"] is True
+    assert wrong_day["passed"] is False
+    assert "缺少全市场涨跌家数时不能确认是否普涨" in wrong_day[
+        "unsupported_market_inferences"
     ]
 
 
@@ -6126,6 +6164,28 @@ def test_stock_guard_accepts_current_quote_with_prior_daily_bar_distinction():
     guard = AgentService._validate_model_output(
         "按2026-07-21 16:14报价快照，当前不是下跌，而是上涨3.41%，报34.88元。\n"
         "上一交易日完整日线收于33.73元，当日跌幅为6.31%。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
+def test_stock_guard_accepts_previous_complete_session_before_current_quote():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯最近走弱吗？",
+        "metrics": {"latest_close": 33.30, "return_1d_pct": -2.29},
+        "provenance": {"market_timestamp": "2026-07-30T01:30:00+00:00"},
+        "current_quote": {
+            "price": 34.00,
+            "pct_change": 2.10,
+            "market_timestamp": "2026-07-31T12:05:00+08:00",
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "上一完整交易日收于33.30元；今天盘中最新报价34.00元，上涨2.10%。",
         evidence,
     )
 
@@ -8434,6 +8494,26 @@ def test_model_language_cleanup_translates_market_driver_field_phrase():
     assert cleaned == "当前没有与本问题直接相关的市场资讯。"
 
 
+def test_market_reassessment_cleanup_removes_invented_future_rules():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "今天普涨，什么时候需要重新判断？",
+        "indices": [{"metrics": {"ma20": 3904.0}}],
+    }
+    answer = (
+        "如果全市场上涨家数连续两到三个交易日维持在三分之二以上，"
+        "说明修复更强。后续关注指数能否站上20日均线或5日均线。"
+    )
+
+    cleaned = agent_module._normalize_market_reassessment_language(answer, evidence)
+
+    assert "连续两到三个交易日" not in cleaned
+    assert "三分之二" not in cleaned
+    assert "5日均线" not in cleaned
+    assert "后续完整交易日" in cleaned
+    assert "上涨家数仍占明显优势" in cleaned
+
+
 def test_market_guard_rejects_wrong_index_count_ma5_and_wave_label():
     evidence = {
         "type": "market_brief",
@@ -8478,6 +8558,35 @@ def test_numeric_guard_uses_structural_numbers_only_from_evidence_keys():
     assert valid["passed"] is True
     assert invented_ratio["passed"] is False
     assert "1.9" in invented_ratio["unsupported_numbers"]
+
+
+def test_numeric_guard_accepts_transparent_ratio_from_supported_percentages():
+    evidence = {
+        "type": "market_brief",
+        "indices": [
+            {
+                "name": "科创50",
+                "metrics": {"volatility_20d_annualized_pct": 71.5},
+            },
+            {
+                "name": "上证综指",
+                "metrics": {"volatility_20d_annualized_pct": 20.9},
+            },
+        ],
+    }
+
+    derived = AgentService._validate_model_output(
+        "科创50的20日年化波动率为71.5%，约是上证综指20.9%的3.4倍。",
+        evidence,
+    )
+    invented = AgentService._validate_model_output(
+        "科创50的20日年化波动率为71.5%，约是上证综指20.9%的5.8倍。",
+        evidence,
+    )
+
+    assert derived["passed"] is True
+    assert invented["passed"] is False
+    assert "5.8" in invented["unsupported_numbers"]
 
 
 def test_stock_numeric_guard_does_not_trust_cross_stock_knowledge_numbers():
@@ -8553,6 +8662,10 @@ def test_market_downtrend_guard_allows_explicit_negation():
         "此前仍为正收益，不能直接确认新下跌趋势已开启。",
         evidence,
     )
+    no_trend = AgentService._validate_model_output(
+        "相邻交易日方向相反，说明市场没有形成持续的上涨或下跌趋势。",
+        evidence,
+    )
     overclaim = AgentService._validate_model_output(
         "当前趋势依然向下。",
         evidence,
@@ -8561,6 +8674,7 @@ def test_market_downtrend_guard_allows_explicit_negation():
     assert safe["passed"] is True
     assert natural_safe["passed"] is True
     assert direct_boundary["passed"] is True
+    assert no_trend["passed"] is True
     assert overclaim["passed"] is False
     assert overclaim["unsupported_market_inferences"] == [
         "中期偏弱不能直接改写为已确认的下行趋势"

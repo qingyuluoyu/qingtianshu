@@ -106,6 +106,12 @@ def compact_market_brief_evidence(
         or "market_overview"
     )
     question = str(evidence.get("user_question") or "")
+    cross_date_comparison = any(
+        term in question for term in ("今天", "今日", "当前", "盘中", "午间")
+    ) and any(
+        term in question
+        for term in ("昨天", "昨日", "上一交易日", "前一交易日", "前日")
+    )
     global_query = any(
         term in question
         for term in (
@@ -661,18 +667,25 @@ def compact_market_brief_evidence(
     if (market_key == "china" or global_query) and focus_key in {
         "market_overview",
         "market_cause",
+        "market_risk",
         "sector_rotation",
         "volume_flows",
     }:
         market_breadth = evidence.get("market_breadth") or {}
         if (
             market_breadth.get("status") == "available"
-            and market_breadth.get("same_date_as_analysis_target") is not False
+            and (
+                market_breadth.get("same_date_as_analysis_target") is not False
+                or cross_date_comparison
+            )
         ):
             compact["market_breadth"] = {
                 "status": "available",
                 "scope": market_breadth.get("scope"),
                 "market_date": market_breadth.get("market_date"),
+                "same_date_as_analysis_target": market_breadth.get(
+                    "same_date_as_analysis_target"
+                ),
                 "coverage": {
                     key: (market_breadth.get("coverage") or {}).get(key)
                     for key in (

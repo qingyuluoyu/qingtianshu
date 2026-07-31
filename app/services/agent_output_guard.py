@@ -435,7 +435,18 @@ class AgentOutputGuard:
                 hot_sectors["sectors"] = []
             guard_evidence["hot_sectors"] = hot_sectors
             market_breadth = dict(evidence.get("market_breadth") or {})
-            if market_breadth.get("same_date_as_analysis_target") is False:
+            user_question = str(evidence.get("user_question") or "")
+            cross_date_comparison = any(
+                term in user_question
+                for term in ("今天", "今日", "当前", "盘中", "午间")
+            ) and any(
+                term in user_question
+                for term in ("昨天", "昨日", "上一交易日", "前一交易日", "前日")
+            )
+            if (
+                market_breadth.get("same_date_as_analysis_target") is False
+                and not cross_date_comparison
+            ):
                 market_breadth = {
                     "status": "cross_date_excluded",
                     "market_date": market_breadth.get("market_date"),
@@ -559,6 +570,43 @@ class AgentOutputGuard:
                 abs(candidate - item) <= max(tolerance_floor, abs(item) * 0.005)
                 for item in allowed
             )
+
+        def is_supported_same_clause_ratio(
+            number_match: re.Match[str], candidate: float
+        ) -> bool:
+            if number_match.group(0).endswith("%") or re.match(
+                r"\s*倍", answer[number_match.end() : number_match.end() + 3]
+            ) is None:
+                return False
+            clause_start = max(
+                answer.rfind(mark, 0, number_match.start())
+                for mark in ("。", "；", "！", "？", "\n")
+            ) + 1
+            prior_percentages = [
+                item
+                for item in _NUMBER_RE.finditer(
+                    answer[clause_start : number_match.start()]
+                )
+                if item.group(0).endswith("%")
+            ]
+            if len(prior_percentages) < 2:
+                return False
+            numerator = AgentOutputGuard._parse_number(
+                prior_percentages[-2].group(0)
+            )
+            denominator = AgentOutputGuard._parse_number(
+                prior_percentages[-1].group(0)
+            )
+            if numerator is None or denominator in (None, 0):
+                return False
+            if not matches(abs(numerator), allowed_magnitudes, 0.051) or not matches(
+                abs(denominator), allowed_magnitudes, 0.051
+            ):
+                return False
+            expected = abs(numerator / denominator)
+            token = number_match.group(0).lstrip("+-").replace(",", "")
+            tolerance = 0.51 if "." not in token else 0.061
+            return abs(abs(candidate) - expected) <= max(tolerance, expected * 0.02)
 
         unsupported = []
         unsupported_contexts = []
@@ -773,6 +821,8 @@ class AgentOutputGuard:
                     abs(value) <= item < approximate_upper_bound
                     for item in allowed_magnitudes
                 )
+            if not supported:
+                supported = is_supported_same_clause_ratio(match, value)
 
             if not supported:
                 unsupported.append(token)
@@ -840,7 +890,7 @@ class AgentOutputGuard:
             market_state = evidence.get("market_state") or {}
             if market_state.get(
                 "whole_market_breadth_available"
-            ) is False and _has_whole_market_breadth_overclaim(answer):
+            ) is False and _has_whole_market_breadth_overclaim(answer, evidence):
                 unsupported_market_inferences.append(
                     "缺少全市场涨跌家数时不能确认是否普涨"
                 )
@@ -1742,7 +1792,7 @@ class AgentOutputGuard:
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
                 "缺少全市场涨跌家数时不能确认是否普涨" in unsupported_market_inferences
-                and _has_whole_market_breadth_overclaim(line)
+                and _has_whole_market_breadth_overclaim(line, evidence)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
                 "缺少同日全市场广度时不能声称多数个股涨跌"

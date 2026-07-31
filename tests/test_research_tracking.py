@@ -137,7 +137,12 @@ def test_generated_report_enters_change_archive_and_common_knowledge(client, app
         "技术状态",
         "风险事件",
     }
-    for heading in ("六维证据覆盖", "反方证据", "失效条件", "下一步核验"):
+    for heading in (
+        "六维证据覆盖",
+        "反方证据",
+        "什么时候需要重新判断",
+        "下一步核验",
+    ):
         assert heading in coverage_payload["answer"]
     for label in ("公司经营", "财务质量", "行业与相对表现", "估值", "技术状态", "风险事件"):
         assert label in coverage_payload["answer"]
