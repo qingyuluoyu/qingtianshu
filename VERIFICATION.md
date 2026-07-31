@@ -1571,3 +1571,13 @@ uv run pytest
 - 定向测试、全量 `1042` 项测试、`uv run ruff check app tests`、Python `compileall`、全部 JavaScript `node --check`、`uv lock --check` 和 `git diff --check` 均通过。唯一提示仍为 Starlette TestClient/httpx 上游弃用警告。
 
 当前边界：本轮证明主营换题与追问质量达到阶段交付标准，不代表所有长会话、基金/债券正式事实、商业数据 SLA、备份恢复或后台 Worker 门禁完成。当前 `/health=ok` 且 Hermes 启用，但 Worker 离线导致 `/ready=503`。
+
+## 2026-08-01 W27 中兴通讯财报质量自然对话与阶段门禁
+
+- 路由已验证：“中兴通讯最新财报到底好不好”进入 `stock_research / quality_review`；分析师式聊天只作为写作风格，不加载分析师预期，否定行情表达会移除市场模块。
+- 证据压缩已验证：质量专项从原始 `financial_drivers.filing_evidence` 重建公司解释，保留经营现金流原文“销售商品、提供劳务收到的现金减少及购买商品、接受劳务支付的现金增加”，不会再误写成公司没有解释现金流转负。
+- 数值误伤已验证：销售收现率从 `106.245%` 降至 `95.96%` 时，“跌破100%”作为直接比较事实通过；无跨越或无关指标的 `100%` 仍不放行。
+- 首次复验 Run `ed16d1ac-24b8-40b5-a90b-15b14a144d34`：`completed / deepseek-v4-pro`，Prompt 29,011 字符，首可见正文 3.276 秒，总请求 37.643 秒；正确引用现金流公司解释，最终数字守卫无不支持数字，但质量编辑使 `api_calls=2`。
+- 第二次复验 Run `dff4b9f7-8d05-4c4e-8125-d21756fe8c92`：`completed / deepseek-v4-pro`，Prompt 同为 29,011 字符，最终回答无标题、列表、股价、技术指标或“公司未解释现金流”；本次仍因不同首稿措辞触发编辑和聚焦重试，`api_calls=3`，总请求 52.030 秒。按用户尽快上传优先级停止继续迭代。
+- 全量门禁：`1051 tests collected` 并执行至 100% 通过；`uv run ruff check .`、Python `compileall`、全部跟踪 JavaScript `node --check`、`uv lock --check` 和 `git diff --check` 全部通过。唯一提示为 Starlette TestClient/httpx 上游弃用警告。
+- 运行态：主服务 `/health=ok`、Hermes 启用；外部 Worker 为 0，持久队列 degraded，`/ready=503`。这不影响本轮对话复验，但不能声称生产就绪。

@@ -66,6 +66,12 @@ class ResearchPlanService:
                 "改善是否有质量",
                 "改善有没有质量",
                 "改善质量",
+                "财报到底好不好",
+                "财报好不好",
+                "财报质量",
+                "业绩质量",
+                "经营质量",
+                "盈利质量",
             ),
         ),
         (
@@ -299,8 +305,8 @@ class ResearchPlanService:
             ),
         },
         "shareholder": {
-            "required": ("market", "shareholder_structure"),
-            "optional": ("company_information", "event_timeline"),
+            "required": ("shareholder_structure",),
+            "optional": (),
             "skills": ("shareholder-structure", "evidence-debate"),
         },
         "business": {
@@ -385,6 +391,16 @@ class ResearchPlanService:
             for key, label, terms in self._FOCUS_RULES
             if any(term.lower() in effective_text.lower() for term in terms)
         ]
+        if self._analyst_word_is_style_only(effective_text):
+            matched = [item for item in matched if item[0] != "expectations"]
+        if self._explicitly_excludes_financial_focus(question) and any(
+            key not in {"financial", "quality_review"} for key, _ in matched
+        ):
+            matched = [
+                item
+                for item in matched
+                if item[0] not in {"financial", "quality_review"}
+            ]
         if is_stock_price_move_question(effective_text) and not any(
             key == "price_cause" for key, _ in matched
         ):
@@ -419,6 +435,12 @@ class ResearchPlanService:
                 )
                 if any(term.lower() in lowered for term in terms):
                     explicit_extra_focuses.add(key)
+            if self._explicitly_excludes_price_focus(effective_text):
+                explicit_extra_focuses.difference_update(
+                    {"price_cause", "price_action"}
+                )
+            if self._analyst_word_is_style_only(effective_text):
+                explicit_extra_focuses.discard("expectations")
             matched = [
                 item
                 for item in matched
@@ -457,6 +479,12 @@ class ResearchPlanService:
                 )
                 if any(term.lower() in lowered for term in terms):
                     explicit_extra_focuses.add(key)
+            if self._explicitly_excludes_price_focus(effective_text):
+                explicit_extra_focuses.difference_update(
+                    {"price_cause", "price_action"}
+                )
+            if self._analyst_word_is_style_only(effective_text):
+                explicit_extra_focuses.discard("expectations")
             matched = [
                 item
                 for item in matched
@@ -465,7 +493,7 @@ class ResearchPlanService:
         if any(key == "business" for key, _ in matched):
             # “先不谈涨跌”“不要给股价和技术指标”是在明确切换到主营，
             # 不能因为否定句里出现涨跌、股价或技术字样又把本轮拉回行情。
-            if self._explicitly_excludes_price_focus(question):
+            if self._explicitly_excludes_price_focus(effective_text):
                 matched = [
                     item
                     for item in matched
@@ -547,6 +575,10 @@ class ResearchPlanService:
                 self._extend_unique(optional, ("outlook_calibration",))
                 self._extend_unique(skills, ("conditional-outlook",))
             optional = [item for item in optional if item not in required]
+
+        if self._explicitly_excludes_price_focus(effective_text):
+            required = [item for item in required if item != "market"]
+            optional = [item for item in optional if item != "market"]
 
         primary_focus = "price_cause" if has_price_cause else focus
         if contextual_followup and primary_focus == "price_cause":
@@ -673,6 +705,52 @@ class ResearchPlanService:
         )
 
     @staticmethod
+    def _explicitly_excludes_financial_focus(question: str) -> bool:
+        folded = re.sub(r"\s+", "", str(question or "")).casefold()
+        return any(
+            phrase in folded
+            for phrase in (
+                "先不谈财报",
+                "不谈财报了",
+                "先不谈财务",
+                "不谈财务了",
+                "不要重复财报",
+                "别重复财报",
+                "不要重复刚才的财务",
+                "别重复刚才的财务",
+                "不要再讲财务",
+                "别再讲财务",
+            )
+        )
+
+    @staticmethod
+    def _analyst_word_is_style_only(question: str) -> bool:
+        folded = re.sub(r"\s+", "", str(question or "")).casefold()
+        if "分析师" not in folded:
+            return False
+        explicit_expectation_terms = (
+            "分析师预期",
+            "分析师一致预期",
+            "一致预期",
+            "研报",
+            "评级",
+            "eps",
+            "机构预期",
+            "预期修订",
+            "上修",
+            "下修",
+        )
+        if any(term in folded for term in explicit_expectation_terms):
+            return False
+        return bool(
+            re.search(
+                r"(?:像|按|用)(?:一个)?分析师(?:一样|的方式|的口吻)?"
+                r"(?:和我)?(?:聊天|说|讲|写|解释|分析)",
+                folded,
+            )
+        )
+
+    @staticmethod
     def _business_question_requests_financials(question: str) -> bool:
         folded = re.sub(r"\s+", "", str(question or "")).casefold()
         return any(
@@ -704,10 +782,38 @@ class ResearchPlanService:
         question: str,
         history: list[dict[str, Any]],
     ) -> bool:
-        if not history or cls._has_explicit_focus(question):
+        if not history:
             return False
         folded = re.sub(r"\s+", "", str(question or "")).casefold()
         if not folded:
+            return False
+        if any(
+            term in folded
+            for term in (
+                "先不谈",
+                "不谈财报了",
+                "不谈财务了",
+                "换个话题",
+                "换个问题",
+                "转到股东",
+                "接着看股东",
+            )
+        ):
+            return False
+        if any(
+            term in folded
+            for term in (
+                "你刚才",
+                "刚才说了很多",
+                "真正值得我改变判断",
+                "哪些只是会计口径",
+                "哪些只是短期节奏",
+                "别重复整份",
+                "不要重复整份",
+            )
+        ):
+            return True
+        if cls._has_explicit_focus(question):
             return False
         return any(
             term in folded

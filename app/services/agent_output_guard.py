@@ -938,6 +938,12 @@ class AgentOutputGuard:
                 )
             if not supported:
                 supported = is_supported_same_clause_ratio(match, value)
+            if not supported:
+                supported = AgentOutputGuard._is_supported_percentage_reference_threshold(
+                    answer,
+                    match,
+                    guard_evidence,
+                )
 
             if not supported:
                 unsupported.append(token)
@@ -1554,6 +1560,99 @@ class AgentOutputGuard:
             re.search(rf"%{range_separator}$", left)
             or re.match(rf"^{range_separator}[-+]?\d+(?:\.\d+)?%", right)
         )
+
+    @staticmethod
+    def _is_supported_percentage_reference_threshold(
+        answer: str,
+        match: re.Match[str],
+        evidence: dict[str, Any],
+    ) -> bool:
+        """Allow a named ratio to be compared with its natural 100% reference.
+
+        The 100% in "销售收现率跌破100%" is not a new financial observation:
+        it is a direct comparison between the evidenced ratio and its denominator.
+        Keep this deliberately narrow so unrelated invented percentage thresholds
+        remain unsupported.
+        """
+
+        token = match.group(0)
+        value = AgentOutputGuard._parse_number(token)
+        if not token.endswith("%") or value is None or abs(value - 100.0) > 0.001:
+            return False
+
+        clause_start = max(
+            answer.rfind(mark, 0, match.start())
+            for mark in ("。", "；", "！", "？", "\n")
+        ) + 1
+        clause_end_candidates = [
+            position
+            for mark in ("。", "；", "！", "？", "\n")
+            if (position := answer.find(mark, match.end())) >= 0
+        ]
+        clause_end = min(clause_end_candidates, default=len(answer))
+        clause = re.sub(r"\s+", "", answer[clause_start:clause_end])
+        if not any(term in clause for term in ("销售收现率", "收现率")):
+            return False
+
+        drivers = (
+            evidence
+            if evidence.get("type") == "financial_drivers"
+            else evidence.get("financial_drivers") or {}
+        )
+        cashflow = drivers.get("cashflow_analysis") or {}
+        current = cashflow.get("cash_received_from_sales_to_revenue_pct")
+        comparable = cashflow.get(
+            "comparable_cash_received_from_sales_to_revenue_pct"
+        )
+        if not isinstance(current, (int, float)) or isinstance(current, bool):
+            return False
+
+        downward_crossing = any(
+            term in clause
+            for term in (
+                "跌破100%",
+                "降破100%",
+                "降到100%以下",
+                "降至100%以下",
+            )
+        )
+        if downward_crossing:
+            return bool(
+                float(current) < 100
+                and isinstance(comparable, (int, float))
+                and not isinstance(comparable, bool)
+                and float(comparable) >= 100
+            )
+        if any(
+            term in clause
+            for term in (
+                "低于100%",
+                "不足100%",
+                "不到100%",
+                "未达100%",
+                "未到100%",
+            )
+        ):
+            return float(current) < 100
+        upward_crossing = any(
+            term in clause
+            for term in (
+                "突破100%",
+                "升破100%",
+                "升到100%以上",
+                "升至100%以上",
+            )
+        )
+        if upward_crossing:
+            return bool(
+                float(current) > 100
+                and isinstance(comparable, (int, float))
+                and not isinstance(comparable, bool)
+                and float(comparable) <= 100
+            )
+        if any(term in clause for term in ("高于100%", "超过100%")):
+            return float(current) > 100
+        return False
 
     @staticmethod
     def _is_breadth_share_percentage(answer: str, match: re.Match[str]) -> bool:

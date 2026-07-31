@@ -180,6 +180,57 @@ def test_stock_price_cause_followup_uses_three_natural_paragraph_contract():
     assert "不评价公告内容积极或消极" in prompt
 
 
+def test_financial_quality_followup_stays_conversational_and_avoids_cash_labels():
+    prompt = _append(
+        intent="stock_research",
+        message=(
+            "你刚才说了很多数据，真正值得我改变判断的是哪两三件？"
+            "哪些只是会计口径、报告期错位或者短期节奏？"
+            "别重复整份财报，直接和我讲重点。"
+        ),
+        prompt_evidence={
+            "research_plan": {
+                "focus": "quality_review",
+                "primary_focus": "quality_review",
+                "contextual_followup": True,
+            }
+        },
+    )
+
+    assert "财报质量连续追问最后核对" in prompt
+    assert "不是重写一份完整财报" in prompt
+    assert "利润有无现金支撑、是否兑现、是否落袋" in prompt
+    assert "不能直接解释当季利润变化" in prompt
+    assert "本轮自然对话表达要求" in prompt
+    assert "不要使用 Markdown 小标题、加粗标签、编号、项目符号" in prompt
+
+
+def test_natural_analyst_style_request_uses_paragraphs_without_report_scaffolding():
+    prompt = _append(
+        intent="stock_research",
+        message=(
+            "中兴通讯最新财报到底好不好？像分析师和我聊天一样写，"
+            "不要写成报告目录。"
+        ),
+        prompt_evidence={"research_plan": {"focus": "quality_review"}},
+    )
+
+    assert "本轮自然对话表达要求" in prompt
+    assert "用连贯自然段组织" in prompt
+    assert "不说“好，我们直接聊”" in prompt
+
+
+def test_quality_review_uses_available_cashflow_company_explanation():
+    prompt = _append(
+        intent="stock_research",
+        message="中兴通讯财报质量怎么样？请说明经营现金流。",
+        prompt_evidence={"research_plan": {"focus": "quality_review"}},
+    )
+
+    assert "经营现金流变化的公司原文解释" in prompt
+    assert "不得再写公司没有解释经营现金流转负" in prompt
+
+
 def test_stock_price_cause_followup_can_answer_same_day_vs_slow_background():
     prompt = _append(
         intent="stock_research",

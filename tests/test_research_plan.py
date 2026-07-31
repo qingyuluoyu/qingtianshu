@@ -189,6 +189,60 @@ def test_quality_review_focus_uses_disclosures_financials_cashflow_and_business_
     assert "evidence-debate" not in plan["selected_skills"]
 
 
+def test_plain_financial_quality_question_ignores_style_and_negated_price_words():
+    plan = ResearchPlanService().build(
+        "中兴通讯最新财报到底好不好？请把收入、利润、经营现金流、毛利率、"
+        "主营结构和最重要的反方事实讲清楚。像分析师和我聊天一样写，"
+        "不要写成报告目录，也不要给股价和技术指标。"
+    )
+
+    assert plan["focus"] == "quality_review"
+    assert plan["primary_focus"] == "quality_review"
+    assert "market" not in plan["selected_modules"]
+    assert "analyst_expectations" not in plan["selected_modules"]
+    assert plan["selected_skills"] == [
+        "quality-review",
+        "a-share-filing-evidence",
+    ]
+
+
+def test_financial_quality_followup_inherits_prior_focus_despite_financial_words():
+    first_question = (
+        "中兴通讯最新财报到底好不好？请把收入、利润、经营现金流、毛利率、"
+        "主营结构和最重要的反方事实讲清楚。像分析师和我聊天一样写，"
+        "不要写成报告目录，也不要给股价和技术指标。"
+    )
+    plan = ResearchPlanService().build(
+        "你刚才说了很多数据，真正值得我改变判断的是哪两三件？"
+        "哪些只是会计口径、报告期错位或者短期节奏？别重复整份财报。",
+        conversation_history=[
+            {"role": "user", "content": first_question},
+            {"role": "assistant", "content": "上一轮回答"},
+        ],
+    )
+
+    assert plan["focus"] == "quality_review"
+    assert plan["primary_focus"] == "quality_review"
+    assert plan["contextual_followup"] is True
+    assert plan["effective_question"].startswith(first_question)
+    assert "market" not in plan["selected_modules"]
+    assert "analyst_expectations" not in plan["selected_modules"]
+
+
+def test_shareholder_topic_switch_drops_negated_financial_scope_and_market():
+    plan = ResearchPlanService().build(
+        "那先不谈财报了，股东结构最近有没有值得注意的变化？"
+        "只说真实披露，也不要重复刚才的财务数据。"
+    )
+
+    assert plan["focus"] == "shareholder"
+    assert plan["selected_modules"] == ["shareholder_structure"]
+    assert plan["selected_skills"] == [
+        "shareholder-structure",
+        "evidence-debate",
+    ]
+
+
 def test_quality_review_correction_keeps_question_scoped_plan() -> None:
     plan = ResearchPlanService().build(
         "请重新核对经营改善候选：投资者关系记录表已明确写出"

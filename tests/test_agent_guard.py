@@ -11543,6 +11543,127 @@ def test_quality_review_rejects_missing_sales_cash_values_and_all_product_claim(
     )
 
 
+def test_quality_review_accepts_two_period_cashflow_amounts_without_repeating_yoy():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "display_name": "中兴通讯",
+        "research_plan": {"focus": "quality_review"},
+        "earnings_quality": {
+            "comparable_report": {
+                "operating_cashflow_to_net_profit": 0.7546,
+            }
+        },
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "operating_cashflow": -1_978_648_000,
+                "comparable_operating_cashflow": 1_851_253_000,
+                "operating_cashflow_change_pct": -206.882,
+                "operating_cashflow_to_net_profit": -1.51,
+                "comparable_operating_cashflow_to_net_profit": 0.755,
+                "cash_received_from_sales_to_revenue_pct": 95.96,
+                "comparable_cash_received_from_sales_to_revenue_pct": 106.245,
+            }
+        },
+    }
+    answer = (
+        "中兴通讯经营现金流从上年同期18.51亿元净流入变为本期"
+        "净流出19.79亿元；经营现金流与归母净利润比率从0.75变为"
+        "-1.51，销售收现率从106.245%降至95.96%。这些口径需要分别理解。"
+    )
+
+    assert stock_specialist_relevance_issue(answer, evidence) is None
+
+
+def test_quality_review_numeric_guard_accepts_evidenced_sales_cash_100pct_crossing():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "display_name": "中兴通讯",
+        "research_plan": {"focus": "quality_review"},
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "cash_received_from_sales_to_revenue_pct": 95.96,
+                "comparable_cash_received_from_sales_to_revenue_pct": 106.245,
+            }
+        },
+    }
+
+    supported = AgentService._validate_model_output(
+        "销售收现率从106.245%降至95.96%，已经跌破100%。",
+        evidence,
+    )
+    no_crossing_evidence = {
+        **evidence,
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "cash_received_from_sales_to_revenue_pct": 95.96,
+                "comparable_cash_received_from_sales_to_revenue_pct": 96.0,
+            }
+        },
+    }
+    no_crossing = AgentService._validate_model_output(
+        "销售收现率从96%降至95.96%，已经跌破100%。",
+        no_crossing_evidence,
+    )
+    unrelated_metric = AgentService._validate_model_output(
+        "毛利率已经跌破100%。",
+        evidence,
+    )
+
+    assert supported["unsupported_numbers"] == []
+    assert no_crossing["unsupported_numbers"] == ["100%"]
+    assert unrelated_metric["unsupported_numbers"] == ["100%"]
+
+
+def test_quality_review_repair_keeps_ratios_when_removing_cash_mismatch_label():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "display_name": "中兴通讯",
+        "research_plan": {"focus": "quality_review"},
+        "earnings_quality": {
+            "comparable_report": {
+                "operating_cashflow_to_net_profit": 0.7546,
+            }
+        },
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "operating_cashflow": -1_978_648_000,
+                "comparable_operating_cashflow": 1_851_253_000,
+                "operating_cashflow_change_pct": -206.882,
+                "operating_cashflow_to_net_profit": -1.51,
+                "comparable_operating_cashflow_to_net_profit": 0.755,
+                "cash_received_from_sales_to_revenue_pct": 95.96,
+                "comparable_cash_received_from_sales_to_revenue_pct": 106.245,
+            }
+        },
+    }
+    answer = (
+        "中兴通讯经营现金流从上年同期净流入18.51亿元变为本期净流出"
+        "19.79亿元。经营现金流与归母净利润的比率变成负的1.51倍，去年同期"
+        "是0.75倍，说明利润与现金之间出现了严重错位。经营现金流恶化，"
+        "公司在报告里也做了解释：主要因为销售商品收到的现金减少，以及购买"
+        "商品支付的现金增加。同时，销售收现率从106.245%降至95.96%，"
+        "回款速度变慢。三项指标指向了同一个方向——回款和付款节奏在本季度"
+        "出现了变化，但具体原因还不能确认。"
+    )
+
+    repaired = repair_quality_review_answer(answer, evidence)
+
+    assert repaired is not None
+    assert "负的1.51" in repaired
+    assert "0.75" in repaired
+    assert "95.96%" in repaired
+    assert "销售商品收到的现金减少" in repaired
+    assert "购买商品支付的现金增加" in repaired
+    assert "严重错位" not in repaired
+    assert "回款速度变慢" not in repaired
+    assert "指向了同一个方向" not in repaired
+    assert "回款和付款节奏" not in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+
+
 def test_quality_review_numeric_repair_keeps_cashflow_fact_paragraph():
     evidence = {
         "type": "stock_research",

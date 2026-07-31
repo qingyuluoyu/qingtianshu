@@ -2516,6 +2516,7 @@ def compact_stock_research_evidence(
             )
 
     if focus == "quality_review":
+        quality_question = str(evidence.get("user_question") or "")
         # 经营改善质量只需要披露、财务、现金流驱动和主营结构。
         # 当前报价、技术指标、同行估值和分析师预期既会显著放大 Prompt，
         # 也容易诱导模型把股价表现或市场定价当作经营改善的证据。
@@ -2688,10 +2689,52 @@ def compact_stock_research_evidence(
 
         compact_business = compact.get("business_structure") or {}
         if compact_business:
+            requested_business_dimensions = {"product"}
+            if any(
+                term in quality_question
+                for term in ("地区", "区域", "国内", "中国区", "海外", "境外")
+            ):
+                requested_business_dimensions.add("region")
+            available_business_dimensions = {
+                str(item.get("classification") or "")
+                for item in (compact_business.get("dimensions") or [])
+            }
+            if "product" not in available_business_dimensions:
+                requested_business_dimensions.add("region")
             dimensions = []
             for dimension in compact_business.get("dimensions") or []:
-                if dimension.get("classification") not in {"product", "region"}:
+                if (
+                    dimension.get("classification")
+                    not in requested_business_dimensions
+                ):
                     continue
+                segments = []
+                for item in (dimension.get("segments") or [])[:4]:
+                    compact_segment = select(
+                        item,
+                        (
+                            "item_name",
+                            "revenue_share_pct",
+                            "comparison_status",
+                            "comparable_revenue_share_pct",
+                            "revenue_share_change_pp",
+                        ),
+                    )
+                    if (
+                        item.get("gross_margin_pct") is not None
+                        and item.get("comparable_gross_margin_pct") is not None
+                    ):
+                        compact_segment.update(
+                            select(
+                                item,
+                                (
+                                    "gross_margin_pct",
+                                    "comparable_gross_margin_pct",
+                                    "gross_margin_change_pp",
+                                ),
+                            )
+                        )
+                    segments.append(compact_segment)
                 dimensions.append(
                     {
                         **select(
@@ -2704,22 +2747,7 @@ def compact_stock_research_evidence(
                                 "report_basis",
                             ),
                         ),
-                        "segments": [
-                            select(
-                                item,
-                                (
-                                    "item_name",
-                                    "revenue_share_pct",
-                                    "gross_margin_pct",
-                                    "comparison_status",
-                                    "comparable_revenue_share_pct",
-                                    "comparable_gross_margin_pct",
-                                    "revenue_share_change_pp",
-                                    "gross_margin_change_pp",
-                                ),
-                            )
-                            for item in (dimension.get("segments") or [])[:4]
-                        ],
+                        "segments": segments,
                     }
                 )
             compact["business_structure"] = {
@@ -2748,24 +2776,46 @@ def compact_stock_research_evidence(
             ]
             filing = compact_drivers.get("filing_evidence") or {}
             if filing:
-                explicit_explanations = list(
-                    filing.get("explicit_company_explanations") or []
+                source_filing = (
+                    (evidence.get("financial_drivers") or {}).get(
+                        "filing_evidence"
+                    )
+                    or {}
                 )
-                question = str(evidence.get("user_question") or "")
+                explicit_explanations = list(
+                    source_filing.get("explicit_company_explanations")
+                    or filing.get("explicit_company_explanations")
+                    or []
+                )
                 if not any(
-                    term in question for term in ("其他收益", "投资收益", "公允价值")
+                    term in quality_question
+                    for term in ("其他收益", "投资收益", "公允价值")
                 ):
+                    allowed_explanation_themes = {
+                        "financial_expense_fx_interest",
+                        "operating_cashflow",
+                    }
+                    if any(term in quality_question for term in ("存货", "库存")):
+                        allowed_explanation_themes.add("inventory")
                     explicit_explanations = [
                         item
                         for item in explicit_explanations
-                        if item.get("theme") == "financial_expense_fx_interest"
+                        if item.get("theme") in allowed_explanation_themes
                         or any(
                             term
                             in " ".join(
                                 str(item.get(key) or "")
                                 for key in ("theme", "label", "statement", "excerpt")
                             )
-                            for term in ("财务费用", "汇兑", "外币", "利息")
+                            for term in (
+                                "财务费用",
+                                "汇兑",
+                                "外币",
+                                "利息",
+                                "经营现金流",
+                                "经营活动产生的现金流量净额",
+                                "销售商品、提供劳务收到的现金",
+                            )
                         )
                     ]
                 filing["explicit_company_explanations"] = explicit_explanations[:2]

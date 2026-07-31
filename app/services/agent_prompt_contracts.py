@@ -25,6 +25,28 @@ def _asks_for_reassessment_conditions(value: Any) -> bool:
     )
 
 
+def _asks_for_natural_conversation_style(value: Any) -> bool:
+    text = str(value or "").replace(" ", "")
+    return any(
+        term in text
+        for term in (
+            "像分析师和我聊天",
+            "像分析师聊天",
+            "像继续聊天",
+            "直接和我讲",
+            "直接跟我讲",
+            "不要写成报告目录",
+            "别写成报告目录",
+            "不要写成报告",
+            "别写成报告",
+            "不要列清单",
+            "别列清单",
+            "不要小标题",
+            "别加小标题",
+        )
+    )
+
+
 def append_prompt_contracts(
     prompt: str,
     *,
@@ -61,6 +83,11 @@ def append_prompt_contracts(
         intent == "stock_research"
         and research_plan.get("contextual_followup")
         and research_plan.get("primary_focus") == "price_cause"
+    )
+    focused_quality_followup = bool(
+        intent == "stock_research"
+        and research_plan.get("contextual_followup")
+        and research_plan.get("primary_focus") == "quality_review"
     )
     price_move_question = intent == "stock_research" and (
         _is_stock_price_move_question(message) or focused_stock_price_followup
@@ -795,6 +822,9 @@ PE TTM/PB 和同行中位数；相对比例不是必答项，不必逐家公司�
 空缺”。同时要保留证据边界：管理层表述能确认公司口径，但若没有金额拆分、分类明细或外部证据，
 不能据此确认解释的完整性、量化贡献或独立真实性。例如原文写明“库存增加主要是为下半年市场需求
 而提前备货”时，应直接引用这句话，再说明尚未取得库存分类、库龄、订单覆盖和跌价准备的量化验证。
+如果 filing_evidence 已给出经营现金流变化的公司原文解释，例如销售商品收到的现金减少、购买商品
+支付的现金增加，正文必须如实引用为公司口径；不得再写公司没有解释经营现金流转负，也不能把这句
+解释扩大成客户回款恶化、供应商挤兑或原因已经完整量化。
 stock_workspace_context.research_entry.industry 只是筛选入口的行业标签。没有同报告期同行经营数据时，
 要直接说明当前不能判断改善质量是否优于行业，不能用公司分部毛利率代替行业比较。
 
@@ -1352,6 +1382,23 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 不能排除其他公司特定因素。不能确认项中不要再举“是否提前消化解禁、是否纯粹资金行为、是否有人
 提前交易”等替代猜测，也不要用反问句列出新的原因候选。
 """
+    if focused_quality_followup:
+        prompt += """
+
+## 财报质量连续追问最后核对
+
+这是上一轮财报质量分析的继续，不是重写一份完整财报。用户现在问的是：哪些事实真的会改变
+当前判断，哪些只是报表口径、报告期错位或尚未确认持续性的短期变化。只选择两到三项最能改变
+理解的事实，并把“事实已经发生”和“原因或持续性尚未确认”放在同一段说明。
+
+不得把经营现金流/归母净利润比率改写成利润有无现金支撑、是否兑现、是否落袋或是否为账面数字；
+经营现金流净额、销售商品收到的现金和销售收现率必须保持为三个不同口径。汇兑损益可以说明本期
+财务费用的公司解释，但不能因此断言它不属于经营判断、可以忽略或必然会反转。年报或中报主营
+分部只能作为最近可得业务底盘，报告期与一季报不同就不能直接解释当季利润变化。
+
+不要复述上一轮所有数字，不增加新的估值、股价、技术指标、分析师评级或完整风险清单。最后只说
+下一份报告中哪一两项证据最可能改变当前判断，不预设结论。
+"""
     if intent == "market_brief" and market_cross_date_cause_question:
         prompt += """
 
@@ -1393,5 +1440,16 @@ return_1d_pct 成对表达；至少覆盖上证、深证、创业板和科创50�
 MA20 不是市场平均持仓成本，也不能推出抛压、压力或市场是否接受某个价格。不计算均线点数距离，
 不写“被均线压住、挡回来”，也不增加成交额、资讯、第三个变量、未来天数或通过门槛。
 回答必须以完整句子结束。
+"""
+    if _asks_for_natural_conversation_style(message):
+        prompt += """
+
+## 本轮自然对话表达要求
+
+用户明确要的是分析师式的自然交流，而不是报告目录。保留必要的报告期、金额、比例、公司原文和
+证据边界，但用连贯自然段组织；不要使用 Markdown 小标题、加粗标签、编号、项目符号或“下面说
+几点”等清单式开场。第一句直接给判断，不说“好，我们直接聊”“按你的要求”之类元话语。
+篇幅由证据决定，不为了简短删除关键事实，也不为了显得专业重复同一组数字。每一段都应推进判断：
+事实是什么、它改变了什么、还有什么不能由当前证据推出。
 """
     return prompt

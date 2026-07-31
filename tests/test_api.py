@@ -2318,9 +2318,10 @@ def test_earnings_quality_api_and_chat_routing(client):
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["intent"] == "earnings_quality"
+    assert payload["intent"] == "stock_research"
     assert payload["status"] == "preview"
     assert payload["evidence"]["symbol"] == "000063.SZ"
+    assert payload["evidence"]["research_plan"]["focus"] == "quality_review"
     assert "财报质量" in payload["answer"]
     assert payload["assistant_message_id"]
 

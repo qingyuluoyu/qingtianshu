@@ -1228,6 +1228,27 @@ def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_p
                         "title": "2026年第一季度报告",
                         "report_period": "2026-03-31",
                     },
+                    "explicit_company_explanations": [
+                        {
+                            "theme": "financial_expense_fx_interest",
+                            "excerpt": "财务费用增加主要因汇兑损失。",
+                        },
+                        {
+                            "theme": "inventory",
+                            "excerpt": "存货增加主要因备货。",
+                        },
+                        {
+                            "theme": "operating_cashflow",
+                            "excerpt": (
+                                "经营现金流变化主要因销售商品收到的现金减少及"
+                                "购买商品支付的现金增加。"
+                            ),
+                        },
+                        {
+                            "theme": "other_income_investment_fair_value",
+                            "excerpt": "投资收益增加。",
+                        },
+                    ],
                     "unresolved_themes": ["增长来源仍需公司原文解释"],
                 },
             },
@@ -1237,7 +1258,23 @@ def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_p
                     {
                         "classification": "product",
                         "segments": [
-                            {"item_name": "云计算产品", "revenue_share_pct": 50.0}
+                            {
+                                "item_name": "云计算产品",
+                                "revenue_share_pct": 50.0,
+                                "gross_margin_pct": None,
+                                "comparable_gross_margin_pct": 12.0,
+                            }
+                        ],
+                    },
+                    {
+                        "classification": "region",
+                        "segments": [
+                            {
+                                "item_name": "中国区",
+                                "revenue_share_pct": 70.0,
+                                "gross_margin_pct": 8.0,
+                                "comparable_gross_margin_pct": 10.0,
+                            }
                         ],
                     },
                     {
@@ -1295,6 +1332,9 @@ def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_p
     assert compact["business_structure"]["dimensions"][0]["segments"][0][
         "item_name"
     ] == "云计算产品"
+    assert "comparable_gross_margin_pct" not in compact["business_structure"][
+        "dimensions"
+    ][0]["segments"][0]
     assert len(compact["business_structure"]["dimensions"]) == 1
     assert "不等于结构优化" in compact["business_structure"][
         "quality_review_boundary"
@@ -1303,6 +1343,16 @@ def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_p
         item["key"] != "gross_profit_revenue_scale_effect"
         for item in compact["financial_drivers"]["confirmed_mechanical_drivers"]
     )
+    explanation_themes = {
+        item["theme"]
+        for item in compact["financial_drivers"]["filing_evidence"][
+            "explicit_company_explanations"
+        ]
+    }
+    assert explanation_themes == {
+        "financial_expense_fx_interest",
+        "operating_cashflow",
+    }
     assert "event_timeline" not in compact
     announcements = compact["a_share_information"]["announcements"]
     assert announcements[0]["title"] == "2026年投资者关系活动记录表"

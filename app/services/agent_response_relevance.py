@@ -421,6 +421,19 @@ def _quality_review_number_mentioned(text: str, value: Any) -> bool:
     for variant in sorted(variants, key=len, reverse=True):
         if variant and re.search(rf"(?<!\d){re.escape(variant)}(?!\d)", normalized):
             return True
+    if number < 0:
+        magnitude_variants: set[str] = set()
+        for decimal_places in (1, 2, 3):
+            formatted = f"{abs(number):.{decimal_places}f}"
+            magnitude_variants.add(formatted)
+            magnitude_variants.add(formatted.rstrip("0").rstrip("."))
+        for variant in sorted(magnitude_variants, key=len, reverse=True):
+            if variant and re.search(
+                rf"(?:负(?:的)?|负值(?:为|是)?|为负(?:的)?)"
+                rf"[^。；！？\n\d]{{0,4}}(?<!\d){re.escape(variant)}(?!\d)",
+                normalized,
+            ):
+                return True
     return False
 
 
@@ -639,24 +652,47 @@ def quality_review_required_fact_issue(
 
     cashflow = (evidence.get("financial_drivers") or {}).get("cashflow_analysis") or {}
     operating_cashflow = cashflow.get("operating_cashflow")
+    comparable_operating_cashflow = cashflow.get("comparable_operating_cashflow")
     operating_cashflow_pct = cashflow.get("operating_cashflow_change_pct")
     if operating_cashflow is not None and operating_cashflow_pct is not None:
         amount_yi = float(operating_cashflow) / 100_000_000
+        comparable_amount_yi = (
+            float(comparable_operating_cashflow) / 100_000_000
+            if comparable_operating_cashflow is not None
+            else None
+        )
+        has_change_context = _quality_review_number_mentioned(
+            text, operating_cashflow_pct
+        ) or (
+            comparable_amount_yi is not None
+            and _quality_review_number_mentioned(text, comparable_amount_yi)
+        )
         if not (
             "经营现金流" in text
-            and _quality_review_number_mentioned(text, amount_yi)
-            and _quality_review_number_mentioned(text, operating_cashflow_pct)
+            and _directional_amount_mentioned(text, amount_yi)
+            and has_change_context
         ):
             return "经营改善回答遗漏经营现金流金额或同比变化"
 
     current_coverage = cashflow.get("operating_cashflow_to_net_profit")
     comparable_coverage = cashflow.get("comparable_operating_cashflow_to_net_profit")
     if current_coverage is not None and comparable_coverage is not None:
+        comparable_coverage_values = [comparable_coverage]
+        raw_comparable_coverage = (
+            (evidence.get("earnings_quality") or {})
+            .get("comparable_report", {})
+            .get("operating_cashflow_to_net_profit")
+        )
+        if raw_comparable_coverage is not None:
+            comparable_coverage_values.append(raw_comparable_coverage)
         if not (
             "经营现金流" in text
             and "归母净利润" in text
             and _quality_review_number_mentioned(text, current_coverage)
-            and _quality_review_number_mentioned(text, comparable_coverage)
+            and any(
+                _quality_review_number_mentioned(text, value)
+                for value in comparable_coverage_values
+            )
         ):
             return "经营改善回答遗漏经营现金流与归母净利润的两期比率"
 
@@ -3193,6 +3229,24 @@ def normalize_quality_review_language(text: str) -> str:
             "这两项差异是本轮最重要的反方事实，具体原因仍需核验",
         ),
         (
+            r"说明利润与现金之间出现了严重错位",
+            "两期比率方向不同，但该比率不能替代对经营现金流金额、销售收现和营运资金的判断",
+        ),
+        (
+            r"回款速度变慢",
+            "销售收现率下降，具体原因尚未确认",
+        ),
+        (
+            r"利润的质量缺少现实验证",
+            "利润与经营现金流的口径差异仍需核验",
+        ),
+        (
+            r"换句话说，收入在扩张，但赚到手的利润和实际收回来的现金都在缩水，"
+            r"这是这份财报最值得警惕的地方",
+            "收入增长、归母净利润下降，经营现金流由净流入转为净流出，"
+            "这是本期最需要核验的反方事实",
+        ),
+        (
             r"(?<!最重要的反方事实是)(利润(?:同比)?增速(?:明显)?快于经营现金流)",
             r"最重要的反方事实是\1",
         ),
@@ -3224,6 +3278,24 @@ def normalize_quality_review_language(text: str) -> str:
         (
             r"(?:这三项|三项|这些)线索提示回款和营运资金占用可能在加大",
             "三项指标口径不同，具体原因尚未确认",
+        ),
+        (
+            r"(?:这)?三项指标方向(?:虽)?一致",
+            "三项指标口径不同",
+        ),
+        (
+            r"经营现金流(?:恶化|转弱|承压)，公司在报告里也做了解释："
+            r"主要因为销售商品收到的现金减少，以及购买商品支付的现金增加",
+            "经营现金流由净流入转为净流出，公司口径解释为销售商品收到的现金减少、"
+            "购买商品支付的现金增加",
+        ),
+        (
+            r"三项指标指向了同一个方向——回款和付款节奏在本季度出现了变化",
+            "三项指标口径不同，分别反映经营现金流净额、利润覆盖和销售收现",
+        ),
+        (
+            r"三项叠加说明当前的增长并没有带来更好的盈利质量和现金回报",
+            "这些差异不能合并推断具体经营原因",
         ),
         (
             r"也就是说，营业收入增长很快，但利润率、现金覆盖和销售回款匹配度"
@@ -3298,7 +3370,7 @@ def repair_quality_review_answer(answer: str, evidence: dict[str, Any]) -> str |
             if repaired.startswith("改善质量")
             else f"{subject}：{repaired}"
         )
-    if len(repaired) < 180 or len(repaired) < len(original) * 0.45:
+    if len(repaired) < 80 or len(repaired) < len(original) * 0.45:
         return None
     if quality_review_overclaim_issue(repaired) is not None:
         return None
