@@ -12,7 +12,9 @@ def _filter_knowledge_context(
     symbol: str | None,
     evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    items = list(context.get("items") or [])
+    original_items = list(context.get("items") or [])
+    items = list(original_items)
+    attached_document_id = context.get("attached_document_id")
     research_focus = str(
         (((evidence or {}).get("research_plan") or {}).get("focus") or "")
     )
@@ -247,6 +249,20 @@ def _filter_knowledge_context(
                 if canonical
                 else str(item.get("source_key") or "").startswith("research-outcome:")
             )
+        ]
+    if attached_document_id:
+        attached_items = [
+            item
+            for item in original_items
+            if item.get("document_id") == attached_document_id
+        ]
+        items = [
+            *attached_items,
+            *[
+                item
+                for item in items
+                if item.get("document_id") != attached_document_id
+            ],
         ]
     coverage = dict(context.get("coverage") or {})
     coverage["matched_documents"] = len(items)

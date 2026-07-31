@@ -198,6 +198,22 @@ def test_document_uploads_enter_private_knowledge_flow(client, app) -> None:
         for item in chat.json()["knowledge"]["items"]
     )
 
+    attached_chat = client.post(
+        "/me/chat",
+        json={
+            "message": "总结这份附件",
+            "execute_agent": False,
+            "document_id": uploaded[1]["id"],
+        },
+    )
+    assert attached_chat.status_code == 200, attached_chat.text
+    attached_payload = attached_chat.json()
+    assert attached_payload["intent"] == "general_research"
+    assert any(
+        item["document_id"] == uploaded[1]["id"] and item["attached"] is True
+        for item in attached_payload["knowledge"]["items"]
+    )
+
     removed = uploaded[0]
     assert client.delete(f"/me/knowledge/{removed['id']}").status_code == 204
     source_path = (

@@ -1022,7 +1022,7 @@
             <textarea id="chatInput" placeholder="输入研究问题；Enter 发送，Shift+Enter 换行"></textarea>
             <div id="imageAttachment" class="image-attachment" hidden>
               <span id="imageAttachmentName" class="image-attachment-name"></span>
-              <button id="removeImage" class="image-remove" type="button" aria-label="移除图片">×</button>
+              <button id="removeImage" class="image-remove" type="button" aria-label="移除附件">×</button>
             </div>
             <div class="composer-row">
               <div class="model-tools">
@@ -1035,8 +1035,8 @@
                 <label id="useHermesLabel" class="model-toggle" hidden>
                   <input id="useHermes" type="checkbox"> AI 深度解读
                 </label>
-                <button id="attachImage" class="btn attach-image" type="button" disabled>⊕ 添加图片</button>
-                <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+                <button id="attachImage" class="btn attach-image" type="button" disabled>⊕ 添加附件</button>
+                <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,.pdf,.docx,.xlsx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
               </div>
               <button id="sendButton" class="btn primary" type="submit">发送</button>
             </div>

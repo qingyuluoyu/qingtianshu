@@ -41,6 +41,10 @@ class ChatUploadExpired(LookupError):
     pass
 
 
+class ChatDocumentNotFound(LookupError):
+    pass
+
+
 @dataclass(slots=True)
 class PreparedChatContext:
     message: str
@@ -70,6 +74,7 @@ class PreparedChatContext:
     analyst_expectations_context: bool
     event_timeline_context: bool
     upload: dict[str, Any] | None
+    attached_document: dict[str, Any] | None
     image_path: str | None
     model_tier: str
     knowledge_context: dict[str, Any]
@@ -427,6 +432,7 @@ class ChatRequestContextService:
         requested_symbol: str | None,
         image_id: str | None,
         model_tier: str,
+        document_id: str | None = None,
     ) -> PreparedChatContext:
         message = message.strip()
         if conversation_id:
@@ -568,6 +574,18 @@ class ChatRequestContextService:
             self.database.mark_user_upload_used(user_id, image_id)
             resolved_model_tier = "vision"
 
+        attached_document: dict[str, Any] | None = None
+        if document_id:
+            attached_document = self.database.get_knowledge_document(
+                user_id, document_id
+            )
+            if (
+                attached_document is None
+                or attached_document.get("scope") != "user"
+                or str(attached_document.get("owner_user_id") or "") != user_id
+            ):
+                raise ChatDocumentNotFound
+
         (
             knowledge_query,
             required_knowledge_sources,
@@ -584,12 +602,32 @@ class ChatRequestContextService:
             analyst_expectations_context=analyst_expectations_context,
             event_timeline_context=event_timeline_context,
         )
+        if attached_document is not None:
+            required_knowledge_sources = list(
+                dict.fromkeys(
+                    [
+                        str(attached_document.get("source_key") or ""),
+                        *(required_knowledge_sources or []),
+                    ]
+                )
+            )
+            required_knowledge_sources = [
+                item for item in required_knowledge_sources if item
+            ]
+            knowledge_max_results = min(
+                6, max(knowledge_max_results, len(required_knowledge_sources) + 1)
+            )
         knowledge_context = self.knowledge.retrieve(
             user_id,
             knowledge_query,
             max_results=knowledge_max_results,
             required_source_keys=required_knowledge_sources,
         )
+        if attached_document is not None:
+            knowledge_context["attached_document_id"] = attached_document["id"]
+            for item in knowledge_context.get("items") or []:
+                if item.get("document_id") == attached_document["id"]:
+                    item["attached"] = True
         self.database.add_conversation_message(
             user_id=user_id,
             conversation_id=resolved_conversation_id,
@@ -597,6 +635,7 @@ class ChatRequestContextService:
             content=message,
             metadata={
                 "image_id": image_id,
+                "document_id": document_id,
                 "model_tier": resolved_model_tier,
             },
         )
@@ -629,6 +668,7 @@ class ChatRequestContextService:
             analyst_expectations_context=analyst_expectations_context,
             event_timeline_context=event_timeline_context,
             upload=upload,
+            attached_document=attached_document,
             image_path=image_path,
             model_tier=resolved_model_tier,
             knowledge_context=knowledge_context,
@@ -637,6 +677,7 @@ class ChatRequestContextService:
 
 __all__ = [
     "ChatConversationNotFound",
+    "ChatDocumentNotFound",
     "ChatRequestContextService",
     "ChatUploadExpired",
     "ChatUploadNotFound",

@@ -104,7 +104,13 @@ function connectServerEvents() {
 
     async function sendChat(message, options = {}) {
       const attachedImage = state.pendingImage;
-      const question = message.trim() || (attachedImage ? "请分析这张图片，并说明可验证的观察和不能确认的内容。" : "");
+      const attachedDocument = state.pendingDocument;
+      const question = message.trim()
+        || (attachedImage
+          ? "请分析这张图片，并说明可验证的观察和不能确认的内容。"
+          : attachedDocument
+          ? "请总结这份文档的核心信息、关键依据和需要进一步核验的内容。"
+          : "");
       if (!question) return;
       if (!state.workspaceBootReady && state.workspaceBootPromise) {
         $("sendButton").disabled = true;
@@ -124,7 +130,12 @@ function connectServerEvents() {
         ? (globalThis.crypto?.randomUUID?.() || `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`)
         : null;
       if (!options.reuseUserMessage) {
-        addMessage("user", attachedImage ? `已附加图片：${attachedImage.original_name}\n${question}` : question);
+        const attachmentLabel = attachedImage
+          ? `已附加图片：${attachedImage.original_name}\n`
+          : attachedDocument
+          ? `已附加文档：${attachedDocument.original_name}\n`
+          : "";
+        addMessage("user", `${attachmentLabel}${question}`);
       }
       const pending = addMessage(
         "agent",
@@ -143,7 +154,7 @@ function connectServerEvents() {
       $("sendButton").disabled = true;
       $("attachImage").disabled = true;
       try {
-        if (!directHermes) {
+        if (!directHermes && !attachedDocument) {
           renderAgentFailure(pending, question, null, false);
           return false;
         }
@@ -159,6 +170,7 @@ function connectServerEvents() {
             execute_agent: attachedImage ? true : directHermes,
             prefer_precomputed: false,
             image_id: attachedImage?.id || null,
+            document_id: attachedDocument?.id || null,
             conversation_id: state.conversationId,
             request_id: requestId,
             quality_scope: state.evaluationMode ? "evaluation" : "user"
@@ -168,7 +180,7 @@ function connectServerEvents() {
         if (state.workspacePage === "agent") syncWorkspaceUrl("replace");
         else if (stockAgentIsEmbedded()) syncWorkspaceUrl("replace");
         $("conversationTitle").textContent = data.conversation_title || $("conversationTitle").textContent;
-        if (attachedImage) clearImageAttachment();
+        if (attachedImage || attachedDocument) clearImageAttachment();
         const responseMetadata = {
           knowledgeSources: data.knowledge?.items || [],
           marketSources: data.evidence?.market_drivers?.items || [],
@@ -245,7 +257,7 @@ function connectServerEvents() {
         renderAgentResearchContext(state.agentContextMetadata, state.agentContextQuestion);
         $("sendButton").textContent = "发送";
         $("sendButton").disabled = false;
-        $("attachImage").disabled = state.imageUploading || !state.health?.hermes_enabled;
+        $("attachImage").disabled = state.imageUploading || state.documentUploading;
       }
     }
 

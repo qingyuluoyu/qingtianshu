@@ -5,6 +5,8 @@ const welcomeMessage = "你好，我是清数智算。你可以问市场、个�
       health: null,
       pendingImage: null,
       imageUploading: false,
+      pendingDocument: null,
+      documentUploading: false,
       conversationId: null,
       conversations: [],
       conversationMessages: [],

@@ -1,3 +1,18 @@
+FROM python:3.11-slim-bookworm AS hermes-runtime
+
+ARG HERMES_COMMIT=ab158e8088a847890057b75a63a951155ea93004
+
+RUN python -m venv /opt/hermes \
+    && /opt/hermes/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && mkdir -p /opt/hermes-agent \
+    && python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/NousResearch/hermes-agent/archive/${HERMES_COMMIT}.tar.gz', '/tmp/hermes-agent.tar.gz')" \
+    && tar --extract --gzip --file /tmp/hermes-agent.tar.gz \
+        --directory /opt/hermes-agent --strip-components=1 \
+    && /opt/hermes/bin/pip install --no-cache-dir --editable /opt/hermes-agent \
+    && rm -f /tmp/hermes-agent.tar.gz \
+    && /opt/hermes/bin/hermes --version
+
+
 FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -5,9 +20,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     QINGSHU_DATA_DIR=/data \
     BACKGROUND_JOBS_ENABLED=true \
     BACKGROUND_WORKER_MODE=external \
+    HERMES_HOME=/data/hermes \
+    HERMES_BIN=/opt/hermes/bin/hermes \
+    HERMES_PYTHON_BIN=/opt/hermes/bin/python \
     HERMES_ENABLED=false
 
 WORKDIR /app
+
+COPY --from=hermes-runtime /opt/hermes /opt/hermes
+COPY --from=hermes-runtime /opt/hermes-agent /opt/hermes-agent
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl \
