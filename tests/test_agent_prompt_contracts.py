@@ -133,6 +133,9 @@ def test_stock_price_move_detects_deep_causal_comparison_wording():
     assert "基本面是背景，近期直接驱动若无" in prompt
     assert "700—1100 个中文字" in prompt
     assert "最多使用两个自然小标题" in prompt
+    assert "主要推力、主导力量、决定了个股方向" in prompt
+    assert "证据不足时也不强行二选一" in prompt
+    assert "解释了为什么跑输、压制弹性" in prompt
     assert "账面利润未获验证" in prompt
     assert "特别针对" in prompt
     assert "结尾在当前分层结论处结束" in prompt
@@ -152,8 +155,9 @@ def test_market_followup_adds_short_final_quality_check():
     assert "旧的资讯标题不能被改造成未来观察指标" in prompt
     assert "不写权重托底、中小市值跟随或市场轮动" in prompt
     assert "不要使用小标题" in prompt
-    assert "口语化近似可以保留" in prompt
-    assert "不得使用喘息、超卖、卖压衰竭" in prompt
+    assert "不得再引用具体上涨下跌家数、比例或成交额" in prompt
+    assert "不增加第三项量能观察" in prompt
+    assert "不得使用单日修复、情绪回暖、持续性存疑" in prompt
 
 
 def test_stock_research_separates_official_and_media_sources_without_fixed_counts():
@@ -417,7 +421,13 @@ def test_market_risk_question_with_why_keeps_cause_contract_and_final_check():
     assert "最终只写四个自然短段落" in prompt
     assert "700—950 个中文字" in prompt
     assert "技术性回补、超跌反弹、抛压释放" in prompt
+    assert "情绪性逆转、单日修复、情绪整体回暖" in prompt
     assert "若今天的触发事件未取得" in prompt
+    assert "盘中时间序列" in prompt
+    assert "情绪释放式单日波动" in prompt
+    assert "不要自行添加“六大指数、四个核心指数”等固定数量标签" in prompt
+    assert "previous_return_1d_pct" in prompt
+    assert "不能只用“此前同步下跌”代替数字" in prompt
 
 
 def test_relative_industry_contract_hides_unselected_modules_and_fixed_day_thresholds():

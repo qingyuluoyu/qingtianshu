@@ -5,6 +5,7 @@ from statistics import mean, pstdev
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.services.live_market import previous_market_session_date
 from app.services.stock_price_move import (
     compact_stock_price_move_event_evidence,
     is_stock_price_move_question,
@@ -308,6 +309,59 @@ def compact_market_brief_evidence(
         compact_item["metrics"] = {
             key: metrics.get(key) for key in metric_keys if metrics.get(key) is not None
         }
+        if cross_date_comparison and target_market_date and interval == "1d":
+            recent_bars = list(item.get("recent_bars") or [])
+            item_market_key = str(item.get("group") or market_key)
+            timezone_name = {
+                "china": "Asia/Shanghai",
+                "hong_kong": "Asia/Hong_Kong",
+                "us": "America/New_York",
+                "europe": "Europe/London",
+                "japan": "Asia/Tokyo",
+                "korea": "Asia/Seoul",
+            }.get(item_market_key, "UTC")
+            target_index = next(
+                (
+                    index
+                    for index, bar in enumerate(recent_bars)
+                    if prompt_market_date(bar.get("timestamp"), timezone_name)
+                    == target_market_date
+                ),
+                None,
+            )
+            if target_index is not None and target_index >= 2:
+                previous_bar = recent_bars[target_index - 1]
+                previous_previous_bar = recent_bars[target_index - 2]
+                previous_date = prompt_market_date(
+                    previous_bar.get("timestamp"), timezone_name
+                )
+                previous_previous_date = prompt_market_date(
+                    previous_previous_bar.get("timestamp"), timezone_name
+                )
+                expected_previous_date = previous_market_session_date(
+                    item_market_key, target_market_date
+                )
+                expected_previous_previous_date = previous_market_session_date(
+                    item_market_key, previous_date
+                )
+                previous_close = previous_bar.get("close")
+                previous_previous_close = previous_previous_bar.get("close")
+                if (
+                    previous_date == expected_previous_date
+                    and previous_previous_date == expected_previous_previous_date
+                    and isinstance(previous_close, (int, float))
+                    and isinstance(previous_previous_close, (int, float))
+                    and previous_previous_close
+                ):
+                    compact_item["previous_market_date"] = previous_date
+                    compact_item["previous_return_1d_pct"] = round(
+                        (
+                            float(previous_close) / float(previous_previous_close)
+                            - 1
+                        )
+                        * 100,
+                        4,
+                    )
         latest_close = metrics.get("latest_close")
         moving_average_keys = (
             ()
@@ -453,6 +507,13 @@ def compact_market_brief_evidence(
             )
             if date_alignment.get(key) is not None
         }
+        visible_available_indices = sum(
+            item.get("status") != "unavailable" for item in compact_indices
+        )
+        if "available_indices" in compact["date_alignment"]:
+            compact["date_alignment"]["available_indices"] = visible_available_indices
+        if "aligned_indices" in compact["date_alignment"]:
+            compact["date_alignment"]["aligned_indices"] = visible_available_indices
     if question_focus:
         compact["question_focus"] = {
             key: question_focus.get(key)
@@ -471,6 +532,10 @@ def compact_market_brief_evidence(
                 for key in (
                     "label",
                     "whole_market_breadth_available",
+                    "whole_market_breadth_state",
+                    "whole_market_advancers",
+                    "whole_market_decliners",
+                    "whole_market_unchanged",
                 )
                 if compact["market_state"].get(key) is not None
             }

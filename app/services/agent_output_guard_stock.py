@@ -495,6 +495,13 @@ def _stock_current_quote_conflicts(
         "完整日线",
         "历史日线",
         "前日",
+        "前一天",
+        "昨天",
+        "昨日",
+        "此前",
+        "近期",
+        "最近几个交易日",
+        "最近几日",
     )
     for raw_line in re.split(r"(?<=[。！？；])|\n", answer):
         line = raw_line.strip()
@@ -1348,6 +1355,16 @@ def _stock_industry_counts_required_but_missing(
 def _stock_component_source_boundary_required_but_missing(
     answer: str, evidence: dict[str, Any]
 ) -> bool:
+    question = str(evidence.get("user_question") or "")
+    boundary_is_relevant = any(
+        term in question
+        for term in ("数据源", "行情源", "未复权", "复权", "口径", "除权除息")
+    ) or any(
+        term in answer
+        for term in ("估算贡献", "静态贡献")
+    )
+    if not boundary_is_relevant:
+        return False
     industry_index = (evidence.get("stock_market_context") or {}).get(
         "exact_industry_index"
     ) or {}

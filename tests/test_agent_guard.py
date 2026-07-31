@@ -2269,9 +2269,14 @@ def test_output_guard_rejects_reversed_community_sentiment_direction():
     invalid = AgentService._validate_model_output(
         "社区讨论情绪转负，这解释了下跌。", evidence
     )
+    negated = AgentService._validate_model_output(
+        "社区样本轻微偏多，无明确负面声音，但只能作为弱证据。", evidence
+    )
 
     assert valid["passed"] is True
     assert valid["semantic_conflicts"] == []
+    assert negated["passed"] is True
+    assert negated["semantic_conflicts"] == []
     assert invalid["passed"] is False
     assert invalid["semantic_conflicts"] == ["社区情绪方向与证据不一致：证据为轻微偏多"]
 
@@ -3753,6 +3758,36 @@ def test_guard_repair_renumbers_lists_after_dropping_unsupported_lines():
     assert "1. 保留10" in repaired_answer
     assert "2. 继续保留10" in repaired_answer
     assert "3. 继续保留10" not in repaired_answer
+    assert repaired_guard["passed"] is True
+
+
+def test_guard_repair_drops_only_bad_sentence_in_market_paragraph():
+    repaired = AgentService._repair_guard_failure(
+        "此前主要指数同步下跌，最大跌幅4.12%。"
+        "触发今天上涨的直接原因仍未确认，现有资讯标题只能作为待核验线索。\n\n"
+        "今天主要指数全部上涨，价格和方向的反差已经确认。"
+        "但在取得同日政策、宏观或行业事件之前，不能把讨论热度改写成直接原因。",
+        {
+            "type": "market_brief",
+            "indices": [
+                {"name": "上证综指", "metrics": {"return_1d_pct": 0.72}},
+                {"name": "深证成指", "metrics": {"return_1d_pct": 2.21}},
+            ],
+        },
+        {
+            "unsupported_numbers": ["4.12%"],
+            "unsupported_market_inferences": [],
+            "private_operational_patterns": [],
+            "prohibited_patterns": [],
+            "semantic_conflicts": [],
+        },
+    )
+
+    assert repaired is not None
+    repaired_answer, repaired_guard = repaired
+    assert "4.12%" not in repaired_answer
+    assert "触发今天上涨的直接原因仍未确认" in repaired_answer
+    assert "今天主要指数全部上涨" in repaired_answer
     assert repaired_guard["passed"] is True
 
 
@@ -5865,6 +5900,21 @@ def test_market_guard_requires_explicit_failure_conditions_when_asked():
     ]
 
 
+def test_market_guard_accepts_natural_reassessment_language():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "今天为什么和昨天反差这么大，什么时候需要重新判断？",
+        "indices": [],
+    }
+
+    guard = AgentService._validate_model_output(
+        "后续要判断这个反差能否延续，接下来主要看两个观察点：广度和均线。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
 def test_stock_guard_rejects_invented_failure_thresholds_and_report_windows():
     evidence = {
         "type": "stock_research",
@@ -6231,6 +6281,32 @@ def test_stock_guard_accepts_current_quote_with_prior_daily_bar_distinction():
     )
 
     assert guard["passed"] is True
+
+
+def test_stock_guard_accepts_historical_weakness_in_sentence_mentioning_today():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯今天为什么涨？",
+        "metrics": {"latest_close": 33.73, "return_1d_pct": -6.31},
+        "provenance": {"market_timestamp": "2026-07-20T01:30:00+00:00"},
+        "current_quote": {
+            "price": 34.88,
+            "pct_change": 3.41,
+            "market_timestamp": "2026-07-21T16:14:42+08:00",
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "当前报价34.88元，上涨3.41%。"
+        "前一天和近期几个交易日的下跌，不能用来否定今天上涨的事实。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+    assert "今日涨跌方向必须与更新的当前报价一致" not in guard[
+        "unsupported_market_inferences"
+    ]
 
 
 def test_stock_guard_accepts_previous_complete_session_before_current_quote():
@@ -7685,6 +7761,8 @@ def test_stock_guard_requires_public_boundary_for_unadjusted_component_fallback(
 
     guard = AgentService._validate_model_output(answer, evidence)
     repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+    ordinary_evidence = {**evidence, "user_question": "今天为什么上涨？"}
+    ordinary_guard = AgentService._validate_model_output(answer, ordinary_evidence)
     safe = AgentService._validate_model_output(
         "贝特瑞（920185.BJ）使用新浪公开未复权日线补充；"
         "若目标日前后存在除权除息，其单日收益和静态贡献需要重新核对。",
@@ -7754,6 +7832,10 @@ def test_stock_guard_requires_public_boundary_for_unadjusted_component_fallback(
         "贝特瑞（920185.BJ）使用新浪公开未复权日线补充" in (combined_unsafe_repaired[0])
     )
     assert combined_unsafe_repaired[1]["passed"] is True
+    assert ordinary_guard["passed"] is True
+    assert "行业成分使用未复权补充行情时必须说明证券来源和除权边界" not in (
+        ordinary_guard["semantic_conflicts"]
+    )
 
 
 def test_component_source_appendix_summarizes_truncated_fallback_names():
@@ -8110,6 +8192,21 @@ def test_model_language_cleanup_hides_stock_market_context_fields():
     assert "与目标交易日不一致" in cleaned
     assert "low_to_medium" not in cleaned
     assert "较低至中等" in cleaned
+
+
+def test_model_language_cleanup_removes_accidentally_repeated_opening_passage():
+    opening = (
+        "今天A股与此前形成了非常明显的反差，主要指数从同步下跌转为全面上涨，"
+        "但同日资讯没有提供可确认的直接触发事件。"
+    )
+    answer = (
+        f"{opening}只能先确认价格和广度"
+        f"{opening}只能先确认价格和广度事实本身。\n\n第二段。"
+    )
+
+    cleaned = AgentService._clean_user_facing_model_language(answer)
+
+    assert cleaned == f"{opening}只能先确认价格和广度事实本身。\n\n第二段。"
 
 
 def test_model_language_cleanup_neutralizes_misleading_systemic_heading():
@@ -8673,6 +8770,22 @@ def test_market_reassessment_cleanup_removes_method_thresholds_and_short_windows
     assert "后续完整交易日" in cleaned
 
 
+def test_market_reassessment_cleanup_removes_duplicate_observation_language():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "今天普涨，什么时候需要重新判断？",
+        "indices": [{"metrics": {"ma20": 3904.0}}],
+    }
+    answer = (
+        "在接下来的完整交易日里，后续完整交易日里，"
+        "全市场上涨家数是否仍占明显优势是否延续。"
+    )
+
+    cleaned = agent_module._normalize_market_reassessment_language(answer, evidence)
+
+    assert cleaned == "后续完整交易日里，全市场上涨家数是否仍占明显优势。"
+
+
 def test_market_guard_rejects_wrong_index_count_ma5_and_wave_label():
     evidence = {
         "type": "market_brief",
@@ -8824,6 +8937,31 @@ def test_numeric_guard_accepts_natural_market_count_and_point_rounding():
 
     guard = AgentService._validate_model_output(
         "今天上涨4700多只、下跌不到800只；沪深300距20日均线约160点左右。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+    assert guard["unsupported_numbers"] == []
+
+
+def test_numeric_guard_accepts_previous_session_return_derived_from_recent_bars():
+    evidence = {
+        "type": "market_brief",
+        "indices": [
+            {
+                "name": "深证成指",
+                "metrics": {"return_1d_pct": 0.72},
+                "recent_bars": [
+                    {"timestamp": "2026-07-29", "close": 100.0},
+                    {"timestamp": "2026-07-30", "close": 97.27},
+                    {"timestamp": "2026-07-31", "close": 97.9703},
+                ],
+            }
+        ],
+    }
+
+    guard = AgentService._validate_model_output(
+        "深证成指昨天跌2.73%，今天涨0.72%。",
         evidence,
     )
 

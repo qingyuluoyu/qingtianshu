@@ -137,6 +137,10 @@ _REASSESSMENT_ANSWER_TERMS = (
     "需要重新评估",
     "当前判断需要重算",
     "必须重算当前判断",
+    "后续要判断",
+    "后续判断",
+    "接下来主要看",
+    "观察点",
 )
 _REASSESSMENT_REQUIRED_LABEL = (
     "用户明确询问何时需要重新判断时回答必须说明对应情况"
@@ -151,6 +155,26 @@ def _asks_for_reassessment_conditions(text: Any) -> bool:
 def _answer_explains_reassessment_conditions(text: Any) -> bool:
     normalized = str(text or "")
     return any(term in normalized for term in _REASSESSMENT_ANSWER_TERMS)
+
+
+def _has_asserted_sentiment_language(
+    text: str,
+    pattern: re.Pattern[str],
+    direction_terms: tuple[str, ...],
+) -> bool:
+    for match in pattern.finditer(text):
+        context = text[max(0, match.start() - 16) : match.end() + 8]
+        negated = any(
+            re.search(
+                rf"(?:无|没有|并无|未见|不存在|并未|不是|不算)"
+                rf"[^。；\n]{{0,8}}{re.escape(term)}",
+                context,
+            )
+            for term in direction_terms
+        )
+        if not negated:
+            return True
+    return False
 
 
 class AgentOutputGuard:
@@ -196,6 +220,18 @@ class AgentOutputGuard:
 
     @staticmethod
     def _clean_user_facing_model_language(answer: str) -> str:
+        leading_whitespace = answer[: len(answer) - len(answer.lstrip())]
+        stripped_answer = answer.lstrip()
+        first_paragraph, separator, remainder = stripped_answer.partition("\n\n")
+        if len(first_paragraph) >= 120:
+            opening_anchor = first_paragraph[:24]
+            repeated_at = first_paragraph.find(opening_anchor, 48)
+            if repeated_at >= 48:
+                first_paragraph = first_paragraph[repeated_at:]
+                stripped_answer = first_paragraph + (
+                    f"{separator}{remainder}" if separator else ""
+                )
+                answer = f"{leading_whitespace}{stripped_answer}"
         answer = re.sub(
             r"(?im)^(\s*(?:#{1,6}\s*)?(?:\*\*|__)?)失效条件"
             r"((?:\*\*|__)?\s*[：:]?)",
@@ -528,6 +564,30 @@ class AgentOutputGuard:
         if evidence.get("type") == "market_brief":
             for item in guard_evidence.get("indices") or []:
                 metrics = item.get("metrics") or {}
+                recent_bars = list(item.get("recent_bars") or [])
+                for previous_bar, current_bar in zip(
+                    recent_bars,
+                    recent_bars[1:],
+                ):
+                    previous_close = previous_bar.get("close")
+                    current_close = current_bar.get("close")
+                    if not (
+                        isinstance(previous_close, (int, float))
+                        and isinstance(current_close, (int, float))
+                        and previous_close
+                    ):
+                        continue
+                    adjacent_return = (
+                        float(current_close) / float(previous_close) - 1
+                    ) * 100
+                    derived_returns = {
+                        adjacent_return,
+                        round(adjacent_return, 1),
+                        round(adjacent_return, 2),
+                        round(adjacent_return, 4),
+                    }
+                    allowed_values.extend(derived_returns)
+                    allowed_magnitudes.extend(abs(value) for value in derived_returns)
                 latest = metrics.get("latest_close")
                 if not isinstance(latest, (int, float)):
                     continue
@@ -879,11 +939,19 @@ class AgentOutputGuard:
         information = evidence.get("a_share_information") or {}
         sentiment = information.get("sentiment") or {}
         sentiment_band = str(sentiment.get("band") or "")
-        if "偏多" in sentiment_band and _NEGATIVE_SENTIMENT_LANGUAGE_RE.search(answer):
+        if "偏多" in sentiment_band and _has_asserted_sentiment_language(
+            answer,
+            _NEGATIVE_SENTIMENT_LANGUAGE_RE,
+            ("转负", "偏空", "看空", "负面", "悲观"),
+        ):
             semantic_conflicts.append(
                 f"社区情绪方向与证据不一致：证据为{sentiment_band}"
             )
-        if "偏空" in sentiment_band and _POSITIVE_SENTIMENT_LANGUAGE_RE.search(answer):
+        if "偏空" in sentiment_band and _has_asserted_sentiment_language(
+            answer,
+            _POSITIVE_SENTIMENT_LANGUAGE_RE,
+            ("转正", "偏多", "看多", "正面", "乐观"),
+        ):
             semantic_conflicts.append(
                 f"社区情绪方向与证据不一致：证据为{sentiment_band}"
             )
@@ -2206,24 +2274,6 @@ class AgentOutputGuard:
                 line_tokens & unsupported
                 and not line_has_unsupported_inference
                 and not line_has_private_operation
-                and (
-                    evidence.get("type")
-                    in {
-                        "earnings_quality",
-                        "financial_drivers",
-                        "business_structure",
-                        "shareholder_structure",
-                        "analyst_expectations",
-                        "event_timeline",
-                    }
-                    or (
-                        evidence.get("type") == "stock_research"
-                        and str(
-                            (evidence.get("research_plan") or {}).get("focus") or ""
-                        )
-                        in {"quality_review", "valuation_review"}
-                    )
-                )
             ):
                 kept_clauses = []
                 for clause in re.split(r"(?<=[。！？；])", line):

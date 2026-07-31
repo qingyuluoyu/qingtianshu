@@ -261,9 +261,15 @@ def _normalize_market_reassessment_language(
             "",
             answer,
         )
-    answer = answer.replace(
-        "后续完整交易日里，后续完整交易日里，",
+    answer = re.sub(
+        r"(?:(?:在)?接下来的完整交易日里，|在?后续完整交易日里，)"
+        r"后续完整交易日里，",
         "后续完整交易日里，",
+        answer,
+    )
+    answer = answer.replace(
+        "全市场上涨家数是否仍占明显优势是否延续",
+        "全市场上涨家数是否仍占明显优势",
     )
     answer = re.sub(r"\n{3,}", "\n\n", answer)
     return answer.strip()
@@ -1698,9 +1704,9 @@ class AgentService:
 全面而罗列多个“不确定、可能、待确认”的猜测或资料缺口。只有用户明确追问原因、风险、
 缺失信息，或该缺口会直接改变结论时，才在结尾用一句自然中文说明最关键的证据边界；
 不得整段只返回“证据不足”，也不向用户解释系统运维原因。
-唯一例外是证据中的行业成分行情明确存在 source_fallbacks：此时这是指数估算方法边界，
-不是运维故障。必须用“某证券使用新浪公开未复权日线补充；若存在除权除息需重新核对”
-这种用户可理解的方式说明；不得输出 fallback_unadjusted_returns、source_attempts、reason_code
+证据中的行业成分行情若存在 source_fallbacks，只有用户明确询问数据口径，或正文实际使用
+成分静态贡献时，才用一句自然中文说明未复权行情需要核对除权除息；普通涨跌回答不主动追加
+数据口径脚注。任何情况下都不得输出 fallback_unadjusted_returns、source_attempts、reason_code
 等内部字段，也不得展开接口失败过程。
 数据库状态高于语言推断：如果证据的 status 是 candidate，必须明确说“尚未确认”，
 绝不能说已经长期记住、已经生效或以后一定会使用。

@@ -133,16 +133,29 @@ def test_market_risk_cause_query_prefers_deduplicated_causal_candidates():
             "type": "market_brief",
             "user_question": "今天为什么和昨天反差这么大，什么时候重新判断？",
             "question_focus": {"key": "market_risk"},
-            "analysis_target": {"market_date": "2026-07-30", "market_key": "china"},
+            "analysis_target": {"market_date": "2026-07-31", "market_key": "china"},
+            "market_state": {
+                "label": "偏强",
+                "whole_market_breadth_available": True,
+                "whole_market_breadth_state": "普涨",
+                "whole_market_advancers": 4690,
+                "whole_market_decliners": 728,
+                "whole_market_unchanged": 115,
+            },
+            "date_alignment": {
+                "status": "aligned",
+                "aligned_indices": 6,
+                "available_indices": 6,
+            },
             "indices": [
                     {
                         "name": "上证综指",
                         "group": "china",
-                        "market_date": "2026-07-30",
+                        "market_date": "2026-07-31",
                         "same_date_as_analysis_target": True,
                         "metrics": {
-                        "latest_close": 3804.69,
-                        "return_1d_pct": -0.62,
+                        "latest_close": 3836.51,
+                        "return_1d_pct": 0.84,
                         "return_20d_pct": -5.56,
                         "ma20": 3904.26,
                         "ma60": 4036.01,
@@ -150,7 +163,17 @@ def test_market_risk_cause_query_prefers_deduplicated_causal_candidates():
                         "max_drawdown_60d_pct": -11.28,
                         "trend_state": "中期偏弱",
                     },
-                    "latest_bar": {"close": 3804.69, "volume": 592298923},
+                    "latest_bar": {
+                        "timestamp": "2026-07-31",
+                        "close": 3836.51,
+                        "volume": 592298923,
+                    },
+                    "recent_bars": [
+                        {"timestamp": "2026-07-29", "close": 3828.0},
+                        {"timestamp": "2026-07-30", "close": 3804.69},
+                        {"timestamp": "2026-07-31", "close": 3836.51},
+                    ],
+                    "coverage": {"interval": "1d"},
                 }
             ],
             "market_drivers": {
@@ -223,12 +246,24 @@ def test_market_risk_cause_query_prefers_deduplicated_causal_candidates():
     ]
     assert compact["hot_sectors"]["sectors"][0]["name"] == "白酒"
     assert compact["indices"][0]["metrics"] == {
-        "latest_close": 3804.69,
-        "return_1d_pct": -0.62,
+        "latest_close": 3836.51,
+        "return_1d_pct": 0.84,
         "ma20": 3904.26,
         "ma60": 4036.01,
         "trend_state": "中期偏弱",
     }
+    assert compact["indices"][0]["previous_market_date"] == "2026-07-30"
+    assert compact["indices"][0]["previous_return_1d_pct"] == -0.6089
+    assert compact["market_state"] == {
+        "label": "偏强",
+        "whole_market_breadth_available": True,
+        "whole_market_breadth_state": "普涨",
+        "whole_market_advancers": 4690,
+        "whole_market_decliners": 728,
+        "whole_market_unchanged": 115,
+    }
+    assert compact["date_alignment"]["available_indices"] == 1
+    assert compact["date_alignment"]["aligned_indices"] == 1
     assert "latest_bar" not in compact["indices"][0]
     assert "relative_comparisons" not in compact
     assert compact["market_breadth"]["breadth"] == {
