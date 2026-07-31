@@ -51,11 +51,19 @@ def append_prompt_contracts(
         continues_prior_question
         and any("现金流" in question for question in recent_user_questions)
     )
-    stock_research_focus = str(
-        (prompt_evidence.get("research_plan") or {}).get("focus") or ""
+    research_plan = (
+        prompt_evidence.get("research_plan")
+        or evidence.get("research_plan")
+        or {}
     )
-    price_move_question = intent == "stock_research" and _is_stock_price_move_question(
-        message
+    stock_research_focus = str(research_plan.get("focus") or "")
+    focused_stock_price_followup = bool(
+        intent == "stock_research"
+        and research_plan.get("contextual_followup")
+        and research_plan.get("primary_focus") == "price_cause"
+    )
+    price_move_question = intent == "stock_research" and (
+        _is_stock_price_move_question(message) or focused_stock_price_followup
     )
     market_cause_question = intent == "market_brief" and any(
         term in message for term in ("为什么", "为何", "原因", "反差")
@@ -87,7 +95,10 @@ def append_prompt_contracts(
             "账户体感",
         )
     )
-    deep_price_move_request = _is_deep_stock_price_move_question(message)
+    deep_price_move_request = (
+        _is_deep_stock_price_move_question(message)
+        and not focused_stock_price_followup
+    )
 
     if intent == "general_research":
         prompt += """
@@ -291,7 +302,9 @@ Hermes/DeepSeek Run 针对用户问题即时生成，第一段直接解决问题
 把材料按自然语言分成三层：同日价格和行业是已确认的表现，财务是较慢变化的背景，公告与媒体
 只有在时间对齐且内容足够时才可能成为直接驱动线索。公司公告与媒体报道分别称呼；标题只能证明
 材料存在，不能替用户判断利好、利空或价格因果。最相关的材料自然写进正文，不预告固定数量，
-不展示内部字段，也不使用“风险委员会、研究管理层”等系统角色名称。
+不展示内部字段，也不使用“风险委员会、研究管理层”等系统角色名称。收盘后公告只能写成
+“该公告在当天收盘后才公开，因此不能解释当日交易时段”，不得扩大成“交易时段内市场并不知晓”；
+也不得补写“限售股解禁通常意味着潜在抛压”等没有进入本轮证据的常识故事。
 """
         else:
             prompt += """
@@ -465,6 +478,8 @@ price_move_event_evidence 是本题事件日期对齐后的唯一事件入口：
 - same_date_after_close_events 在收盘后才发布，不能解释当日交易时段；
 - adjacent_date_events 不是同日事件，不能写成直接原因。若 strict_same_date_only=true，正文不得引用
   adjacent_date_events，也不要为了显得完整而补写最近公告或旧新闻。
+描述收盘后公告时，只能写“该公告在当天收盘后才公开，因此不能解释当日交易时段”；不得扩大成
+“交易时段内市场并不知晓、投资者都不知道”等无法由公开时间直接证明的群体认知判断。
 若 same_date_official_disclosures 中存在 direct_excerpt，必须优先使用与用户问题直接相关的一项公司
 原文，并明确这是公司披露口径；它可以确认公司说了什么，但不能单独证明市场为何涨跌。只有标题而
 没有 direct_excerpt 时，必须把它写成公告索引，不得自行扩写公告内容。
@@ -481,6 +496,7 @@ before_open 必须称“开盘前”，during_market 才能称“交易时段”
 等常见市场故事；股权登记日不等于除权除息日，证据没有公司权益分派原文和明确除权除息日期时，
 不得声称登记日当天参考价会自动扣除分红，也不得预测当天收盘后才会出现公告。此时只能陈述标题
 事实及其待核验边界。不得用“公司自身或板块因素更可能”“融资余额不低所以资金更敏感”补足因果，
+也不得补写“限售股解禁通常意味着潜在抛压、解禁担忧可能压制股价”等没有进入本轮证据的常识故事，
 也不得建议用户排查“尚未披露、未公开或内幕”的事项。用户只要求直接解释时，不主动附加未来
 几天成交量、收盘后可能出现公告或“未披露变化”的观察计划。
 不得根据标题自行把公告、媒体、消息、信息或线索评为正面、负面、中性或催化。核验动作只能指向交易所公告、
@@ -1203,6 +1219,8 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 “回到你的问题”等收尾栏目，也不要为了凑结构重复结论。第一段先纠正涨跌事实并给一句核心判断；
 后面按本轮确有证据的市场、行业、事件、财务或情绪展开，没有材料的部分直接省略。正文以约
 700—1100 个中文字为目标，信息量来自具体事实和时间关系，不来自增加栏目或猜测。
+当 analysis_target.basis=explicit_question_date 时，第一段只从目标交易日的 stock_target 开始，
+不得先插入目标日之后的 current_quote 或更新日线。
 
 开头和结尾使用同一口径：基本面是背景，近期直接驱动若无同日证据就明确尚未确认。行业和市场
 同向只说明同步表现或价格旁证，不能称为“主要推力、主导力量、决定了个股方向”；证据不足时也不强行二选一，
@@ -1214,6 +1232,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 利空标签，也不判断市场是否“特别针对”公司。不得因为个股相对抗跌、成交量没有异常放大或没有
 出现踩踏，就反推出“公司没有卖压、解禁担忧没有兑现、订单或经营进展撑住了股价”；也不使用
 “如果真有抛售盘面应该更明显”一类反事实。结尾在当前分层结论处结束，不追加未来观察清单。
+个股相对跑赢宽基只能称为“跌幅较小、相对抗跌或相对表现更强”，不得写“卖压不突出、跌幅被
+收窄、资金承接更好”。经营现金流与归母净利润的覆盖关系只陈述金额或比率，不贴“现金兑现尚可、
+现金质量较好”等综合标签。
 """
             if exact_industry_available:
                 prompt += """
@@ -1246,6 +1267,32 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
             prompt += """
 最后一个自然段只收束已确认事实和仍未确认的直接驱动；不要再补“可能是因为成长股拖累较小、
 市值或持仓结构令波动偏低”等猜测，也不要邀请用户另行提供数据或追加下一轮分析。
+"""
+    if focused_stock_price_followup:
+        prompt += """
+
+## 个股连续追问最后核对
+
+这是上一轮涨跌原因分析的直接续问，不是新的综合诊股。用户说“你现在最有把握能确认”是在问
+当前证据把握，不是在询问当前股价；不得插入最新报价、最新完整日线、技术指标或新的市场话题。
+继续使用 research_plan.effective_question 所对应的目标交易日，并以 stock_market_context 中该日的
+个股、市场、行业为准。followup_answer_frame 是本轮唯一回答框架；不要从其他证据字段恢复被排除
+的邻近日事件、完整财务、技术指标或新主题。
+
+最终只写三个自然短段落，不使用 Markdown 标题、编号、项目符号、加粗标签或“好，像聊天那样
+直接说”等元话语。第一段只说第一件最有把握确认的事，第二段只说第二件，第三段只说最关键的
+一件不能确认之事。不要复述上一轮全部数字；只有一个数字对区分事实口径不可替代时才保留它。
+
+两项确认必须继续服务于上一轮“目标日涨跌更像行业还是公司因素”的问题：优先选择目标日真实
+涨跌与同日市场对照，以及公告公开时间与交易时段的关系。第一项只能确认相对表现，绝不能由
+“跌幅小于宽基”推出“没有公司额外利空、卖压不突出、资金承接较好、更像随大市微跌”。第二项
+只确认本轮取得的公开时间关系，不评价公告内容积极或消极。不能确认项必须停在“缺少同日直接
+证据，无法在行业和公司因素之间强行二选一”这一层。
+不得引入 MA60、MA20、RSI、MACD、估值、股东、同行、解禁抛压、急跌修复、企稳迹象或新的
+观察门槛，也不要在结尾邀请继续分析。若第二项使用公告时间，只能写“本轮没有取得目标交易时段
+内公开的公司事件”；不得扩大成“没有任何公司相关因素、全部正式披露都在收盘后”。没有公开事件
+不能排除其他公司特定因素。不能确认项中不要再举“是否提前消化解禁、是否纯粹资金行为、是否有人
+提前交易”等替代猜测，也不要用反问句列出新的原因候选。
 """
     if intent == "market_brief" and market_cross_date_cause_question:
         prompt += """

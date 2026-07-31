@@ -938,6 +938,129 @@ def test_deep_price_move_keeps_finance_without_explicit_finance_words():
     ] == 333_946_803.6
 
 
+def test_historical_price_cause_followup_keeps_target_scope_without_latest_quote():
+    compact = compact_stock_research_evidence(
+        {
+            "type": "stock_research",
+            "symbol": "000065.SZ",
+            "display_name": "北方国际",
+            "user_question": (
+                "那你现在最有把握能确认的两件事是什么？"
+                "最不能确认的一件事是什么？不要重复所有数字。"
+            ),
+            "research_plan": {
+                "focus": "price_cause",
+                "primary_focus": "price_cause",
+                "contextual_followup": True,
+                "effective_question": (
+                    "北方国际7月30日上涨更像行业还是公司因素？请深度分析。"
+                ),
+                "selected_modules": [
+                    "market",
+                    "company_information",
+                    "event_timeline",
+                    "fundamentals",
+                    "earnings_quality",
+                    "financial_drivers",
+                ],
+            },
+            "current_quote": {
+                "price": 9.31,
+                "pct_change": 1.2,
+                "market_timestamp": "2026-07-31T15:10:00+08:00",
+            },
+            "metrics": {"latest_close": 9.31, "return_1d_pct": 1.2},
+            "provenance": {"market_timestamp": "2026-07-31T15:00:00+08:00"},
+            "stock_market_context": {
+                "analysis_target": {
+                    "market_date": "2026-07-30",
+                    "basis": "explicit_question_date",
+                },
+                "stock_target": {
+                    "status": "same_market_date",
+                    "market_date": "2026-07-30",
+                    "close": 9.2,
+                    "return_1d_pct": -0.43,
+                },
+                "indices": [
+                    {
+                        "symbol": "399001.SZ",
+                        "name": "深证成指",
+                        "comparison_status": "same_market_date",
+                        "market_date": "2026-07-30",
+                        "return_1d_pct": -0.1,
+                    }
+                ],
+                "exact_industry_match_available": False,
+                "exact_industry_index": {
+                    "status": "unavailable_for_target_date",
+                },
+            },
+            "a_share_information": {
+                "announcements": [
+                    {
+                        "title": "重大项目进展公告",
+                        "published_at": "2026-07-30T16:20:00+08:00",
+                        "source": "深交所",
+                    }
+                ]
+            },
+            "fundamentals": {
+                "summary": {
+                    "latest_report": {
+                        "report_date": "2026-03-31",
+                        "revenue_yoy_pct": -35.56,
+                        "net_profit_yoy_pct": -37.54,
+                    }
+                }
+            },
+            "earnings_quality": {
+                "latest_report": {
+                    "report_date": "2026-03-31",
+                    "revenue_yoy_pct": -35.56,
+                },
+                "comparable_report": {"report_date": "2025-03-31"},
+            },
+            "financial_drivers": {
+                "cashflow_analysis": {
+                    "operating_cashflow": 216_477_658.72,
+                    "comparable_operating_cashflow": 333_946_803.6,
+                }
+            },
+            "peer_comparison": {"peers": [{"symbol": "000001.SZ"}]},
+        }
+    )
+
+    assert compact["research_plan"]["contextual_followup"] is True
+    assert compact["research_plan"]["primary_focus"] == "price_cause"
+    assert "current_quote" not in compact
+    assert "metrics" not in compact
+    assert "provenance" not in compact
+    assert compact["stock_market_context"]["analysis_target"]["market_date"] == (
+        "2026-07-30"
+    )
+    assert compact["stock_market_context"]["stock_target"]["return_1d_pct"] == (
+        -0.43
+    )
+    assert "price_move_event_evidence" not in compact
+    frame = compact["followup_answer_frame"]
+    assert frame["requested_shape"] == "two_confirmed_facts_and_one_key_unknown"
+    assert frame["confirmed_fact_candidates"][0]["stock_target"][
+        "return_1d_pct"
+    ] == -0.43
+    assert frame["confirmed_fact_candidates"][1]["coverage_status"] == (
+        "same_date_after_close_only"
+    )
+    assert frame["confirmed_fact_candidates"][1]["after_close_events"][0][
+        "title"
+    ] == "重大项目进展公告"
+    assert "邻近日解禁或其他旧事件" in frame["excluded_topics"]
+    assert "fundamentals" not in compact
+    assert "earnings_quality" not in compact
+    assert "financial_drivers" not in compact
+    assert "peer_comparison" not in compact
+
+
 def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_price():
     compact = compact_stock_research_evidence(
         {

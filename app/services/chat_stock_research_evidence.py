@@ -143,7 +143,17 @@ class ChatStockResearchEvidenceService:
         if symbol.endswith((".SS", ".SZ")):
             self._attach_li_zong(evidence, symbol)
             self._attach_a_share_quote(evidence)
-            self._attach_stock_market_context(evidence, symbol=symbol, message=message)
+            market_context_question = (
+                str(plan.get("effective_question") or message)
+                if plan.get("contextual_followup")
+                and plan.get("primary_focus") == "price_cause"
+                else message
+            )
+            self._attach_stock_market_context(
+                evidence,
+                symbol=symbol,
+                message=market_context_question,
+            )
         if plan.get("focus") == "comprehensive" or _is_deep_stock_coverage_query(
             message
         ):

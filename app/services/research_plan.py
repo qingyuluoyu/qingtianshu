@@ -381,7 +381,9 @@ class ResearchPlanService:
         conversation_history: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         question = str(message or "").strip()
-        effective_text = self._effective_text(question, conversation_history or [])
+        history = conversation_history or []
+        contextual_followup = self._is_focus_inheriting_followup(question, history)
+        effective_text = self._effective_text(question, history)
         matched = [
             (key, label)
             for key, label, terms in self._FOCUS_RULES
@@ -536,6 +538,28 @@ class ResearchPlanService:
                 self._extend_unique(skills, ("conditional-outlook",))
             optional = [item for item in optional if item not in required]
 
+        primary_focus = "price_cause" if has_price_cause else focus
+        if contextual_followup and primary_focus == "price_cause":
+            # A conversational request such as “那你现在最有把握能确认什么”
+            # is asking for a tighter continuation of the prior price-cause
+            # analysis.  The prior question may have requested financial and
+            # event support, so keep those scoped modules while exposing the
+            # actual conversational focus instead of relabelling the turn as a
+            # generic mixed/comprehensive stock report.
+            focus = "price_cause"
+            focus_label = "行情涨跌原因追问"
+            # The current evidence packet already carries the compact
+            # reporting-period facts selected by the prior deep question.
+            # Re-loading four long financial Skills makes a short continuation
+            # slower and more report-like without adding facts. Keep only the
+            # price/event reasoning Skills; the evidence-path Skill is appended
+            # separately by the stock evidence service.
+            skills = [
+                skill
+                for skill in skills
+                if skill in {"a-share-information", "event-timeline"}
+            ]
+
         selected_modules = [*required, *optional]
         module_labels = {key: self.MODULE_LABELS[key] for key in selected_modules}
         if focus == "relative_industry" and "analyst_expectations" in module_labels:
@@ -553,9 +577,11 @@ class ResearchPlanService:
         return {
             "contract_version": self.CONTRACT_VERSION,
             "focus": focus,
+            "primary_focus": primary_focus,
             "focus_label": focus_label,
             "question": question,
             "effective_question": effective_text,
+            "contextual_followup": contextual_followup,
             "required_modules": required,
             "optional_modules": optional,
             "selected_modules": selected_modules,
@@ -576,12 +602,24 @@ class ResearchPlanService:
         question: str,
         history: list[dict[str, Any]],
     ) -> str:
-        lowered = question.lower()
-        has_explicit_focus = cls._is_relative_industry_question(question) or any(
-            term.lower() in lowered
-            for _, _, terms in cls._FOCUS_RULES
-            for term in terms
-        )
+        if cls._is_focus_inheriting_followup(question, history):
+            previous_user_questions = [
+                str(item.get("content") or "").strip()
+                for item in history
+                if item.get("role") == "user"
+                and str(item.get("content") or "").strip()
+            ]
+            previous_focus_question = next(
+                (
+                    item
+                    for item in reversed(previous_user_questions)
+                    if cls._has_explicit_focus(item)
+                ),
+                previous_user_questions[-1] if previous_user_questions else "",
+            )
+            if previous_focus_question:
+                return f"{previous_focus_question} {question}".strip()
+        has_explicit_focus = cls._has_explicit_focus(question)
         if has_explicit_focus or len(question) > 18:
             return question
         previous_user_questions = [
@@ -590,6 +628,51 @@ class ResearchPlanService:
             if item.get("role") == "user" and str(item.get("content") or "").strip()
         ][-2:]
         return " ".join([*previous_user_questions, question]).strip()
+
+    @classmethod
+    def _has_explicit_focus(cls, question: str) -> bool:
+        lowered = question.lower()
+        return cls._is_relative_industry_question(question) or any(
+            term.lower() in lowered
+            for _, _, terms in cls._FOCUS_RULES
+            for term in terms
+        )
+
+    @classmethod
+    def _is_focus_inheriting_followup(
+        cls,
+        question: str,
+        history: list[dict[str, Any]],
+    ) -> bool:
+        if not history or cls._has_explicit_focus(question):
+            return False
+        folded = re.sub(r"\s+", "", str(question or "")).casefold()
+        if not folded:
+            return False
+        return any(
+            term in folded
+            for term in (
+                "那",
+                "那么",
+                "刚才",
+                "前面",
+                "上一轮",
+                "上一问",
+                "继续",
+                "接着",
+                "这些",
+                "上述",
+                "不要重复",
+                "别重复",
+                "像继续聊天",
+                "最有把握",
+                "最不能确认",
+                "能确认什么",
+                "不能确认什么",
+                "换句话说",
+                "这意味着什么",
+            )
+        )
 
     @staticmethod
     def _is_relative_industry_question(text: str) -> bool:

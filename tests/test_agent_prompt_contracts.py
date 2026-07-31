@@ -142,6 +142,56 @@ def test_stock_price_move_detects_deep_causal_comparison_wording():
     assert "结尾在当前分层结论处结束" in prompt
 
 
+def test_stock_price_cause_followup_uses_three_natural_paragraph_contract():
+    prompt = _append(
+        intent="stock_research",
+        message=(
+            "那你现在最有把握能确认的两件事是什么？最不能确认的一件事是什么？"
+            "不要重复所有数字，像继续聊天一样回答。"
+        ),
+        prompt_evidence={
+            "research_plan": {
+                "focus": "price_cause",
+                "primary_focus": "price_cause",
+                "contextual_followup": True,
+                "effective_question": "北方国际7月30日上涨更像行业还是公司因素？",
+            }
+        },
+    )
+
+    assert "个股连续追问最后核对" in prompt
+    assert "不是新的综合诊股" in prompt
+    assert "不是在询问当前股价" in prompt
+    assert "followup_answer_frame 是本轮唯一回答框架" in prompt
+    assert "最终只写三个自然短段落" in prompt
+    assert "不使用 Markdown 标题、编号、项目符号" in prompt
+    assert "第一段只说第一件最有把握确认的事" in prompt
+    assert "不要复述上一轮全部数字" in prompt
+    assert "不得引入 MA60、MA20、RSI、MACD" in prompt
+    assert "无法在行业和公司因素之间强行二选一" in prompt
+    assert "不得扩大成“没有任何公司相关因素" in prompt
+    assert "是否提前消化解禁" in prompt
+    assert "不要用反问句列出新的原因候选" in prompt
+    assert "绝不能由" in prompt
+    assert "没有公司额外利空、卖压不突出" in prompt
+    assert "不评价公告内容积极或消极" in prompt
+
+
+def test_deep_price_move_contract_uses_publication_time_without_market_mind_reading():
+    prompt = _append(
+        intent="stock_research",
+        model_tier="deep",
+        message="北方国际7月30日上涨更像行业还是公司因素？请深度分析。",
+    )
+
+    assert "该公告在当天收盘后才公开" in prompt
+    assert "交易时段内市场并不知晓" in prompt
+    assert "限售股解禁通常意味着潜在抛压" in prompt
+    assert "不得先插入目标日之后的 current_quote" in prompt
+    assert "不得写“卖压不突出、跌幅被" in prompt
+    assert "现金兑现尚可" in prompt
+
+
 def test_explicit_deep_stock_question_uses_deep_contract_on_economy_tier():
     prompt = _append(
         intent="stock_research",

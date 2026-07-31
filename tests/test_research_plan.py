@@ -96,6 +96,45 @@ def test_deep_price_cause_adds_structured_finance_without_explicit_finance_terms
     assert "evidence-debate" not in plan["selected_skills"]
 
 
+def test_price_cause_followup_inherits_prior_scope_without_full_stock_report():
+    service = ResearchPlanService()
+    first_question = (
+        "北方国际7月30日上涨，究竟更像行业因素还是公司因素？"
+        "请做一次深度分析，结合行情、事件和财务，信息量要大，"
+        "但用自然对话的方式直接回答。"
+    )
+    followup = (
+        "那你现在最有把握能确认的两件事是什么？最不能确认的一件事是什么？"
+        "不要重复所有数字，像继续聊天一样回答。"
+    )
+
+    plan = service.build(
+        followup,
+        conversation_history=[
+            {"role": "user", "content": first_question},
+            {"role": "assistant", "content": "上一轮回答"},
+        ],
+    )
+
+    assert plan["focus"] == "price_cause"
+    assert plan["primary_focus"] == "price_cause"
+    assert plan["contextual_followup"] is True
+    assert plan["effective_question"].startswith(first_question)
+    assert plan["selected_modules"] == [
+        "market",
+        "company_information",
+        "event_timeline",
+        "fundamentals",
+        "earnings_quality",
+        "financial_drivers",
+    ]
+    assert "business_structure" not in plan["selected_modules"]
+    assert "shareholder_structure" not in plan["selected_modules"]
+    assert "analyst_expectations" not in plan["selected_modules"]
+    assert "peer_comparison" not in plan["selected_modules"]
+    assert plan["selected_skills"] == ["a-share-information", "event-timeline"]
+
+
 def test_quality_review_focus_uses_disclosures_financials_cashflow_and_business_only():
     service = ResearchPlanService()
 

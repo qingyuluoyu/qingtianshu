@@ -1024,6 +1024,15 @@ def _stock_current_quote_required_but_missing(
         "",
         question,
     )
+    # “你现在最有把握能确认什么”中的“现在”修饰的是模型当前的
+    # 认识强度，不是在索取实时股价。此前把所有裸“现在”都当成行情
+    # 请求，会强行在自然追问前插入一段无关的最新报价。
+    quote_question = re.sub(
+        r"(?:你)?(?:现在|当前|目前)(?=(?:最)?(?:有把握|没把握)?"
+        r"(?:不能|能|可以|能够)?(?:确认|判断|回答|说明|确定))",
+        "",
+        quote_question,
+    )
     if not any(
         term in quote_question
         for term in ("今天", "今日", "当前", "现在", "盘中", "最新")

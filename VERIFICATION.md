@@ -1550,3 +1550,13 @@ uv run pytest
 - 页面标题、快捷问题、股票空间、关注报告与 Agent 预览统一使用“什么时候需要重新判断”或“什么情况会推翻当前判断”；`app/static` 用户界面不再出现“失效条件”。
 - 模型仍返回旧词时，流式和最终展示都会自动转换；用户直接使用“重新判断”或“什么情况会推翻”时，市场/个股路由、证据压缩、Prompt 合同和输出完整性校验继续生效。
 - 定向 Guard、API、深度研究和前端合同回归通过；Ruff、Python 编译、全部静态 JavaScript、依赖锁与差异检查通过。发布前全量测试按用户“立即上传”的优先级停止重复执行，最近一次完整基线仍为 `977 tests collected / 100% passed`。
+
+## 2026-07-31 W26 个股涨跌原因连续追问与自然对话验收
+
+- 根因不是单纯“Guard 太多”，而是长追问没有继承上一轮研究主题，`ResearchPlan` 从涨跌原因退化为 `comprehensive`，同时“你现在最有把握”中的“现在”被误读为当前报价请求。旧追问 Prompt 约 94,478 字符，并加载股东、同行、估值、技术展望等无关模块。
+- 研究计划现在为自然连续追问保留上一轮 `effective_question`、目标交易日和 `primary_focus=price_cause`；仍刷新上一轮需要的行情、事件与财务模块，但模型侧只加载价格/事件 Skills。历史指定日期时，Prompt 不再携带更新报价和更新日线。
+- 追问模型证据改为 `followup_answer_frame`：只提供目标日相对市场表现、公开事件时间关系和一个关键证据缺口；邻近日解禁、完整财务复述、技术指标、估值、股东与同行不会重新进入第二轮模型上下文。该改动属于路由与证据选择，没有新增输出 Guard。
+- 最新真实隔离首问 Run `b456863e-d6b5-47b1-87e5-2cc45798e9a6`：`stock_research / completed / deepseek-v4-pro / api_calls=1`，Prompt 21,859 字符、输入 11,408 tokens；正确纠正7月30日实际微跌，分开同日宽基对照、盘后公告和一季报慢变量背景，无标题，最终 Guard 未修复。
+- 同会话追问 Run `091f050d-c0b7-4514-b6c7-7991e321e878`：`stock_research / completed / deepseek-v4-pro / api_calls=1`，Prompt 14,947 字符、输入 8,720 tokens。回答为三个自然短段落，只给两项确认事实和一个不能确认项；没有最新报价插入、Markdown 标题、MA/RSI/MACD、估值、股东、同行或解禁猜测，最终 Guard 未介入。
+- 全量 `1035 tests collected` 并执行至 100% 通过；`uv run ruff check .`、Python `compileall`、全部跟踪 JavaScript 的 `node --check`、`uv lock --check` 与 `git diff --check` 全部通过。
+- 当前 8773 主服务已加载最新代码，`/health=ok`、Hermes 启用、领域库和运维库均为 PostgreSQL。独立 Worker 当前离线且队列为 degraded，因此 `/ready` 仍为 503；这不影响本轮对话验收，但不能据此声称完整运行态或生产就绪。

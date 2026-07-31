@@ -7007,6 +7007,28 @@ def test_stock_guard_requires_current_quote_when_user_asks_about_today():
     )
 
 
+def test_stock_guard_treats_epistemic_now_as_confidence_not_quote_request():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "user_question": (
+            "那你现在最有把握能确认的两件事是什么？"
+            "最不能确认的一件事是什么？"
+        ),
+        "current_quote": {
+            "price": 9.31,
+            "pct_change": 1.2,
+            "market_timestamp": "2026-07-31T15:10:00+08:00",
+        },
+        "provenance": {"market_timestamp": "2026-07-30T15:00:00+08:00"},
+    }
+
+    assert agent_module._stock_current_quote_required_but_missing(
+        "最有把握确认的是目标日实际涨跌；最不能确认的是直接驱动。",
+        evidence,
+    ) is False
+
+
 def test_stock_guard_repairs_missing_quote_change_without_replacing_model_answer():
     evidence = {
         "type": "stock_research",

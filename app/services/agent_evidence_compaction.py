@@ -1208,7 +1208,10 @@ def compact_stock_research_evidence(
         (
             "contract_version",
             "focus",
+            "primary_focus",
             "focus_label",
+            "effective_question",
+            "contextual_followup",
             "selected_modules",
             "selected_skills",
             "answer_requirements",
@@ -1410,7 +1413,13 @@ def compact_stock_research_evidence(
 
     if requested_price_windows:
         compact["requested_price_windows"] = requested_price_windows
-    price_move_question = is_stock_price_move_question(question)
+    focused_price_followup = bool(
+        plan.get("contextual_followup")
+        and plan.get("primary_focus") == "price_cause"
+    )
+    price_move_question = is_stock_price_move_question(question) or (
+        focused_price_followup
+    )
     needs_outlook = any(
         term in question
         for term in (
@@ -2784,6 +2793,10 @@ def compact_stock_research_evidence(
         compact["peer_comparison"] = compact_peers
     if price_move_question:
         compact_market_context = compact.get("stock_market_context") or {}
+        analysis_target = compact_market_context.get("analysis_target") or {}
+        explicit_historical_target = (
+            analysis_target.get("basis") == "explicit_question_date"
+        )
         if compact_market_context:
             target_keys = ["status", "market_date", "close", "return_1d_pct"]
             if any(
@@ -2812,39 +2825,139 @@ def compact_stock_research_evidence(
             compact_breadth.pop("turnover", None)
         if not any(term in question for term in ("涨跌分布", "中位数", "四分位")):
             compact_breadth.pop("distribution", None)
-        compact["metrics"] = select(
-            evidence.get("metrics") or {},
-            ("latest_close", "return_1d_pct"),
-        )
-        compact["provenance"] = select(
-            evidence.get("provenance") or {},
-            ("market_timestamp", "is_stale"),
-        )
+        if explicit_historical_target:
+            # The user is continuing a question about a named historical
+            # session. A newer quote and newer completed daily bar are valid
+            # data, but putting them in the prompt distracts from the target
+            # date and has repeatedly caused an unrelated “latest quote”
+            # preamble. The target-date stock/index/industry packet remains.
+            compact.pop("current_quote", None)
+            compact.pop("metrics", None)
+            compact.pop("provenance", None)
+        else:
+            compact["metrics"] = select(
+                evidence.get("metrics") or {},
+                ("latest_close", "return_1d_pct"),
+            )
+            compact["provenance"] = select(
+                evidence.get("provenance") or {},
+                ("market_timestamp", "is_stale"),
+            )
         allowed = [
             "type",
             "generated_at",
             "symbol",
             "display_name",
             "user_question",
-            "current_quote",
-            "metrics",
-            "provenance",
             "research_plan",
             "stock_market_context",
             "price_move_event_evidence",
             "research_evidence_contract",
         ]
+        if not explicit_historical_target:
+            allowed[5:5] = ["current_quote", "metrics", "provenance"]
 
-        financial_in_scope = is_deep_stock_price_move_question(question) or any(
-            term in question
-            for term in (
-                "财务",
-                "财报",
-                "营收",
-                "利润",
-                "毛利",
-                "现金流",
-                "基本面",
+        if focused_price_followup:
+            event_packet = compact.get("price_move_event_evidence") or {}
+            compact["followup_answer_frame"] = {
+                "requested_shape": "two_confirmed_facts_and_one_key_unknown",
+                "confirmed_fact_candidates": [
+                    {
+                        "kind": "target_day_relative_market_performance",
+                        "stock_target": select(
+                            compact_market_context.get("stock_target") or {},
+                            ("market_date", "close", "return_1d_pct"),
+                        ),
+                        "same_date_indices": [
+                            select(
+                                item,
+                                (
+                                    "symbol",
+                                    "name",
+                                    "market_date",
+                                    "return_1d_pct",
+                                    "stock_minus_index_pct",
+                                ),
+                            )
+                            for item in (
+                                compact_market_context.get("indices") or []
+                            )[:2]
+                        ],
+                        "boundary": (
+                            "只确认目标日相对表现；不能据此推断没有公司利空、"
+                            "卖压较小、资金承接，或更像随大盘波动。"
+                        ),
+                    },
+                    {
+                        "kind": "same_day_publication_timing",
+                        "coverage_status": event_packet.get("coverage_status"),
+                        "same_session_official_disclosures": list(
+                            event_packet.get("same_date_official_disclosures") or []
+                        )[:1],
+                        "same_session_media_clues": list(
+                            event_packet.get("same_date_media_clues") or []
+                        )[:1],
+                        "after_close_events": [
+                            select(
+                                item,
+                                (
+                                    "title",
+                                    "source",
+                                    "published_at",
+                                    "event_date",
+                                    "session_relation",
+                                ),
+                            )
+                            for item in (
+                                event_packet.get("same_date_after_close_events") or []
+                            )[:1]
+                        ],
+                        "boundary": (
+                            "只确认本轮取得的公开时间关系；盘后公开内容不能解释"
+                            "当日交易时段，但这不排除其他公司特定因素。"
+                        ),
+                    },
+                ],
+                "key_unknown": {
+                    "question": "目标日相对表现究竟由行业因素还是公司因素主导",
+                    "missing_evidence": [
+                        "目标日精确行业指数或同口径行业成分表现",
+                        "目标交易时段内可直接对齐价格的公司公开事件",
+                    ],
+                    "boundary": (
+                        "当前不能在行业与公司因素之间强行二选一，也不列新的原因猜测。"
+                    ),
+                },
+                "excluded_topics": [
+                    "邻近日解禁或其他旧事件",
+                    "当前报价与更新日线",
+                    "技术指标、估值、股东、同行和观察门槛",
+                    "完整财务复述",
+                ],
+            }
+            # The distilled frame is the model-facing evidence for this short
+            # continuation. Removing the raw event packet prevents adjacent
+            # disclosures and detailed announcement content from becoming new
+            # speculative stories despite the user's request not to repeat.
+            compact.pop("price_move_event_evidence", None)
+            allowed = [
+                key for key in allowed if key != "price_move_event_evidence"
+            ]
+            allowed.append("followup_answer_frame")
+
+        financial_in_scope = not focused_price_followup and (
+            is_deep_stock_price_move_question(question)
+            or any(
+                term in question
+                for term in (
+                    "财务",
+                    "财报",
+                    "营收",
+                    "利润",
+                    "毛利",
+                    "现金流",
+                    "基本面",
+                )
             )
         )
         if financial_in_scope:
