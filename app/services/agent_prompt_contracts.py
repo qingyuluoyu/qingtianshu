@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.services.stock_price_move import (
     is_deep_stock_price_move_question as _is_deep_stock_price_move_question,
     is_stock_price_move_question as _is_stock_price_move_question,
 )
+
+
+def _requested_fact_count(value: Any) -> int | None:
+    text = str(value or "").replace(" ", "")
+    match = re.search(r"([1-5一二两三四五])(?:个|项|件)事实", text)
+    if match is None:
+        return None
+    token = match.group(1)
+    if token.isdigit():
+        return int(token)
+    return {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5}[token]
 
 
 def _asks_for_reassessment_conditions(value: Any) -> bool:
@@ -33,6 +45,9 @@ def _asks_for_natural_conversation_style(value: Any) -> bool:
             "像分析师和我聊天",
             "像分析师聊天",
             "像继续聊天",
+            "像我们接着聊",
+            "像接着聊",
+            "接着聊",
             "直接和我讲",
             "直接跟我讲",
             "不要写成报告目录",
@@ -89,6 +104,7 @@ def append_prompt_contracts(
         and research_plan.get("contextual_followup")
         and research_plan.get("primary_focus") == "quality_review"
     )
+    requested_fact_count = _requested_fact_count(message)
     price_move_question = intent == "stock_research" and (
         _is_stock_price_move_question(message) or focused_stock_price_followup
     )
@@ -1332,8 +1348,9 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 ## 财报质量连续追问最后核对
 
 这是上一轮财报质量分析的继续，不是重写一份完整财报。用户现在问的是：哪些事实真的会改变
-当前判断，哪些只是报表口径、报告期错位或尚未确认持续性的短期变化。只选择两到三项最能改变
-理解的事实，并把“事实已经发生”和“原因或持续性尚未确认”放在同一段说明。
+当前判断，哪些只是报表口径、报告期错位或尚未确认持续性的短期变化。严格按用户明确要求的
+事实数量回答；用户没有给出数量时，才选择两到三项最能改变理解的事实。把“事实已经发生”和
+“原因或持续性尚未确认”放在同一段说明。
 
 不得把经营现金流/归母净利润比率改写成利润有无现金支撑、是否兑现、是否落袋或是否为账面数字；
 经营现金流净额、销售商品收到的现金和销售收现率必须保持为三个不同口径。汇兑损益可以说明本期
@@ -1342,6 +1359,14 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 
 不要复述上一轮所有数字，不增加新的估值、股价、技术指标、分析师评级或完整风险清单。最后只说
 下一份报告中哪一两项证据最可能改变当前判断，不预设结论。
+"""
+        if requested_fact_count is not None:
+            prompt += f"""
+
+用户本轮明确要求 {requested_fact_count} 个事实。正文必须恰好回答 {requested_fact_count} 个事实，
+每个事实用一个自然段表达，不使用 Markdown 小标题、加粗标签、编号或项目符号。若用户还问
+“只能继续跟踪一项”，只在最后一个事实段末尾加一句，从前述事实对应的变量中选一项并解释原因；
+这句话不是第三个事实，也不得另起“补充线索”“继续跟踪”或总结段。
 """
     if intent == "market_brief" and market_cross_date_cause_question:
         prompt += """

@@ -3535,10 +3535,17 @@ def repair_quality_review_answer(answer: str, evidence: dict[str, Any]) -> str |
             and "跌价准备" in repaired
         )
     ):
-        repaired = (
-            f"{repaired.rstrip()} 这是公司口径，仍需结合存货分类、库龄和"
-            "跌价准备做量化核验。"
+        boundary = (
+            "这是公司口径，仍需结合存货分类、库龄和跌价准备做量化核验。"
         )
+        paragraphs = repaired.split("\n\n")
+        for index, paragraph in enumerate(paragraphs):
+            if "下半年" in paragraph and "备货" in paragraph:
+                paragraphs[index] = f"{paragraph.rstrip()} {boundary}"
+                break
+        else:
+            paragraphs.append(boundary)
+        repaired = "\n\n".join(paragraphs)
     aliases = _subject_aliases(evidence)
     if aliases and not any(alias in repaired for alias in aliases):
         subject = aliases[0]

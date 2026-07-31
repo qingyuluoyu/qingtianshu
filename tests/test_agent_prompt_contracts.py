@@ -205,6 +205,29 @@ def test_financial_quality_followup_stays_conversational_and_avoids_cash_labels(
     assert "不要使用 Markdown 小标题、加粗标签、编号、项目符号" in prompt
 
 
+def test_financial_quality_followup_obeys_exact_fact_count_without_third_section():
+    prompt = _append(
+        intent="stock_research",
+        message=(
+            "别再复述整份财报和所有数字。真正会改变你判断的两个事实是什么？"
+            "如果只能继续跟踪一项，你选哪项，为什么？像我们接着聊。"
+        ),
+        prompt_evidence={
+            "research_plan": {
+                "focus": "quality_review",
+                "primary_focus": "quality_review",
+                "contextual_followup": True,
+            }
+        },
+    )
+
+    assert "正文必须恰好回答 2 个事实" in prompt
+    assert "每个事实用一个自然段表达" in prompt
+    assert "这句话不是第三个事实" in prompt
+    assert "不得另起“补充线索”" in prompt
+    assert "本轮自然对话表达要求" in prompt
+
+
 def test_natural_analyst_style_request_uses_paragraphs_without_report_scaffolding():
     prompt = _append(
         intent="stock_research",

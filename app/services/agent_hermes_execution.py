@@ -260,6 +260,35 @@ def execute_hermes_streaming(
     final_event: dict[str, Any] | None = None
     bridge_error: str | None = None
 
+    def streaming_usage(*, partial: bool = False, reason: str | None = None) -> dict[str, Any]:
+        metadata: dict[str, Any] = {
+            "enabled": True,
+            "mode": "guarded_cumulative_stream_v3",
+            "max_tokens": max_tokens,
+            "max_iterations": max_iterations,
+            "reasoning_effort": reasoning_effort,
+            "first_token_seconds": (
+                round(first_token_seconds, 3)
+                if first_token_seconds is not None
+                else None
+            ),
+            "first_visible_seconds": (
+                round(first_visible_seconds, 3)
+                if first_visible_seconds is not None
+                else None
+            ),
+            "raw_delta_events": delta_events,
+            "visible_events": visible_events,
+            "visible_characters": len(last_visible_draft),
+            "withheld_segments": withheld_segments,
+            "deferred_segments": deferred_segments,
+            "required_context_prefix_injected": required_context_prefix_injected,
+        }
+        if partial:
+            metadata["transport_recovery"] = "guarded_partial"
+            metadata["partial_reason"] = reason
+        return metadata
+
     try:
         while True:
             remaining = deadline - time.perf_counter()
@@ -392,35 +421,28 @@ def execute_hermes_streaming(
             )
         if final_event is None or not str(final_event.get("answer") or "").strip():
             raise RuntimeError("Hermes streaming bridge returned no final answer")
-    except Exception:
+    except Exception as exc:
         if process.poll() is None:
             process.terminate()
             try:
                 process.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 process.kill()
+        partial_answer = last_visible_draft.strip()
+        sentence_count = sum(partial_answer.count(mark) for mark in "。！？")
+        if len(partial_answer) >= 160 and sentence_count >= 2:
+            return partial_answer, {
+                "completed": False,
+                "failed": False,
+                "partial": True,
+                "turn_exit_reason": "guarded_partial_after_transport_failure",
+                "streaming": streaming_usage(
+                    partial=True,
+                    reason=type(exc).__name__,
+                ),
+            }
         raise
 
     usage = dict(final_event.get("usage") or {})
-    usage["streaming"] = {
-        "enabled": True,
-        "mode": "guarded_cumulative_stream_v3",
-        "max_tokens": max_tokens,
-        "max_iterations": max_iterations,
-        "reasoning_effort": reasoning_effort,
-        "first_token_seconds": (
-            round(first_token_seconds, 3) if first_token_seconds is not None else None
-        ),
-        "first_visible_seconds": (
-            round(first_visible_seconds, 3)
-            if first_visible_seconds is not None
-            else None
-        ),
-        "raw_delta_events": delta_events,
-        "visible_events": visible_events,
-        "visible_characters": len(last_visible_draft),
-        "withheld_segments": withheld_segments,
-        "deferred_segments": deferred_segments,
-        "required_context_prefix_injected": required_context_prefix_injected,
-    }
+    usage["streaming"] = streaming_usage()
     return str(final_event["answer"]).strip(), usage

@@ -9882,6 +9882,62 @@ def test_streaming_bridge_publishes_only_guarded_cumulative_sentences(
     assert captured["command"][reasoning_index + 1] == "none"
 
 
+def test_streaming_bridge_keeps_substantial_guarded_partial_without_final_event(
+    tmp_path: Path, settings, monkeypatch
+):
+    bin_dir = tmp_path / "hermes-partial" / "venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    hermes_bin = bin_dir / "hermes"
+    python_bin = bin_dir / "python"
+    hermes_bin.touch()
+    python_bin.touch()
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "stream-partial-workspaces",
+        hermes_bin=hermes_bin,
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    service = AgentService(database, guarded_settings)
+    run_dir = tmp_path / "run-partial"
+    run_dir.mkdir()
+    (run_dir / "prompt.md").write_text("测试保留安全流式段落", encoding="utf-8")
+    paragraphs = [
+        "宁德时代这份中报既有真实增长，也有需要继续解释的财务矛盾。",
+        "动力电池和储能电池收入都在增长，但两项业务毛利率均较可比期下降，"
+        "所以不能只看收入和利润增速就判断改善质量已经稳固。",
+        "经营现金流仍为正增长，公司也解释库存增加是为下半年提前备货；"
+        "这些事实值得结合后续毛利率、存货分类和回款数据继续观察，不能因为"
+        "某一个指标好看或难看就提前替公司完成整份经营归因。",
+    ]
+    lines = [
+        json.dumps({"type": "delta", "text": paragraph}, ensure_ascii=False) + "\n"
+        for paragraph in paragraphs
+    ]
+    monkeypatch.setattr(
+        "app.services.agent_hermes_execution.subprocess.Popen",
+        lambda *args, **kwargs: _FakeStreamingProcess(lines),
+    )
+    updates = []
+
+    answer, usage = service._execute_hermes_streaming(
+        model_tier="economy",
+        run_dir=run_dir,
+        user_workspace=tmp_path,
+        evidence={"type": "general_research"},
+        trusted_context=None,
+        stream_callback=updates.append,
+    )
+
+    assert answer == "".join(paragraphs)
+    assert usage["partial"] is True
+    assert usage["failed"] is False
+    assert usage["streaming"]["transport_recovery"] == "guarded_partial"
+    assert usage["streaming"]["partial_reason"] == "RuntimeError"
+    assert updates[-1]["draft"] == answer
+
+
 def test_streaming_bridge_keeps_standalone_markdown_heading_as_final_prefix(
     tmp_path: Path, settings, monkeypatch
 ):
@@ -10933,7 +10989,7 @@ def test_relative_industry_rounding_near_miss_keeps_single_model_call(
     assert "relevance_retry" not in run["usage"]
 
 
-def test_quality_review_cashflow_overclaim_gets_concise_editor_pass(
+def test_quality_review_cashflow_overclaim_stays_single_model_pass(
     tmp_path: Path, settings, monkeypatch
 ):
     guarded_settings = replace(
@@ -10946,22 +11002,17 @@ def test_quality_review_cashflow_overclaim_gets_concise_editor_pass(
     user = database.create_user("Quality Review Retry User")
     service = AgentService(database, guarded_settings)
     stream_calls = []
-    editor_prompts = []
 
     def fake_stream(**kwargs):
         prompt_path = kwargs.get("prompt_path")
         stream_calls.append(prompt_path)
-        if prompt_path and Path(prompt_path).name == "prompt.quality_editor.md":
-            editor_prompts.append(Path(prompt_path).read_text(encoding="utf-8"))
-            return (
-                "工业富联的经营改善质量目前一般。营收和利润增长是已确认的报表事实。"
-                "经营现金流12亿元，同比增长3%；经营现金流与归母净利润比率从1.93"
-                "降至1.39；销售收现率从125%降至95%。三个指标口径不同，具体原因"
-                "尚未由公司解释。反方证据是资产负债率上升，而负债结构尚未拆分。",
-                {"model": "fake-editor", "api_calls": 1},
-            )
+        if len(stream_calls) > 1:
+            raise AssertionError("quality review must not call a second editor model")
         return (
-            "工业富联经营改善很有质量，利润有经营现金流支撑，说明利润不是纸面数字。",
+            "工业富联经营改善很有质量，利润有经营现金流支撑，说明利润不是纸面数字。"
+            "营收和利润增长是已确认的报表事实。经营现金流12亿元，同比增长3%；"
+            "资产负债率上升，但负债结构尚未拆分。主营披露只能说明当前业务构成，"
+            "不能据此确认本期增长来自哪个产品。",
             {
                 "model": "fake-first",
                 "api_calls": 1,
@@ -10970,13 +11021,6 @@ def test_quality_review_cashflow_overclaim_gets_concise_editor_pass(
         )
 
     monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
-    monkeypatch.setattr(
-        service,
-        "_execute_hermes",
-        lambda **_kwargs: (_ for _ in ()).throw(
-            AssertionError("quality editor should use the bounded streaming bridge")
-        ),
-    )
     streamed = []
     run = service.run(
         user=user,
@@ -11009,17 +11053,13 @@ def test_quality_review_cashflow_overclaim_gets_concise_editor_pass(
         stream_callback=streamed.append,
     )
 
-    assert len(stream_calls) == 2
-    assert len(editor_prompts) == 1
-    assert "结构化事实" in editor_prompts[0]
-    assert "经营现金流金额及同比" in editor_prompts[0]
+    assert stream_calls == [None]
     assert run["status"] == "completed"
-    assert "改善质量目前一般" in run["answer"]
     assert "纸面数字" not in run["answer"]
-    assert run["usage"]["quality_editor"]["passed"] is True
-    assert run["usage"]["quality_editor"]["model_tier"] == "economy"
-    assert run["usage"]["api_calls"] == 2
-    assert "回款质量" in run["usage"]["quality_editor"]["reason"]
+    assert "经营现金流12亿元" in run["answer"]
+    assert run["usage"]["api_calls"] == 1
+    assert run["usage"]["relevance_repair"]["passed"] is True
+    assert "quality_editor" not in run["usage"]
     assert not any(item.get("type") == "reset" for item in streamed)
 
 
@@ -11338,17 +11378,19 @@ def test_quality_review_repair_restores_inventory_verification_boundary():
     }
     draft = (
         "宁德时代经营改善有真实业务进展。公司解释存货增加是为下半年市场需求"
-        "提前备货，但现金流被库存占用自然跟着出现。"
+        "提前备货，但现金流被库存占用自然跟着出现。\n\n"
+        "总体判断仍应等待后续财报验证。"
     )
 
     repaired = repair_quality_review_answer(draft, evidence)
 
     assert repaired is not None
     assert "存货分类、库龄和跌价准备" in repaired
+    assert repaired.index("存货分类、库龄和跌价准备") < repaired.index("总体判断")
     assert quality_review_required_fact_issue(repaired, evidence) is None
 
 
-def test_quality_review_keeps_grounded_initial_draft_when_editor_and_retry_fail(
+def test_quality_review_keeps_grounded_initial_draft_without_editor_or_retry(
     tmp_path: Path, settings, monkeypatch
 ):
     guarded_settings = replace(
@@ -11370,21 +11412,9 @@ def test_quality_review_keeps_grounded_initial_draft_when_editor_and_retry_fail(
 
     def fake_stream(**kwargs):
         calls.append(kwargs.get("prompt_path"))
-        if len(calls) == 1:
-            answer = initial_answer
-        elif len(calls) == 2:
-            answer = (
-                "宁德时代改善质量一般，但当前证据还需要继续核对。公司经营和财务"
-                "变化需要放在一起理解，不能只凭一个指标下结论；毛利率、存货和现金"
-                "流各自反映不同问题，后续仍应阅读正式披露。"
-            )
-        else:
-            answer = (
-                "宁德时代当前财报既有改善也有待核验项。利润、主营、现金流和存货"
-                "应分别理解，不能把其中一个指标直接扩大成完整经营结论；目前更适合"
-                "保留问题，等待公司后续披露补充原因。"
-            )
-        return answer, {"model": "fake-deepseek", "api_calls": 1}
+        if len(calls) > 1:
+            raise AssertionError("soft quality issue must not trigger another model")
+        return initial_answer, {"model": "fake-deepseek", "api_calls": 1}
 
     monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
     run = service.run(
@@ -11410,12 +11440,12 @@ def test_quality_review_keeps_grounded_initial_draft_when_editor_and_retry_fail(
         stream_callback=lambda _event: None,
     )
 
-    assert len(calls) == 3
+    assert calls == [None]
     assert run["status"] == "completed"
     assert run["answer"] == initial_answer
-    assert run["usage"]["quality_editor"]["passed"] is False
-    assert run["usage"]["relevance_retry"]["preserved_generated_answer"] is True
-    assert run["usage"]["relevance_retry"]["source"] == "initial"
+    assert run["usage"]["soft_relevance_preservation"]["source"] == "initial"
+    assert "quality_editor" not in run["usage"]
+    assert "relevance_retry" not in run["usage"]
     assert run["usage"]["output_guard"]["passed"] is True
 
 

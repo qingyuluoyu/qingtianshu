@@ -42,7 +42,6 @@ from app.services.chat_knowledge_context import (
 from app.services.agent_preview import render_preview
 from app.services.agent_response_relevance import (
     _normalize_valuation_review_language,
-    build_quality_review_editor_prompt,
     build_stock_guard_retry_prompt,
     build_stock_relevance_retry_prompt,
     generated_answer_preserves_current_subject,
@@ -888,94 +887,30 @@ class AgentService:
                                     },
                                 }
                     if quality_review and relevance_issue:
-                        specialist_retry_used = True
-                        editor_prompt = build_quality_review_editor_prompt(
-                            draft=answer,
-                            evidence=prompt_evidence,
-                        )
-                        editor_prompt_path = run_dir / "prompt.quality_editor.md"
-                        editor_prompt_path.write_text(
-                            editor_prompt,
-                            encoding="utf-8",
-                        )
-                        notify_progress(
-                            "model_started",
-                            quality_editor=True,
-                        )
-                        initial_usage = usage or {}
-                        editor_answer, editor_usage = self._execute_hermes_streaming(
-                            model_tier="economy",
-                            run_dir=run_dir,
-                            user_workspace=workspace,
-                            evidence=prompt_evidence,
-                            trusted_context=[],
-                            stream_callback=lambda _event: None,
-                            prompt_path=editor_prompt_path,
-                        )
-                        editor_issue = stock_specialist_relevance_issue(
-                            editor_answer,
-                            prompt_evidence,
-                        )
-                        usage = {
-                            **_aggregate_model_usage(initial_usage, editor_usage),
-                            "quality_editor": {
-                                "triggered": True,
-                                "reason": original_relevance_issue,
-                                "passed": editor_issue is None,
-                                "initial_usage": initial_usage,
-                                "editor_usage": editor_usage or {},
-                                "model_tier": "economy",
-                                "prompt_characters": len(editor_prompt),
-                            },
-                        }
-                        if editor_issue is None:
-                            answer = editor_answer
-                            relevance_issue = None
-                            (run_dir / "answer.quality_editor.md").write_text(
+                        preserved = recover_subject_preserving_generated_answer()
+                        if preserved is not None:
+                            (
                                 answer,
-                                encoding="utf-8",
-                            )
-                        else:
-                            answer = editor_answer
-                            relevance_issue = editor_issue
-                            (run_dir / "answer.quality_editor_rejected.md").write_text(
-                                answer, encoding="utf-8"
-                            )
-                            # The first answer usually contains the complete fact
-                            # frame. If the concise editor drops a required fact,
-                            # repair the richer original before considering a
-                            # full regeneration.
-                            answer = (run_dir / "answer.irrelevant.md").read_text(
-                                encoding="utf-8"
-                            )
-
-                    if relevance_issue:
-                        repaired_quality_answer = repair_quality_review_answer(
-                            answer,
-                            prompt_evidence,
-                        )
-                        if repaired_quality_answer:
-                            repaired_issue = stock_specialist_relevance_issue(
-                                repaired_quality_answer,
-                                prompt_evidence,
-                            )
-                            if repaired_issue is None:
-                                answer = repaired_quality_answer
-                                relevance_issue = None
-                                (run_dir / "answer.relevance_repaired.md").write_text(
-                                    answer, encoding="utf-8"
-                                )
-                                usage = {
-                                    **(usage or {}),
-                                    "relevance_repair": {
-                                        "triggered": True,
-                                        "reason": original_relevance_issue,
-                                        "passed": True,
-                                        "method": (
-                                            "neutralize_quality_review_overclaims_v1"
-                                        ),
-                                    },
-                                }
+                                preserved_guard,
+                                preserved_source,
+                                preserved_method,
+                                soft_relevance_issue,
+                            ) = preserved
+                            relevance_issue = None
+                            usage = {
+                                **(usage or {}),
+                                "soft_relevance_preservation": {
+                                    "triggered": True,
+                                    "source": preserved_source,
+                                    "method": preserved_method,
+                                    "original_reason": original_relevance_issue,
+                                    "remaining_issue": soft_relevance_issue,
+                                },
+                                "output_guard": preserved_guard,
+                            }
+                            (
+                                run_dir / "answer.soft_relevance_preserved.md"
+                            ).write_text(answer, encoding="utf-8")
                 if relevance_issue:
                     repaired_relative_answer = repair_relative_industry_answer(
                         answer,

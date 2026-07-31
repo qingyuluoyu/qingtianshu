@@ -266,6 +266,28 @@ def test_financial_quality_followup_inherits_prior_focus_despite_financial_words
     assert "analyst_expectations" not in plan["selected_modules"]
 
 
+def test_financial_quality_followup_recognizes_explicit_continue_chat_wording():
+    first_question = (
+        "中兴通讯最新财报到底好不好？请把收入、利润、经营现金流、毛利率、"
+        "主营结构和最重要的反方事实讲清楚。"
+    )
+    plan = ResearchPlanService().build(
+        "别再复述整份财报和所有数字。真正会改变你判断的两个事实是什么？"
+        "如果只能继续跟踪一项，你选哪项，为什么？像我们接着聊。",
+        conversation_history=[
+            {"role": "user", "content": first_question},
+            {"role": "assistant", "content": "上一轮回答"},
+        ],
+    )
+
+    assert plan["focus"] == "quality_review"
+    assert plan["primary_focus"] == "quality_review"
+    assert plan["contextual_followup"] is True
+    assert plan["effective_question"].startswith(first_question)
+    assert "market" not in plan["selected_modules"]
+    assert "analyst_expectations" not in plan["selected_modules"]
+
+
 def test_quality_review_reanswer_inherits_focus_despite_negated_report_word():
     first_question = (
         "中兴通讯最新财报到底好不好？请把收入、利润、经营现金流、毛利率、"
