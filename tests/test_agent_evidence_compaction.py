@@ -108,6 +108,73 @@ def test_market_compaction_preserves_explicit_session_alignment() -> None:
     ]
 
 
+def test_market_experience_gap_compacts_causal_titles_without_story_counts() -> None:
+    compact = compact_market_brief_evidence(
+        {
+            "type": "market_brief",
+            "user_question": (
+                "今天为什么指数表现和大多数个股的体感不一样？"
+                "请结合成交额和当天事件分析。"
+            ),
+            "analysis_target": {"market_date": "2026-07-31", "market_key": "china"},
+            "question_focus": {"key": "market_cause"},
+            "market_drivers": {
+                "market_key": "china",
+                "question_focus": "market_cause",
+                "causal_evidence": {
+                    "target_market_date": "2026-07-31",
+                    "coverage_status": "same_date_multi_source",
+                    "candidate_count": 3,
+                    "source_count": 5,
+                    "corroborated_categories": [
+                        {"category_label": "科技与行业事件", "same_date_sources": 4}
+                    ],
+                    "boundary": "标题只是讨论线索。",
+                    "candidates": [
+                        {
+                            "title": "A股放量普涨、科技集体反弹",
+                            "source": "来源甲",
+                            "published_market_date": "2026-07-31",
+                        },
+                        {
+                            "title": "资金流入红利权重股",
+                            "source": "来源乙",
+                            "published_market_date": "2026-07-31",
+                        },
+                        {
+                            "title": "某只股票获资金净流入",
+                            "source": "来源丙",
+                            "published_market_date": "2026-07-31",
+                        },
+                    ],
+                },
+            },
+            "market_breadth": {
+                "status": "available",
+                "market_date": "2026-07-31",
+                "same_date_as_analysis_target": True,
+                "breadth": {"advancers": 4690, "decliners": 728, "state": "普涨"},
+                "distribution": {
+                    "status": "available",
+                    "median_pct_change": 2.027,
+                    "bins": {"strong_advancers_ge_3": 1912},
+                },
+            },
+            "indices": [],
+        }
+    )
+
+    causal = compact["causal_evidence"]
+    assert "candidate_count" not in causal
+    assert "source_count" not in causal
+    assert "corroborated_categories" not in causal
+    assert [item["title"] for item in causal["candidates"]] == [
+        "A股放量普涨、科技集体反弹",
+        "资金流入红利权重股",
+    ]
+    assert compact["market_breadth"]["distribution"]["bin_threshold_abs_pct"] == 3
+
+
 def test_market_compaction_keeps_newer_breadth_for_explicit_today_vs_yesterday() -> None:
     compact = compact_market_brief_evidence(
         {

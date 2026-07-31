@@ -191,15 +191,20 @@ def test_market_followup_adds_short_final_quality_check():
         ],
     )
 
+    assert "大盘连续追问要求" in prompt
+    assert "大盘标准回答要求" not in prompt
     assert "市场追问最后核对" in prompt
-    assert "旧的资讯标题不能被改造成未来观察指标" in prompt
-    assert "不写权重托底、中小市值跟随或市场轮动" in prompt
-    assert "不要使用小标题" in prompt
-    assert "不得再引用具体上涨下跌家数、比例或成交额" in prompt
-    assert "不增加第三项量能观察" in prompt
-    assert "不得使用单日修复、情绪回暖、持续性存疑" in prompt
-    assert "不要使用“涨跌各半、持续压倒、站稳、受阻、碰一下又被压回”" in prompt
-    assert "主要指数与 MA20 的关系是否改善" in prompt
+    assert "直接写两个完整短段落" in prompt
+    assert "后续广度优势是否仍在" in prompt
+    assert "只能说参与面变窄" in prompt
+    assert "不补写情绪、买盘、底座或风格故事" in prompt
+    assert "不决定所谓“修复动力”或“宽度支撑”" in prompt
+    assert "不写反弹、同步回升节奏或已经持续数日" in prompt
+    assert "主要指数与已有 MA20 的关系是否改善" in prompt
+    assert "MA20 不是市场平均持仓成本" in prompt
+    assert "不写“被均线压住、挡回来”" in prompt
+    assert "不增加成交额、资讯、第三个变量" in prompt
+    assert "回答必须以完整句子结束" in prompt
 
 
 def test_market_experience_gap_uses_breadth_without_style_story():
@@ -215,9 +220,16 @@ def test_market_experience_gap_uses_breadth_without_style_story():
         },
     )
 
-    assert "直接用同日全市场涨跌家数" in prompt
-    assert "不能继续猜“权重股涨得少拖累指数" in prompt
-    assert "不能据此称某类资金或板块是" in prompt
+    assert "指数与多数个股体感差异回答要求" in prompt
+    assert "用四个自然段直接交流" in prompt
+    assert "成分权重贡献数据" in prompt
+    assert "什么成分拖低或抬高了指数" in prompt
+    assert "也不补写银行、保险、大盘蓝筹或权重股当天表现" in prompt
+    assert "不能外推为每位投资者的账户" in prompt
+    assert "不能说某个指数涨幅“落在个股分布底部" in prompt
+    assert "不要说成交额与盘面“形成呼应”" in prompt
+    assert "投资者可以安心、真实赚钱效应、账户普遍赚钱" in prompt
+    assert "大盘标准回答要求" not in prompt
     assert "本轮市场结论最后核对" not in prompt
 
 

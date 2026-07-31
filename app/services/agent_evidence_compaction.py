@@ -114,6 +114,21 @@ def compact_market_brief_evidence(
         if str(item).strip()
     ]
     question_context = "\n".join((question, *prior_questions))
+    market_experience_gap_question = any(
+        term in question_context
+        for term in ("为什么", "为何", "怎么回事", "发生了什么")
+    ) and any(
+        term in question_context
+        for term in (
+            "指数表现",
+            "指数和大多数个股",
+            "指数与大多数个股",
+            "多数个股的体感",
+            "大多数个股的体感",
+            "个股的体感",
+            "账户体感",
+        )
+    )
     cause_query = focus_key == "market_cause" or any(
         term in question_context for term in ("为什么", "为何", "原因", "反差")
     )
@@ -543,9 +558,10 @@ def compact_market_brief_evidence(
     compact["indices"] = compact_indices
     compact["market_drivers"] = compact_drivers
     if cause_query and causal_evidence and not observation_followup:
-        compact["causal_evidence"] = {
-            key: causal_evidence.get(key)
-            for key in (
+        causal_summary_keys = (
+            ("target_market_date", "coverage_status", "boundary")
+            if market_experience_gap_question
+            else (
                 "target_market_date",
                 "coverage_status",
                 "candidate_count",
@@ -554,6 +570,10 @@ def compact_market_brief_evidence(
                 "corroborated_categories",
                 "boundary",
             )
+        )
+        compact["causal_evidence"] = {
+            key: causal_evidence.get(key)
+            for key in causal_summary_keys
             if causal_evidence.get(key) is not None
         }
         compact_candidates: list[dict[str, Any]] = []
@@ -602,7 +622,9 @@ def compact_market_brief_evidence(
                     if item.get(key) is not None
                 }
             )
-            if len(compact_candidates) >= 3:
+            if len(compact_candidates) >= (
+                2 if market_experience_gap_question else 3
+            ):
                 break
         compact["causal_evidence"]["candidates"] = compact_candidates
         for item in compact["causal_evidence"]["candidates"]:
@@ -902,6 +924,8 @@ def compact_market_brief_evidence(
                     )
                     if (market_breadth.get("distribution") or {}).get(key) is not None
                 }
+                if compact_distribution.get("bins"):
+                    compact_distribution["bin_threshold_abs_pct"] = 3
             compact["market_breadth"] = {
                 "status": "available",
                 "scope": market_breadth.get("scope"),

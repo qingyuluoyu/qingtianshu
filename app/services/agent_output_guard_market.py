@@ -1070,6 +1070,23 @@ def _has_wrong_index_return_extreme_claim(
             claim_position = normalized_clause.find(term)
             if claim_position < 0:
                 continue
+            boundary_window = normalized_clause[
+                max(0, claim_position - 48) : claim_position
+            ]
+            if any(
+                boundary in boundary_window
+                for boundary in (
+                    "不能",
+                    "无法",
+                    "不得",
+                    "不应",
+                    "不宜",
+                    "并非",
+                    "不是",
+                    "尚不能",
+                )
+            ):
+                continue
             prefix = normalized_clause[:claim_position]
             subjects = []
             for item in available:

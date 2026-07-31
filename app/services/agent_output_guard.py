@@ -1014,6 +1014,7 @@ class AgentOutputGuard:
                         "不能直接证明",
                         "不能直接说明",
                         "不能解读为",
+                        "不能据此解读为",
                         "无法解读为",
                         "不宜解读为",
                         "不得解读为",
@@ -1025,6 +1026,9 @@ class AgentOutputGuard:
                         "无法直接说明",
                         "不证明",
                         "不说明",
+                        "不代表",
+                        "不等同于",
+                        "并不等同于",
                         "不等于",
                         "不是",
                         "并非",
@@ -1076,7 +1080,10 @@ class AgentOutputGuard:
                     turnover_available
                     and "成交额" in user_question
                     and not any(
-                        any(term in clause for term in ("成交额", "成交金额"))
+                        any(
+                            term in clause
+                            for term in ("成交额", "成交金额", "成交总额")
+                        )
                         and re.search(r"\d", clause)
                         for clause in answer_clauses
                     )
@@ -1881,7 +1888,12 @@ class AgentOutputGuard:
                                         "不能说明",
                                         "不能直接证明",
                                         "不能直接说明",
+                                        "不能据此解读为",
+                                        "不能解读为",
                                         "不说明",
+                                        "不代表",
+                                        "不等同于",
+                                        "并不等同于",
                                         "不等于",
                                         "不是",
                                         "并非",

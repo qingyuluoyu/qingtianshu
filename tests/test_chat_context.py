@@ -10,6 +10,7 @@ from app.services.chat_context import (
     ChatRequestContextService,
     ChatUploadExpired,
     ChatUploadNotFound,
+    _knowledge_request,
     build_financial_advisor_context,
 )
 
@@ -147,6 +148,46 @@ def test_prepare_creates_conversation_and_requires_market_knowledge() -> None:
     assert "市场涨跌原因" in knowledge.calls[0]["query"]
     assert database.messages[0]["role"] == "user"
     assert database.messages[0]["metadata"]["model_tier"] == "economy"
+
+
+def test_market_experience_gap_uses_only_causality_reference() -> None:
+    _, sources, max_results = _knowledge_request(
+        message=(
+            "今天为什么指数表现和大多数个股的体感不一样？"
+            "请结合成交额自然回答。"
+        ),
+        symbol=None,
+        prior_intent=None,
+        contextual_followup=False,
+        explicit_market_query=True,
+        li_zong_query=False,
+        stock_screen_query=False,
+        stock_comparison_query=False,
+        analyst_expectations_context=False,
+        event_timeline_context=False,
+    )
+
+    assert sources == ["builtin:market-causality.md"]
+    assert max_results == 1
+
+
+def test_short_market_observation_followup_skips_repeated_rule_documents() -> None:
+    query, sources, max_results = _knowledge_request(
+        message="不要重复刚才的数字，接下来最值得观察哪两个变量？",
+        symbol=None,
+        prior_intent="market_brief",
+        contextual_followup=True,
+        explicit_market_query=False,
+        li_zong_query=False,
+        stock_screen_query=False,
+        stock_comparison_query=False,
+        analyst_expectations_context=False,
+        event_timeline_context=False,
+    )
+
+    assert query == "不要重复刚才的数字，接下来最值得观察哪两个变量？"
+    assert sources is None
+    assert max_results == 0
 
 
 def test_prepare_resolves_full_a_share_name_from_security_master() -> None:

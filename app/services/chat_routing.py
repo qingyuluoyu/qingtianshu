@@ -478,6 +478,30 @@ def _extract_industry_topic(message: str) -> str | None:
 def _market_question_focus(message: str) -> dict[str, Any]:
     folded = re.sub(r"\s+", "", message).casefold()
     counter_evidence_terms = ("反方", "反证", "相反证据")
+    index_breadth_gap_question = any(
+        term in folded for term in ("为什么", "为何", "怎么回事", "发生了什么")
+    ) and any(
+        term in folded
+        for term in (
+            "指数表现",
+            "指数和大多数个股",
+            "指数与大多数个股",
+            "多数个股的体感",
+            "大多数个股的体感",
+            "个股的体感",
+            "账户体感",
+        )
+    )
+    if index_breadth_gap_question:
+        return {
+            "key": "market_cause",
+            "label": "指数与个股体感差异",
+            "answer_requirements": [
+                "先用同日指数、涨跌家数和涨跌幅中位数说明体感差异",
+                "没有成分权重贡献或风格指数时不猜差异来源",
+                "成交额与资讯标题只作为当日背景，不替代指数归因",
+            ],
+        }
     focus_rules = (
         (
             "market_risk",

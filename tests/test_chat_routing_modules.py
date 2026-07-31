@@ -29,6 +29,19 @@ def test_chat_routing_preserves_market_and_followup_semantics() -> None:
     assert chat_routing._question_price_direction("中兴通讯今天为什么跌") == -1
 
 
+def test_market_focus_prioritizes_index_experience_gap_over_turnover_dimension() -> None:
+    focus = chat_routing._market_question_focus(
+        "今天A股到底发生了什么，为什么指数表现和大多数个股的体感不一样？"
+        "请结合指数、涨跌分布和成交额分析。"
+    )
+
+    assert focus["key"] == "market_cause"
+    assert focus["label"] == "指数与个股体感差异"
+    assert "没有成分权重贡献或风格指数时不猜差异来源" in focus[
+        "answer_requirements"
+    ]
+
+
 def test_chat_routing_restores_saved_research_context() -> None:
     history = [
         {

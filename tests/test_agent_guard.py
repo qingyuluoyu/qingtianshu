@@ -8871,6 +8871,67 @@ def test_market_reassessment_cleanup_removes_method_thresholds_and_short_windows
     assert "持续保持" not in cleaned
     assert "一两天" not in cleaned
     assert "后续完整交易日" in cleaned
+    assert "又跌回均线下方，就说明修复无效" in cleaned
+
+
+def test_market_reassessment_cleanup_preserves_sentence_after_vague_window():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "接下来最值得观察什么？",
+        "indices": [{"metrics": {"ma20": 3904.0}}],
+    }
+    answer = (
+        "第一个看广度优势是否还在。如果接下来一两天内上涨家数明显减少，"
+        "就需要重新判断。\n\n另一个看主要指数与20日均线的关系。"
+    )
+
+    cleaned = agent_module._normalize_market_reassessment_language(answer, evidence)
+
+    assert "如果后续完整交易日里上涨家数明显减少，就需要重新判断" in cleaned
+    assert "另一个看主要指数与20日均线的关系" in cleaned
+    assert "如果接下来\n" not in cleaned
+
+
+def test_market_reassessment_cleanup_corrects_ma20_cost_metaphor_locally():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "接下来最值得观察什么？",
+        "indices": [{"metrics": {"ma20": 3904.0}}],
+    }
+    answer = (
+        "二十日移动均线代表了最近一个月的平均持仓成本，"
+        "价格逐步靠近它，只说明近期价格重心在改善。"
+    )
+
+    cleaned = agent_module._normalize_market_reassessment_language(answer, evidence)
+
+    assert "平均持仓成本" not in cleaned
+    assert "二十日均线是过去二十个交易日收盘价的滚动平均" in cleaned
+    assert "价格逐步靠近它，只说明近期价格重心在改善" in cleaned
+
+    vague_window = agent_module._normalize_market_reassessment_language(
+        "二十日均线是过去若干个交易日收盘价的滚动平均。",
+        evidence,
+    )
+    assert vague_window == "二十日均线是过去二十个交易日收盘价的滚动平均。"
+
+
+def test_market_reassessment_cleanup_neutralizes_vague_window_and_ma_pressure():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "接下来最值得观察什么？",
+        "indices": [{"metrics": {"ma20": 3904.0}}],
+    }
+    answer = (
+        "如果之后几个完整交易日里广度仍在，就继续观察。"
+        "如果指数始终被压在这条均线下方，中期趋势尚未改善。"
+    )
+
+    cleaned = agent_module._normalize_market_reassessment_language(answer, evidence)
+
+    assert "如果后续完整交易日里广度仍在" in cleaned
+    assert "仍位于这条均线下方" in cleaned
+    assert "被压在" not in cleaned
 
 
 def test_market_reassessment_cleanup_removes_duplicate_observation_language():
@@ -8902,6 +8963,73 @@ def test_market_reassessment_cleanup_normalizes_vague_future_window():
     cleaned = agent_module._normalize_market_reassessment_language(answer, evidence)
 
     assert cleaned == "第一个是后续完整交易日里，上涨家数是否仍占明显优势。"
+
+
+def test_market_guard_allows_natural_turnover_boundary_without_repair():
+    evidence = {"type": "market_brief", "market_state": {}}
+    answer = (
+        "成交额较前一交易日增加，只说明当天交易更活跃，"
+        "不能据此解读为资金净流入、机构加仓或市场参与意愿回升。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is True
+    assert guard["unsupported_market_inferences"] == []
+
+
+def test_market_guard_accepts_turnover_total_wording_as_complete_answer():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "请结合全市场成交额解释今天的行情。",
+        "market_state": {},
+        "market_breadth": {
+            "turnover": {
+                "status": "available",
+                "total_amount_100m_cny": 25590.66,
+            }
+        },
+    }
+    answer = (
+        "全市场当日成交总额为25590.66亿元，说明交易金额较大；"
+        "这并不等同于资金净流入或机构加仓。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is True
+    assert guard["semantic_conflicts"] == []
+    assert guard["unsupported_market_inferences"] == []
+
+
+def test_market_guard_allows_negated_style_leadership_boundary():
+    evidence = {
+        "type": "market_brief",
+        "market_state": {},
+        "indices": [
+            {
+                "symbol": "000001.SS",
+                "name": "上证综指",
+                "same_date_as_analysis_target": True,
+                "metrics": {"return_1d_pct": 0.72},
+            },
+            {
+                "symbol": "399006.SZ",
+                "name": "创业板指",
+                "same_date_as_analysis_target": True,
+                "metrics": {"return_1d_pct": 3.06},
+            },
+        ],
+    }
+    answer = (
+        "上证综指与创业板指涨幅存在差异，但没有风格指数和权重贡献数据，"
+        "不能把它定性为中小市值风格领涨。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is True
+    assert guard["unsupported_market_inferences"] == []
 
 
 def test_market_guard_repair_keeps_cautious_turnover_and_drops_flow_story():

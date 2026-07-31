@@ -435,6 +435,33 @@ def _knowledge_request(
 ) -> tuple[str, list[str] | None, int]:
     query = message
     required_sources: list[str] | None = None
+    market_observation_followup = (
+        prior_intent == "market_brief"
+        and contextual_followup
+        and any(
+            term in message for term in ("接下来", "最值得看", "观察", "不要重复")
+        )
+    )
+    if market_observation_followup:
+        # The live market packet, compact conversation context and market Skill
+        # already contain everything needed for this short continuation. Repeating
+        # three generic rule documents makes the model sound like a fresh report
+        # and weakens the user's explicit request to keep chatting naturally.
+        return message, None, 0
+    market_experience_gap_question = any(
+        term in message for term in ("为什么", "为何", "怎么回事", "发生了什么")
+    ) and any(
+        term in message
+        for term in (
+            "指数表现",
+            "指数和大多数个股",
+            "指数与大多数个股",
+            "多数个股的体感",
+            "大多数个股的体感",
+            "个股的体感",
+            "账户体感",
+        )
+    )
     if (explicit_market_query and symbol is None) or (
         prior_intent == "market_brief" and contextual_followup
     ):
@@ -443,11 +470,15 @@ def _knowledge_request(
             f"{message} 市场涨跌原因 证据规则 清数智算证据层级 "
             f"市场趋势与风险分析规则 {question_focus['label']}"
         )
-        required_sources = [
-            "builtin:evidence-hierarchy.md",
-            "builtin:market-causality.md",
-            "builtin:market-trend-risk.md",
-        ]
+        required_sources = (
+            ["builtin:market-causality.md"]
+            if market_experience_gap_question
+            else [
+                "builtin:evidence-hierarchy.md",
+                "builtin:market-causality.md",
+                "builtin:market-trend-risk.md",
+            ]
+        )
     elif li_zong_query:
         query = (
             f"{message} 李总策略 确定性规则 基本面 股性 量价 "
@@ -484,7 +515,9 @@ def _knowledge_request(
             dict.fromkeys([*(required_sources or []), *financial_sources])
         )
     max_results = (
-        min(5, max(3, len(required_sources or []) + 1))
+        1
+        if market_experience_gap_question
+        else min(5, max(3, len(required_sources or []) + 1))
         if financial_sources
         else 5
     )
