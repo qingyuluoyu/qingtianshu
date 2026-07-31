@@ -2,14 +2,18 @@ FROM python:3.11-slim-bookworm AS hermes-runtime
 
 ARG HERMES_COMMIT=ab158e8088a847890057b75a63a951155ea93004
 
-RUN python -m venv /opt/hermes \
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates git \
+    && python -m venv /opt/hermes \
     && /opt/hermes/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
     && mkdir -p /opt/hermes-agent \
-    && python -c "import urllib.request; urllib.request.urlretrieve('https://github.com/NousResearch/hermes-agent/archive/${HERMES_COMMIT}.tar.gz', '/tmp/hermes-agent.tar.gz')" \
-    && tar --extract --gzip --file /tmp/hermes-agent.tar.gz \
-        --directory /opt/hermes-agent --strip-components=1 \
+    && git -C /opt/hermes-agent init \
+    && git -C /opt/hermes-agent remote add origin https://github.com/NousResearch/hermes-agent.git \
+    && git -C /opt/hermes-agent -c http.version=HTTP/1.1 \
+        fetch --depth 1 origin "${HERMES_COMMIT}" \
+    && git -C /opt/hermes-agent checkout --detach FETCH_HEAD \
     && /opt/hermes/bin/pip install --no-cache-dir --editable /opt/hermes-agent \
-    && rm -f /tmp/hermes-agent.tar.gz \
+    && rm -rf /opt/hermes-agent/.git /var/lib/apt/lists/* \
     && /opt/hermes/bin/hermes --version
 
 
