@@ -3,7 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.services.stock_price_move import is_stock_price_move_question
+from app.services.stock_price_move import (
+    is_deep_stock_price_move_question,
+    is_stock_price_move_question,
+)
 
 
 class ResearchPlanService:
@@ -494,6 +497,26 @@ class ResearchPlanService:
                 self._extend_unique(required, config["required"])
                 self._extend_unique(optional, config["optional"])
                 self._extend_unique(skills, config["skills"])
+            if "price_cause" in focus_keys and is_deep_stock_price_move_question(
+                effective_text
+            ):
+                # Deep causal analysis should be informative without reviving
+                # the generic full-report path. Add only structured reporting-
+                # period evidence, which the prompt keeps separate from the
+                # target day's direct price driver.
+                self._extend_unique(
+                    required,
+                    ("fundamentals", "earnings_quality", "financial_drivers"),
+                )
+                self._extend_unique(
+                    skills,
+                    (
+                        "a-share-filing-evidence",
+                        "fundamental-evidence",
+                        "earnings-quality",
+                        "financial-drivers",
+                    ),
+                )
             if "price_cause" in focus_keys:
                 skills = [skill for skill in skills if skill != "evidence-debate"]
             if "price_action" in focus_keys and any(

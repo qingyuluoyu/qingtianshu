@@ -823,6 +823,54 @@ def test_deep_price_move_compaction_keeps_requested_finance_and_sentiment_only()
     assert "deep_stock_coverage" not in compact
 
 
+def test_deep_price_move_keeps_finance_without_explicit_finance_words():
+    compact = compact_stock_research_evidence(
+        {
+            "type": "stock_research",
+            "symbol": "000065.SZ",
+            "display_name": "北方国际",
+            "user_question": (
+                "北方国际7月30日上涨更像行业还是公司因素？"
+                "请深度分析，信息量要大。"
+            ),
+            "research_plan": {"focus": "price_cause"},
+            "fundamentals": {
+                "summary": {
+                    "latest_report": {
+                        "report_date": "2026-03-31",
+                        "revenue_yoy_pct": -35.56,
+                        "net_profit_yoy_pct": -37.54,
+                        "operating_cashflow": 216_477_658.72,
+                    }
+                }
+            },
+            "earnings_quality": {
+                "latest_report": {
+                    "report_date": "2026-03-31",
+                    "revenue_yoy_pct": -35.56,
+                },
+                "comparable_report": {"report_date": "2025-03-31"},
+            },
+            "financial_drivers": {
+                "cashflow_analysis": {
+                    "operating_cashflow": 216_477_658.72,
+                    "comparable_operating_cashflow": 333_946_803.6,
+                }
+            },
+        }
+    )
+
+    assert compact["fundamentals"]["summary"]["latest_report"][
+        "revenue_yoy_pct"
+    ] == -35.56
+    assert compact["earnings_quality"]["latest_report"]["report_date"] == (
+        "2026-03-31"
+    )
+    assert compact["financial_drivers"]["cashflow_analysis"][
+        "comparable_operating_cashflow"
+    ] == 333_946_803.6
+
+
 def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_price():
     compact = compact_stock_research_evidence(
         {

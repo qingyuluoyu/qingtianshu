@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.stock_price_move import (
+    is_deep_stock_price_move_question as _is_deep_stock_price_move_question,
     is_stock_price_move_question as _is_stock_price_move_question,
 )
 
@@ -59,10 +60,17 @@ def append_prompt_contracts(
     market_cause_question = intent == "market_brief" and any(
         term in message for term in ("为什么", "为何", "原因", "反差")
     )
-    deep_price_move_request = price_move_question and any(
-        term in message
-        for term in ("深度", "详细", "信息量要大", "信息量充分", "全面")
+    market_cross_date_cause_question = market_cause_question and (
+        "反差" in message
+        or (
+            any(term in message for term in ("今天", "今日", "当前"))
+            and any(
+                term in message
+                for term in ("昨天", "昨日", "上一交易日", "前一交易日", "前日")
+            )
+        )
     )
+    deep_price_move_request = _is_deep_stock_price_move_question(message)
 
     if intent == "general_research":
         prompt += """
@@ -1071,6 +1079,17 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 成交额没有单独标注市场日期。回答必须明确说明成交额只是成交金额，不等于资金净流入。
 历史比较为 building_history 时，只能说同口径历史仍在积累；不得声称已确认放量或缩量。
 """
+        if any(
+            term in message
+            for term in ("大多数个股", "多数个股", "个股的体感", "指数表现和")
+        ):
+            prompt += """
+用户问的是指数与大多数个股体感为何不同。直接用同日全市场涨跌家数、涨跌幅中位数和宽基指数
+之间的差异解释“体感事实”：这能确认多数股票的当日表现强于部分宽基指数。没有权重贡献、大小盘
+或风格指数证据时，不能继续猜“权重股涨得少拖累指数、中小市值或科技成长集体活跃”是根源。
+资讯标题中的“放量、资金净流入、科技反弹”只作为当天讨论线索，不能据此称某类资金或板块是
+主要推力。成交额段只说明交易活跃度及其同口径变化，并明确它不代表资金净流入。
+"""
     if intent == "stock_research" and stock_research_focus == "quality_review":
         prompt += """
 
@@ -1119,14 +1138,28 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 继续计入目标日的收盘到收盘跌幅，也不得计算“除息贡献了目标日多少跌幅”。
 """
         if deep_price_move_request:
+            market_context = prompt_evidence.get("stock_market_context") or {}
+            industry = market_context.get("exact_industry_index") or {}
+            exact_industry_available = bool(
+                market_context.get("exact_industry_match_available")
+                and industry.get("status") == "same_market_date"
+                and industry.get("return_1d_pct") is not None
+            )
+            same_day_market_breadth_available = bool(
+                market_context.get("market_breadth")
+            )
+            financial_context_available = any(
+                prompt_evidence.get(key)
+                for key in ("fundamentals", "earnings_quality", "financial_drivers")
+            )
             prompt += """
 
 ## 本轮结论最后核对
 
-这是用户明确要求的深度分析。用四个自然短段落完成回答，不套报告目录：第一段给最新价格、行业
-相对表现和一句结论；第二段解释同日市场、行业及事件时间；第三段写最新报告期财务和现金流背景；
-第四段写社区样本并收束结论。正文以约 700—1100 个中文字为目标，不需要小标题；确有助于阅读时
-最多使用两个自然小标题。信息量来自具体事实与关系，不来自重复边界或增加猜测。
+这是用户明确要求的深度分析。用三至五个自然短段落直接交流，不使用 Markdown 小标题、报告目录、
+“回到你的问题”等收尾栏目，也不要为了凑结构重复结论。第一段先纠正涨跌事实并给一句核心判断；
+后面按本轮确有证据的市场、行业、事件、财务或情绪展开，没有材料的部分直接省略。正文以约
+700—1100 个中文字为目标，信息量来自具体事实和时间关系，不来自增加栏目或猜测。
 
 开头和结尾使用同一口径：基本面是背景，近期直接驱动若无同日证据就明确尚未确认。行业和市场
 同向只说明同步表现或价格旁证，不能称为“主要推力、主导力量、决定了个股方向”；证据不足时也不强行二选一，
@@ -1135,9 +1168,43 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 
 财务段保留营收、利润、毛利率、经营现金流和销售收现率中最有解释力的事实，但只作为报告期背景。
 销售收现率变化不改写成“账面利润未获验证”或回款恶化；公告与媒体标题不贴常规、正负面或利好
-利空标签，也不判断市场是否“特别针对”公司。结尾在当前分层结论处结束，不追加未来观察清单。
+利空标签，也不判断市场是否“特别针对”公司。不得因为个股相对抗跌、成交量没有异常放大或没有
+出现踩踏，就反推出“公司没有卖压、解禁担忧没有兑现、订单或经营进展撑住了股价”；也不使用
+“如果真有抛售盘面应该更明显”一类反事实。结尾在当前分层结论处结束，不追加未来观察清单。
 """
-    if intent == "market_brief" and market_cause_question:
+            if exact_industry_available:
+                prompt += """
+本轮存在目标日精确行业指数，只能用它描述个股与行业的同日相对表现，不能把同步或分化直接写成
+涨跌原因。代表性宽基指数仍然是市场对照，不得称为行业表现。
+"""
+            else:
+                prompt += """
+本轮没有目标日精确行业指数证据。必须明确说目前无法可靠比较行业因素；上证综指、深证成指等
+代表性宽基指数只能称为市场对照，绝不能改称“行业压力、行业表现”或据此在行业与公司之间二选一。
+个股跌幅小于宽基时只写“相对跑赢、跌幅较小”，不写“相对独立、独立行情、脱离市场”。
+"""
+            if not same_day_market_breadth_available:
+                prompt += """
+本轮没有目标日全市场涨跌家数或分布。只能说列出的宽基指数上涨或下跌，不能写“整个 A 股普跌、
+普跌行情、弱市中跌得少的一类”或用指数替代全市场广度。
+"""
+            if financial_context_available:
+                prompt += """
+本轮已装配结构化财务与现金流证据，可用一个自然段说明最新报告期经营背景；这些较慢变化的事实
+不能解释目标日为什么相对抗跌或跑输，也不能与邻近日公告拼成当天的价格故事。财务段优先引用
+营收、利润、毛利率和经营现金流，不要用收盘后订单公告代替已经取得的报表数据。费用变化只能称
+“已列科目的机械影响”，不能写成“真正的拖累项、公司正在降本”；销售收现率上升也只陈述两期
+数值，不贴“亮点、回款改善”标签。
+"""
+            else:
+                prompt += """
+本轮没有结构化财务与现金流证据，不得用订单公告、项目进度或常识性公司介绍代替财务分析。
+"""
+            prompt += """
+最后一个自然段只收束已确认事实和仍未确认的直接驱动；不要再补“可能是因为成长股拖累较小、
+市值或持仓结构令波动偏低”等猜测，也不要邀请用户另行提供数据或追加下一轮分析。
+"""
+    if intent == "market_brief" and market_cross_date_cause_question:
         prompt += """
 
 ## 本轮市场结论最后核对

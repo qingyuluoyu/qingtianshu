@@ -1108,6 +1108,9 @@ def _has_stock_cross_date_market_claim(answer: str, evidence: dict[str, Any]) ->
         "缺乏同日",
         "缺少同日",
         "同日数据缺失",
+        "不是行业对比",
+        "只是市场对照",
+        "宽基指数来做参照",
     )
     for clause in re.split(r"[。；\n]", answer):
         if any(term in clause for term in cautious_terms):
@@ -1190,6 +1193,12 @@ def _has_stock_industry_causal_overclaim(answer: str) -> bool:
         "不能倒推出",
         "不能排除",
         "不能写成",
+        "说不清",
+        "无法判断",
+        "没办法明确判断",
+        "无法区分",
+        "到底更像",
+        "究竟更像",
     )
     for clause in re.split(r"[。；\n]", answer):
         if any(term in clause for term in cautious_terms):
@@ -1470,6 +1479,7 @@ def _has_stock_event_sentiment_overclaim(answer: str) -> bool:
             clause,
         )
         negated_or_hypothetical_label = re.search(
+            r"(?:没有|未见|尚无)[^。；\n]{0,12}(?:盘中|同日)?催化(?:剂)?|"
             r"(?:尚未找到|未找到|尚未取得|未取得|并无|未见|未出现|"
             r"尚无|不存在|并非来自|不是来自|不构成|无法确认|不能确认|"
             r"尚不能确认)[^。；\n]{0,48}"
@@ -1482,6 +1492,8 @@ def _has_stock_event_sentiment_overclaim(answer: str) -> bool:
             r"没有[^。；\n]{0,12}(?:证据|确证)|尚未[^。；\n]{0,12}(?:证实|确认))",
             clause,
         )
+        if "中性或常规" in clause and not explicit_boundary:
+            return True
         has_boundary = bool(explicit_boundary or negated_or_hypothetical_label)
         if (
             any(

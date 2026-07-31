@@ -196,6 +196,11 @@ def _normalize_market_reassessment_language(
     )
     if user_has_window is None:
         answer = re.sub(
+            r"(?:未来|后续|接下来)(?:的)?(?:几个|数个|若干个)交易日(?:里|中|内)?",
+            "后续完整交易日里",
+            answer,
+        )
+        answer = re.sub(
             r"(?:至少)?连续(?:\d+|一|两|二|三|四|五)"
             r"(?:\s*(?:到|至|[-—–~～])\s*(?:\d+|一|两|二|三|四|五))?"
             r"(?:个)?交易日",
@@ -266,6 +271,11 @@ def _normalize_market_reassessment_language(
         r"(?:(?:在)?接下来的完整交易日(?:里|中)，|"
         r"(?:在)?后续完整交易日(?:里|中)，)"
         r"(?:后续完整交易日(?:里|中)，)+",
+        "后续完整交易日里，",
+        answer,
+    )
+    answer = re.sub(
+        r"后续完整交易日里(?:全市场的)?\s*后续完整交易日里，?",
         "后续完整交易日里，",
         answer,
     )

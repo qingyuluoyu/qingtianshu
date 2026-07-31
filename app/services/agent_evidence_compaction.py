@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from app.services.live_market import previous_market_session_date
 from app.services.stock_price_move import (
     compact_stock_price_move_event_evidence,
+    is_deep_stock_price_move_question,
     is_stock_price_move_question,
 )
 
@@ -1472,6 +1473,17 @@ def compact_stock_research_evidence(
     if market_context:
         industry = market_context.get("exact_industry_index") or {}
         breadth = market_context.get("market_breadth") or {}
+        target_market_date = str(
+            (market_context.get("analysis_target") or {}).get("market_date") or ""
+        )[:10]
+        breadth_market_date = str(breadth.get("market_date") or "")[:10]
+        breadth_matches_target = breadth.get("same_date_as_target") is True or bool(
+            target_market_date
+            and breadth_market_date
+            and target_market_date == breadth_market_date
+        )
+        if price_move_question and not breadth_matches_target:
+            breadth = {}
         component_breadth = industry.get("component_breadth") or {}
         source_scope_question = any(
             term in question
@@ -1535,6 +1547,28 @@ def compact_stock_research_evidence(
         ]
         if any(term in question for term in ("贡献", "权重", "归因")):
             industry_keys.append("subject_weight_pct")
+        raw_indices = list(market_context.get("indices") or [])
+        if price_move_question:
+            raw_indices = [
+                item
+                for item in raw_indices
+                if item.get("comparison_status") in {None, "same_market_date"}
+            ]
+            preferred_symbols = (
+                ("399001.SZ", "000001.SS")
+                if str(evidence.get("symbol") or "").endswith(".SZ")
+                else ("000001.SS", "399001.SZ")
+            )
+            ordered_indices = [
+                item
+                for symbol in preferred_symbols
+                for item in raw_indices
+                if item.get("symbol") == symbol
+            ]
+            ordered_indices.extend(
+                item for item in raw_indices if item not in ordered_indices
+            )
+            raw_indices = ordered_indices[:2]
         compact["stock_market_context"] = {
             **select(
                 market_context,
@@ -1562,7 +1596,7 @@ def compact_stock_research_evidence(
                         "stock_minus_index_pct",
                     ),
                 )
-                for item in (market_context.get("indices") or [])[:4]
+                for item in raw_indices[:4]
             ],
             "exact_industry_index": {
                 **select(
@@ -1614,6 +1648,8 @@ def compact_stock_research_evidence(
                 ),
             },
         }
+        if not breadth:
+            compact["stock_market_context"].pop("market_breadth", None)
         if any(term in question for term in ("贡献", "权重", "归因")):
             compact["stock_market_context"]["exact_industry_index"][
                 "component_contribution"
@@ -2775,7 +2811,7 @@ def compact_stock_research_evidence(
             "research_evidence_contract",
         ]
 
-        financial_in_scope = any(
+        financial_in_scope = is_deep_stock_price_move_question(question) or any(
             term in question
             for term in (
                 "财务",

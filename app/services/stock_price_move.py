@@ -30,6 +30,7 @@ STOCK_PRICE_MOVE_QUALIFIER_TERMS = (
     "可能解释",
     "不能确认",
     "究竟更像",
+    "更像",
     "更像什么",
     "更接近",
     "归因于",
@@ -72,6 +73,22 @@ def is_stock_price_move_question(question: str) -> bool:
         return True
     return any(term in text for term in STOCK_PRICE_MOVE_QUALIFIER_TERMS) and any(
         term in text for term in STOCK_PRICE_MOVE_CONTEXT_TERMS
+    )
+
+
+def is_deep_stock_price_move_question(question: str) -> bool:
+    text = str(question or "")
+    return is_stock_price_move_question(text) and any(
+        term in text
+        for term in (
+            "深度分析",
+            "深入分析",
+            "详细分析",
+            "全面分析",
+            "信息量要大",
+            "信息量充分",
+            "充分展开",
+        )
     )
 
 

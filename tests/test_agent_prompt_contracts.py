@@ -132,12 +132,13 @@ def test_stock_price_move_detects_deep_causal_comparison_wording():
     assert "这是用户明确要求的深度分析" in prompt
     assert "基本面是背景，近期直接驱动若无" in prompt
     assert "700—1100 个中文字" in prompt
-    assert "最多使用两个自然小标题" in prompt
+    assert "不使用 Markdown 小标题" in prompt
     assert "主要推力、主导力量、决定了个股方向" in prompt
     assert "证据不足时也不强行二选一" in prompt
     assert "解释了为什么跑输、压制弹性" in prompt
     assert "账面利润未获验证" in prompt
     assert "特别针对" in prompt
+    assert "如果真有抛售盘面应该更明显" in prompt
     assert "结尾在当前分层结论处结束" in prompt
 
 
@@ -153,6 +154,28 @@ def test_explicit_deep_stock_question_uses_deep_contract_on_economy_tier():
 
     assert "个股涨跌原因回答合同（深度）" in prompt
     assert "这是用户明确要求的深度分析" in prompt
+
+
+def test_deep_price_move_without_exact_industry_keeps_broad_indices_as_market():
+    prompt = _append(
+        intent="stock_research",
+        model_tier="deep",
+        message="北方国际为什么跌？请深度分析，信息量要大。",
+        prompt_evidence={
+            "stock_market_context": {
+                "exact_industry_match_available": False,
+                "exact_industry_index": {"status": "unavailable_for_target_date"},
+            },
+            "fundamentals": {"summary": {"report_date": "2026-03-31"}},
+        },
+    )
+
+    assert "无法可靠比较行业因素" in prompt
+    assert "代表性宽基指数只能称为市场对照" in prompt
+    assert "不写“相对独立、独立行情、脱离市场”" in prompt
+    assert "整个 A 股普跌" in prompt
+    assert "已装配结构化财务与现金流证据" in prompt
+    assert "成长股拖累较小" in prompt
     assert "700—1100 个中文字" in prompt
     assert "标准回答控制在约 250—500 个中文字" not in prompt
     assert "不能在行业和公司之间强行二选一" in prompt
@@ -177,6 +200,25 @@ def test_market_followup_adds_short_final_quality_check():
     assert "不得使用单日修复、情绪回暖、持续性存疑" in prompt
     assert "不要使用“涨跌各半、持续压倒、站稳、受阻、碰一下又被压回”" in prompt
     assert "主要指数与 MA20 的关系是否改善" in prompt
+
+
+def test_market_experience_gap_uses_breadth_without_style_story():
+    prompt = _append(
+        intent="market_brief",
+        message=(
+            "今天为什么指数表现和大多数个股的体感不一样？"
+            "请结合成交额自然回答。"
+        ),
+        prompt_evidence={
+            "question_focus": {"key": "volume_flows"},
+            "market_breadth": {"turnover": {"status": "available"}},
+        },
+    )
+
+    assert "直接用同日全市场涨跌家数" in prompt
+    assert "不能继续猜“权重股涨得少拖累指数" in prompt
+    assert "不能据此称某类资金或板块是" in prompt
+    assert "本轮市场结论最后核对" not in prompt
 
 
 def test_stock_research_separates_official_and_media_sources_without_fixed_counts():

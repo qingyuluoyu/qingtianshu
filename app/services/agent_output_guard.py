@@ -1851,6 +1851,7 @@ class AgentOutputGuard:
             _MARKET_TECHNICAL_REPAIR_CAUSAL_LABEL,
             _MARKET_STYLE_GAP_STORY_LABEL,
             _MARKET_NEW_CATALYST_GATE_LABEL,
+            "成交量或量比不能直接证明增量资金入场或资金流向",
         }
         market_clause_patterns = [
             (label, pattern)
@@ -1870,6 +1871,23 @@ class AgentOutputGuard:
                             label
                             for label, pattern in market_clause_patterns
                             if pattern.search(clause)
+                            and not (
+                                label
+                                == "成交量或量比不能直接证明增量资金入场或资金流向"
+                                and any(
+                                    term in clause
+                                    for term in (
+                                        "不能证明",
+                                        "不能说明",
+                                        "不能直接证明",
+                                        "不能直接说明",
+                                        "不说明",
+                                        "不等于",
+                                        "不是",
+                                        "并非",
+                                    )
+                                )
+                            )
                         ),
                         None,
                     )

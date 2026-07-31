@@ -2880,6 +2880,9 @@ def test_stock_cause_prompt_drops_noncausal_bulk_and_duplicate_provenance():
                 "source_url": "https://example.invalid/index",
             },
             "market_breadth": {
+                "status": "available",
+                "market_date": "2026-07-24",
+                "same_date_as_target": True,
                 "distribution": {
                     "median_pct_change": -0.5,
                     "bins": ["x" * 1000],
@@ -2933,7 +2936,7 @@ def test_stock_cause_prompt_drops_noncausal_bulk_and_duplicate_provenance():
     assert "research_claims" not in compact
     assert "a_share_information" not in compact
     assert "event_timeline" not in compact
-    assert len(compact["stock_market_context"]["indices"]) == 4
+    assert len(compact["stock_market_context"]["indices"]) == 2
     assert (
         "component_contribution"
         not in compact["stock_market_context"]["exact_industry_index"]
@@ -2958,6 +2961,62 @@ def test_stock_cause_prompt_drops_noncausal_bulk_and_duplicate_provenance():
     ]
     assert [item["title"] for item in packet["adjacent_date_events"]] == ["前一日公告"]
     assert packet["same_date_media_source_count"] == 1
+
+
+def test_stock_price_move_prompt_drops_cross_date_market_breadth():
+    compact = AgentService._compact_stock_research_evidence(
+        {
+            "type": "stock_research",
+            "symbol": "000065.SZ",
+            "user_question": "北方国际7月30日为什么跌？",
+            "stock_market_context": {
+                "analysis_target": {"market_date": "2026-07-30"},
+                "indices": [
+                    {
+                        "symbol": "399001.SZ",
+                        "name": "深证成指",
+                        "comparison_status": "same_market_date",
+                        "market_date": "2026-07-30",
+                        "return_1d_pct": -2.73,
+                    },
+                    {
+                        "symbol": "000688.SS",
+                        "name": "科创50",
+                        "comparison_status": "same_market_date",
+                        "market_date": "2026-07-30",
+                        "return_1d_pct": -5.38,
+                    },
+                    {
+                        "symbol": "399006.SZ",
+                        "name": "创业板指",
+                        "comparison_status": "cross_date",
+                        "market_date": "2026-07-31",
+                        "return_1d_pct": 3.0,
+                    },
+                ],
+                "exact_industry_match_available": False,
+                "exact_industry_index": {
+                    "status": "unavailable_for_target_date",
+                },
+                "market_breadth": {
+                    "status": "available",
+                    "market_date": "2026-07-31",
+                    "same_date_as_target": False,
+                    "breadth": {
+                        "advancers": 700,
+                        "decliners": 4700,
+                    },
+                },
+            },
+        }
+    )
+
+    context = compact["stock_market_context"]
+    assert "market_breadth" not in context
+    assert [item["symbol"] for item in context["indices"]] == [
+        "399001.SZ",
+        "000688.SS",
+    ]
 
 
 def test_mixed_stock_prompt_compacts_duplicate_financial_and_market_context():
@@ -8830,6 +8889,40 @@ def test_market_reassessment_cleanup_removes_duplicate_observation_language():
     assert cleaned == "一要看后续完整交易日里，全市场上涨家数是否仍占明显优势。"
 
 
+def test_market_reassessment_cleanup_normalizes_vague_future_window():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "接下来最值得观察什么？",
+    }
+    answer = (
+        "第一个是后续几个交易日里全市场的后续完整交易日里，"
+        "上涨家数是否仍占明显优势。"
+    )
+
+    cleaned = agent_module._normalize_market_reassessment_language(answer, evidence)
+
+    assert cleaned == "第一个是后续完整交易日里，上涨家数是否仍占明显优势。"
+
+
+def test_market_guard_repair_keeps_cautious_turnover_and_drops_flow_story():
+    evidence = {"type": "market_brief", "market_state": {}}
+    answer = (
+        "今天多数个股上涨，市场体感明显强于部分宽基指数。\n\n"
+        "成交额放大，说明增量资金集中流入科技板块。\n\n"
+        "成交额只说明交易活跃度，不说明资金净流入或机构意图。\n\n"
+        "目前可以确认的是当日参与面较广，具体事件驱动仍需核验。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert guard["passed"] is False
+    assert repaired is not None
+    assert "增量资金集中流入" not in repaired[0]
+    assert "不说明资金净流入" in repaired[0]
+    assert repaired[1]["passed"] is True
+
+
 def test_market_guard_rejects_wrong_index_count_ma5_and_wave_label():
     evidence = {
         "type": "market_brief",
@@ -10238,6 +10331,40 @@ def test_stock_guard_preserves_explicit_industry_causality_boundary():
         "行业成分广度只能描述同步性不能证明个股涨跌因果"
         not in guard["unsupported_market_inferences"]
     )
+
+
+def test_stock_guard_preserves_natural_missing_industry_and_event_boundary():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000065.SZ",
+        "user_question": "北方国际7月30日下跌更像行业还是公司因素？",
+        "research_plan": {"focus": "price_cause"},
+        "stock_market_context": {
+            "stock_target": {
+                "market_date": "2026-07-30",
+                "return_1d_pct": -0.43,
+            },
+            "indices": [
+                {"name": "深证成指", "return_1d_pct": -2.73},
+                {"name": "上证综指", "return_1d_pct": -0.62},
+            ],
+            "market_breadth": {"same_date_as_target": False},
+            "exact_industry_index": {"status": "unavailable_for_target_date"},
+        },
+    }
+    answer = (
+        "北方国际下跌0.43%，深证成指下跌2.73%，上证综指下跌0.62%。"
+        "它确实跑赢了大盘，但这不是行业对比，只是市场对照。"
+        "问题的核心是这种相对抗跌到底更像行业拖着走，还是公司自身在支撑。"
+        "缺少行业样本，我说不清到底是行业整体抗跌带动了它，"
+        "还是公司自身因素在支撑。当天没有盘中催化剂，"
+        "收盘后公告也不构成同日驱动。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is True
+    assert guard["unsupported_market_inferences"] == []
 
 
 def test_market_repair_surgically_removes_recurring_causal_stories():

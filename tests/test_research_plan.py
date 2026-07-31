@@ -79,6 +79,23 @@ def test_deep_price_cause_request_keeps_question_scoped_evidence_plan():
     )
 
 
+def test_deep_price_cause_adds_structured_finance_without_explicit_finance_terms():
+    plan = ResearchPlanService().build(
+        "北方国际7月30日上涨更像行业还是公司因素？请深度分析，信息量要大。"
+    )
+
+    assert plan["focus"] == "price_cause"
+    assert plan["selected_modules"] == [
+        "market",
+        "company_information",
+        "event_timeline",
+        "fundamentals",
+        "earnings_quality",
+        "financial_drivers",
+    ]
+    assert "evidence-debate" not in plan["selected_skills"]
+
+
 def test_quality_review_focus_uses_disclosures_financials_cashflow_and_business_only():
     service = ResearchPlanService()
 
