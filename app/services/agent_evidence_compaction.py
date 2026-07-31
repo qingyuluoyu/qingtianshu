@@ -115,6 +115,12 @@ def compact_market_brief_evidence(
     cause_query = focus_key == "market_cause" or any(
         term in question_context for term in ("为什么", "为何", "原因", "反差")
     )
+    observation_followup = bool(prior_questions) and any(
+        term in question for term in ("接下来", "最值得看", "观察", "不要重复")
+    )
+    concise_market_observation = observation_followup or (
+        cause_query and focus_key == "market_risk"
+    )
     cross_date_comparison = any(
         term in question_context
         for term in ("今天", "今日", "当前", "盘中", "午间")
@@ -221,13 +227,25 @@ def compact_market_brief_evidence(
     metric_keys = metric_keys_by_focus.get(
         focus_key, metric_keys_by_focus["market_overview"]
     )
-    if "60日" in question and any(
+    if observation_followup:
+        metric_keys = ("latest_close", "ma20", "ma60", "trend_state")
+    elif cause_query and focus_key == "market_risk":
+        metric_keys = (
+            "latest_close",
+            "return_1d_pct",
+            "ma20",
+            "ma60",
+            "trend_state",
+        )
+    if not observation_followup and "60日" in question and any(
         term in question for term in ("收益", "涨幅", "跌幅", "涨跌")
     ):
         metric_keys = tuple(dict.fromkeys((*metric_keys, "return_60d_pct")))
     latest_bar_keys = (
         ("timestamp", "open", "high", "low", "close", "volume")
         if focus_key in {"volume_flows", "market_risk"}
+        and not cause_query
+        and not observation_followup
         else ()
     )
 
@@ -291,7 +309,13 @@ def compact_market_brief_evidence(
             key: metrics.get(key) for key in metric_keys if metrics.get(key) is not None
         }
         latest_close = metrics.get("latest_close")
-        moving_average_keys = () if focus_key == "market_cause" else ("ma20", "ma60")
+        moving_average_keys = (
+            ()
+            if focus_key == "market_cause"
+            or cause_query
+            or observation_followup
+            else ("ma20", "ma60")
+        )
         for moving_average_key in moving_average_keys:
             moving_average = metrics.get(moving_average_key)
             if not isinstance(latest_close, (int, float)) or not isinstance(
@@ -334,6 +358,8 @@ def compact_market_brief_evidence(
     causal_evidence = market_drivers.get("causal_evidence") or {}
     driver_limit = (
         0
+        if observation_followup
+        else 0
         if cause_query and causal_evidence
         else 4
         if cause_query
@@ -439,23 +465,18 @@ def compact_market_brief_evidence(
             market_key=market_key,
             original=evidence.get("market_state") or {},
         )
-        if focus_key == "market_cause":
+        if focus_key == "market_cause" or concise_market_observation:
             compact["market_state"] = {
                 key: compact["market_state"].get(key)
                 for key in (
                     "label",
-                    "coverage_ratio",
-                    "average_return_1d_pct",
-                    "advance_ratio",
-                    "dispersion_pct",
-                    "breadth_scope",
                     "whole_market_breadth_available",
                 )
                 if compact["market_state"].get(key) is not None
             }
     compact["indices"] = compact_indices
     compact["market_drivers"] = compact_drivers
-    if cause_query and causal_evidence:
+    if cause_query and causal_evidence and not observation_followup:
         compact["causal_evidence"] = {
             key: causal_evidence.get(key)
             for key in (
@@ -470,12 +491,33 @@ def compact_market_brief_evidence(
             if causal_evidence.get(key) is not None
         }
         compact_candidates: list[dict[str, Any]] = []
-        seen_candidate_titles: set[str] = set()
-        for item in causal_evidence.get("candidates") or []:
+        seen_candidate_titles: list[str] = []
+
+        def causal_candidate_rank(item: dict[str, Any]) -> int:
+            title = str(item.get("title") or "")
+            if any(
+                term in title
+                for term in ("跌停", "大跌", "重挫", "下挫", "下跌", "跳水")
+            ):
+                return 0
+            if any(
+                term in title
+                for term in ("逆市", "收红", "走强", "上涨", "大涨", "扩大")
+            ):
+                return 1
+            return 2
+
+        for item in sorted(
+            causal_evidence.get("candidates") or [], key=causal_candidate_rank
+        ):
             title = str(item.get("title") or "").strip()
-            if not title or title in seen_candidate_titles:
+            normalized_title = "".join(character for character in title if character.isalnum())
+            if not title or any(
+                normalized_title in existing or existing in normalized_title
+                for existing in seen_candidate_titles
+            ):
                 continue
-            seen_candidate_titles.add(title)
+            seen_candidate_titles.append(normalized_title)
             compact_candidates.append(
                 {
                     key: item.get(key)
@@ -494,7 +536,7 @@ def compact_market_brief_evidence(
                     if item.get(key) is not None
                 }
             )
-            if len(compact_candidates) >= 4:
+            if len(compact_candidates) >= 3:
                 break
         compact["causal_evidence"]["candidates"] = compact_candidates
         for item in compact["causal_evidence"]["candidates"]:
@@ -504,13 +546,26 @@ def compact_market_brief_evidence(
                 item["summary"] = str(item["summary"])[:240]
     industry_focus = evidence.get("industry_focus") or {}
     industry_snapshot = evidence.get("industry_snapshot") or {}
-    if industry_focus.get("name"):
+    generic_industry_names = {
+        "行业",
+        "板块",
+        "热门",
+        "热点",
+        "热门板块",
+        "热点板块",
+    }
+    if industry_focus.get("name") and str(
+        industry_focus.get("name")
+    ) not in generic_industry_names:
         compact["industry_focus"] = {
             key: industry_focus.get(key)
             for key in ("name", "market_scope", "requested_by_user")
             if industry_focus.get(key) is not None
         }
-    if industry_snapshot:
+    if (
+        industry_snapshot
+        and str(industry_focus.get("name") or "") not in generic_industry_names
+    ):
         points = list(industry_snapshot.get("points") or [])
         target_point = next(
             (
@@ -601,7 +656,9 @@ def compact_market_brief_evidence(
                 "不是当日成交量相对20日均量"
             )
         }
-    if focus_key in {"trend_reversal", "market_risk"}:
+    if focus_key == "trend_reversal" or (
+        focus_key == "market_risk" and not concise_market_observation
+    ):
         compact.setdefault("metric_definitions", {}).update(
             {
                 "return_5d_pct": "最近5个交易日累计收益，不表示连续5日每天同向涨跌",
@@ -625,7 +682,11 @@ def compact_market_brief_evidence(
         compact.setdefault("metric_definitions", {}).setdefault(
             "return_60d_pct", "最近60个交易日累计收益"
         )
-    if focus_key == "market_risk" and len(compact_indices) >= 2:
+    if (
+        focus_key == "market_risk"
+        and not concise_market_observation
+        and len(compact_indices) >= 2
+    ):
         first_volatility = (
             compact_indices[0].get("metrics", {}).get("volatility_20d_annualized_pct")
         )
@@ -651,7 +712,7 @@ def compact_market_brief_evidence(
                 }
             }
 
-    if (market_key == "china" or global_query) and (
+    if not observation_followup and (market_key == "china" or global_query) and (
         focus_key
         in {
         "market_overview",
@@ -704,6 +765,77 @@ def compact_market_brief_evidence(
                 or cross_date_comparison
             )
         ):
+            breadth_keys = (
+                ("total", "advancers", "decliners", "unchanged", "state")
+                if concise_market_observation
+                else (
+                    "total",
+                    "advancers",
+                    "decliners",
+                    "unchanged",
+                    "net_advancers",
+                    "advance_ratio",
+                    "decline_ratio",
+                    "unchanged_ratio",
+                    "state",
+                    "classification_method",
+                )
+            )
+            raw_turnover = market_breadth.get("turnover") or {}
+            if concise_market_observation:
+                history_comparison = raw_turnover.get("history_comparison") or {}
+                compact_turnover = {
+                    key: raw_turnover.get(key)
+                    for key in ("status", "currency", "total_amount_100m_cny")
+                    if raw_turnover.get(key) is not None
+                }
+                compact_history_comparison = {
+                    key: history_comparison.get(key)
+                    for key in (
+                        "status",
+                        "previous_market_date",
+                        "change_vs_previous_pct",
+                        "previous_5d_average_amount_cny",
+                        "change_vs_previous_5d_average_pct",
+                        "previous_20d_average_amount_cny",
+                        "change_vs_previous_20d_average_pct",
+                        "available_prior_sessions",
+                        "method",
+                    )
+                    if history_comparison.get(key) is not None
+                }
+                if compact_history_comparison:
+                    compact_turnover["history_comparison"] = (
+                        compact_history_comparison
+                    )
+                compact_distribution: dict[str, Any] = {}
+            else:
+                compact_turnover = {
+                    "status": raw_turnover.get("status"),
+                    "currency": raw_turnover.get("currency"),
+                    "total_amount_cny": raw_turnover.get("total_amount_cny"),
+                    "total_amount_100m_cny": raw_turnover.get(
+                        "total_amount_100m_cny"
+                    ),
+                    "coverage": raw_turnover.get("coverage"),
+                    "exchanges": raw_turnover.get("exchanges"),
+                    "history_comparison": raw_turnover.get("history_comparison"),
+                    "interpretation": raw_turnover.get("interpretation"),
+                }
+                compact_distribution = {
+                    key: (market_breadth.get("distribution") or {}).get(key)
+                    for key in (
+                        "status",
+                        "coverage",
+                        "median_pct_change",
+                        "p25_pct_change",
+                        "p75_pct_change",
+                        "bins",
+                        "bin_ratios",
+                        "method",
+                    )
+                    if (market_breadth.get("distribution") or {}).get(key) is not None
+                }
             compact["market_breadth"] = {
                 "status": "available",
                 "scope": market_breadth.get("scope"),
@@ -724,55 +856,16 @@ def compact_market_brief_evidence(
                 },
                 "breadth": {
                     key: (market_breadth.get("breadth") or {}).get(key)
-                    for key in (
-                        "total",
-                        "advancers",
-                        "decliners",
-                        "unchanged",
-                        "net_advancers",
-                        "advance_ratio",
-                        "decline_ratio",
-                        "unchanged_ratio",
-                        "state",
-                        "classification_method",
-                    )
+                    for key in breadth_keys
                     if (market_breadth.get("breadth") or {}).get(key) is not None
                 },
-                "turnover": {
-                    "status": (market_breadth.get("turnover") or {}).get("status"),
-                    "currency": (market_breadth.get("turnover") or {}).get("currency"),
-                    "total_amount_cny": (market_breadth.get("turnover") or {}).get(
-                        "total_amount_cny"
-                    ),
-                    "total_amount_100m_cny": (market_breadth.get("turnover") or {}).get(
-                        "total_amount_100m_cny"
-                    ),
-                    "coverage": (market_breadth.get("turnover") or {}).get("coverage"),
-                    "exchanges": (market_breadth.get("turnover") or {}).get(
-                        "exchanges"
-                    ),
-                    "history_comparison": (market_breadth.get("turnover") or {}).get(
-                        "history_comparison"
-                    ),
-                    "interpretation": (market_breadth.get("turnover") or {}).get(
-                        "interpretation"
-                    ),
-                },
-                "distribution": {
-                    key: (market_breadth.get("distribution") or {}).get(key)
-                    for key in (
-                        "status",
-                        "coverage",
-                        "median_pct_change",
-                        "p25_pct_change",
-                        "p75_pct_change",
-                        "bins",
-                        "bin_ratios",
-                        "method",
-                    )
-                    if (market_breadth.get("distribution") or {}).get(key) is not None
-                },
+                "turnover": compact_turnover,
+                "distribution": compact_distribution,
             }
+            if not compact_turnover:
+                compact["market_breadth"].pop("turnover", None)
+            if not compact_distribution:
+                compact["market_breadth"].pop("distribution", None)
             snapshot_local_time = prompt_local_time(
                 market_breadth.get("fetched_at"), "Asia/Shanghai"
             )
@@ -2576,9 +2669,10 @@ def compact_stock_research_evidence(
             def compact_company_explanation(item: dict[str, Any]) -> dict[str, Any]:
                 excerpt = " ".join(str(item.get("excerpt") or "").split())
                 cause_at = excerpt.find("主要因")
-                company_statement = (
+                raw_statement = (
                     excerpt[cause_at:] if cause_at >= 0 else excerpt[:240]
                 )
+                company_statement = "".join(raw_statement.split())
                 return {
                     **select(
                         item,
@@ -2586,6 +2680,16 @@ def compact_stock_research_evidence(
                     ),
                     "company_statement": company_statement,
                 }
+
+            explanation_priority = {
+                "operating_cashflow": 0,
+                "financial_expense_fx_interest": 1,
+                "inventory": 2,
+                "receivables_collection": 3,
+            }
+
+            def explanation_rank(item: dict[str, Any]) -> int:
+                return explanation_priority.get(str(item.get("theme") or ""), 99)
 
             fundamentals = compact.get("fundamentals") or {}
             summary = fundamentals.get("summary") or {}
@@ -2616,6 +2720,22 @@ def compact_stock_research_evidence(
             }
 
             quality = compact.get("earnings_quality") or {}
+            quality_report_keys = (
+                "report_date",
+                "report_type",
+                "report_date_name",
+                "notice_date",
+                "currency",
+                "revenue",
+                "revenue_yoy_pct",
+                "parent_net_profit",
+                "net_profit_yoy_pct",
+                "gross_margin_pct",
+                "net_margin_pct",
+                "operating_cashflow",
+                "operating_cashflow_to_net_profit",
+                "period_basis",
+            )
             compact["earnings_quality"] = {
                 **select(
                     quality,
@@ -2623,32 +2743,82 @@ def compact_stock_research_evidence(
                         "overall_label",
                         "confidence",
                         "summary",
-                        "latest_report",
-                        "comparable_report",
                         "contradictions",
                         "company_explanations",
                         "boundary",
                     ),
                 ),
-                "factors": (quality.get("factors") or [])[:5],
+                "latest_report": select(
+                    quality.get("latest_report") or {}, quality_report_keys
+                ),
+                "comparable_report": select(
+                    quality.get("comparable_report") or {}, quality_report_keys
+                ),
+                "factors": [
+                    select(
+                        item,
+                        (
+                            "key",
+                            "label",
+                            "status",
+                            "value_pct",
+                            "comparable_pct",
+                            "change_pp",
+                            "value_ratio",
+                            "comparable_ratio",
+                            "interpretation",
+                            "interpretation_boundary",
+                        ),
+                    )
+                    for item in (quality.get("factors") or [])[:5]
+                ],
             }
 
             drivers = compact.get("financial_drivers") or {}
             filing = drivers.get("filing_evidence") or {}
+            cashflow_analysis = select(
+                drivers.get("cashflow_analysis") or {},
+                (
+                    "operating_cashflow",
+                    "comparable_operating_cashflow",
+                    "operating_cashflow_to_net_profit",
+                    "comparable_operating_cashflow_to_net_profit",
+                    "cash_received_from_sales_to_revenue_pct",
+                    "comparable_cash_received_from_sales_to_revenue_pct",
+                ),
+            )
+            mechanical_drivers = [
+                item
+                for item in (drivers.get("confirmed_mechanical_drivers") or [])
+                if item.get("calculation_nature") != "static_counterfactual"
+            ]
+            clue_priority = {
+                "operating_cashflow_coverage": 0,
+                "sales_cash_collection": 1,
+                "inventory": 2,
+            }
+            plausible_clues = sorted(
+                (
+                    item
+                    for item in (drivers.get("plausible_clues") or [])
+                    if item.get("key") in clue_priority
+                ),
+                key=lambda item: clue_priority[str(item.get("key"))],
+            )
+            company_explanations = sorted(
+                filing.get("explicit_company_explanations") or [],
+                key=explanation_rank,
+            )
             compact["financial_drivers"] = {
                 **select(
                     drivers,
                     (
                         "overall_label",
                         "confidence",
-                        "summary",
-                        "latest_period",
-                        "comparable_period",
-                        "cashflow_analysis",
-                        "unresolved_causes",
                         "boundary",
                     ),
                 ),
+                "cashflow_analysis": cashflow_analysis,
                 "confirmed_mechanical_drivers": [
                     select(
                         item,
@@ -2661,11 +2831,12 @@ def compact_stock_research_evidence(
                             "interpretation_boundary",
                         ),
                     )
-                    for item in (
-                        drivers.get("confirmed_mechanical_drivers") or []
-                    )[:5]
+                    for item in mechanical_drivers[:4]
                 ],
-                "plausible_clues": (drivers.get("plausible_clues") or [])[:3],
+                "plausible_clues": [
+                    select(item, ("key", "label", "evidence"))
+                    for item in plausible_clues[:3]
+                ],
                 "filing_evidence": {
                     **select(filing, ("status", "summary", "boundary")),
                     "document": select(
@@ -2682,9 +2853,7 @@ def compact_stock_research_evidence(
                     "explicit_company_explanations": (
                         [
                             compact_company_explanation(item)
-                            for item in (
-                                filing.get("explicit_company_explanations") or []
-                            )[:3]
+                            for item in company_explanations[:4]
                         ]
                     ),
                 },

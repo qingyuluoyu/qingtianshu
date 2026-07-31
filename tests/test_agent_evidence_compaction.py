@@ -134,6 +134,25 @@ def test_market_risk_cause_query_prefers_deduplicated_causal_candidates():
             "user_question": "今天为什么和昨天反差这么大，什么时候重新判断？",
             "question_focus": {"key": "market_risk"},
             "analysis_target": {"market_date": "2026-07-30", "market_key": "china"},
+            "indices": [
+                    {
+                        "name": "上证综指",
+                        "group": "china",
+                        "market_date": "2026-07-30",
+                        "same_date_as_analysis_target": True,
+                        "metrics": {
+                        "latest_close": 3804.69,
+                        "return_1d_pct": -0.62,
+                        "return_20d_pct": -5.56,
+                        "ma20": 3904.26,
+                        "ma60": 4036.01,
+                        "volatility_20d_annualized_pct": 20.89,
+                        "max_drawdown_60d_pct": -11.28,
+                        "trend_state": "中期偏弱",
+                    },
+                    "latest_bar": {"close": 3804.69, "volume": 592298923},
+                }
+            ],
             "market_drivers": {
                 "market_key": "china",
                 "question_focus": "market_risk",
@@ -155,6 +174,45 @@ def test_market_risk_cause_query_prefers_deduplicated_causal_candidates():
                 "market_date": "2026-07-30",
                 "sectors": [{"name": "白酒", "pct_change": 4.26}],
             },
+            "industry_focus": {
+                "name": "热门",
+                "market_scope": "A股",
+                "requested_by_user": True,
+            },
+            "industry_snapshot": {
+                "status": "unavailable",
+                "industry_name": "热门",
+            },
+            "market_breadth": {
+                "status": "available",
+                "same_date_as_analysis_target": True,
+                "breadth": {
+                    "total": 5533,
+                    "advancers": 1767,
+                    "decliners": 3635,
+                    "unchanged": 131,
+                    "advance_ratio": 0.3194,
+                    "state": "普跌",
+                    "classification_method": "内部分类说明",
+                },
+                "turnover": {
+                    "status": "available",
+                    "currency": "CNY",
+                    "total_amount_100m_cny": 23574.95,
+                    "exchanges": {"shanghai": {"amount": 1}},
+                    "history_comparison": {
+                        "status": "available",
+                        "previous_market_date": "2026-07-29",
+                        "change_vs_previous_pct": 2.01,
+                        "available_prior_sessions": 4,
+                    },
+                },
+                "distribution": {
+                    "status": "available",
+                    "median_pct_change": -1.15,
+                    "bins": {"strong_decliners": 1711},
+                },
+            },
         }
     )
 
@@ -164,6 +222,84 @@ def test_market_risk_cause_query_prefers_deduplicated_causal_candidates():
         "银行板块午后走强",
     ]
     assert compact["hot_sectors"]["sectors"][0]["name"] == "白酒"
+    assert compact["indices"][0]["metrics"] == {
+        "latest_close": 3804.69,
+        "return_1d_pct": -0.62,
+        "ma20": 3904.26,
+        "ma60": 4036.01,
+        "trend_state": "中期偏弱",
+    }
+    assert "latest_bar" not in compact["indices"][0]
+    assert "relative_comparisons" not in compact
+    assert compact["market_breadth"]["breadth"] == {
+        "total": 5533,
+        "advancers": 1767,
+        "decliners": 3635,
+        "unchanged": 131,
+        "state": "普跌",
+    }
+    assert "distribution" not in compact["market_breadth"]
+    assert "exchanges" not in compact["market_breadth"]["turnover"]
+    assert "industry_focus" not in compact
+    assert "industry_snapshot" not in compact
+
+
+def test_market_observation_followup_drops_old_stories_and_extra_metrics():
+    compact = compact_market_brief_evidence(
+        {
+            "type": "market_brief",
+            "user_question": "接下来最值得看什么？不要重复上一轮。",
+            "_conversation_user_questions": [
+                "今天为什么和昨天反差这么大？"
+            ],
+            "question_focus": {"key": "market_risk"},
+            "analysis_target": {"market_date": "2026-07-30", "market_key": "china"},
+            "indices": [
+                    {
+                        "name": "沪深300",
+                        "group": "china",
+                        "market_date": "2026-07-30",
+                        "same_date_as_analysis_target": True,
+                        "metrics": {
+                        "latest_close": 4549.72,
+                        "return_1d_pct": -1.1,
+                        "ma20": 4712.458,
+                        "ma60": 4820.0,
+                        "volatility_20d_annualized_pct": 30.0,
+                        "max_drawdown_60d_pct": -15.0,
+                        "trend_state": "中期偏弱",
+                    },
+                    "latest_bar": {"close": 4549.72, "volume": 1},
+                }
+            ],
+            "market_drivers": {
+                "market_key": "china",
+                "question_focus": "market_risk",
+                "items": [{"title": "旧风险提示标题"}],
+                "causal_evidence": {
+                    "coverage_status": "same_date_multi_source",
+                    "candidates": [{"title": "旧的CPO线索", "source": "甲"}],
+                },
+            },
+            "hot_sectors": {
+                "same_date_as_analysis_target": True,
+                "sectors": [{"name": "白酒", "pct_change": 4.26}],
+            },
+        }
+    )
+
+    assert compact["market_drivers"]["items"] == []
+    assert "causal_evidence" not in compact
+    assert "hot_sectors" not in compact
+    assert compact["indices"][0]["metrics"] == {
+        "latest_close": 4549.72,
+        "ma20": 4712.458,
+        "ma60": 4820.0,
+        "trend_state": "中期偏弱",
+    }
+    assert "latest_bar" not in compact["indices"][0]
+    assert "ma20_gap_points" not in compact["indices"][0]["metrics"]
+    assert "relative_comparisons" not in compact
 
 
 def test_agent_service_delegates_market_compaction_to_pure_module(
@@ -456,10 +592,35 @@ def test_deep_price_move_compaction_keeps_requested_finance_and_sentiment_only()
                 },
                 "confirmed_mechanical_drivers": [
                     {
+                        "key": "gross_profit_margin_effect",
+                        "label": "毛利率静态影响",
+                        "calculation_nature": "static_counterfactual",
+                        "statement": "不应保留的静态反事实。",
+                    },
+                    {
                         "key": "financial_expense",
                         "label": "财务费用变化",
+                        "calculation_nature": "reported_statement_bridge",
                         "statement": "财务费用同比增加。",
                     }
+                ],
+                "plausible_clues": [
+                    {"key": "inventory", "label": "存货", "evidence": "存货上升。"},
+                    {
+                        "key": "accounts_payable",
+                        "label": "应付账款",
+                        "evidence": "不应保留。",
+                    },
+                    {
+                        "key": "sales_cash_collection",
+                        "label": "销售收现率",
+                        "evidence": "销售收现率下降。",
+                    },
+                    {
+                        "key": "operating_cashflow_coverage",
+                        "label": "现金流覆盖",
+                        "evidence": "经营现金流转负。",
+                    },
                 ],
                 "filing_evidence": {
                     "status": "available",
@@ -470,6 +631,15 @@ def test_deep_price_move_compaction_keeps_requested_finance_and_sentiment_only()
                             "excerpt": (
                                 "财务费用 340,974 (340,005) 200.28% "
                                 "主要因本期汇率波动产生汇兑损失及净利息收入减少"
+                            ),
+                            "notice_date": "2026-04-25",
+                        },
+                        {
+                            "theme": "operating_cashflow",
+                            "label": "经营现金流与销售收现",
+                            "excerpt": (
+                                "经营活动现金流净额 主要因本期销售商品、提供劳务 "
+                                "收到的现金减少及购买商品、接受劳务支付的现金增加"
                             ),
                             "notice_date": "2026-04-25",
                         }
@@ -505,8 +675,20 @@ def test_deep_price_move_compaction_keeps_requested_finance_and_sentiment_only()
     explanation = compact["financial_drivers"]["filing_evidence"][
         "explicit_company_explanations"
     ][0]
-    assert explanation["company_statement"].startswith("主要因本期汇率波动")
+    assert explanation["theme"] == "operating_cashflow"
+    assert explanation["company_statement"].startswith("主要因本期销售商品")
     assert "340,974" not in explanation["company_statement"]
+    assert [
+        item["key"]
+        for item in compact["financial_drivers"]["confirmed_mechanical_drivers"]
+    ] == ["financial_expense"]
+    assert [
+        item["key"] for item in compact["financial_drivers"]["plausible_clues"]
+    ] == [
+        "operating_cashflow_coverage",
+        "sales_cash_collection",
+        "inventory",
+    ]
     assert compact["a_share_information"] == {
         "sentiment": {
             "band": "中性或混合",

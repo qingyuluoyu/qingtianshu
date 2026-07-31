@@ -1182,6 +1182,7 @@ def _has_stock_industry_causal_overclaim(answer: str) -> bool:
         "不能因此",
         "不能倒推出",
         "不能排除",
+        "不能写成",
     )
     for clause in re.split(r"[。；\n]", answer):
         if any(term in clause for term in cautious_terms):

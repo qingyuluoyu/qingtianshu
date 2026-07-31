@@ -131,6 +131,11 @@ def test_stock_price_move_detects_deep_causal_comparison_wording():
     assert "本轮结论最后核对" in prompt
     assert "这是用户明确要求的深度分析" in prompt
     assert "基本面是背景，近期直接驱动若无" in prompt
+    assert "700—1100 个中文字" in prompt
+    assert "最多使用两个自然小标题" in prompt
+    assert "账面利润未获验证" in prompt
+    assert "特别针对" in prompt
+    assert "结尾在当前分层结论处结束" in prompt
 
 
 def test_market_followup_adds_short_final_quality_check():
@@ -147,7 +152,7 @@ def test_market_followup_adds_short_final_quality_check():
     assert "旧的资讯标题不能被改造成未来观察指标" in prompt
     assert "不写权重托底、中小市值跟随或市场轮动" in prompt
     assert "不要使用小标题" in prompt
-    assert "不把 4708 改成“4700多”" in prompt
+    assert "口语化近似可以保留" in prompt
     assert "不得使用喘息、超卖、卖压衰竭" in prompt
 
 
@@ -409,6 +414,10 @@ def test_market_risk_question_with_why_keeps_cause_contract_and_final_check():
     assert "不强制引用风险提示标题" in prompt
     assert "本轮市场结论最后核对" in prompt
     assert "不得把盘中反弹命名为技术性修复" in prompt
+    assert "最终只写四个自然短段落" in prompt
+    assert "700—950 个中文字" in prompt
+    assert "技术性回补、超跌反弹、抛压释放" in prompt
+    assert "若今天的触发事件未取得" in prompt
 
 
 def test_relative_industry_contract_hides_unselected_modules_and_fixed_day_thresholds():

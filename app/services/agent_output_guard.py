@@ -739,6 +739,7 @@ class AgentOutputGuard:
                     implied_value = direction * abs(value)
             tolerance_floor = 0.02
             approximate_upper_bound: float | None = None
+            approximate_lower_bound: float | None = None
             approximate_plain_number: re.Match[str] | None = None
             if token.endswith("%"):
                 numeric_token = token.lstrip("+-").rstrip("%")
@@ -776,8 +777,14 @@ class AgentOutputGuard:
                 numeric_token = token.lstrip("+-").replace(",", "")
                 trailing_zeros = len(numeric_token) - len(numeric_token.rstrip("0"))
                 approximate_plain_number = re.search(
-                    r"(?:约|大约|约为|近|超过|多于|高于|至少|不少于)\s*$",
+                    r"(?:约|大约|约为|近|超过|多于|高于|至少|不少于|"
+                    r"不到|少于|不足|低于)\s*$",
                     prefix[-10:],
+                )
+                approximate_plain_number = approximate_plain_number or re.match(
+                    r"\s*(?:点|家|只|个|元|万元|亿元|倍|(?:个)?百分点)?"
+                    r"\s*(?:左右|上下|附近)",
+                    answer[match.end() : match.end() + 12],
                 )
                 percentage_point_suffix = re.match(
                     r"\s*(?:个)?百分点",
@@ -814,6 +821,17 @@ class AgentOutputGuard:
                         tolerance_floor = max(
                             tolerance_floor, 0.51 * (10**trailing_zeros)
                         )
+                if (
+                    "." not in numeric_token
+                    and trailing_zeros > 0
+                    and re.search(
+                        r"(?:不到|少于|不足|低于)\s*$",
+                        prefix[-10:],
+                    )
+                ):
+                    approximate_lower_bound = max(
+                        0.0, abs(value) - 10**trailing_zeros
+                    )
 
             if explicit_sign:
                 supported = matches(value, allowed_values, tolerance_floor)
@@ -839,6 +857,11 @@ class AgentOutputGuard:
             if not supported and approximate_upper_bound is not None:
                 supported = any(
                     abs(value) <= item < approximate_upper_bound
+                    for item in allowed_magnitudes
+                )
+            if not supported and approximate_lower_bound is not None:
+                supported = any(
+                    approximate_lower_bound < item < abs(value)
                     for item in allowed_magnitudes
                 )
             if not supported:

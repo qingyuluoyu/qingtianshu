@@ -8803,6 +8803,34 @@ def test_numeric_guard_accepts_market_ma_distance_derived_from_evidence():
     assert "9.9%" in invented["unsupported_numbers"]
 
 
+def test_numeric_guard_accepts_natural_market_count_and_point_rounding():
+    evidence = {
+        "type": "market_brief",
+        "indices": [
+            {
+                "name": "沪深300",
+                "metrics": {"latest_close": 4549.72, "ma20": 4712.458},
+            }
+        ],
+        "market_breadth": {
+            "breadth": {
+                "total": 5533,
+                "advancers": 4708,
+                "decliners": 714,
+                "unchanged": 111,
+            }
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "今天上涨4700多只、下跌不到800只；沪深300距20日均线约160点左右。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+    assert guard["unsupported_numbers"] == []
+
+
 def test_market_downtrend_guard_allows_explicit_negation():
     evidence = {
         "type": "market_brief",
@@ -10018,7 +10046,7 @@ def test_stock_guard_preserves_explicit_industry_causality_boundary():
         "user_question": "中兴通讯下跌究竟更像行业还是公司因素？",
     }
     answer = (
-        "行业大跌只能说明个股与行业同向运动，不能就此断定行业就是主因，"
+        "行业大跌只能说明个股与行业同向运动，不能写成行业拖累了个股，"
         "也不能因此认为公司因素已经被排除；近期直接驱动尚未确认。"
     )
 
