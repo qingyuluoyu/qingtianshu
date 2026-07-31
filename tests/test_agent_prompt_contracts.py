@@ -117,6 +117,40 @@ def test_stock_price_move_gets_concise_same_day_evidence_contract():
     assert "禁止写“更像行业普跌中的跟随" in prompt
 
 
+def test_stock_price_move_detects_deep_causal_comparison_wording():
+    prompt = _append(
+        intent="stock_research",
+        model_tier="deep",
+        message=(
+            "请深度分析中兴通讯最近这次下跌：究竟更像行业拖累、"
+            "公司基本面压力，还是市场情绪？信息量要大。"
+        ),
+    )
+
+    assert "个股涨跌原因回答合同（深度）" in prompt
+    assert "本轮结论最后核对" in prompt
+    assert "这是用户明确要求的深度分析" in prompt
+    assert "基本面是背景，近期直接驱动若无" in prompt
+
+
+def test_market_followup_adds_short_final_quality_check():
+    prompt = _append(
+        intent="market_brief",
+        message="接下来最值得看什么？不要重复上一轮。",
+        conversation_history=[
+            {"role": "user", "content": "今天为什么反弹？"},
+            {"role": "assistant", "content": "市场广度明显修复。"},
+        ],
+    )
+
+    assert "市场追问最后核对" in prompt
+    assert "旧的资讯标题不能被改造成未来观察指标" in prompt
+    assert "不写权重托底、中小市值跟随或市场轮动" in prompt
+    assert "不要使用小标题" in prompt
+    assert "不把 4708 改成“4700多”" in prompt
+    assert "不得使用喘息、超卖、卖压衰竭" in prompt
+
+
 def test_stock_research_separates_official_and_media_sources_without_fixed_counts():
     prompt = _append(
         intent="stock_research",
@@ -359,6 +393,22 @@ def test_market_cause_answers_before_explaining_evidence_layers():
     assert "第一传达句必须直接回答“为什么”" in prompt
     assert "第一传达句不得只罗列日期、指数名称和涨跌幅" in prompt
     assert "不要为满足模板单列空洞反方栏目" in prompt
+
+
+def test_market_risk_question_with_why_keeps_cause_contract_and_final_check():
+    prompt = _append(
+        intent="market_brief",
+        message="今天为什么和昨天反差这么大，并说明什么时候需要重新判断？",
+        prompt_evidence={
+            "question_focus": {"key": "market_risk"},
+            "market_drivers": {"items": [{"title": "板块分化线索"}]},
+        },
+    )
+
+    assert "涨跌原因回答必须先给结论" in prompt
+    assert "不强制引用风险提示标题" in prompt
+    assert "本轮市场结论最后核对" in prompt
+    assert "不得把盘中反弹命名为技术性修复" in prompt
 
 
 def test_relative_industry_contract_hides_unselected_modules_and_fixed_day_thresholds():

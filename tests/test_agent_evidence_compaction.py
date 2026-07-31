@@ -127,6 +127,45 @@ def test_market_followup_keeps_prior_cross_date_question_context() -> None:
     assert compact["market_breadth"]["breadth"]["advancers"] == 4517
 
 
+def test_market_risk_cause_query_prefers_deduplicated_causal_candidates():
+    compact = compact_market_brief_evidence(
+        {
+            "type": "market_brief",
+            "user_question": "今天为什么和昨天反差这么大，什么时候重新判断？",
+            "question_focus": {"key": "market_risk"},
+            "analysis_target": {"market_date": "2026-07-30", "market_key": "china"},
+            "market_drivers": {
+                "market_key": "china",
+                "question_focus": "market_risk",
+                "items": [
+                    {"title": "多家公司发布风险提示"},
+                    {"title": "不应优先进入 Prompt 的泛标题"},
+                ],
+                "causal_evidence": {
+                    "coverage_status": "same_date_multi_source",
+                    "candidates": [
+                        {"title": "CPO概念批量跌停，白酒股上涨", "source": "甲"},
+                        {"title": "CPO概念批量跌停，白酒股上涨", "source": "乙"},
+                        {"title": "银行板块午后走强", "source": "丙"},
+                    ],
+                },
+            },
+            "hot_sectors": {
+                "same_date_as_analysis_target": True,
+                "market_date": "2026-07-30",
+                "sectors": [{"name": "白酒", "pct_change": 4.26}],
+            },
+        }
+    )
+
+    assert compact["market_drivers"]["items"] == []
+    assert [item["title"] for item in compact["causal_evidence"]["candidates"]] == [
+        "CPO概念批量跌停，白酒股上涨",
+        "银行板块午后走强",
+    ]
+    assert compact["hot_sectors"]["sectors"][0]["name"] == "白酒"
+
+
 def test_agent_service_delegates_market_compaction_to_pure_module(
     monkeypatch,
 ) -> None:
@@ -372,6 +411,113 @@ def test_stock_events_are_aligned_to_requested_price_windows() -> None:
     assert inside["source"] == "深交所"
     assert inside["url"] == "https://example.invalid/ir"
     assert inside["direct_excerpt"] == "公司表示二季度出货量环比增长。"
+
+
+def test_deep_price_move_compaction_keeps_requested_finance_and_sentiment_only():
+    compact = compact_stock_research_evidence(
+        {
+            "type": "stock_research",
+            "symbol": "000063.SZ",
+            "display_name": "中兴通讯",
+            "user_question": (
+                "请深度分析最近这次下跌究竟更像行业拖累、公司基本面压力，"
+                "还是市场情绪，并结合财报与现金流、公告和社区样本。"
+            ),
+            "research_plan": {"focus": "comprehensive"},
+            "current_quote": {"price": 33.9, "pct_change": 1.8},
+            "metrics": {
+                "latest_close": 33.3,
+                "return_1d_pct": -2.29,
+                "return_60d_pct": -12.94,
+            },
+            "provenance": {"market_timestamp": "2026-07-30T01:30:00+00:00"},
+            "fundamentals": {
+                "valuation": {"pe_ttm": 36.24},
+                "summary": {
+                    "latest_report": {
+                        "report_date": "2026-03-31",
+                        "report_type": "一季报",
+                        "revenue_yoy_pct": 6.13,
+                        "net_profit_yoy_pct": -46.58,
+                        "operating_cashflow": -19.79,
+                    }
+                },
+            },
+            "earnings_quality": {
+                "overall_label": "盈利质量承压",
+                "latest_report": {"report_date": "2026-03-31"},
+                "factors": [{"label": "利润与现金流方向相反"}],
+            },
+            "financial_drivers": {
+                "overall_label": "利润与经营现金流双重承压",
+                "cashflow_analysis": {
+                    "operating_cashflow": -19.79,
+                    "comparable_operating_cashflow": 18.51,
+                },
+                "confirmed_mechanical_drivers": [
+                    {
+                        "key": "financial_expense",
+                        "label": "财务费用变化",
+                        "statement": "财务费用同比增加。",
+                    }
+                ],
+                "filing_evidence": {
+                    "status": "available",
+                    "explicit_company_explanations": [
+                        {
+                            "theme": "financial_expense_fx_interest",
+                            "label": "财务费用、汇兑与利息",
+                            "excerpt": (
+                                "财务费用 340,974 (340,005) 200.28% "
+                                "主要因本期汇率波动产生汇兑损失及净利息收入减少"
+                            ),
+                            "notice_date": "2026-04-25",
+                        }
+                    ],
+                },
+            },
+            "a_share_information": {
+                "sentiment": {
+                    "band": "中性或混合",
+                    "sample_size": 28,
+                    "neutral_count": 26,
+                },
+                "news": [{"title": "不应保留的泛新闻"}],
+                "announcements": [{"title": "不应在此重复的公告"}],
+            },
+            "peer_comparison": {"peers": [{"name": "烽火通信"}]},
+            "analysis_board": {"summary": "不应进入涨跌原因 Prompt"},
+            "deep_stock_coverage": {"status": "sufficient"},
+        }
+    )
+
+    assert compact["metrics"] == {
+        "latest_close": 33.3,
+        "return_1d_pct": -2.29,
+    }
+    assert compact["fundamentals"]["summary"]["latest_report"][
+        "revenue_yoy_pct"
+    ] == 6.13
+    assert compact["financial_drivers"]["cashflow_analysis"] == {
+        "operating_cashflow": -19.79,
+        "comparable_operating_cashflow": 18.51,
+    }
+    explanation = compact["financial_drivers"]["filing_evidence"][
+        "explicit_company_explanations"
+    ][0]
+    assert explanation["company_statement"].startswith("主要因本期汇率波动")
+    assert "340,974" not in explanation["company_statement"]
+    assert compact["a_share_information"] == {
+        "sentiment": {
+            "band": "中性或混合",
+            "sample_size": 28,
+            "neutral_count": 26,
+        },
+        "sentiment_caveat": None,
+    }
+    assert "peer_comparison" not in compact
+    assert "analysis_board" not in compact
+    assert "deep_stock_coverage" not in compact
 
 
 def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_price():

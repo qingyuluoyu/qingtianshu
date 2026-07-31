@@ -2699,7 +2699,7 @@ class AgentOutputGuard:
     @staticmethod
     def _clean_repair_artifacts(lines: list[str]) -> list[str]:
         cleaned: list[str] = []
-        for line in lines:
+        for index, line in enumerate(lines):
             line = re.sub(r"^(?P<indent>\s*)[。；，、]+\s*", r"\g<indent>", line)
             line = re.sub(r"[；;、]\s*$", "。", line)
             stripped = line.strip()
@@ -2708,6 +2708,16 @@ class AgentOutputGuard:
                 continue
             if re.fullmatch(r"[*_#`\s。；，、.!?,:：]+", stripped):
                 continue
+            if re.fullmatch(
+                r"(?:公司|管理层|财报)[^。！？\n]{0,36}(?:解释|说明)[：:]",
+                stripped,
+            ):
+                next_index = index + 1
+                while next_index < len(lines) and not lines[next_index].strip():
+                    next_index += 1
+                next_line = lines[next_index].strip() if next_index < len(lines) else ""
+                if not re.match(r"^(?:[-*+]\s+|\d+[.、)]\s+)", next_line):
+                    continue
             cleaned.append(line)
         return cleaned
 

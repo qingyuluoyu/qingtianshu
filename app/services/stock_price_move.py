@@ -29,6 +29,11 @@ STOCK_PRICE_MOVE_TERMS = (
 STOCK_PRICE_MOVE_QUALIFIER_TERMS = (
     "可能解释",
     "不能确认",
+    "究竟更像",
+    "更像什么",
+    "更接近",
+    "归因于",
+    "直接驱动",
 )
 
 STOCK_PRICE_MOVE_CONTEXT_TERMS = (

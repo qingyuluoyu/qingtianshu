@@ -10012,6 +10012,24 @@ def test_stock_repair_removes_industry_main_cause_and_sentiment_exclusion_cleanl
     assert repaired_guard["passed"] is True
 
 
+def test_stock_guard_preserves_explicit_industry_causality_boundary():
+    evidence = {
+        "type": "stock_research",
+        "user_question": "中兴通讯下跌究竟更像行业还是公司因素？",
+    }
+    answer = (
+        "行业大跌只能说明个股与行业同向运动，不能就此断定行业就是主因，"
+        "也不能因此认为公司因素已经被排除；近期直接驱动尚未确认。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert (
+        "行业成分广度只能描述同步性不能证明个股涨跌因果"
+        not in guard["unsupported_market_inferences"]
+    )
+
+
 def test_market_repair_surgically_removes_recurring_causal_stories():
     evidence = {"type": "market_brief", "market_state": {}}
     answer = (
@@ -10038,6 +10056,19 @@ def test_market_repair_surgically_removes_recurring_causal_stories():
     assert "代表性指数同步下跌" in repaired_answer
     assert "核心指数与已有均线的关系" in repaired_answer
     assert repaired_guard["passed"] is True
+
+
+def test_repair_artifact_cleanup_removes_dangling_company_explanation_lead():
+    cleaned = AgentOutputGuard._clean_repair_artifacts(
+        [
+            "公司在一季报中给出了几条明确解释：",
+            "",
+            "这些事实说明财务背景承压。",
+        ]
+    )
+
+    assert "公司在一季报中给出了几条明确解释：" not in cleaned
+    assert "这些事实说明财务背景承压。" in cleaned
 
 
 def test_streamed_unverified_draft_is_followed_by_final_guarded_answer(
