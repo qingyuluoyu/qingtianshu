@@ -87,6 +87,46 @@ def test_market_compaction_keeps_newer_breadth_for_explicit_today_vs_yesterday()
     }
 
 
+def test_market_followup_keeps_prior_cross_date_question_context() -> None:
+    history = [
+        {
+            "role": "user",
+            "content": "今天A股普涨，但昨天四个核心指数很弱，怎么理解？",
+        },
+        {"role": "assistant", "content": "更像情绪修复。"},
+    ]
+    question_context = agent_module._market_followup_question_context(
+        "你刚才说更像情绪修复，最强反方证据是什么？",
+        history,
+    )
+    compact = compact_market_brief_evidence(
+        {
+            "type": "market_brief",
+            "user_question": "你刚才说更像情绪修复，最强反方证据是什么？",
+            "_conversation_user_questions": question_context,
+            "analysis_target": {"market_date": "2026-07-30", "market_key": "china"},
+            "question_focus": {"key": "market_risk"},
+            "market_drivers": {"market_key": "china", "question_focus": "market_risk"},
+            "market_breadth": {
+                "status": "available",
+                "market_date": "2026-07-31",
+                "same_date_as_analysis_target": False,
+                "coverage": {"valid_change": 5533, "coverage_ratio": 1.0},
+                "breadth": {
+                    "total": 5533,
+                    "advancers": 4517,
+                    "decliners": 902,
+                    "unchanged": 114,
+                    "state": "普涨",
+                },
+            },
+        }
+    )
+
+    assert compact["cross_date_comparison"] is True
+    assert compact["market_breadth"]["breadth"]["advancers"] == 4517
+
+
 def test_agent_service_delegates_market_compaction_to_pure_module(
     monkeypatch,
 ) -> None:

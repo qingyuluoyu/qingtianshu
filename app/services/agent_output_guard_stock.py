@@ -109,7 +109,7 @@ def _number_unit(text: str, match: re.Match[str]) -> str:
         return "percent"
     if re.match(r"\s*个?百分点", suffix):
         return "percentage_point"
-    if re.match(r"\s*(?:个)?交易日", suffix):
+    if re.match(r"\s*(?:个)?(?:交易日|日)", suffix):
         return "trading_day"
     if re.match(r"\s*(?:个)?(?:报告期|季度|财季)", suffix):
         return "report_period"
@@ -124,6 +124,11 @@ def _sanctioned_stock_failure_text(evidence: dict[str, Any]) -> str:
         "invalidation": outlook.get("invalidation"),
         "horizon": outlook.get("horizon"),
         "price_levels": evidence.get("price_levels") or {},
+        "current_quote": {
+            key: (evidence.get("current_quote") or {}).get(key)
+            for key in ("price", "pct_change", "market_date")
+            if (evidence.get("current_quote") or {}).get(key) is not None
+        },
         "tracking_plan": board.get("tracking_plan") or [],
         "user_thesis": evidence.get("user_thesis"),
         "user_question": evidence.get("user_question"),
@@ -470,7 +475,6 @@ def _stock_current_quote_conflicts(
         return False, False
     direction_conflict = False
     price_conflict = False
-    current_terms = ("今天", "今日", "当前", "现在", "盘中", "最新")
     previous_terms = (
         "上一交易日",
         "前一交易日",
@@ -483,9 +487,16 @@ def _stock_current_quote_conflicts(
         "历史日线",
         "前日",
     )
-    for raw_line in answer.splitlines():
+    for raw_line in re.split(r"(?<=[。！？；])|\n", answer):
         line = raw_line.strip()
-        if not line or not any(term in line for term in current_terms):
+        has_current_quote_reference = any(
+            term in line for term in ("今天", "今日", "现在", "盘中")
+        ) or re.search(
+            r"(?:当前|最新)(?:报价|价格|股价|现价|行情|涨跌)|"
+            r"(?:当前|最新)报(?=\s*[0-9])",
+            line,
+        )
+        if not line or not has_current_quote_reference:
             continue
         explicit_current_quote = re.search(
             r"(?:当前|现在|最新)(?:报价|价格|股价|报)"
@@ -1158,6 +1169,13 @@ def _has_stock_industry_causal_overclaim(answer: str) -> bool:
     for clause in re.split(r"[。；\n]", answer):
         if any(term in clause for term in cautious_terms):
             continue
+        if re.search(
+            r"(?:核心|主要|直接)(?:原因|驱动|因素)?(?:是|来自|源于|在于)?"
+            r"[^。；\n]{0,30}(?:行业|板块)[^。；\n]{0,30}"
+            r"(?:拖累|驱动|导致|造成|原因|因素)",
+            clause,
+        ):
+            return True
         if not re.search(r"(?:行业|板块)[^。；\n]{0,30}(?:普涨|普跌)", clause):
             continue
         if re.search(r"(?:导致|造成|驱动|拖累|共同作用|解释了|原因)", clause):
@@ -1444,6 +1462,8 @@ def _has_stock_unsupported_causal_hypothesis(
         "无法说明",
         "不能单独证明",
         "无法单独证明",
+        "不能单独确认",
+        "无法单独确认",
         "没有证据",
         "未取得证据",
         "不等于",

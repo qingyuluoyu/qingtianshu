@@ -129,6 +129,13 @@ _UNSUPPORTED_MARKET_INFERENCE_PATTERNS = (
         ),
     ),
     (
+        "缺少权重贡献证据时不能声称权重托底护盘或把它作为确认条件",
+        re.compile(
+            r"(?:权重|大市值)[^。；\n]{0,36}"
+            r"(?:托底|护盘|稳定攀升|结构性防线)"
+        ),
+    ),
+    (
         "成交量或量比不能直接证明增量资金入场或资金流向",
         re.compile(
             r"(?:成交量|成交额|量比|放量)[^。；\n]{0,80}"
@@ -820,9 +827,12 @@ def _market_breadth_claim_has_matching_evidence(
         term in user_question for term in relative_terms
     ):
         return True
-    return any(term in user_question for term in relative_terms) and any(
-        term in user_question
-        for term in ("昨天", "昨日", "上一交易日", "前一交易日", "前日")
+    return bool(evidence.get("cross_date_comparison")) or (
+        any(term in user_question for term in relative_terms)
+        and any(
+            term in user_question
+            for term in ("昨天", "昨日", "上一交易日", "前一交易日", "前日")
+        )
     )
 
 

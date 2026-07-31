@@ -436,7 +436,9 @@ class AgentOutputGuard:
             guard_evidence["hot_sectors"] = hot_sectors
             market_breadth = dict(evidence.get("market_breadth") or {})
             user_question = str(evidence.get("user_question") or "")
-            cross_date_comparison = any(
+            cross_date_comparison = bool(
+                evidence.get("cross_date_comparison")
+            ) or any(
                 term in user_question
                 for term in ("今天", "今日", "当前", "盘中", "午间")
             ) and any(
@@ -874,6 +876,12 @@ class AgentOutputGuard:
                         "不能说明",
                         "不能直接证明",
                         "不能直接说明",
+                        "不能解读为",
+                        "无法解读为",
+                        "不宜解读为",
+                        "不得解读为",
+                        "不能视为",
+                        "无法视为",
                         "无法证明",
                         "无法说明",
                         "无法直接证明",
@@ -1114,6 +1122,8 @@ class AgentOutputGuard:
                     "有待确认",
                     "有待核验",
                     "尚待确认",
+                    "不能解读为",
+                    "无法解读为",
                     "证据边界",
                 )
             ):
@@ -1729,6 +1739,7 @@ class AgentOutputGuard:
                 sanitized_lines.append("".join(kept_clauses))
             answer = "\n".join(sanitized_lines)
 
+        industry_boundary_added = False
         for label, predicate in (
             (
                 _STOCK_INDUSTRY_CAUSAL_LABEL,
@@ -1770,6 +1781,29 @@ class AgentOutputGuard:
                 for clause in clauses:
                     if predicate(clause):
                         removed_count += 1
+                        if label == _STOCK_INDUSTRY_CAUSAL_LABEL:
+                            factual_prefix = re.split(
+                                r"(?:，|,)?(?:说明|表明|意味着|因此|核心(?:是|在于)?)",
+                                clause,
+                                maxsplit=1,
+                            )[0].strip()
+                            if (
+                                factual_prefix
+                                and re.search(r"\d", factual_prefix)
+                                and any(
+                                    term in factual_prefix
+                                    for term in ("行业", "板块")
+                                )
+                            ):
+                                kept_clauses.append(
+                                    factual_prefix.rstrip("，,") + "。"
+                                )
+                                if not industry_boundary_added:
+                                    kept_clauses.append(
+                                        "这只能说明个股与行业的同步或相对表现，"
+                                        "不能单独确认个股涨跌的直接原因。"
+                                    )
+                                    industry_boundary_added = True
                         continue
                     kept_clauses.append(clause)
                 sanitized_lines.append("".join(kept_clauses))
@@ -1779,7 +1813,32 @@ class AgentOutputGuard:
         for line in answer.splitlines():
             line_tokens = {match.group(0) for match in _NUMBER_RE.finditer(line)}
             line_has_unsupported_inference = any(
-                label in unsupported_market_inferences and pattern.search(line)
+                label in unsupported_market_inferences
+                and pattern.search(line)
+                and (
+                    label
+                    != "证据包没有给出阈值时不能发明量能或回撤验证门槛"
+                    or any(
+                        term in line
+                        for term in (
+                            "后续",
+                            "未来",
+                            "接下来",
+                            "至少",
+                            "维持",
+                            "扩大至",
+                            "跌至",
+                            "升至",
+                            "如果",
+                            "一旦",
+                            "才",
+                            "方",
+                            "确认",
+                            "有效",
+                            "视为",
+                        )
+                    )
+                )
                 for label, pattern in (
                     *_UNSUPPORTED_MARKET_INFERENCE_PATTERNS,
                     *_UNSUPPORTED_PEER_OPERATING_INFERENCE_PATTERNS,
@@ -2072,6 +2131,8 @@ class AgentOutputGuard:
         ).strip()
         repaired = AgentOutputGuard._renumber_repaired_sections(repaired)
         repaired = AgentOutputGuard._renumber_markdown_lists(repaired)
+        repaired = re.sub(r"\n{3,}", "\n\n", repaired)
+        repaired = AgentOutputGuard._strip_unbalanced_markdown_emphasis(repaired)
         repaired = re.sub(r"[；;、]\s*$", "。", repaired)
 
         post_repair_appendices: list[str] = []
@@ -2470,15 +2531,33 @@ class AgentOutputGuard:
         positions = [
             index for index, line in enumerate(lines) if section_heading.match(line)
         ]
-        if not positions or len(positions) > len(ordinals):
+        if len(positions) > len(ordinals):
             return answer
-        for number, index in enumerate(positions):
-            match = section_heading.match(lines[index])
-            if match is None:
-                continue
-            lines[index] = (
-                f"{match.group('prefix')}{ordinals[number]}、{match.group('rest')}"
-            )
+        if positions:
+            for number, index in enumerate(positions):
+                match = section_heading.match(lines[index])
+                if match is None:
+                    continue
+                lines[index] = (
+                    f"{match.group('prefix')}{ordinals[number]}、"
+                    f"{match.group('rest')}"
+                )
+        prose_ordinal = re.compile(
+            r"^(?P<prefix>\s*)第(?P<ordinal>[一二三四五六七八九十])"
+            r"(?P<marker>[，,:：])(?P<rest>.+)$"
+        )
+        prose_positions = [
+            index for index, line in enumerate(lines) if prose_ordinal.match(line)
+        ]
+        if 0 < len(prose_positions) <= len(ordinals):
+            for number, index in enumerate(prose_positions):
+                match = prose_ordinal.match(lines[index])
+                if match is None:
+                    continue
+                lines[index] = (
+                    f"{match.group('prefix')}第{ordinals[number]}"
+                    f"{match.group('marker')}{match.group('rest')}"
+                )
         return "\n".join(lines)
 
     @staticmethod
@@ -2507,6 +2586,16 @@ class AgentOutputGuard:
                 count=1,
             )
             expected += 1
+        return "\n".join(lines)
+
+    @staticmethod
+    def _strip_unbalanced_markdown_emphasis(answer: str) -> str:
+        lines = answer.splitlines()
+        for index, line in enumerate(lines):
+            for marker in ("**", "__"):
+                if line.count(marker) % 2:
+                    line = line.replace(marker, "")
+            lines[index] = line
         return "\n".join(lines)
 
     @staticmethod

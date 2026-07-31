@@ -106,10 +106,17 @@ def compact_market_brief_evidence(
         or "market_overview"
     )
     question = str(evidence.get("user_question") or "")
+    prior_questions = [
+        str(item)
+        for item in (evidence.get("_conversation_user_questions") or [])
+        if str(item).strip()
+    ]
+    question_context = "\n".join((question, *prior_questions))
     cross_date_comparison = any(
-        term in question for term in ("今天", "今日", "当前", "盘中", "午间")
+        term in question_context
+        for term in ("今天", "今日", "当前", "盘中", "午间")
     ) and any(
-        term in question
+        term in question_context
         for term in ("昨天", "昨日", "上一交易日", "前一交易日", "前日")
     )
     global_query = any(
@@ -365,6 +372,8 @@ def compact_market_brief_evidence(
         )
         if evidence.get(key) is not None
     }
+    if cross_date_comparison:
+        compact["cross_date_comparison"] = True
     focused_live_market = evidence.get("focused_live_market") or {}
     if focused_live_market:
         compact["focused_live_market"] = {

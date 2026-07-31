@@ -214,6 +214,12 @@ def _normalize_market_reassessment_language(
             answer,
         )
         answer = re.sub(
+            r"上涨比例(?:仍)?(?:维持|保持)(?:在)?(?:约)?"
+            r"(?:\d+(?:\.\d+)?%|三分之二)(?:以上|左右)?",
+            "上涨家数仍占明显优势",
+            answer,
+        )
+        answer = re.sub(
             r"全市场(?:的)?上涨家数(?:在后续完整交易日里)?"
             r"(?:维持|保持)?在(?:约)?(?:\d+(?:\.\d+)?%|三分之二)以上",
             "后续完整交易日里，全市场上涨家数仍占明显优势",
@@ -231,6 +237,32 @@ def _normalize_market_reassessment_language(
             answer,
         )
     return answer
+
+
+def _market_followup_question_context(
+    message: str,
+    history: list[dict[str, Any]],
+) -> list[str]:
+    """Keep prior user framing for an explicit market follow-up.
+
+    Market facts are rebuilt from fresh evidence, but a follow-up such as
+    “你刚才说……” still needs the earlier question to preserve the dates and
+    comparison the user is referring to. Only user text is carried forward;
+    prior model prose remains excluded.
+    """
+
+    if not history or re.search(
+        r"(?:你)?刚才|刚刚|上(?:一轮|一条|面)|前面|你说的|"
+        r"这个判断|这一判断|这个结论|这一结论|继续说|接着说",
+        message,
+    ) is None:
+        return []
+    questions = [
+        str(item.get("content") or "")[:500]
+        for item in history
+        if item.get("role") == "user" and str(item.get("content") or "").strip()
+    ]
+    return questions[-4:]
 
 _MODEL_USAGE_SUM_KEYS = (
     "estimated_cost_usd",
@@ -424,6 +456,14 @@ class AgentService:
         prompt_knowledge_context = self._evidence_for_prompt(raw_knowledge_context)
         prompt_history = conversation_history or []
         if intent == "market_brief":
+            market_question_context = _market_followup_question_context(
+                message,
+                prompt_history,
+            )
+            if market_question_context:
+                prompt_evidence["_conversation_user_questions"] = (
+                    market_question_context
+                )
             prompt_evidence = self._compact_market_brief_evidence(prompt_evidence)
             # Knowledge retrieval is rendered in its own prompt section. Keeping
             # the same excerpts inside the evidence packet wastes context and
