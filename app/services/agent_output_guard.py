@@ -15,6 +15,10 @@ from app.services.agent_output_guard_common import (
     _PROHIBITED_OUTPUT_PATTERNS,
 )
 from app.services.agent_output_guard_market import (
+    _MARKET_NEWS_CAUSAL_LABEL,
+    _MARKET_TECHNICAL_REPAIR_CAUSAL_LABEL,
+    _MARKET_STYLE_GAP_STORY_LABEL,
+    _MARKET_NEW_CATALYST_GATE_LABEL,
     _UNSUPPORTED_PEER_OPERATING_INFERENCE_PATTERNS,
     _is_index_contribution_clause,
     _NEGATIVE_SENTIMENT_LANGUAGE_RE,
@@ -79,6 +83,7 @@ from app.services.agent_output_guard_stock import (
     _STOCK_COMPONENT_SOURCE_BOUNDARY_LABEL,
     _STOCK_MARKET_ABSORPTION_LABEL,
     _STOCK_EVENT_SENTIMENT_LABEL,
+    _STOCK_SENTIMENT_EXCLUSION_LABEL,
     _STOCK_UNSUPPORTED_CAUSAL_HYPOTHESIS_LABEL,
     _MARKET_CAUSE_FACT_REQUIRED_LABEL,
     _stock_failure_line_has_unsupported_threshold,
@@ -108,6 +113,7 @@ from app.services.agent_output_guard_stock import (
     _is_public_component_source_boundary_clause,
     _is_evidence_security_entity_clause,
     _has_stock_event_sentiment_overclaim,
+    _has_stock_sentiment_exclusion_overclaim,
     _has_stock_unsupported_causal_hypothesis,
     _has_stock_60d_return_binding_conflict,
     _has_stock_debt_ratio_scale_conflict,
@@ -290,6 +296,18 @@ class AgentOutputGuard:
             r"(?:上涨|下跌|回落)?(?:属于|是)?与(?:大盘|大市|市场|行业)"
             r"方向不同的独立表现",
             "相对市场方向明显分化，但具体驱动仍未确认",
+            answer,
+        )
+        answer = re.sub(
+            r"[，,]\s*(?:现金覆盖能力|现金覆盖|现金质量|现金支撑)"
+            r"(?:转弱|下降|恶化|改善|增强)",
+            "",
+            answer,
+        )
+        answer = re.sub(
+            r"[（(](?:成本上升|成本变化)(?:或|、)"
+            r"(?:产品结构|产品组合)(?:变化|调整)[）)]",
+            "",
             answer,
         )
         answer = re.sub(
@@ -859,6 +877,11 @@ class AgentOutputGuard:
                     or (evidence.get("market_breadth") or {}).get("index_contribution")
                 ):
                     continue
+                if label == _MARKET_NEWS_CAUSAL_LABEL and any(
+                    term in match.group(0)
+                    for term in ("不能说明", "无法说明", "不能证明", "无法证明")
+                ):
+                    continue
                 if (
                     label == "证据包没有给出阈值时不能发明量能或回撤验证门槛"
                     and AgentOutputGuard._is_evidenced_breadth_threshold(
@@ -1219,6 +1242,10 @@ class AgentOutputGuard:
                 unsupported_market_inferences.append(_STOCK_MARKET_ABSORPTION_LABEL)
             if _has_stock_event_sentiment_overclaim(answer):
                 unsupported_market_inferences.append(_STOCK_EVENT_SENTIMENT_LABEL)
+            if _has_stock_sentiment_exclusion_overclaim(answer, evidence):
+                unsupported_market_inferences.append(
+                    _STOCK_SENTIMENT_EXCLUSION_LABEL
+                )
             if _has_stock_unsupported_causal_hypothesis(answer, evidence):
                 unsupported_market_inferences.append(
                     _STOCK_UNSUPPORTED_CAUSAL_HYPOTHESIS_LABEL
@@ -1705,6 +1732,42 @@ class AgentOutputGuard:
                 sanitized_lines.append("".join(kept_clauses))
             answer = "\n".join(sanitized_lines)
 
+        surgical_market_labels = {
+            _MARKET_NEWS_CAUSAL_LABEL,
+            _MARKET_TECHNICAL_REPAIR_CAUSAL_LABEL,
+            _MARKET_STYLE_GAP_STORY_LABEL,
+            _MARKET_NEW_CATALYST_GATE_LABEL,
+        }
+        market_clause_patterns = [
+            (label, pattern)
+            for label, pattern in _UNSUPPORTED_MARKET_INFERENCE_PATTERNS
+            if label in unsupported_market_inferences
+            and label in surgical_market_labels
+        ]
+        if market_clause_patterns:
+            sanitized_lines = []
+            removed_labels: set[str] = set()
+            for line in answer.splitlines():
+                clauses = re.split(r"(?<=[。！？；])", line)
+                kept_clauses = []
+                for clause in clauses:
+                    matched_label = next(
+                        (
+                            label
+                            for label, pattern in market_clause_patterns
+                            if pattern.search(clause)
+                        ),
+                        None,
+                    )
+                    if matched_label is not None:
+                        removed_count += 1
+                        removed_labels.add(matched_label)
+                        continue
+                    kept_clauses.append(clause)
+                sanitized_lines.append("".join(kept_clauses))
+            answer = "\n".join(sanitized_lines)
+            unsupported_market_inferences.difference_update(removed_labels)
+
         if _STOCK_CROSS_DATE_MARKET_LABEL in unsupported_market_inferences:
             section_heading = re.compile(r"^\s*(?:#{1,6}\s+.+|\*\*.+\*\*)\s*$")
             sanitized_lines = []
@@ -1740,6 +1803,7 @@ class AgentOutputGuard:
             answer = "\n".join(sanitized_lines)
 
         industry_boundary_added = False
+        sentiment_boundary_added = False
         for label, predicate in (
             (
                 _STOCK_INDUSTRY_CAUSAL_LABEL,
@@ -1752,6 +1816,12 @@ class AgentOutputGuard:
             (
                 _STOCK_EVENT_SENTIMENT_LABEL,
                 _has_stock_event_sentiment_overclaim,
+            ),
+            (
+                _STOCK_SENTIMENT_EXCLUSION_LABEL,
+                lambda text: _has_stock_sentiment_exclusion_overclaim(
+                    text, evidence
+                ),
             ),
             (
                 _STOCK_UNSUPPORTED_CAUSAL_HYPOTHESIS_LABEL,
@@ -1804,6 +1874,28 @@ class AgentOutputGuard:
                                         "不能单独确认个股涨跌的直接原因。"
                                     )
                                     industry_boundary_added = True
+                        elif label == _STOCK_SENTIMENT_EXCLUSION_LABEL:
+                            factual_prefix = re.split(
+                                r"(?:，|,)?(?:而)?(?:市场)?情绪(?:面)?"
+                                r"[^，。；]{0,12}(?:并无|没有|未有)明确"
+                                r"(?:方向|指向)|"
+                                r"(?:，|,)?(?:并没有|并未|所以|因此|这说明|意味着)",
+                                clause,
+                                maxsplit=1,
+                            )[0].strip()
+                            if factual_prefix and any(
+                                term in factual_prefix
+                                for term in ("社区", "样本", "中性", "混合")
+                            ):
+                                kept_clauses.append(
+                                    factual_prefix.rstrip("，,") + "。"
+                                )
+                            if not sentiment_boundary_added:
+                                kept_clauses.append(
+                                    "这只说明本轮社区样本的方向分布，"
+                                    "不能排除未被样本捕捉的情绪影响。"
+                                )
+                                sentiment_boundary_added = True
                         continue
                     kept_clauses.append(clause)
                 sanitized_lines.append("".join(kept_clauses))
@@ -2072,6 +2164,11 @@ class AgentOutputGuard:
                 and _has_stock_event_sentiment_overclaim(line)
             )
             line_has_unsupported_inference = line_has_unsupported_inference or (
+                _STOCK_SENTIMENT_EXCLUSION_LABEL
+                in unsupported_market_inferences
+                and _has_stock_sentiment_exclusion_overclaim(line, evidence)
+            )
+            line_has_unsupported_inference = line_has_unsupported_inference or (
                 _STOCK_UNSUPPORTED_CAUSAL_HYPOTHESIS_LABEL
                 in unsupported_market_inferences
                 and _has_stock_unsupported_causal_hypothesis(line, evidence)
@@ -2126,6 +2223,7 @@ class AgentOutputGuard:
                 removed_count += 1
                 continue
             kept_lines.append(line)
+        kept_lines = AgentOutputGuard._clean_repair_artifacts(kept_lines)
         repaired = "\n".join(
             AgentOutputGuard._drop_empty_answer_sections(kept_lines)
         ).strip()
@@ -2597,6 +2695,21 @@ class AgentOutputGuard:
                     line = line.replace(marker, "")
             lines[index] = line
         return "\n".join(lines)
+
+    @staticmethod
+    def _clean_repair_artifacts(lines: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for line in lines:
+            line = re.sub(r"^(?P<indent>\s*)[。；，、]+\s*", r"\g<indent>", line)
+            line = re.sub(r"[；;、]\s*$", "。", line)
+            stripped = line.strip()
+            if not stripped:
+                cleaned.append("")
+                continue
+            if re.fullmatch(r"[*_#`\s。；，、.!?,:：]+", stripped):
+                continue
+            cleaned.append(line)
+        return cleaned
 
     @staticmethod
     def _drop_empty_answer_sections(lines: list[str]) -> list[str]:

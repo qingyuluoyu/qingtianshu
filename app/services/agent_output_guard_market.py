@@ -95,6 +95,18 @@ _NEGATIVE_SENTIMENT_LANGUAGE_RE = re.compile(
 _POSITIVE_SENTIMENT_LANGUAGE_RE = re.compile(
     r"(?:社区|股吧|零售)[^。；\n]{0,24}(?:转正|偏多|看多|正面|乐观)"
 )
+_MARKET_NEWS_CAUSAL_LABEL = (
+    "资讯标题不能扩写为估值压力释放连锁抛售或情绪尚未消化"
+)
+_MARKET_TECHNICAL_REPAIR_CAUSAL_LABEL = (
+    "缺少驱动证据时不能把反弹归因于连续下跌后的技术性修复"
+)
+_MARKET_STYLE_GAP_STORY_LABEL = (
+    "缺少昨日全市场广度或风格指数时不能猜测中小盘此前跌幅较浅"
+)
+_MARKET_NEW_CATALYST_GATE_LABEL = (
+    "重新判断不能要求证据包之外的新宏观政策或行业催化"
+)
 _UNSUPPORTED_MARKET_INFERENCE_PATTERNS = (
     (
         "市场资讯标题不能证明已经被价格消化或产生市场反应",
@@ -103,6 +115,41 @@ _UNSUPPORTED_MARKET_INFERENCE_PATTERNS = (
             r"[^。；\n]{0,120}(?:已在市场上产生反应|已产生市场反应|"
             r"已被市场消化|已经被市场消化|已部分被市场消化|"
             r"已经计价|已计价|市场已经反应|市场已反应)"
+        ),
+    ),
+    (
+        _MARKET_NEWS_CAUSAL_LABEL,
+        re.compile(
+            r"(?:风险提示|风险警示|热门股|公告|资讯|标题)"
+            r"[^。；\n]{0,120}(?:说明|表明|意味着|对应|触发|导致|使得)"
+            r"[^。；\n]{0,80}(?:估值压力|连锁抛售|情绪承压|情绪扰动|"
+            r"影响尚未消化|影响逐渐消化)"
+        ),
+    ),
+    (
+        _MARKET_TECHNICAL_REPAIR_CAUSAL_LABEL,
+        re.compile(
+            r"(?:反弹|上涨)[^。；\n]{0,90}"
+            r"(?:只能|更像|看作|视为)[^。；\n]{0,50}"
+            r"(?:连续下跌后|超跌后|短暂的)?(?:一次)?"
+            r"(?:技术性修复|超跌修复)"
+        ),
+    ),
+    (
+        _MARKET_STYLE_GAP_STORY_LABEL,
+        re.compile(
+            r"(?:可能|或许)[^。；\n]{0,24}(?:中下市值|中小盘|小盘股)"
+            r"[^。；\n]{0,100}(?:此前|昨天)[^。；\n]{0,40}"
+            r"(?:跌幅并不深|跌得不深|受影响较小|调整幅度有限)"
+        ),
+    ),
+    (
+        _MARKET_NEW_CATALYST_GATE_LABEL,
+        re.compile(
+            r"(?:留意|观察|条件|重新判断)[^。；\n]{0,90}"
+            r"(?:政策信号|宏观经济数据|宏观数据|行业重磅信息|"
+            r"新增催化|新的?催化)[^。；\n]{0,60}"
+            r"(?:支撑|确认|判断|基础)"
         ),
     ),
     (

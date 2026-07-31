@@ -201,6 +201,12 @@ def _normalize_market_reassessment_language(
             "在后续完整交易日里",
             answer,
         )
+        answer = re.sub(
+            r"(?:如果|若)?(?:一两|两三|三五|几|数)天(?:内|后)?"
+            r"[^。；\n]{0,120}[。；]",
+            "",
+            answer,
+        )
     user_has_breadth_threshold = re.search(
         r"(?:上涨|下跌)(?:家数|比例|占比)?[^。；\n]{0,20}"
         r"(?:\d+(?:\.\d+)?%|三分之二)",
@@ -229,6 +235,25 @@ def _normalize_market_reassessment_language(
             "上涨家数仍占明显优势、净涨跌家数仍处于较高水平",
             "上涨家数仍占明显优势",
         )
+        answer = re.sub(
+            r"[^。；\n]{0,80}(?:普涨|普跌)[^。；\n]{0,40}"
+            r"分类门槛[^。；\n]{0,80}[。；]",
+            "",
+            answer,
+        )
+        answer = re.sub(
+            r"(?:全市场)?(?:上涨|涨跌)家数[^。；\n]{0,40}"
+            r"(?:连续|持续|继续)(?:保持|维持)[^。；\n]{0,24}"
+            r"(?:优势|较高水平)",
+            "后续完整交易日里，全市场上涨家数是否仍占明显优势",
+            answer,
+        )
+        answer = re.sub(
+            r"如果全市场上涨比例(?:连续|持续)(?:保持|维持)"
+            r"[^。；\n]{0,60}[。；]",
+            "后续完整交易日里，观察全市场上涨家数是否仍占明显优势。",
+            answer,
+        )
     evidence_text = json.dumps(evidence, ensure_ascii=False, default=str)
     if '"ma5"' not in evidence_text.lower() and "5日均线" not in user_question:
         answer = re.sub(
@@ -236,7 +261,12 @@ def _normalize_market_reassessment_language(
             "",
             answer,
         )
-    return answer
+    answer = answer.replace(
+        "后续完整交易日里，后续完整交易日里，",
+        "后续完整交易日里，",
+    )
+    answer = re.sub(r"\n{3,}", "\n\n", answer)
+    return answer.strip()
 
 
 def _market_followup_question_context(

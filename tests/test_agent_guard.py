@@ -6009,6 +6009,18 @@ def test_model_language_cleanup_repairs_wireless_access_typo():
     assert cleaned == "需要确认无线接入产品毛利率是否下降。"
 
 
+def test_model_language_cleanup_keeps_cashflow_facts_without_unsupported_summary():
+    cleaned = AgentService._clean_user_facing_model_language(
+        "经营现金流净流出19.79亿元，而去年同期为净流入18.51亿元，"
+        "现金覆盖能力转弱。毛利率下降（成本上升或产品结构变化）。"
+    )
+
+    assert "经营现金流净流出19.79亿元" in cleaned
+    assert "去年同期为净流入18.51亿元" in cleaned
+    assert "现金覆盖能力转弱" not in cleaned
+    assert "成本上升或产品结构变化" not in cleaned
+
+
 def test_stock_guard_rejects_report_date_and_drawdown_window_conflicts():
     evidence = {
         "type": "stock_research",
@@ -6064,6 +6076,37 @@ def test_stock_guard_does_not_treat_percentage_near_announcement_as_notice_date(
     assert guard["passed"] is True
     assert (
         "财报公告日期必须与结构化报告一致" not in guard["unsupported_market_inferences"]
+    )
+
+
+def test_stock_guard_does_not_treat_valid_looking_ratio_as_notice_date():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "fundamentals": {
+            "summary": {
+                "latest_report": {
+                    "report_date": "2026-03-31",
+                    "report_date_name": "2026一季报",
+                    "report_type": "一季报",
+                    "notice_date": "2026-04-25",
+                    "revenue_yoy_pct": 6.13,
+                    "net_profit_yoy_pct": -46.58,
+                }
+            }
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "根据2026年一季报（4月25日披露），营收同比增长6.13%，"
+        "归母净利润同比下降46.58%。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+    assert (
+        "财报公告日期必须与结构化报告一致"
+        not in guard["unsupported_market_inferences"]
     )
 
 
@@ -7277,6 +7320,7 @@ def test_stock_guard_does_not_let_indices_alone_exclude_systemic_drag():
         "这些基本面压力已在市场消化，情绪驱动的短期超跌需要继续复盘。\n"
         "一季报盈利质量承压不构成新信息。\n"
         "这些基本面压力是此前已存在的信息，不是7月20日新出现的驱动。\n"
+        "一季报公告后股价并未出现单日极端反应，因此只能算长期背景。\n"
         "公司最新季报并不是7月20日的新信息，不能作为当日上涨原因。\n"
         "现有证据只能确认财报数值，不能确认它对7月20日价格的因果；"
         "后续仍需核对同日公告、正式新闻和盘中交易证据。"
@@ -7312,6 +7356,7 @@ def test_stock_guard_does_not_let_indices_alone_exclude_systemic_drag():
     assert "已在市场消化" not in absorption_repaired[0]
     assert "不构成新信息" not in absorption_repaired[0]
     assert "此前已存在的信息" not in absorption_repaired[0]
+    assert "公告后股价并未出现单日极端反应" not in absorption_repaired[0]
     assert "最新季报并不是" not in absorption_repaired[0]
     assert "只能确认财报数值" in absorption_repaired[0]
     assert absorption_repaired[1]["passed"] is True
@@ -8606,6 +8651,28 @@ def test_market_reassessment_cleanup_removes_invented_future_rules():
     assert "上涨家数仍占明显优势" in cleaned
 
 
+def test_market_reassessment_cleanup_removes_method_thresholds_and_short_windows():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "今天普涨，哪些已有数据会让我重新判断？",
+        "indices": [{"metrics": {"ma20": 3904.0}}],
+    }
+    answer = (
+        "31日普涨分类门槛是上涨比例超过65%，且净涨家数大于500家。"
+        "全市场涨跌家数的方向能否在后续交易日持续保持优势。"
+        "如果一两天内又跌回均线下方，就说明修复无效。"
+    )
+
+    cleaned = agent_module._normalize_market_reassessment_language(answer, evidence)
+
+    assert "分类门槛" not in cleaned
+    assert "65%" not in cleaned
+    assert "500家" not in cleaned
+    assert "持续保持" not in cleaned
+    assert "一两天" not in cleaned
+    assert "后续完整交易日" in cleaned
+
+
 def test_market_guard_rejects_wrong_index_count_ma5_and_wave_label():
     evidence = {
         "type": "market_brief",
@@ -9897,6 +9964,80 @@ def test_stock_repair_keeps_safe_first_sentence_when_industry_cause_is_removed()
     assert "不能单独确认个股涨跌的直接原因" in repaired[0]
     assert "具体驱动仍未确认" in repaired[0]
     assert repaired[1]["passed"] is True
+
+
+def test_stock_repair_removes_industry_main_cause_and_sentiment_exclusion_cleanly():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "display_name": "中兴通讯",
+        "user_question": "中兴通讯最近下跌是行业还是情绪？",
+        "a_share_information": {
+            "sentiment": {
+                "band": "中性或混合",
+                "sample_size": 28,
+                "neutral_count": 28,
+            }
+        },
+    }
+    answer = (
+        "行业暴跌是主因，但个股相对抗跌；市场情绪无方向性信号。\n\n"
+        "**一、行业与个股**\n"
+        "中兴通讯下跌更多是跟随行业整体调整。"
+        "当前能确认的是个股与行业同日下跌，"
+        "但个股相对表现更强，近期直接驱动仍未确认。\n\n"
+        "**二、社区样本**\n"
+        "社区样本28条均为中性或混合，只说明样本内没有明确方向。"
+        "因此情绪不是当天下跌的主力推手。\n\n"
+        "综合来看，公司财务压力属于长期背景，而市场情绪并无明确指向。\n\n"
+        "**三、仍未确认的直接驱动**\n"
+        "。公司财务压力属于较慢变化的背景，不能自动解释近期价格变化。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert guard["passed"] is False
+    assert repaired is not None
+    repaired_answer, repaired_guard = repaired
+    assert "行业暴跌是主因" not in repaired_answer
+    assert "跟随行业整体调整" not in repaired_answer
+    assert "市场情绪无方向性信号" not in repaired_answer
+    assert "情绪不是当天下跌的主力推手" not in repaired_answer
+    assert "市场情绪并无明确指向" not in repaired_answer
+    assert "社区样本28条均为中性或混合" in repaired_answer
+    assert "不能排除未被样本捕捉的情绪影响" in repaired_answer
+    assert "\n。" not in repaired_answer
+    assert not any(line.rstrip().endswith("；") for line in repaired_answer.splitlines())
+    assert repaired_guard["passed"] is True
+
+
+def test_market_repair_surgically_removes_recurring_causal_stories():
+    evidence = {"type": "market_brief", "market_state": {}}
+    answer = (
+        "当前能确认的是代表性指数同步下跌，具体驱动尚未确认。"
+        "今天的全市场广度可用于描述上涨覆盖面，但不能反向证明昨天的个股分布。\n\n"
+        "风险提示公告说明市场情绪承压。"
+        "今天反弹只能看作连续下跌后的一次技术性修复。"
+        "可能存在中小盘此前跌幅并不深、今天迅速回暖的情况。\n\n"
+        "后续完整交易日里，可以继续观察上涨家数是否仍占优势，"
+        "以及核心指数与已有均线的关系。"
+        "同时留意政策信号或宏观经济数据为反弹提供额外支撑。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+
+    assert guard["passed"] is False
+    assert repaired is not None
+    repaired_answer, repaired_guard = repaired
+    assert "情绪承压" not in repaired_answer
+    assert "技术性修复" not in repaired_answer
+    assert "中小盘此前跌幅并不深" not in repaired_answer
+    assert "政策信号" not in repaired_answer
+    assert "代表性指数同步下跌" in repaired_answer
+    assert "核心指数与已有均线的关系" in repaired_answer
+    assert repaired_guard["passed"] is True
 
 
 def test_streamed_unverified_draft_is_followed_by_final_guarded_answer(

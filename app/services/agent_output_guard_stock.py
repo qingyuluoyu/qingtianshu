@@ -51,6 +51,9 @@ _STOCK_MARKET_ABSORPTION_LABEL = (
     "缺少事件研究证据时不能声称基本面已被市场消化或情绪驱动超跌"
 )
 _STOCK_EVENT_SENTIMENT_LABEL = "公告或媒体线索不能在缺少事件研究时评为正面负面或催化"
+_STOCK_SENTIMENT_EXCLUSION_LABEL = (
+    "中性或混合社区样本不能排除未被样本捕捉的市场情绪"
+)
 _STOCK_UNSUPPORTED_CAUSAL_HYPOTHESIS_LABEL = (
     "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
 )
@@ -405,6 +408,12 @@ def _has_stock_report_notice_date_conflict(
             # to the permissive date matcher. Only calendar-valid month/day
             # pairs may participate in the notice-date consistency check.
             if not (1 <= month <= 12 and 1 <= day <= 31):
+                continue
+            date_suffix = clause[date_match.end() : date_match.end() + 8]
+            if re.match(r"\s*(?:%|个百分点|倍|亿元|万元|元)", date_suffix):
+                # A valid-looking ratio such as ``6.13%`` can sit close to
+                # “披露” and otherwise be mistaken for June 13. Units make
+                # clear that this token is a financial value, not a date.
                 continue
             date_prefix = clause[max(0, date_match.start() - 12) : date_match.start()]
             if re.search(r"(?:截至|报告期截至|期末为|止于)\s*$", date_prefix):
@@ -1163,8 +1172,11 @@ def _has_stock_industry_causal_overclaim(answer: str) -> bool:
         "无法证明",
         "不能单独证明",
         "无法单独证明",
+        "不能单独确认",
+        "无法单独确认",
         "不等于原因",
         "不是原因证明",
+        "直接驱动尚未确认",
     )
     for clause in re.split(r"[。；\n]", answer):
         if any(term in clause for term in cautious_terms):
@@ -1172,13 +1184,74 @@ def _has_stock_industry_causal_overclaim(answer: str) -> bool:
         if re.search(
             r"(?:核心|主要|直接)(?:原因|驱动|因素)?(?:是|来自|源于|在于)?"
             r"[^。；\n]{0,30}(?:行业|板块)[^。；\n]{0,30}"
-            r"(?:拖累|驱动|导致|造成|原因|因素)",
+            r"(?:拖累|驱动|带动|导致|造成|原因|因素|抛售)",
+            clause,
+        ):
+            return True
+        if re.search(
+            r"(?:行业|板块)[^。；\n]{0,40}"
+            r"(?:是|构成|成为)?[^。；\n]{0,16}"
+            r"(?:主因|主要原因|核心原因|直接驱动|最大权重)|"
+            r"(?:能确认的是|可以确认)[^。；\n]{0,20}"
+            r"(?:行业|板块)[^。；\n]{0,20}(?:拖累|带动|导致)|"
+            r"(?:行业|板块)[^。；\n]{0,36}"
+            r"(?:拖累了|带动了|整体抛售带动|情绪传染)",
+            clause,
+        ):
+            return True
+        if re.search(
+            r"(?:下跌|回落)[^。；\n]{0,24}(?:更多|主要)?"
+            r"(?:是|来自|源于)?[^。；\n]{0,28}"
+            r"(?:跟随|随同)[^。；\n]{0,20}(?:行业|板块)"
+            r"[^。；\n]{0,20}(?:调整|下跌|抛售)",
+            clause,
+        ):
+            return True
+        if re.search(
+            r"(?:盈利质量|基本面|财务压力)[^。；\n]{0,30}"
+            r"(?:让|使)[^。；\n]{0,24}(?:更容易|容易)"
+            r"[^。；\n]{0,18}(?:随行业|回落|下跌)",
             clause,
         ):
             return True
         if not re.search(r"(?:行业|板块)[^。；\n]{0,30}(?:普涨|普跌)", clause):
             continue
-        if re.search(r"(?:导致|造成|驱动|拖累|共同作用|解释了|原因)", clause):
+        if re.search(
+            r"(?:导致|造成|驱动|带动|拖累|共同作用|解释了|原因|主因)",
+            clause,
+        ):
+            return True
+    return False
+
+
+def _has_stock_sentiment_exclusion_overclaim(
+    answer: str,
+    evidence: dict[str, Any],
+) -> bool:
+    sentiment = (evidence.get("a_share_information") or {}).get("sentiment") or {}
+    band = str(sentiment.get("band") or "")
+    if not any(term in band for term in ("中性", "混合")):
+        return False
+    cautious_terms = (
+        "不能排除",
+        "无法排除",
+        "不代表不存在",
+        "不能证明不存在",
+        "只说明样本",
+        "仅说明样本",
+        "未被样本捕捉",
+    )
+    for clause in re.split(r"[。；\n]", answer):
+        if any(term in clause for term in cautious_terms):
+            continue
+        if re.search(
+            r"(?:市场)?情绪(?:面)?[^。；\n]{0,20}"
+            r"(?:无方向性信号|没有[^。；\n]{0,12}驱动证据|"
+            r"未提供[^。；\n]{0,12}驱动证据|无法解释|不能解释|"
+            r"不是[^。；\n]{0,12}(?:原因|驱动|推手|推动因素)|"
+            r"(?:并无|没有|未有)明确(?:方向|指向)|可以排除|可排除)",
+            clause,
+        ):
             return True
     return False
 
@@ -1305,7 +1378,11 @@ def _has_stock_market_absorption_overclaim(answer: str) -> bool:
             r"(?:基本面|财报|季报|中报|年报|业绩|盈利质量|经营压力)[^。；\n]{0,80}"
             r"(?:此前已存在(?:的)?信息|早已存在(?:的)?信息|"
             r"(?:不是|并非)[^。；\n]{0,20}新出现的驱动)|"
-            r"(?:情绪驱动|情绪面驱动)[^。；\n]{0,24}(?:超跌|下跌|反弹)",
+            r"(?:情绪驱动|情绪面驱动)[^。；\n]{0,24}(?:超跌|下跌|反弹)|"
+            r"(?:财报|一季报|中报|年报|公告)[^。；\n]{0,100}"
+            r"(?:公告后|披露后)[^。；\n]{0,50}(?:未|没有)"
+            r"[^。；\n]{0,24}(?:极端反应|明显反应)"
+            r"[^。；\n]{0,30}(?:因此|所以)",
             answer,
         )
     )
