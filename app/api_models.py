@@ -72,6 +72,7 @@ class DeepStockEntryContext(BaseModel):
     source_kind: Literal["stock_screen", "li_zong_strategy"]
     source_label: str = Field(min_length=1, max_length=80)
     display_name: str | None = Field(default=None, max_length=80)
+    industry: str | None = Field(default=None, max_length=80)
     profile_key: str | None = Field(default=None, max_length=60)
     as_of_date: str | None = Field(default=None, max_length=32)
     candidate_status: str | None = Field(default=None, max_length=40)
@@ -85,6 +86,7 @@ class DeepStockStart(BaseModel):
     symbol: str = Field(min_length=1, max_length=24)
     conversation_id: str | None = Field(default=None, max_length=36)
     entry_context: DeepStockEntryContext | None = None
+    quality_scope: Literal["user", "evaluation"] = "user"
 
 
 class StockRelationUpdate(BaseModel):

@@ -57,6 +57,8 @@ def _compact_stock_workspace_context(
             (
                 "source_kind",
                 "source_label",
+                "display_name",
+                "industry",
                 "profile_key",
                 "as_of_date",
                 "candidate_status",

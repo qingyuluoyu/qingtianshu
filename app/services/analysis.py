@@ -30,9 +30,8 @@ from app.utils import utc_now
 
 def analyze_history(history: dict[str, Any]) -> dict[str, Any]:
     points = history.get("points") or []
-    closes = [
-        float(point["close"]) for point in points if point.get("close") is not None
-    ]
+    valid_points = [point for point in points if point.get("close") is not None]
+    closes = [float(point["close"]) for point in valid_points]
     if not closes:
         raise ValueError("没有可分析的收盘价")
 
@@ -47,6 +46,15 @@ def analyze_history(history: dict[str, Any]) -> dict[str, Any]:
         "volatility_20d_annualized_pct": annualized_volatility(closes, 20),
         "max_drawdown_60d_pct": maximum_drawdown(closes[-60:]),
     }
+    for sessions in (1, 5, 20, 60):
+        if len(valid_points) <= sessions:
+            continue
+        base_timestamp = valid_points[-(sessions + 1)].get("timestamp")
+        end_timestamp = valid_points[-1].get("timestamp")
+        if base_timestamp:
+            metrics[f"return_{sessions}d_base_date"] = base_timestamp
+        if end_timestamp:
+            metrics[f"return_{sessions}d_end_date"] = end_timestamp
     metrics.update(build_technical_snapshot(points, closes))
     ma20 = metrics["ma20"]
     ma60 = metrics["ma60"]
@@ -1132,7 +1140,7 @@ def build_research_analysis_board(evidence: dict[str, Any]) -> dict[str, Any]:
                 "股东户数集中或分散线索是否持续，以及下一份十大股东报告是否出现可比变化",
                 "同财年EPS一致预期是否发生修订，覆盖机构数变化是否影响可比性",
                 "与固定同行样本的相对估值和基本面差异是否收敛或扩大",
-                f"条件展望“{outlook.get('label') or outlook.get('price_signal_label') or '待确认'}”的触发与失效条件是否需要重算",
+                f"条件展望“{outlook.get('label') or outlook.get('price_signal_label') or '待确认'}”出现什么情况需要重新判断",
             ],
         },
     ]

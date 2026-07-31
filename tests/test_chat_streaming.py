@@ -96,6 +96,7 @@ def test_agent_callbacks_preserve_private_stream_protocol() -> None:
     ]
     assert private.events[1][2]["draft"] == "当前回答"
     assert private.events[1][2]["is_guarded_partial"] is True
+    assert private.events[2][2]["reset"] is True
     assert private.events[-1][2]["run_id"] == "run-1"
 
 

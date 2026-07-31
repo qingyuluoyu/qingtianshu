@@ -72,6 +72,43 @@ def test_focused_price_move_persists_evidence_not_generic_library_sources() -> N
     assert quality.user_ids == ["user-1"]
 
 
+def test_relative_industry_persists_only_selected_evidence_sources() -> None:
+    service, database, _ = build_service()
+    result = service.persist(
+        {"answer": "相对行业回答"},
+        user_id="user-relative-industry",
+        conversation={"title": "宁德时代相对电池行业"},
+        conversation_id="conversation-relative-industry",
+        knowledge_context={
+            "items": [
+                {
+                    "document_id": "doc-generic",
+                    "title": "无关通用资料",
+                    "scope": "common",
+                }
+            ],
+            "coverage": {"matched_documents": 1},
+        },
+        model_tier="deep",
+        assistant_content="相对行业回答",
+        response_intent="stock_research",
+        response_symbol="300750.SZ",
+        evidence_payload={
+            "type": "stock_research",
+            "user_question": "宁德时代相对电池行业表现如何",
+            "display_name": "宁德时代",
+            "research_plan": {"focus": "relative_industry"},
+            "visible_evidence_sources": [
+                {"title": "CS电池同日行情", "kind": "industry_comparison"}
+            ],
+        },
+    )
+
+    assert database.messages[0]["metadata"]["knowledge_sources"] == []
+    assert result["knowledge"]["items"] == []
+    assert result["knowledge"]["coverage"] == {"matched_documents": 1}
+
+
 def test_comparison_persists_all_structured_research_targets() -> None:
     service, database, _ = build_service()
     result = service.persist(

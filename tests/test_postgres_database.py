@@ -146,12 +146,13 @@ def test_postgres_domain_database_core_round_trip(tmp_path: Path):
         )
         assert database.get_run(run["id"], user["id"])["status"] == "completed"
 
+        news_symbol = f"PG-{suffix}"
         news_url = f"https://example.invalid/postgres-news-{suffix}"
         database.upsert_news_items(
             [
                 {
                     "id": f"postgres-news-{suffix}",
-                    "symbol": "000063.SZ",
+                    "symbol": news_symbol,
                     "category": "news",
                     "title": "PostgreSQL 新闻首次抓取",
                     "summary": None,
@@ -166,7 +167,7 @@ def test_postgres_domain_database_core_round_trip(tmp_path: Path):
             [
                 {
                     "id": f"postgres-news-{suffix}",
-                    "symbol": "000063.SZ",
+                    "symbol": news_symbol,
                     "category": "news",
                     "title": "PostgreSQL 新闻重复抓取",
                     "summary": None,
@@ -179,7 +180,7 @@ def test_postgres_domain_database_core_round_trip(tmp_path: Path):
         )
         stored_news = [
             item
-            for item in database.list_news("000063.SZ", limit=100)
+            for item in database.list_news(news_symbol, limit=100)
             if item["url"] == news_url
         ]
         assert len(stored_news) == 1

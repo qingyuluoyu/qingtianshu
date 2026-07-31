@@ -125,6 +125,69 @@ def test_yahoo_provider_returns_explicit_stale_cache_on_failure(tmp_path: Path):
     assert any("请求失败" in warning for warning in stale["warnings"])
 
 
+def test_yahoo_provider_restores_newer_completed_bar_when_upstream_regresses(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    database.upsert_market_bars(
+        "000065.SZ",
+        "1d",
+        [
+            {
+                "timestamp": "2026-07-28T01:30:00+00:00",
+                "open": 9.2,
+                "high": 9.24,
+                "low": 8.98,
+                "close": 9.04,
+                "adjusted_close": 9.04,
+                "volume": 20_000_000,
+            }
+        ],
+        "earlier complete Yahoo response",
+        "2026-07-28T08:00:00+00:00",
+    )
+    payload = {
+        "chart": {
+            "error": None,
+            "result": [
+                {
+                    "meta": {
+                        "currency": "CNY",
+                        "exchangeTimezoneName": "Asia/Shanghai",
+                        "regularMarketTime": 1_775_000_000,
+                    },
+                    "timestamp": [1_774_224_600, 1_774_311_000],
+                    "indicators": {
+                        "quote": [
+                            {
+                                "open": [8.98, 8.98],
+                                "high": [9.29, 9.29],
+                                "low": [8.86, 8.98],
+                                "close": [8.89, 9.18],
+                                "volume": [13_263_030, 14_413_200],
+                            }
+                        ],
+                        "adjclose": [{"adjclose": [8.89, 9.18]}],
+                    },
+                }
+            ],
+        }
+    }
+    provider = YahooMarketProvider(
+        database,
+        ttl_seconds=60,
+        http_get=lambda *args, **kwargs: FakeResponse(payload),
+    )
+
+    history = provider.fetch_history("000065.SZ", range_name="1mo")
+
+    assert history["points"][-1]["timestamp"] == "2026-07-28T01:30:00+00:00"
+    assert history["points"][-1]["close"] == 9.04
+    assert history["coverage"]["restored_persisted_newer_bars"] == 1
+    assert any("生产数据库补回" in warning for warning in history["warnings"])
+
+
 def test_yahoo_history_rejects_invalid_and_incomplete_daily_bars():
     history = {
         "symbol": "000063.SZ",

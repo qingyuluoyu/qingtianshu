@@ -230,11 +230,17 @@ class EventTimelineService:
         return self.refresh_symbol(symbol, refresh_sources=refresh_sources)
 
     def _build_packet(self, symbol: str) -> dict[str, Any]:
-        items = self.database.list_news(
+        official_items = self.database.list_news(
             symbol,
-            limit=160,
-            categories=("announcement", "news", "regulatory_filing", "global_news"),
+            limit=80,
+            categories=("announcement", "regulatory_filing"),
         )
+        media_items = self.database.list_news(
+            symbol,
+            limit=120,
+            categories=("news", "global_news"),
+        )
+        items = [*official_items, *media_items]
         events: list[dict[str, Any]] = []
         seen: set[str] = set()
         for item in items:
@@ -251,6 +257,7 @@ class EventTimelineService:
             seen.add(identity)
             relevance = _research_relevance(title)
             evidence_level, evidence_label, event_status = _evidence_level(category)
+            direct_excerpt = _direct_announcement_excerpt(item)
             events.append(
                 {
                     "event_type": event_type,
@@ -272,6 +279,11 @@ class EventTimelineService:
                     "source": item.get("source"),
                     "url": item.get("url"),
                     "fetched_at": item.get("fetched_at"),
+                    **(
+                        {"direct_excerpt": direct_excerpt}
+                        if direct_excerpt
+                        else {}
+                    ),
                 }
             )
         events.sort(
@@ -288,7 +300,24 @@ class EventTimelineService:
             if any(_same_event(event, existing) for existing in deduplicated):
                 continue
             deduplicated.append(event)
-        events = deduplicated[:40]
+        recent_events = deduplicated[:28]
+        official_supplement = [
+            item
+            for item in deduplicated
+            if item.get("evidence_level")
+            in {"official_disclosure", "regulatory_filing"}
+            and item not in recent_events
+        ][:12]
+        events = sorted(
+            [*recent_events, *official_supplement],
+            key=lambda item: (
+                str(item.get("event_date") or ""),
+                item.get("evidence_level")
+                in {"official_disclosure", "regulatory_filing"},
+                str(item.get("published_at") or ""),
+            ),
+            reverse=True,
+        )[:40]
         type_counts = Counter(item["event_type"] for item in events)
         themes = [
             {
@@ -334,6 +363,9 @@ class EventTimelineService:
                 "risk_events": len(adverse),
                 "supportive_events": len(supportive),
                 "event_types": len(type_counts),
+                "direct_excerpt_events": sum(
+                    bool(item.get("direct_excerpt")) for item in events
+                ),
             },
             "review_points": [
                 "优先阅读最新官方公告或监管文件原文，不只依赖标题。",
@@ -358,6 +390,11 @@ class EventTimelineService:
                 f"- {item.get('event_date') or '日期待确认'}｜"
                 f"{item.get('evidence_label')}｜{item.get('event_label')}｜"
                 f"{item.get('research_relevance_label')}｜{item.get('title')}"
+                + (
+                    f"\n  公司公告原文摘录：{item.get('direct_excerpt')}"
+                    if item.get("direct_excerpt")
+                    else ""
+                )
                 for item in (packet.get("events") or [])[:24]
             )
             or "- 当前未形成可用的事件脉络。"
@@ -426,6 +463,16 @@ def _evidence_level(category: str) -> tuple[str, str, str]:
     if category in _MEDIA_CATEGORIES:
         return "media_report", "媒体报道", "reported_clue"
     return "unknown", "证据类型待确认", "reported_clue"
+
+
+def _direct_announcement_excerpt(item: dict[str, Any]) -> str:
+    if str(item.get("category") or "") != "announcement":
+        return ""
+    summary = re.sub(r"\s+", " ", str(item.get("summary") or "")).strip()
+    prefix = "公司公告原文摘录："
+    if not summary.startswith(prefix):
+        return ""
+    return summary[len(prefix) :].strip()[:1200]
 
 
 def _normalized_title(title: str) -> str:

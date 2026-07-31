@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import math
 from statistics import median
 from typing import Any
 
@@ -38,7 +39,9 @@ def _metric_summary(
     peer_median = float(median(peer_values))
     subject_value = (
         float(subject[key])
-        if subject and isinstance(subject.get(key), (int, float)) and float(subject[key]) > 0
+        if subject
+        and isinstance(subject.get(key), (int, float))
+        and float(subject[key]) > 0
         else None
     )
     return {
@@ -71,9 +74,7 @@ def _operating_metric_summary(
     key: str,
 ) -> dict[str, Any] | None:
     peer_values = [
-        float(item[key])
-        for item in peers
-        if isinstance(item.get(key), (int, float))
+        float(item[key]) for item in peers if isinstance(item.get(key), (int, float))
     ]
     if len(peer_values) < 2:
         return None
@@ -189,12 +190,249 @@ class PeerComparisonService:
         self.us_fundamentals_service = us_fundamentals_service
         self.business_structure_service = business_structure_service
 
-    @staticmethod
-    def _group(symbol: str) -> dict[str, Any]:
+    def _group(self, symbol: str) -> dict[str, Any]:
         group = PEER_GROUPS.get(symbol)
-        if group is None:
+        if group is not None:
+            return group
+        return self._dynamic_a_share_group(symbol)
+
+    @staticmethod
+    def _snapshot_rows(record: dict[str, Any] | None) -> list[dict[str, Any]]:
+        rows = ((record or {}).get("payload") or {}).get("rows") or []
+        return [dict(row) for row in rows if isinstance(row, dict)]
+
+    @staticmethod
+    def _date_string(value: Any) -> str | None:
+        digits = "".join(
+            character for character in str(value or "") if character.isdigit()
+        )
+        if len(digits) < 8:
+            return None
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+
+    @staticmethod
+    def _number(value: Any) -> float | None:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) else None
+
+    def _dynamic_a_share_group(self, symbol: str) -> dict[str, Any]:
+        canonical = normalize_symbol(symbol)
+        if not canonical.endswith((".SS", ".SZ")):
             raise ValueError("该证券尚未配置固定同行样本")
-        return group
+
+        stock_by_symbol: dict[str, dict[str, Any]] = {}
+        valuation_by_symbol: dict[str, dict[str, Any]] = {}
+        universe = self.database.latest_tushare_dataset_snapshot(
+            "a_share_universe", "all"
+        )
+        universe_items = ((universe or {}).get("payload") or {}).get("items") or []
+        for raw_item in universe_items:
+            if not isinstance(raw_item, dict):
+                continue
+            item = dict(raw_item)
+            raw_symbol = str(item.get("symbol") or item.get("ts_code") or "").strip()
+            if not raw_symbol:
+                continue
+            row_symbol = normalize_symbol(raw_symbol)
+            stock_by_symbol[row_symbol] = item
+            valuation_by_symbol[row_symbol] = {
+                **item,
+                "snapshot_as_of_date": (universe or {}).get("as_of_date"),
+                "snapshot_created_at": (universe or {}).get("created_at"),
+                "data_version": (universe or {}).get("data_version"),
+            }
+
+        if not stock_by_symbol or canonical not in valuation_by_symbol:
+            stock_records = self.database.list_latest_tushare_dataset_snapshots(
+                "stock_basic",
+                data_status="stable",
+                limit=20_000,
+            )
+            valuation_records = self.database.list_latest_tushare_dataset_snapshots(
+                "daily_basic",
+                data_status="stable",
+                limit=20_000,
+            )
+            for record in stock_records:
+                for row in self._snapshot_rows(record)[:1]:
+                    raw_symbol = str(row.get("ts_code") or "").strip()
+                    if not raw_symbol:
+                        continue
+                    row_symbol = normalize_symbol(raw_symbol)
+                    if row_symbol:
+                        stock_by_symbol[row_symbol] = row
+            for record in valuation_records:
+                for row in self._snapshot_rows(record)[:1]:
+                    raw_symbol = str(row.get("ts_code") or "").strip()
+                    if not raw_symbol:
+                        continue
+                    row_symbol = normalize_symbol(raw_symbol)
+                    if not row_symbol:
+                        continue
+                    valuation_by_symbol[row_symbol] = {
+                        **row,
+                        "snapshot_as_of_date": record.get("as_of_date"),
+                        "snapshot_created_at": record.get("created_at"),
+                        "data_version": record.get("data_version"),
+                    }
+
+        subject_basic = stock_by_symbol.get(canonical) or {}
+        subject_valuation = valuation_by_symbol.get(canonical) or {}
+        industry = str(subject_basic.get("industry") or "").strip()
+        subject_market_cap = self._market_cap_cny(subject_valuation)
+        subject_date = self._date_string(
+            subject_valuation.get("trade_date")
+            or subject_valuation.get("snapshot_as_of_date")
+        )
+        if not industry or subject_market_cap in {None, 0} or not subject_date:
+            raise ValueError("该证券尚缺少可建立同日同行估值样本的行业或市值数据")
+
+        candidates: list[tuple[float, str, dict[str, Any]]] = []
+        for peer_symbol, peer_basic in stock_by_symbol.items():
+            if peer_symbol == canonical:
+                continue
+            if str(peer_basic.get("industry") or "").strip() != industry:
+                continue
+            peer_valuation = valuation_by_symbol.get(peer_symbol) or {}
+            if (
+                self._date_string(
+                    peer_valuation.get("trade_date")
+                    or peer_valuation.get("snapshot_as_of_date")
+                )
+                != subject_date
+            ):
+                continue
+            peer_market_cap = self._market_cap_cny(peer_valuation)
+            pe_ttm = self._number(peer_valuation.get("pe_ttm"))
+            pb = self._number(peer_valuation.get("pb"))
+            name = str(peer_basic.get("name") or "").strip()
+            if (
+                peer_market_cap in {None, 0}
+                or pe_ttm is None
+                or pe_ttm <= 0
+                or pb is None
+                or pb <= 0
+                or not name
+                or "ST" in name.upper()
+            ):
+                continue
+            distance = abs(math.log(float(peer_market_cap) / float(subject_market_cap)))
+            candidates.append(
+                (
+                    distance,
+                    peer_symbol,
+                    {
+                        "symbol": peer_symbol,
+                        "name": name,
+                        "valuation": peer_valuation,
+                    },
+                )
+            )
+        selected = [item for _, _, item in sorted(candidates)[:3]]
+        if len(selected) < 2:
+            raise ValueError("同日同业且估值字段完整的可比公司不足两家")
+        return {
+            "label": f"{industry}同日估值样本",
+            "basis": (
+                f"在生产数据库{subject_date}同一Tushare行业标签“{industry}”内，"
+                "选择总市值最接近且PE TTM、PB均有效的最多3家公司；"
+                "该样本不是完整行业指数或投资评级"
+            ),
+            "peers": selected,
+            "dynamic": True,
+            "industry": industry,
+            "as_of_date": subject_date,
+            "subject": {
+                "symbol": canonical,
+                "name": str(subject_basic.get("name") or canonical),
+                "valuation": subject_valuation,
+            },
+        }
+
+    @classmethod
+    def _market_cap_cny(cls, valuation: dict[str, Any]) -> float | None:
+        value_yi = cls._number(valuation.get("total_mv_yi"))
+        if value_yi is not None:
+            return value_yi * 100_000_000.0
+        tushare_value = cls._number(valuation.get("total_mv"))
+        if tushare_value is not None:
+            return tushare_value * 10_000.0
+        return None
+
+    @classmethod
+    def _dynamic_public_valuation(
+        cls,
+        item: dict[str, Any],
+        *,
+        fallback_symbol: str,
+        fallback_name: str,
+        as_of_date: str,
+    ) -> dict[str, Any]:
+        valuation = item.get("valuation") or {}
+        return {
+            "symbol": str(item.get("symbol") or fallback_symbol),
+            "name": str(item.get("name") or fallback_name),
+            "currency": "CNY",
+            "pe_ttm": cls._number(valuation.get("pe_ttm")),
+            "pb": cls._number(valuation.get("pb")),
+            "total_market_cap": cls._market_cap_cny(valuation),
+            "market_timestamp": f"{as_of_date}T15:00:00+08:00",
+            "source": "Tushare Pro daily_basic stable snapshot",
+        }
+
+    def _dynamic_packet(
+        self,
+        canonical: str,
+        group: dict[str, Any],
+    ) -> dict[str, Any]:
+        as_of_date = str(group.get("as_of_date") or "")
+        subject_entry = group.get("subject") or {}
+        subject = self._dynamic_public_valuation(
+            subject_entry,
+            fallback_symbol=canonical,
+            fallback_name=canonical,
+            as_of_date=as_of_date,
+        )
+        public_peers = [
+            self._dynamic_public_valuation(
+                item,
+                fallback_symbol=str(item.get("symbol") or ""),
+                fallback_name=str(item.get("name") or item.get("symbol") or "同行"),
+                as_of_date=as_of_date,
+            )
+            for item in group.get("peers") or []
+        ]
+        metrics = {
+            key: summary
+            for key in ("pe_ttm", "pb", "total_market_cap")
+            if (summary := _metric_summary(subject, public_peers, key)) is not None
+        }
+        return {
+            "symbol": canonical,
+            "name": subject.get("name") or canonical,
+            "group_label": group["label"],
+            "selection_basis": group["basis"],
+            "generated_at": utc_now(),
+            "as_of": as_of_date,
+            "subject": subject,
+            "peers": public_peers,
+            "metrics": metrics,
+            "coverage": {
+                "requested_peers": len(group.get("peers") or []),
+                "available_peers": len(public_peers),
+            },
+            "operating_comparison": self._build_operating_packet(canonical, group),
+            "refresh": None,
+            "warnings": [
+                "同行样本来自同一交易日、同一Tushare行业标签和同一估值字段口径，不是完整行业指数或投资评级。",
+                "样本按总市值接近度确定；业务结构、会计口径和成长阶段差异仍需单独核对。",
+                "样本比较不允许直接改写成高估、低估、便宜或昂贵。",
+            ],
+            "method": "dynamic_same_day_peer_valuation_snapshot_v1",
+        }
 
     def _fetch_valuation(self, symbol: str) -> dict[str, Any]:
         if symbol.endswith((".SS", ".SZ")):
@@ -204,6 +442,35 @@ class PeerComparisonService:
     def refresh_symbol(self, symbol: str) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
         group = self._group(canonical)
+        if group.get("dynamic"):
+            packet = self._dynamic_packet(canonical, group)
+            return {
+                "symbol": canonical,
+                "refreshed_at": utc_now(),
+                "requested": 1 + len(group.get("peers") or []),
+                "completed": 1 + len(packet.get("peers") or []),
+                "results": [
+                    {
+                        "symbol": item.get("symbol"),
+                        "status": "ok",
+                        "market_timestamp": item.get("market_timestamp"),
+                    }
+                    for item in [
+                        packet.get("subject") or {},
+                        *(packet.get("peers") or []),
+                    ]
+                ],
+                "operating_comparison": {
+                    "status": (packet.get("operating_comparison") or {}).get("status"),
+                    "anchor_report_date": (
+                        packet.get("operating_comparison") or {}
+                    ).get("anchor_report_date"),
+                    "coverage": (packet.get("operating_comparison") or {}).get(
+                        "coverage"
+                    )
+                    or {},
+                },
+            }
         symbols = [canonical, *(item["symbol"] for item in group["peers"])]
         results = []
         for peer_symbol in symbols:
@@ -244,6 +511,8 @@ class PeerComparisonService:
     ) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
         group = self._group(canonical)
+        if group.get("dynamic"):
+            return self._dynamic_packet(canonical, group)
         subject = self.database.latest_valuation_snapshot(canonical)
         peers = []
         for item in group["peers"]:
@@ -269,7 +538,9 @@ class PeerComparisonService:
             peers = [
                 valuation
                 for item in group["peers"]
-                if (valuation := self.database.latest_valuation_snapshot(item["symbol"]))
+                if (
+                    valuation := self.database.latest_valuation_snapshot(item["symbol"])
+                )
             ]
 
         peer_name_by_symbol = {item["symbol"]: item["name"] for item in group["peers"]}
@@ -290,9 +561,7 @@ class PeerComparisonService:
         metrics = {
             key: summary
             for key in ("pe_ttm", "pb", "total_market_cap")
-            if (
-                summary := _metric_summary(subject, public_peers, key)
-            ) is not None
+            if (summary := _metric_summary(subject, public_peers, key)) is not None
         }
         timestamps = [
             item.get("market_timestamp")
@@ -342,7 +611,9 @@ class PeerComparisonService:
         self, symbol: str, refresh_max_age_seconds: int = 21_600
     ) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
-        self._group(canonical)
+        group = self._group(canonical)
+        if group.get("dynamic"):
+            return self._build_operating_packet(canonical, group)
         snapshot = self.database.latest_peer_operating_snapshot(canonical)
         current_periods = self.database.list_financial_periods(canonical, limit=1)
         current_report_date = (
@@ -350,11 +621,10 @@ class PeerComparisonService:
         )
         if snapshot:
             payload = dict(snapshot.get("payload") or {})
-            if (
-                payload.get("anchor_report_date") == current_report_date
-                and not _is_older_than(
-                    snapshot.get("created_at"), refresh_max_age_seconds
-                )
+            if payload.get(
+                "anchor_report_date"
+            ) == current_report_date and not _is_older_than(
+                snapshot.get("created_at"), refresh_max_age_seconds
             ):
                 payload["cache_hit"] = True
                 return payload
@@ -390,12 +660,17 @@ class PeerComparisonService:
                 key: value
                 for key, value in packet.items()
                 if key
-                not in {"generated_at", "snapshot_id", "snapshot_created_at", "cache_hit"}
+                not in {
+                    "generated_at",
+                    "snapshot_id",
+                    "snapshot_created_at",
+                    "cache_hit",
+                }
             }
             fingerprint = hashlib.sha256(
-                json.dumps(stable, ensure_ascii=False, sort_keys=True, default=str).encode(
-                    "utf-8"
-                )
+                json.dumps(
+                    stable, ensure_ascii=False, sort_keys=True, default=str
+                ).encode("utf-8")
             ).hexdigest()
             saved = self.database.save_peer_operating_snapshot(packet, fingerprint)
             packet["snapshot_id"] = saved["id"]
@@ -436,9 +711,7 @@ class PeerComparisonService:
         subject_structure = _business_profile(
             self.database.latest_business_structure_snapshot(canonical)
         )
-        peer_name_by_symbol = {
-            item["symbol"]: item["name"] for item in group["peers"]
-        }
+        peer_name_by_symbol = {item["symbol"]: item["name"] for item in group["peers"]}
         peers = []
         comparable_financials = []
         missing_items = []
@@ -543,9 +816,10 @@ class PeerComparisonService:
 
     def _index_common_knowledge(self, packet: dict[str, Any]) -> None:
         source_key = f"peer-operating:{packet['symbol']}"
-        document_id = "peer-operating-" + hashlib.sha256(
-            source_key.encode("utf-8")
-        ).hexdigest()[:20]
+        document_id = (
+            "peer-operating-"
+            + hashlib.sha256(source_key.encode("utf-8")).hexdigest()[:20]
+        )
         metric_labels = {
             "revenue_yoy_pct": "营收同比",
             "net_profit_yoy_pct": "净利润同比",

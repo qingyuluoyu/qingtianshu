@@ -76,6 +76,110 @@ def build_visible_evidence_sources(
             item["url"] = str(url).strip()
         sources.append(item)
 
+    research_focus = str(
+        (packet.get("research_plan") or {}).get("focus") or ""
+    ).strip()
+    industry = (packet.get("stock_market_context") or {}).get(
+        "exact_industry_index"
+    ) or {}
+    if research_focus == "relative_industry" and industry:
+        index_name = str(industry.get("name") or "所属行业指数").strip()
+        index_code = str(industry.get("index_code") or "").strip()
+        market_date = (
+            industry.get("market_date")
+            or ((packet.get("stock_market_context") or {}).get("analysis_target") or {}).get(
+                "market_date"
+            )
+        )
+        stock_return = _public_evidence_number(
+            industry.get("stock_return_1d_pct"), signed=True
+        )
+        index_return = _public_evidence_number(
+            industry.get("return_1d_pct"), signed=True
+        )
+        spread = _public_evidence_number(
+            industry.get("stock_minus_industry_pct"), signed=True
+        )
+        comparison_parts = []
+        if stock_return is not None:
+            comparison_parts.append(f"个股 {stock_return}%")
+        if index_return is not None:
+            comparison_parts.append(f"行业指数 {index_return}%")
+        if spread is not None:
+            comparison_parts.append(f"公司减行业 {spread} 个百分点")
+        if comparison_parts:
+            add(
+                "行业对照",
+                f"{display_name}与{index_name}同日表现",
+                "；".join(comparison_parts),
+                as_of=market_date,
+                source=(
+                    f"中证行业指数 {index_code} 与个股复权日线"
+                    if index_code
+                    else "行业指数与个股复权日线"
+                ),
+            )
+
+        breadth = industry.get("component_breadth") or {}
+        coverage = breadth.get("coverage") or {}
+        if breadth.get("status") == "available":
+            breadth_parts = []
+            available = coverage.get("available_returns")
+            constituents = coverage.get("constituents")
+            if available is not None and constituents is not None:
+                breadth_parts.append(f"有效收益 {available}/{constituents} 只")
+            for label, key in (("上涨", "advancers"), ("下跌", "decliners"), ("平盘", "unchanged")):
+                if breadth.get(key) is not None:
+                    breadth_parts.append(f"{label} {breadth.get(key)} 只")
+            median = _public_evidence_number(
+                breadth.get("median_pct_change"), signed=True
+            )
+            if median is not None:
+                breadth_parts.append(f"成分收益中位数 {median}%")
+            add(
+                "行业成分",
+                f"{index_name}成分覆盖与涨跌家数",
+                "；".join(breadth_parts),
+                as_of=market_date,
+                source="指数成分与同日收益计算",
+            )
+
+        for fallback in (breadth.get("source_fallbacks") or [])[:2]:
+            if not isinstance(fallback, dict):
+                continue
+            fallback_name = str(
+                fallback.get("name") or fallback.get("symbol") or "个别成分"
+            ).strip()
+            add(
+                "口径边界",
+                f"{fallback_name}收益使用未复权日线补充",
+                "若目标日前后存在除权除息，需要重新核对该成分的单日收益。",
+                as_of=market_date,
+                source="公开日线补充计算",
+            )
+
+        metrics = packet.get("metrics") or {}
+        return_60d = _public_evidence_number(
+            metrics.get("return_60d_pct"), signed=True
+        )
+        drawdown_60d = _public_evidence_number(
+            metrics.get("max_drawdown_60d_pct"), signed=True
+        )
+        risk_parts = []
+        if return_60d is not None:
+            risk_parts.append(f"近60日 {return_60d}%")
+        if drawdown_60d is not None:
+            risk_parts.append(f"近60日最大回撤 {drawdown_60d}%")
+        if risk_parts:
+            add(
+                "反方证据",
+                f"{display_name}较长窗口价格表现",
+                "；".join(risk_parts),
+                as_of=(packet.get("provenance") or {}).get("market_timestamp"),
+                source="复权历史日线与确定性指标",
+            )
+        return sources[:6]
+
     if packet.get("type") == "stock_comparison":
         for comparison_item in (packet.get("items") or [])[:5]:
             name = str(
@@ -131,7 +235,7 @@ def build_visible_evidence_sources(
             quote_summary += f"；涨跌幅 {quote_change}%"
         add(
             "行情事实",
-            f"{str(quote.get('name') or display_name).strip()}最新报价",
+            f"{display_name}最新报价",
             quote_summary,
             as_of=quote.get("market_timestamp"),
             source="实时行情快照",

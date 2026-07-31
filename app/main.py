@@ -434,6 +434,7 @@ def create_app(
         shareholders,
         analyst_expectations,
         event_timeline,
+        security_master,
     )
     stock_comparison = StockComparisonService(research_evidence)
     research_reports = ResearchReportService(
@@ -1707,6 +1708,7 @@ def create_app(
                     if payload.entry_context is not None
                     else None
                 ),
+                quality_scope=payload.quality_scope,
             )
         except DeepStockConversationConflict as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -2546,8 +2548,11 @@ def create_app(
                 raise ValueError("该接口用于个股，指数请使用指数历史接口")
             history = analysis.get_index_history(normalized, range_name=range_name)
             target = RESEARCH_TARGETS.get(normalized) or {}
-            if target.get("name"):
-                history["display_name"] = target["name"]
+            history["display_name"] = security_master.display_name(
+                normalized,
+                target.get("name"),
+                history.get("display_name"),
+            )
             return history
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -2579,9 +2584,11 @@ def create_app(
             target = RESEARCH_TARGETS.get(normalized) or {}
             return {
                 **history,
-                "display_name": target.get("name")
-                or history.get("display_name")
-                or normalized,
+                "display_name": security_master.display_name(
+                    normalized,
+                    target.get("name"),
+                    history.get("display_name"),
+                ),
                 "latest_price": latest.get("close"),
                 "pct_change": pct_change,
                 "market_timestamp": latest.get("timestamp"),
@@ -2596,8 +2603,10 @@ def create_app(
             latest = stored[-1]
             return {
                 "symbol": normalized,
-                "display_name": (RESEARCH_TARGETS.get(normalized) or {}).get("name")
-                or normalized,
+                "display_name": security_master.display_name(
+                    normalized,
+                    (RESEARCH_TARGETS.get(normalized) or {}).get("name"),
+                ),
                 "status": "stored",
                 "data_granularity": "1m",
                 "points": stored,
@@ -2984,7 +2993,7 @@ def create_app(
                 },
                 {
                     "title": "AI 综合表达",
-                    "detail": "Agent 只能引用已取得的证据，负责解释因果候选、指出反方证据与失效条件，不负责凭空生成行情数字。",
+                    "detail": "Agent 只能引用已取得的证据，负责解释因果候选、指出反方证据，并说明什么时候需要重新判断，不负责凭空生成行情数字。",
                 },
                 {
                     "title": "保存报告与证据变化",
@@ -3065,7 +3074,7 @@ def create_app(
             "boundaries": [
                 "价格、目标价、概率和交易指令不得由模型编造。",
                 "新闻标题只能提供驱动线索，不能单独证明涨跌的唯一因果。",
-                "条件展望必须同时给出触发条件、反方证据和失效条件。",
+                "条件展望必须同时给出触发条件、反方证据，以及什么时候需要重新判断。",
                 "页面不展示密钥、内部提示词、供应商故障或后台任务细节。",
             ],
         }

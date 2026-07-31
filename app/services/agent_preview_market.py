@@ -218,8 +218,11 @@ def render_market_preview(evidence: dict[str, Any]) -> str | None:
                     f"{fmt(metrics.get('volatility_20d_annualized_pct'))}%，"
                     f"60日最大回撤 {fmt(metrics.get('max_drawdown_60d_pct'))}%。"
                 )
-            if "失效条件" in str(evidence.get("user_question") or ""):
-                lines.append("失效条件：")
+            if any(
+                term in str(evidence.get("user_question") or "")
+                for term in ("失效条件", "重新判断", "什么情况会推翻")
+            ):
+                lines.append("什么时候需要重新判断：")
                 for item in shown[:3]:
                     metrics = item.get("metrics") or {}
                     latest_close = metrics.get("latest_close")

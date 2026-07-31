@@ -15,6 +15,11 @@ _EXPLICIT_CAUSE_RE = re.compile(
     r"(?:主要因|主要系|主要由于|原因(?:分析)?|由于|受[^。；]{0,36}影响|"
     r"导致|系本期|因本期|较上年同期[^。；]{0,24}(?:增加|减少|下降|上升))"
 )
+_NON_CAUSAL_DISCLOSURE_TEMPLATE_RE = re.compile(
+    r"(?:确定可变现净值|剩余对价与将要发生的成本|"
+    r"转回或转销[^。；]{0,36}(?:准备|成本)[^。；]{0,12}原因|"
+    r"会计政策|会计估计|资产负债表日|□适用|不适用)"
+)
 _THEMES: tuple[dict[str, Any], ...] = (
     {
         "key": "gross_margin_cost",
@@ -28,7 +33,7 @@ _THEMES: tuple[dict[str, Any], ...] = (
     },
     {
         "key": "inventory",
-        "label": "存货、备货与跌价",
+        "label": "存货与跌价",
         "keywords": ("存货", "备货", "跌价准备"),
     },
     {
@@ -68,6 +73,21 @@ _THEMES: tuple[dict[str, Any], ...] = (
         ),
     },
 )
+
+
+def _is_explicit_company_explanation(excerpt: str) -> bool:
+    """Distinguish a stated cause from table headers and accounting boilerplate.
+
+    Financial filings repeat words such as ``原因`` and ``跌价准备`` in column
+    headings and accounting-policy templates.  Treating those fragments as a
+    management explanation makes the Agent claim that the company explained a
+    change when the source only described how a field should be disclosed.
+    """
+
+    text = re.sub(r"\s+", " ", str(excerpt or "")).strip()
+    if not text or _NON_CAUSAL_DISCLOSURE_TEMPLATE_RE.search(text):
+        return False
+    return _EXPLICIT_CAUSE_RE.search(text) is not None
 
 
 class AShareFilingService:
@@ -257,7 +277,7 @@ class AShareFilingService:
                 excerpt = _bounded_excerpt(paragraph, keyword)
                 classification = (
                     "explicit_company_explanation"
-                    if _EXPLICIT_CAUSE_RE.search(excerpt)
+                    if _is_explicit_company_explanation(excerpt)
                     else "reported_fact"
                 )
                 matches.append(

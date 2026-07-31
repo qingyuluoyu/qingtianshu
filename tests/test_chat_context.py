@@ -23,6 +23,8 @@ class FakeDatabase:
         self.upload: dict[str, Any] | None = None
         self.document: dict[str, Any] | None = None
         self.used_uploads: list[str] = []
+        self.deep_stock: dict[str, Any] | None = None
+        self.universe_items: list[dict[str, Any]] = []
 
     def get_conversation(self, user_id: str, conversation_id: str):
         del user_id, conversation_id
@@ -73,6 +75,22 @@ class FakeDatabase:
     def add_conversation_message(self, **payload: Any) -> dict[str, Any]:
         self.messages.append(payload)
         return {"id": f"message-{len(self.messages)}"}
+
+    def get_deep_stock_session_by_conversation(
+        self, user_id: str, conversation_id: str
+    ) -> dict[str, Any] | None:
+        del user_id, conversation_id
+        return self.deep_stock
+
+    def latest_tushare_dataset_snapshot(
+        self, dataset: str, scope_key: str
+    ) -> dict[str, Any] | None:
+        assert dataset == "a_share_universe"
+        assert scope_key == "all"
+        return {
+            "data_version": "chat-context-test-v1",
+            "payload": {"items": list(self.universe_items)},
+        }
 
 
 class FakeKnowledge:
@@ -135,6 +153,31 @@ def test_prepare_creates_conversation_and_requires_market_knowledge() -> None:
     assert "市场涨跌原因" in knowledge.calls[0]["query"]
     assert database.messages[0]["role"] == "user"
     assert database.messages[0]["metadata"]["model_tier"] == "economy"
+
+
+def test_prepare_resolves_full_a_share_name_from_security_master() -> None:
+    service, database, _ = build_service()
+    database.universe_items = [
+        {
+            "symbol": "000065.SZ",
+            "name": "北方国际",
+            "industry": "建筑装饰",
+            "market": "主板",
+        }
+    ]
+
+    prepared = service.prepare(
+        user_id="user-a-share-name",
+        message="北方国际最近为什么下跌，现金流有什么变化？",
+        conversation_id=None,
+        quality_scope="evaluation",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="economy",
+    )
+
+    assert prepared.symbol == "000065.SZ"
+    assert prepared.symbols == ["000065.SZ"]
 
 
 def test_prepare_requires_financial_education_sources_for_fund_etf_question() -> None:
@@ -309,6 +352,272 @@ def test_prepare_restores_stock_target_for_contextual_followup() -> None:
     assert prepared.contextual_followup is True
     assert prepared.stock_context_followup is True
     assert prepared.explicit_market_query is True
+
+
+def test_bound_deep_stock_defaults_to_current_symbol_for_natural_research() -> None:
+    service, database, _ = build_service()
+    database.conversation = {
+        "id": "conversation-bound",
+        "title": "北方国际研究",
+        "status": "active",
+    }
+    database.deep_stock = {"symbol": "000065.SZ"}
+
+    prepared = service.prepare(
+        user_id="user-bound",
+        message=(
+            "最近20日下跌8.04%，这次回撤最可能与哪些已经确认的公司事件、"
+            "财务和现金流变化有关？请先直接回答，再说明哪些原因目前没有证据；"
+            "同时判断近5日0.00%能不能算企稳。不要复述选股卡片。"
+        ),
+        conversation_id="conversation-bound",
+        quality_scope="product",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="deep",
+    )
+
+    assert prepared.symbol == "000065.SZ"
+    assert prepared.symbols == ["000065.SZ"]
+    assert prepared.explicit_stock_screen_query is False
+    assert prepared.stock_screen_query is False
+
+
+def test_bound_quality_review_keeps_current_stock_when_requesting_industry_boundary():
+    service, database, _ = build_service()
+    database.conversation = {
+        "id": "conversation-bound-quality",
+        "title": "宁德时代研究",
+        "status": "active",
+    }
+    database.deep_stock = {"symbol": "300750.SZ"}
+
+    prepared = service.prepare(
+        user_id="user-bound-quality",
+        message=(
+            "这家公司为什么进入经营改善候选？请结合最新公告、同报告期财务、"
+            "经营现金流、主营结构和行业口径，直接说明改善是否有质量。"
+        ),
+        conversation_id="conversation-bound-quality",
+        quality_scope="evaluation",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="deep",
+    )
+
+    assert prepared.symbol == "300750.SZ"
+    assert prepared.symbols == ["300750.SZ"]
+    assert prepared.explicit_stock_screen_query is False
+    assert prepared.stock_screen_query is False
+
+
+def test_bound_quality_review_correction_does_not_restart_whole_market_screening():
+    service, database, _ = build_service()
+    database.conversation = {
+        "id": "conversation-bound-quality-correction",
+        "title": "宁德时代研究",
+        "status": "active",
+    }
+    database.deep_stock = {"symbol": "300750.SZ"}
+
+    prepared = service.prepare(
+        user_id="user-bound-quality-correction",
+        message=(
+            "请重新核对经营改善候选：投资者关系记录表已明确写出"
+            "‘库存增加主要是为下半年市场需求而提前备货’。请据此修正上一回答，"
+            "区分公司已解释的备货原因，与仍需量化核验的库存分类、库龄、"
+            "订单覆盖和跌价准备；同时保留毛利率、现金流和行业边界。"
+            "不要讨论其他候选，不要自行设定库龄阈值，不要编造行业数据。"
+        ),
+        conversation_id="conversation-bound-quality-correction",
+        quality_scope="evaluation",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="deep",
+    )
+
+    assert prepared.symbol == "300750.SZ"
+    assert prepared.symbols == ["300750.SZ"]
+    assert prepared.explicit_market_query is False
+    assert prepared.explicit_industry_topic is None
+    assert prepared.explicit_stock_screen_query is False
+    assert prepared.stock_screen_query is False
+
+
+def test_stock_margin_language_does_not_load_fixed_income_education() -> None:
+    assert (
+        build_financial_advisor_context(
+            "继续核验这家公司的毛利率、净利率、现金流和行业边界。"
+        )
+        is None
+    )
+
+
+def test_bound_peer_valuation_question_uses_fixed_peers_as_evidence() -> None:
+    service, database, _ = build_service()
+    database.conversation = {
+        "id": "conversation-bound-valuation",
+        "title": "宁德时代研究",
+        "status": "active",
+    }
+    database.deep_stock = {"symbol": "300750.SZ"}
+    database.universe_items = [
+        {"symbol": "300750.SZ", "name": "宁德时代"},
+        {"symbol": "300014.SZ", "name": "亿纬锂能"},
+        {"symbol": "002074.SZ", "name": "国轩高科"},
+        {"symbol": "300207.SZ", "name": "欣旺达"},
+    ]
+
+    prepared = service.prepare(
+        user_id="user-bound-valuation",
+        message=(
+            "宁德时代的PE和PB分别相对亿纬锂能、国轩高科、欣旺达处于什么位置？"
+            "不要简单说便宜或贵，请结合同行经营口径缺失说明估值约束。"
+        ),
+        conversation_id="conversation-bound-valuation",
+        quality_scope="evaluation",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="deep",
+    )
+
+    assert prepared.symbol == "300750.SZ"
+    assert prepared.symbols == ["300750.SZ"]
+    assert prepared.peer_comparison_query is True
+    assert prepared.explicit_stock_screen_query is False
+    assert prepared.stock_screen_query is False
+    assert prepared.stock_comparison_query is False
+
+
+def test_bound_deep_stock_ignores_single_letter_section_label() -> None:
+    service, database, _ = build_service()
+    database.conversation = {
+        "id": "conversation-bound",
+        "title": "北方国际研究",
+        "status": "active",
+    }
+    database.deep_stock = {"symbol": "000065.SZ"}
+
+    prepared = service.prepare(
+        user_id="user-bound",
+        message=(
+            "交互验收B：请继续用三段话说明这些财务压力能确认什么、"
+            "不能解释什么，以及近5日走平为什么还不能叫企稳。"
+        ),
+        conversation_id="conversation-bound",
+        quality_scope="product",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="economy",
+    )
+
+    assert prepared.symbol == "000065.SZ"
+    assert prepared.symbols == ["000065.SZ"]
+
+
+def test_named_stock_followup_leaves_legacy_screening_conversation() -> None:
+    service, database, _ = build_service()
+    database.conversation = {
+        "id": "conversation-legacy-screening",
+        "title": "个股研究｜北方国际",
+        "status": "active",
+    }
+    database.universe_items = [
+        {
+            "symbol": "000065.SZ",
+            "name": "北方国际",
+            "industry": "建筑装饰",
+            "market": "主板",
+        }
+    ]
+    database.history = [
+        {
+            "role": "assistant",
+            "intent": "stock_screen",
+            "metadata": {"stock_screen_profile": "pullback"},
+        }
+    ]
+
+    prepared = service.prepare(
+        user_id="user-legacy-screening",
+        message=(
+            "请基于最新数据重新回答：北方国际这次回撤与哪些已确认的财务、"
+            "经营现金流和公司事件有关？哪些只是静态测算或尚无直接因果证据？"
+            "近5日走平能不能叫企稳？"
+        ),
+        conversation_id="conversation-legacy-screening",
+        quality_scope="product",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="economy",
+    )
+
+    assert prepared.symbol == "000065.SZ"
+    assert prepared.symbols == ["000065.SZ"]
+    assert prepared.prior_intent == "stock_screen"
+    assert prepared.contextual_followup is True
+    assert prepared.explicit_stock_screen_query is False
+    assert prepared.stock_screen_query is False
+
+
+def test_bound_deep_stock_only_leaves_for_explicit_scope_change() -> None:
+    service, database, _ = build_service()
+    database.conversation = {
+        "id": "conversation-bound",
+        "title": "中兴通讯研究",
+        "status": "active",
+    }
+    database.deep_stock = {"symbol": "000063.SZ"}
+
+    rescreen = service.prepare(
+        user_id="user-bound",
+        message="请重新筛选A股，给我一批新的股票候选",
+        conversation_id="conversation-bound",
+        quality_scope="product",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="deep",
+    )
+    assert rescreen.symbol is None
+    assert rescreen.stock_screen_query is True
+
+    fund_question = service.prepare(
+        user_id="user-bound",
+        message="基金和ETF有什么区别？",
+        conversation_id="conversation-bound",
+        quality_scope="product",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="deep",
+    )
+    assert fund_question.symbol is None
+    assert fund_question.stock_screen_query is False
+
+    market_question = service.prepare(
+        user_id="user-bound",
+        message="今天A股大盘和哪些板块在领涨？",
+        conversation_id="conversation-bound",
+        quality_scope="product",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="deep",
+    )
+    assert market_question.symbol is None
+    assert market_question.explicit_market_query is True
+    assert market_question.stock_screen_query is False
+
+    industry_question = service.prepare(
+        user_id="user-bound",
+        message="通信设备行业最近走势怎么样？",
+        conversation_id="conversation-bound",
+        quality_scope="product",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="deep",
+    )
+    assert industry_question.symbol is None
+    assert industry_question.explicit_industry_topic == "通信设备"
+    assert industry_question.stock_screen_query is False
 
 
 def test_prepare_validates_conversation_and_upload_lifecycle(tmp_path: Path) -> None:

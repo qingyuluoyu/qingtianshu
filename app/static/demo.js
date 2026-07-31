@@ -95,6 +95,8 @@ const welcomeMessage = "你好，我是清数智算。你可以问市场、个�
       agentContextCollapsed: true,
       pendingAgentRequests: new Map(),
       agentResearchRunning: false,
+      chatDraftRevision: 0,
+      chatDraftUserEdited: false,
       fundComparison: null,
       riskProfile: null,
       riskProfileLoading: false,
@@ -102,6 +104,29 @@ const welcomeMessage = "你好，我是清数智算。你可以问市场、个�
       evaluationMode
     };
     const $ = (id) => document.getElementById(id);
+    function setChatInputDraft(value, options = {}) {
+      const input = $("chatInput");
+      if (!input) return false;
+      const expectedRevision = options.expectedRevision;
+      if (
+        expectedRevision != null
+        && expectedRevision !== state.chatDraftRevision
+      ) return false;
+      if (
+        !options.force
+        && state.chatDraftUserEdited
+        && input.value.trim()
+      ) return false;
+      const next = String(value ?? "");
+      if (input.value === next) return true;
+      input.value = next;
+      state.chatDraftRevision += 1;
+      state.chatDraftUserEdited = false;
+      return true;
+    }
+    function clearChatInputDraft() {
+      return setChatInputDraft("", {force: true});
+    }
     // Keep the frequently used general screener first. The strict strategy stays
     // discoverable through the section shortcut without shifting the form after load.
     $("stockScreenerPanel").appendChild($("liZongPanel"));

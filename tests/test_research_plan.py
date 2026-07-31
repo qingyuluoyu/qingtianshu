@@ -51,6 +51,89 @@ def test_research_plan_routes_price_financial_shareholder_and_comprehensive():
     assert "analyst_expectations" in research_priority["selected_modules"]
 
 
+def test_quality_review_focus_uses_disclosures_financials_cashflow_and_business_only():
+    service = ResearchPlanService()
+
+    plan = service.build(
+        "这家公司为什么进入经营改善候选？请结合同报告期财务、"
+        "经营现金流和主营结构判断改善是否有质量。"
+    )
+
+    assert plan["focus"] == "quality_review"
+    assert plan["required_modules"] == [
+        "fundamentals",
+        "earnings_quality",
+        "financial_drivers",
+        "business_structure",
+        "company_information",
+        "event_timeline",
+    ]
+    assert "market" not in plan["selected_modules"]
+    assert "peer_comparison" not in plan["selected_modules"]
+    assert "analyst_expectations" not in plan["selected_modules"]
+    assert plan["selected_skills"] == ["quality-review", "a-share-filing-evidence"]
+    assert "evidence-debate" not in plan["selected_skills"]
+
+
+def test_quality_review_correction_keeps_question_scoped_plan() -> None:
+    plan = ResearchPlanService().build(
+        "请重新核对经营改善候选：投资者关系记录表已明确写出"
+        "‘库存增加主要是为下半年市场需求而提前备货’。请据此修正上一回答，"
+        "区分公司已解释的备货原因，与仍需量化核验的库存分类、库龄、"
+        "订单覆盖和跌价准备；同时保留毛利率、现金流和行业边界。"
+    )
+
+    assert plan["focus"] == "quality_review"
+    assert plan["selected_modules"] == [
+        "fundamentals",
+        "earnings_quality",
+        "financial_drivers",
+        "business_structure",
+        "company_information",
+        "event_timeline",
+    ]
+    assert "market" not in plan["selected_modules"]
+    assert "peer_comparison" not in plan["selected_modules"]
+    assert plan["selected_skills"] == [
+        "quality-review",
+        "a-share-filing-evidence",
+    ]
+
+
+def test_quality_review_can_still_add_explicit_valuation_question():
+    service = ResearchPlanService()
+
+    plan = service.build("经营改善候选的改善质量如何，估值是不是也便宜？")
+
+    assert plan["focus"] == "mixed"
+    assert "peer_comparison" in plan["selected_modules"]
+
+
+def test_valuation_candidate_uses_scoped_quality_and_peer_plan() -> None:
+    plan = ResearchPlanService().build(
+        "动力新科为什么进入估值约束候选？请核对PE、PB及数据日期，"
+        "并结合同口径同行估值、最新财务、盈利质量、经营现金流和负债，"
+        "判断是否存在低估值陷阱。"
+    )
+
+    assert plan["focus"] == "valuation_review"
+    assert plan["required_modules"] == [
+        "market",
+        "fundamentals",
+        "earnings_quality",
+        "financial_drivers",
+        "business_structure",
+        "analyst_expectations",
+        "peer_comparison",
+        "company_information",
+        "event_timeline",
+    ]
+    assert "shareholder_structure" not in plan["selected_modules"]
+    assert "outlook_calibration" not in plan["selected_modules"]
+    assert "a-share-filing-evidence" in plan["selected_skills"]
+    assert "financial-drivers" in plan["selected_skills"]
+
+
 def test_research_plan_inherits_focus_for_short_followup():
     plan = ResearchPlanService().build(
         "那主要风险呢？",
@@ -62,6 +145,74 @@ def test_research_plan_inherits_focus_for_short_followup():
 
     assert plan["focus"] == "shareholder"
     assert "中兴通讯股东户数" in plan["effective_question"]
+
+
+def test_financial_and_stabilization_followup_avoids_comprehensive_prompt():
+    service = ResearchPlanService()
+
+    plan = service.build(
+        "请用三段话继续说明：财务压力能确认什么、不能解释什么，以及近5日走平为什么还不能叫企稳。"
+    )
+
+    assert plan["focus"] == "mixed"
+    assert plan["selected_modules"] == [
+        "market",
+        "fundamentals",
+        "earnings_quality",
+        "financial_drivers",
+    ]
+    assert "business_structure" not in plan["selected_modules"]
+    assert "shareholder_structure" not in plan["selected_modules"]
+    assert "analyst_expectations" not in plan["selected_modules"]
+    assert "company_information" not in plan["selected_modules"]
+    assert "event_timeline" not in plan["selected_modules"]
+    assert "outlook_calibration" not in plan["selected_modules"]
+    assert "conditional-outlook" not in plan["selected_skills"]
+
+
+def test_future_price_question_keeps_outlook_calibration_only_when_requested():
+    service = ResearchPlanService()
+
+    current = service.build("中兴通讯近5日走平算企稳吗？")
+    future = service.build("中兴通讯后续走势怎么看？")
+
+    assert current["focus"] == "price_action"
+    assert "outlook_calibration" not in current["selected_modules"]
+    assert "conditional-outlook" not in current["selected_skills"]
+    assert future["focus"] == "price_action"
+    assert "outlook_calibration" in future["selected_modules"]
+    assert "conditional-outlook" in future["selected_skills"]
+
+
+def test_relative_industry_question_uses_scoped_market_and_industry_plan():
+    plan = ResearchPlanService().build(
+        "宁德时代今天相对电池行业是增强还是走弱？请说明行业成分覆盖。"
+    )
+
+    assert plan["focus"] == "relative_industry"
+    assert plan["required_modules"] == ["market", "analyst_expectations"]
+    assert plan["selected_skills"] == []
+    assert plan["module_labels"]["analyst_expectations"] == "所属行业指数与成分"
+    assert "peer_comparison" not in plan["selected_modules"]
+    assert "financial_drivers" not in plan["selected_modules"]
+
+
+def test_named_cs_industry_index_keeps_relative_industry_plan():
+    plan = ResearchPlanService().build(
+        "用最新数据重新分析：宁德时代今天相对CS电池行业是增强还是走弱？"
+    )
+
+    assert plan["focus"] == "relative_industry"
+    assert plan["required_modules"] == ["market", "analyst_expectations"]
+
+
+def test_named_cs_index_without_industry_word_keeps_relative_industry_plan():
+    plan = ResearchPlanService().build(
+        "宁德时代今天相对CS电池指数是增强、同步还是走弱？"
+    )
+
+    assert plan["focus"] == "relative_industry"
+    assert plan["required_modules"] == ["market", "analyst_expectations"]
 
 
 def test_price_question_uses_scoped_modules_and_private_stock_workspace(
@@ -240,6 +391,7 @@ def test_screening_entry_reaches_stock_agent_evidence_and_prompt(app):
         "source_kind": "stock_screen",
         "source_label": "经营改善候选",
         "display_name": "中兴通讯",
+        "industry": "通信设备",
         "profile_key": "quality",
         "as_of_date": "2026-07-28",
         "candidate_status": "ready",
@@ -266,10 +418,9 @@ def test_screening_entry_reaches_stock_agent_evidence_and_prompt(app):
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["intent"] == "stock_research"
-    research_entry = payload["evidence"]["stock_workspace_context"][
-        "research_entry"
-    ]
+    research_entry = payload["evidence"]["stock_workspace_context"]["research_entry"]
     assert research_entry["source_label"] == "经营改善候选"
+    assert research_entry["industry"] == "通信设备"
     assert research_entry["matched_reasons"] == entry["matched_reasons"]
     assert research_entry["research_focus"] == entry["research_focus"]
     assert research_entry["attention_flags"] == entry["attention_flags"]
@@ -283,10 +434,93 @@ def test_screening_entry_reaches_stock_agent_evidence_and_prompt(app):
     ).read_text(encoding="utf-8")
     assert "选股入口线索使用要求" in prompt
     assert "经营改善候选" in prompt
+    assert "通信设备" in prompt
     assert "营收同比保持增长" in prompt
     assert "先核验改善是否来自主营并转化为现金流" in prompt
     assert "净利润同比下降" in prompt
     assert "现金流变化原因" in prompt
+
+
+def test_bound_screening_candidate_question_uses_full_stock_research_path(app):
+    client = TestClient(app)
+    user = _create_user(client, "Bound screening research user")
+    created = client.post(
+        "/me/deep-stock",
+        json={
+            "symbol": "000065.SZ",
+            "entry_context": {
+                "source_kind": "stock_screen",
+                "source_label": "回撤后待复核候选",
+                "display_name": "北方国际",
+                "profile_key": "pullback",
+                "as_of_date": "2026-07-28",
+                "candidate_status": "ready",
+                "matched_reasons": ["最近20日出现回撤"],
+                "research_focus": "核验回撤是否有公司事件和现金流证据。",
+                "attention_flags": ["短线停止下跌不等于已经企稳。"],
+                "missing_fields": ["股价回撤的直接公司解释"],
+            },
+        },
+    )
+    assert created.status_code == 201
+
+    question = (
+        "北方国际最近20日下跌8.04%，这次回撤最可能与哪些已经确认的公司事件、"
+        "财务和经营现金流变化有关？请先直接回答，再说明哪些原因目前没有证据；"
+        "同时判断近5日0.00%能不能算企稳。请用普通投资者能看懂的话，"
+        "不要复述选股卡片。"
+    )
+    response = client.post(
+        "/me/chat",
+        json={
+            "message": question,
+            "conversation_id": created.json()["conversation_id"],
+            "execute_agent": False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    evidence = payload["evidence"]
+    assert payload["intent"] == "stock_research"
+    assert evidence["symbol"] == "000065.SZ"
+    assert evidence["research_plan"]["focus"] == "mixed"
+    assert "conditional_outlook" not in evidence["research_plan"]["selected_modules"]
+    assert "conditional-outlook" not in evidence["research_plan"]["selected_skills"]
+    assert set(evidence["research_plan"]["required_modules"]) == {
+        "market",
+        "fundamentals",
+        "earnings_quality",
+        "financial_drivers",
+        "company_information",
+        "event_timeline",
+    }
+    assert (
+        evidence["stock_workspace_context"]["research_entry"]["source_label"]
+        == "回撤后待复核候选"
+    )
+    assert "candidates" not in evidence
+    assert "fundamentals" in evidence
+    assert "earnings_quality" in evidence
+    assert "financial_drivers" in evidence
+    assert "a_share_information" in evidence
+    assert "event_timeline" in evidence
+
+    prompt = (
+        Path(app.state.database.get_user(user["id"])["workspace_path"])
+        / "runs"
+        / payload["run_id"]
+        / "prompt.md"
+    ).read_text(encoding="utf-8")
+    assert "# Fundamental Evidence" in prompt
+    assert "# Earnings Quality" in prompt
+    assert "# Financial Drivers" in prompt
+    assert "# A-share Information Runtime" in prompt
+    assert "# Event Timeline" in prompt
+    assert "选股入口线索使用要求" in prompt
+    assert '"a_share_information"' in prompt
+    assert '"financial_drivers"' in prompt
+    assert "不要把已有披露说成“没有事件证据”" in prompt
 
 
 def test_required_module_failure_returns_partial_packet(client, app, monkeypatch):

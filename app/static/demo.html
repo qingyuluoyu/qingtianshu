@@ -194,7 +194,7 @@
           <section id="reviewEvidencePanel" class="review-tab-panel" data-review-panel="evidence" data-review-whitebox hidden>
             <section class="panel backend-flow-panel review-evidence-flow">
               <div class="backend-flow-title">一条回答怎样从数据走到用户面前</div>
-              <div class="backend-flow-copy">价格和结构化指标先由确定性工具生成；资料库负责补充语境；AI 研究引擎只在证据包范围内组织解释、反方证据和失效条件。</div>
+              <div class="backend-flow-copy">价格和结构化指标先由确定性工具生成；资料库负责补充语境；AI 研究引擎只在证据包范围内组织解释、反方证据，并说明什么时候需要重新判断。</div>
               <div class="backend-flow" aria-label="清数智算后端流程图">
                 <div class="backend-flow-node"><strong>① 采集</strong><span>行情、公告、财报、新闻和社区样本</span></div>
                 <div class="backend-flow-arrow">→</div>
@@ -1006,7 +1006,7 @@
               <div class="quick-action-buttons">
                 <button id="earningsQualityAction" class="chip">财报公告</button>
                 <button class="chip" data-message="比较中兴通讯、中际旭创和英伟达的盈利质量、估值和主要风险；严格区分报告期和币种口径">多股比较</button>
-                <button class="chip" data-message="只看反方证据和原假设的失效条件">反方风险</button>
+                <button class="chip" data-message="只看反方证据，并说明什么情况会推翻原假设">反方风险</button>
                 <button class="chip" data-message="请根据我自己记录的原计划，检查这次拟议操作是否偏离计划；不要替我生成买卖建议">操作前检查</button>
                 <button class="chip secondary-research-action" data-quick-secondary hidden data-message="请分析当前市场环境如何影响我的自选股和原研究假设">市场与持仓</button>
                 <button class="chip secondary-research-action" data-quick-secondary hidden data-message="我的研究行动和观察条件是什么？">研究任务</button>
@@ -1029,7 +1029,7 @@
                 <label>研究深度
                   <select id="modelTier">
                     <option value="economy">标准</option>
-                    <option value="deep">深入</option>
+                    <option value="deep">深入（回答更全面，等待更久）</option>
                   </select>
                 </label>
                 <label id="useHermesLabel" class="model-toggle" hidden>

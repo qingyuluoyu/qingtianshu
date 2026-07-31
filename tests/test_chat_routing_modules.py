@@ -24,6 +24,8 @@ def test_chat_routing_preserves_market_and_followup_semantics() -> None:
     assert chat_routing._is_market_query("美股为什么收盘跌了")
     assert not chat_routing._is_market_query("现在仍在盘中吗")
     assert chat_routing._prefers_stock_context_followup("它相对行业更强吗")
+    assert chat_routing._needs_stock_market_context("宁德时代相对电池行业走弱吗")
+    assert chat_routing._needs_stock_market_context("宁德时代相对CS电池指数走弱吗")
     assert chat_routing._question_price_direction("中兴通讯今天为什么跌") == -1
 
 

@@ -106,7 +106,10 @@ function researchStatusMeta(status) {
       try {
         const session = await api("/me/deep-stock", {
           method: "POST",
-          body: JSON.stringify({symbol: item.symbol})
+          body: JSON.stringify({
+            symbol: item.symbol,
+            quality_scope: state.evaluationMode ? "evaluation" : "user"
+          })
         });
         state.deepStock = session;
         await loadConversations(false);
@@ -115,9 +118,9 @@ function researchStatusMeta(status) {
         const completeBarDate = report?.market_timestamp
           ? marketDateLabel(report.market_timestamp, timezoneName)
           : "待确认";
-        const question = `请用最新可验证数据复核${item.name || item.symbol}（${item.symbol}）的已有研究报告。报告更新于${readableTime(report?.generated_at)}，其中完整日线截至${completeBarDate}。请先说明本轮相较报告有哪些事实更新，再分别列出仍成立的判断、反方证据、失效条件和下一条最值得核验的证据；行情时间与财务报告期必须分开写。不要直接复述报告原文，不要给目标价或买卖建议。`;
+        const question = `请用最新可验证数据复核${item.name || item.symbol}（${item.symbol}）的已有研究报告。报告更新于${readableTime(report?.generated_at)}，其中完整日线截至${completeBarDate}。请先说明本轮相较报告有哪些事实更新，再分别列出仍成立的判断、反方证据、什么情况会推翻当前判断，以及下一条最值得核验的证据；行情时间与财务报告期必须分开写。不要直接复述报告原文，不要给目标价或买卖建议。`;
         await continueDeepStockConversation(question, session);
-        $("chatInput").value = "";
+        clearChatInputDraft();
         await sendChat(question);
       } catch (error) {
         openReader(
@@ -563,7 +566,7 @@ function researchStatusMeta(status) {
       const actions = document.createElement("div"); actions.className = "stock-detail-actions";
       const deep = document.createElement("button"); deep.type = "button"; deep.className = "btn primary"; deep.textContent = "进入股票研究空间"; deep.addEventListener("click", () => { void openDeepStockSymbol(item.symbol); });
       const ask = document.createElement("button"); ask.type = "button"; ask.className = "btn"; ask.textContent = "向 Agent 提问"; ask.addEventListener("click", () => {
-        activateWorkspace("agent"); $("chatInput").value = `分析${item.name || item.symbol}最近的行情、基本面变化和需要复核的风险。`; $("chatInput").focus();
+        activateWorkspace("agent"); setChatInputDraft(`分析${item.name || item.symbol}最近的行情、基本面变化和需要复核的风险。`, {force: true}); $("chatInput").focus();
       });
       actions.append(deep, ask);
       detail.append(chartHost, actions);

@@ -328,7 +328,7 @@ def render_stock_preview(
 
             outlook = evidence.get("conditional_outlook") or {}
             invalidation = outlook.get("invalidation")
-            lines.append("失效条件")
+            lines.append("什么时候需要重新判断")
             if invalidation:
                 lines.append("- " + evidence_text(invalidation))
             else:
@@ -1075,9 +1075,12 @@ def render_stock_preview(
                 lines.append(
                     f"  - {scenario['name']}：当{scenario['condition']}；{scenario['meaning']}"
                 )
-            if "失效条件" in str(evidence.get("user_question") or ""):
+            if any(
+                term in str(evidence.get("user_question") or "")
+                for term in ("失效条件", "重新判断", "什么情况会推翻")
+            ):
                 lines.append(
-                    "- 失效条件："
+                    "- 什么时候需要重新判断："
                     + str(
                         outlook.get("invalidation")
                         or "价格跨越关键参考位或公告、财务、行业证据发生冲突时，当前判断必须重算。"

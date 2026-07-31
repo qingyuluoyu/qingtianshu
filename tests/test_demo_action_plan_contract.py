@@ -179,7 +179,7 @@ def test_demo_agent_task_entry_requests_live_verification_and_draft_only() -> No
     for fragment in (
         "请立即核验",
         "当前可用的实时数据、资料库和证据链",
-        "反方证据、数据时间和失效条件",
+        "反方证据、数据时间，以及哪些可观察事实会推翻当前判断",
         "生成观察任务草稿供我确认",
         "正式任务必须等我点击确认后才写入",
         "continueDeepStockConversation(agentTaskPrompt)",
@@ -217,7 +217,8 @@ def test_demo_restores_agent_route_before_loading_unrelated_dashboards() -> None
     for fragment in (
         'if (initialRoute.page === "agent")',
         "await Promise.all([loadConversations(false, false), loadDeepStock()]);",
-        'await restoreWorkspaceRoute(initialRoute, "replace");',
+        'await restoreWorkspaceRoute(initialRoute, "replace", {',
+        "expectedDraftRevision: bootDraftRevision",
         "void Promise.allSettled([",
         "loadTodayOverview(),",
         "loadKnowledge()",
@@ -269,7 +270,8 @@ def test_demo_loads_li_zong_route_before_unrelated_dashboards() -> None:
     ]
     assert 'initialRoute.screeningSection === "li_zong"' in screening_branch
     assert "await loadLiZongStrategy();" in screening_branch
-    assert 'await restoreWorkspaceRoute(initialRoute, "replace");' in screening_branch
+    assert 'await restoreWorkspaceRoute(initialRoute, "replace", {' in screening_branch
+    assert "expectedDraftRevision: bootDraftRevision" in screening_branch
     assert "void Promise.allSettled([" in screening_branch
     assert screening_branch.index("await loadLiZongStrategy") < screening_branch.index(
         "loadWatchlist(),"

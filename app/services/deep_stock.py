@@ -22,9 +22,7 @@ class DeepStockResearchService:
         "本轮没有形成可复核的新结论，研究进度保持不变；"
         "可重新发起研究或继续核验下一条证据。"
     )
-    RUN_EVIDENCE_REVIEW_NOTICE = (
-        "本轮结论的证据引用仍需补充核验，研究进度保持不变。"
-    )
+    RUN_EVIDENCE_REVIEW_NOTICE = "本轮结论的证据引用仍需补充核验，研究进度保持不变。"
     CORE_EVIDENCE_REVIEW_NOTICE = (
         "本轮核心证据尚不完整，研究进度保持不变；请先补齐下一条关键证据。"
     )
@@ -67,9 +65,9 @@ class DeepStockResearchService:
         },
         {
             "key": "invalidation_next",
-            "label": "失效条件与下一证据",
-            "description": "把未决问题变成可持续跟踪的证据任务和失效条件。",
-            "question": "请总结当前研究逻辑的失效条件、仍未解决的证据缺口，以及下一次最值得核验的事实。",
+            "label": "什么时候需要重新判断",
+            "description": "明确哪些可观察事实会推翻当前判断，并把未决问题变成持续跟踪任务。",
+            "question": "请说明什么情况会推翻当前研究判断、仍有哪些证据缺口，以及下一次最值得核验的事实。",
         },
     )
 
@@ -105,6 +103,44 @@ class DeepStockResearchService:
         "insufficient": 1,
         "partial": 2,
         "sufficient": 3,
+    }
+    ANALYSIS_BOARD_MODULES = {
+        "market": {"market"},
+        "news": {"company_information", "event_timeline"},
+        "sentiment": {"company_information"},
+        "fundamentals": {
+            "fundamentals",
+            "earnings_quality",
+            "financial_drivers",
+            "business_structure",
+            "shareholder_structure",
+        },
+        "peers": {"peer_comparison"},
+        "analyst_expectations": {"analyst_expectations"},
+        "debate": set(),
+    }
+    ANALYSIS_BOARD_LABELS = {
+        "行情结构",
+        "公告、新闻与事件脉络",
+        "情绪与分歧",
+        "基本面与现金流",
+        "同行估值与经营",
+        "分析师预期与研报",
+        "多空与风险委员会",
+    }
+    BASE_MISSING_INFORMATION_MODULES = {
+        "公司最新公告尚未接入": {"company_information", "event_timeline"},
+        "结构化财务与估值数据尚未接入": {
+            "fundamentals",
+            "earnings_quality",
+            "financial_drivers",
+            "peer_comparison",
+        },
+        "行业供需与一致预期尚未接入": {
+            "analyst_expectations",
+            "peer_comparison",
+        },
+        "新闻与事件影响尚未接入": {"company_information", "event_timeline"},
     }
     EVIDENCE_PERSISTED_RUN_STATUSES = {"completed", "preview"}
     STAGE_ADVANCING_RUN_STATUSES = {"completed"}
@@ -148,6 +184,7 @@ class DeepStockResearchService:
         symbol: str,
         conversation_id: str | None = None,
         entry_context: dict[str, Any] | None = None,
+        quality_scope: str = "user",
     ) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
         research_entry = self._normalize_research_entry(entry_context)
@@ -160,10 +197,8 @@ class DeepStockResearchService:
                 )
         bound_conversation = None
         if conversation_id:
-            conversation_session = (
-                self.database.get_deep_stock_session_by_conversation(
-                    user_id, conversation_id
-                )
+            conversation_session = self.database.get_deep_stock_session_by_conversation(
+                user_id, conversation_id
             )
             if (
                 conversation_session is not None
@@ -193,7 +228,9 @@ class DeepStockResearchService:
                 self._display_name(user_id, canonical),
             )
             bound_conversation = self.database.create_conversation(
-                user_id, f"个股研究｜{display_name}"
+                user_id,
+                f"个股研究｜{display_name}",
+                quality_scope=quality_scope,
             )
 
         report = self.database.latest_research_report(canonical)
@@ -211,15 +248,17 @@ class DeepStockResearchService:
         }
         automatic_titles.discard("个股研究｜")
         desired_title = f"个股研究｜{name}"
-        if (
-            current_title != desired_title
-            and (conversation_id is not None or current_title in automatic_titles)
+        if current_title != desired_title and (
+            conversation_id is not None or current_title in automatic_titles
         ):
-            bound_conversation = self.database.rename_conversation(
-                user_id,
-                str(bound_conversation["id"]),
-                desired_title,
-            ) or bound_conversation
+            bound_conversation = (
+                self.database.rename_conversation(
+                    user_id,
+                    str(bound_conversation["id"]),
+                    desired_title,
+                )
+                or bound_conversation
+            )
         if existing is None:
             watchlist = self.database.get_watchlist_item(user_id, canonical)
             thesis = str((watchlist or {}).get("thesis") or "").strip()
@@ -259,16 +298,20 @@ class DeepStockResearchService:
             else "active"
         )
         next_question = self._next_question(stages, name)
-        if research_entry is not None and (
-            next(
-                (
-                    item
-                    for item in stages
-                    if item.get("status") in {"in_progress", "needs_review"}
-                ),
-                {},
-            )
-        ).get("key") == "original_thesis":
+        if (
+            research_entry is not None
+            and (
+                next(
+                    (
+                        item
+                        for item in stages
+                        if item.get("status") in {"in_progress", "needs_review"}
+                    ),
+                    {},
+                )
+            ).get("key")
+            == "original_thesis"
+        ):
             focus = str(research_entry.get("research_focus") or "").strip()
             next_question = (
                 f"请先核验{name}命中“{research_entry['source_label']}”的理由。"
@@ -296,8 +339,7 @@ class DeepStockResearchService:
             latest_run = self.database.get_run(str(latest_run_id), user_id)
             if (
                 latest_run
-                and latest_run.get("status")
-                in self.EVIDENCE_PERSISTED_RUN_STATUSES
+                and latest_run.get("status") in self.EVIDENCE_PERSISTED_RUN_STATUSES
             ):
                 input_data = latest_run.get("input") or {}
                 reconciled = self.observe_chat(
@@ -344,11 +386,10 @@ class DeepStockResearchService:
             "source_kind": source_kind,
             "source_label": source_label,
             "display_name": clean_text(entry_context.get("display_name"), 80),
+            "industry": clean_text(entry_context.get("industry"), 80),
             "profile_key": clean_text(entry_context.get("profile_key"), 60),
             "as_of_date": clean_text(entry_context.get("as_of_date"), 32),
-            "candidate_status": clean_text(
-                entry_context.get("candidate_status"), 40
-            ),
+            "candidate_status": clean_text(entry_context.get("candidate_status"), 40),
             "matched_reasons": matched_reasons,
             "missing_fields": missing_fields,
             "status": "user_selected_context",
@@ -381,9 +422,7 @@ class DeepStockResearchService:
 
         coverage = self._coverage_dimensions(evidence, intent=intent)
         counts = {
-            status: sum(
-                item["coverage_status"] == status for item in coverage.values()
-            )
+            status: sum(item["coverage_status"] == status for item in coverage.values())
             for status in ("sufficient", "partial", "insufficient", "unavailable")
         }
         return {
@@ -432,22 +471,20 @@ class DeepStockResearchService:
         run_status = str(run.get("status") or "")
         run_id = run.get("id")
         now = utc_now()
-        coverage_override = self._coverage_from_modules(evidence_modules)
+        coverage_override = self._repair_stale_coverage_observations(
+            self._coverage_from_modules(evidence_modules),
+            user_id=user_id,
+        )
         stage_gate_allowed, stage_gate_reason = self._stage_advance_gate(
             run,
             evidence,
         )
-        unresolved = [
-            item for item in unresolved if not self._is_run_gate_notice(item)
-        ]
+        unresolved = [item for item in unresolved if not self._is_run_gate_notice(item)]
         if run_status not in self.EVIDENCE_PERSISTED_RUN_STATUSES:
             unresolved.append(self.RUN_NOT_ADVANCED_NOTICE)
         else:
             coverage = self._coverage_dimensions(evidence, intent=intent)
-            if (
-                run_status in self.STAGE_ADVANCING_RUN_STATUSES
-                and stage_gate_allowed
-            ):
+            if run_status in self.STAGE_ADVANCING_RUN_STATUSES and stage_gate_allowed:
                 assessments = self._stage_assessments(
                     intent=intent,
                     message=message,
@@ -459,15 +496,17 @@ class DeepStockResearchService:
                     if assessment is None or stage.get("status") == "completed":
                         continue
                     stage_status = str(assessment["status"])
-                    stage.update({
-                        "status": stage_status,
-                        "review_status": stage_status,
-                        "review_reasons": assessment["review_reasons"],
-                        "source_refs": assessment["source_refs"],
-                        "coverage_gate": assessment["coverage_gate"],
-                        "last_evaluated_at": now,
-                        "last_evaluated_run_id": run_id,
-                    })
+                    stage.update(
+                        {
+                            "status": stage_status,
+                            "review_status": stage_status,
+                            "review_reasons": assessment["review_reasons"],
+                            "source_refs": assessment["source_refs"],
+                            "coverage_gate": assessment["coverage_gate"],
+                            "last_evaluated_at": now,
+                            "last_evaluated_run_id": run_id,
+                        }
+                    )
                     if stage_status == "completed":
                         stage.update(
                             {
@@ -514,9 +553,7 @@ class DeepStockResearchService:
             unresolved.extend(
                 self._evidence_unresolved(evidence, include_coverage=False)
             )
-            coverage_labels = {
-                label for _, label in self.COVERAGE_DIMENSIONS
-            }
+            coverage_labels = {label for _, label in self.COVERAGE_DIMENSIONS}
             unresolved = [
                 item
                 for item in unresolved
@@ -593,9 +630,7 @@ class DeepStockResearchService:
             if not addressed:
                 return
             required = self.STAGE_COVERAGE_GATES.get(stage_key, ())
-            coverage_gate = {
-                key: coverage[key]["coverage_status"] for key in required
-            }
+            coverage_gate = {key: coverage[key]["coverage_status"] for key in required}
             reasons = list(extra_reasons or [])
             if not modules:
                 reasons.append("本阶段核心证据包缺失或不可用。")
@@ -647,9 +682,10 @@ class DeepStockResearchService:
         financial_modules = self._present_modules(
             evidence, ("fundamentals", "earnings_quality", "financial_drivers")
         )
-        if intent in {"earnings_quality", "financial_drivers"} and self._packet_available(
-            evidence
-        ):
+        if intent in {
+            "earnings_quality",
+            "financial_drivers",
+        } and self._packet_available(evidence):
             financial_modules = [intent]
         assess(
             "financial_cashflow",
@@ -712,7 +748,7 @@ class DeepStockResearchService:
                 extra_reasons=(
                     []
                     if self._invalidation_sufficient(evidence)
-                    else ["失效条件与下一证据尚未形成可核验闭环。"]
+                    else ["什么时候需要重新判断以及下一证据尚未形成可核验闭环。"]
                 ),
             )
         return assessments
@@ -888,30 +924,34 @@ class DeepStockResearchService:
                 "key": key,
                 "label": label,
                 "coverage_status": status,
+                "observed_in_run": bool(attempted or sufficient or partial),
                 "sources": self._dedupe(sources),
                 "missing_items": [] if status == "sufficient" else missing_items,
                 "as_of": self._dedupe(as_of or []),
             }
 
         business = packet("business_structure")
-        research_frame = packet("research_frame")
         direct_business = intent == "business_structure" and self._packet_available(
             evidence
         )
         business_content = direct_business or has_any(
             business,
-            ("rows", "dimensions", "key_changes", "business_profile", "anchor_report_date"),
+            (
+                "rows",
+                "dimensions",
+                "key_changes",
+                "business_profile",
+                "anchor_report_date",
+            ),
         )
         company_sources = []
         if business_content:
             company_sources.append("主营与业务结构")
-        if research_frame:
-            company_sources.append("公司研究框架")
         company = dimension(
             "company_operating",
             sources=company_sources,
             sufficient=business_content,
-            partial=bool(research_frame),
+            partial=False,
             attempted=bool(business),
             missing_items=["需要可核验的主营构成、收入或毛利来源证据。"],
             as_of=[
@@ -927,9 +967,10 @@ class DeepStockResearchService:
         fundamentals = packet("fundamentals")
         earnings = packet("earnings_quality")
         drivers = packet("financial_drivers")
-        direct_financial = intent in {"earnings_quality", "financial_drivers"} and self._packet_available(
-            evidence
-        )
+        direct_financial = intent in {
+            "earnings_quality",
+            "financial_drivers",
+        } and self._packet_available(evidence)
         fundamental_content = has_any(
             fundamentals,
             ("summary", "financial_periods", "statements", "valuation"),
@@ -982,16 +1023,28 @@ class DeepStockResearchService:
             else {}
         )
         expectations = packet("analyst_expectations")
+        market_context = packet("stock_market_context")
+        exact_industry_index = (
+            market_context.get("exact_industry_index")
+            if isinstance(market_context.get("exact_industry_index"), dict)
+            else {}
+        )
         peer_content = has_any(peers, ("metrics", "peers")) or has_any(
             peer_operating, ("metrics", "peers", "coverage")
+        )
+        exact_industry_content = (
+            exact_industry_index.get("status") == "same_market_date"
+            and exact_industry_index.get("return_1d_pct") is not None
+            and exact_industry_index.get("stock_return_1d_pct") is not None
+            and exact_industry_index.get("stock_minus_industry_pct") is not None
         )
         expectation_industry = bool(
             expectations.get("industry")
             or expectations.get("industry_index")
             or expectations.get("latest_reports")
         )
-        direct_expectations = intent == "analyst_expectations" and self._packet_available(
-            evidence
+        direct_expectations = (
+            intent == "analyst_expectations" and self._packet_available(evidence)
         )
         industry = dimension(
             "industry_relative",
@@ -999,19 +1052,26 @@ class DeepStockResearchService:
                 label
                 for present, label in (
                     (peer_content, "固定同行比较"),
+                    (exact_industry_content, "同日官方行业指数对照"),
                     (expectation_industry, "行业与分析师覆盖"),
                     (direct_expectations, "分析师预期专项"),
                 )
                 if present
             ],
-            sufficient=peer_content,
+            sufficient=peer_content or exact_industry_content,
             partial=expectation_industry or direct_expectations,
-            attempted=bool(peers or expectations),
+            attempted=bool(peers or expectations or market_context),
             missing_items=["需要固定同行或同日行业相对表现证据。"],
             as_of=self._collect_dates(
                 peers,
                 expectations,
+                exact_industry_index,
                 keys=("report_period", "market_timestamp", "fetched_at"),
+            )
+            + (
+                [str(exact_industry_index.get("market_date"))]
+                if exact_industry_index.get("market_date")
+                else []
             ),
         )
 
@@ -1079,12 +1139,32 @@ class DeepStockResearchService:
         timeline = packet("event_timeline")
         information = packet("a_share_information")
         global_information = packet("global_information")
-        debate = packet("evidence_debate")
         direct_event = intent == "event_timeline" and self._packet_available(evidence)
-        event_content = direct_event or has_any(timeline, ("events", "sources")) or any(
-            information.get(key) for key in ("announcements", "news", "social_posts")
-        ) or bool(global_information.get("news"))
+        selected_modules = {
+            str(item)
+            for item in (packet("research_plan").get("selected_modules") or [])
+            if item
+        }
+        event_selected = bool(
+            selected_modules.intersection({"company_information", "event_timeline"})
+        )
+        event_content = (
+            direct_event
+            or has_any(timeline, ("events", "sources"))
+            or any(
+                information.get(key)
+                for key in ("announcements", "news", "social_posts")
+            )
+            or bool(global_information.get("news"))
+        )
         debate_content = self._counterevidence_sufficient(evidence)
+        risk_attempted = bool(
+            direct_event
+            or event_selected
+            or timeline
+            or information
+            or global_information
+        )
         risk = dimension(
             "risk_events",
             sources=[
@@ -1096,8 +1176,8 @@ class DeepStockResearchService:
                 if present
             ],
             sufficient=event_content,
-            partial=debate_content,
-            attempted=bool(timeline or information or global_information or debate),
+            partial=debate_content and risk_attempted,
+            attempted=risk_attempted,
             missing_items=["需要事件证据与反方风险证据同时覆盖。"],
             as_of=self._collect_dates(
                 timeline,
@@ -1110,9 +1190,7 @@ class DeepStockResearchService:
         return dict((company, financial, industry, valuation, technical, risk))
 
     @staticmethod
-    def _collect_dates(
-        *packets: dict[str, Any], keys: tuple[str, ...]
-    ) -> list[str]:
+    def _collect_dates(*packets: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
         dates: list[str] = []
         for packet in packets:
             for key in keys:
@@ -1137,14 +1215,20 @@ class DeepStockResearchService:
         outlook = evidence.get("conditional_outlook") or {}
         frame = evidence.get("research_frame") or {}
         return bool(
-            (isinstance(outlook, dict) and (
-                outlook.get("scenarios")
-                or outlook.get("invalidation")
-                or outlook.get("conditions")
-                or outlook.get("label")
-            ))
+            (
+                isinstance(outlook, dict)
+                and (
+                    outlook.get("scenarios")
+                    or outlook.get("invalidation")
+                    or outlook.get("conditions")
+                    or outlook.get("label")
+                )
+            )
             and (
-                (isinstance(frame, dict) and frame.get("missing_information") is not None)
+                (
+                    isinstance(frame, dict)
+                    and frame.get("missing_information") is not None
+                )
                 or DeepStockResearchService._counterevidence_sufficient(evidence)
             )
         )
@@ -1158,9 +1242,7 @@ class DeepStockResearchService:
         }
 
     @staticmethod
-    def _present_modules(
-        evidence: dict[str, Any], keys: tuple[str, ...]
-    ) -> list[str]:
+    def _present_modules(evidence: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
         present = []
         for key in keys:
             value = evidence.get(key)
@@ -1341,7 +1423,9 @@ class DeepStockResearchService:
             next_question=self._next_question(stages, str(session["name"])),
             latest_run_id=session.get("latest_run_id"),
             latest_report_id=session.get("latest_report_id"),
-            completed_at=(session.get("completed_at") if status == "completed" else None),
+            completed_at=(
+                session.get("completed_at") if status == "completed" else None
+            ),
         )
         return saved
 
@@ -1380,6 +1464,10 @@ class DeepStockResearchService:
         restored_coverage = self._coverage_from_modules(
             dict(session.get("evidence_modules") or {})
         )
+        restored_coverage = self._repair_stale_coverage_observations(
+            restored_coverage,
+            user_id=str(session["user_id"]),
+        )
         if coverage_override is not None:
             coverage = coverage_override
         elif restored_coverage:
@@ -1392,9 +1480,7 @@ class DeepStockResearchService:
             )
             coverage = self._coverage_dimensions(coverage_evidence)
         coverage_counts = {
-            status: sum(
-                item["coverage_status"] == status for item in coverage.values()
-            )
+            status: sum(item["coverage_status"] == status for item in coverage.values())
             for status in ("sufficient", "partial", "insufficient", "unavailable")
         }
         refresh_attention = sum(
@@ -1403,6 +1489,10 @@ class DeepStockResearchService:
             for item in coverage.values()
         )
         coverage_tasks = self._coverage_tasks(coverage)
+        public_unresolved = self._public_session_unresolved(
+            session,
+            coverage_tasks=coverage_tasks,
+        )
         coverage_history = list(
             (session.get("evidence_modules") or {}).get("_coverage_history") or []
         )
@@ -1419,17 +1509,16 @@ class DeepStockResearchService:
             str(session["symbol"]),
             str(session["symbol"]).split(".", 1)[0],
         }
-        if conversation_title.startswith("个股研究｜") and conversation_title.split(
-            "｜", 1
-        )[1] in automatic_suffixes:
+        if (
+            conversation_title.startswith("个股研究｜")
+            and conversation_title.split("｜", 1)[1] in automatic_suffixes
+        ):
             conversation_title = f"个股研究｜{display_name}"
         return {
             **session,
             "name": display_name,
             "stages": stages,
-            "unresolved_items": self._public_issue_list(
-                list(session.get("unresolved_items") or [])
-            ),
+            "unresolved_items": public_unresolved,
             "progress": {
                 "completed": completed,
                 "total": len(stages),
@@ -1459,6 +1548,62 @@ class DeepStockResearchService:
             "research_entry": research_entry or None,
         }
 
+    def _public_session_unresolved(
+        self,
+        session: dict[str, Any],
+        *,
+        coverage_tasks: list[dict[str, Any]],
+    ) -> list[str]:
+        run_gate_notices = [
+            str(item)
+            for item in (session.get("unresolved_items") or [])
+            if item and self._is_run_gate_notice(str(item))
+        ]
+        unresolved = [
+            str(item)
+            for item in (session.get("unresolved_items") or [])
+            if item
+            and not self._is_run_gate_notice(str(item))
+            and not self._is_generated_evidence_notice(str(item))
+        ]
+        latest_run_id = str(session.get("latest_run_id") or "")
+        if latest_run_id:
+            run = self.database.get_run(latest_run_id, str(session["user_id"]))
+            run_evidence = (run or {}).get("evidence") or {}
+            if (
+                run
+                and run.get("status") in self.EVIDENCE_PERSISTED_RUN_STATUSES
+                and isinstance(run_evidence, dict)
+            ):
+                unresolved.extend(
+                    self._evidence_unresolved(
+                        run_evidence,
+                        include_coverage=False,
+                    )
+                )
+        unresolved.extend(
+            f"证据覆盖｜{task['label']}：{task['next_step']}"
+            for task in coverage_tasks
+        )
+        unresolved.extend(run_gate_notices)
+        return self._public_issue_list(self._dedupe(unresolved)[-12:])
+
+    @classmethod
+    def _is_generated_evidence_notice(cls, item: str) -> bool:
+        if item in cls.BASE_MISSING_INFORMATION_MODULES:
+            return True
+        if item.startswith("证据覆盖｜"):
+            return True
+        if any(
+            item.startswith(f"{label}：")
+            for _, label in cls.COVERAGE_DIMENSIONS
+        ):
+            return True
+        return any(
+            item == f"{label}仍需补充可核验证据。"
+            for label in cls.ANALYSIS_BOARD_LABELS
+        )
+
     def _coverage_from_modules(
         self, evidence_modules: dict[str, Any]
     ) -> dict[str, dict[str, Any]]:
@@ -1472,10 +1617,50 @@ class DeepStockResearchService:
             if isinstance(item, dict) and item.get("key")
         }
         return {
-            key: restored[key]
-            for key, _ in self.COVERAGE_DIMENSIONS
-            if key in restored
+            key: restored[key] for key, _ in self.COVERAGE_DIMENSIONS if key in restored
         }
+
+    def _repair_stale_coverage_observations(
+        self,
+        previous: dict[str, dict[str, Any]],
+        *,
+        user_id: str,
+    ) -> dict[str, dict[str, Any]]:
+        """Remove refresh warnings created by runs that never observed a dimension."""
+
+        repaired = {key: dict(item) for key, item in previous.items()}
+        run_cache: dict[str, dict[str, Any] | None] = {}
+        for key, item in repaired.items():
+            status = str(item.get("coverage_status") or "unavailable")
+            observed_status = str(item.get("last_observed_status") or status)
+            run_id = str(item.get("last_observed_run_id") or "")
+            if observed_status == status or not run_id:
+                continue
+            if run_id not in run_cache:
+                run_cache[run_id] = self.database.get_run(run_id, user_id)
+            run = run_cache[run_id]
+            if not run or run.get("status") not in self.EVIDENCE_PERSISTED_RUN_STATUSES:
+                continue
+            run_evidence = run.get("evidence") or {}
+            if not isinstance(run_evidence, dict):
+                continue
+            current = (
+                self._coverage_dimensions(
+                    run_evidence,
+                    intent=str(run.get("intent") or ""),
+                ).get(key)
+                or {}
+            )
+            if current.get("observed_in_run"):
+                continue
+            for field in (
+                "last_observed_status",
+                "last_observed_at",
+                "last_observed_run_id",
+                "last_observed_intent",
+            ):
+                item.pop(field, None)
+        return repaired
 
     def _merge_coverage_snapshot(
         self,
@@ -1499,14 +1684,15 @@ class DeepStockResearchService:
                     "as_of": [],
                 }
             )
+            observed_in_run = bool(candidate.pop("observed_in_run", False))
             prior = dict(previous.get(key) or {})
             current_status = str(candidate.get("coverage_status") or "unavailable")
             prior_status = str(prior.get("coverage_status") or "unavailable")
-            if (
-                prior
-                and self.COVERAGE_STATUS_RANK.get(prior_status, 0)
-                > self.COVERAGE_STATUS_RANK.get(current_status, 0)
-            ):
+            if prior and not observed_in_run:
+                item = prior
+            elif prior and self.COVERAGE_STATUS_RANK.get(
+                prior_status, 0
+            ) > self.COVERAGE_STATUS_RANK.get(current_status, 0):
                 item = prior
                 item["last_observed_status"] = current_status
                 item["last_observed_at"] = observed_at
@@ -1538,10 +1724,10 @@ class DeepStockResearchService:
         observed_at: str,
     ) -> list[dict[str, Any]]:
         history = [dict(item) for item in (existing or []) if isinstance(item, dict)]
-        previous_statuses = dict((history[-1] or {}).get("statuses") or {}) if history else {}
-        statuses = {
-            key: item.get("coverage_status") for key, item in coverage.items()
-        }
+        previous_statuses = (
+            dict((history[-1] or {}).get("statuses") or {}) if history else {}
+        )
+        statuses = {key: item.get("coverage_status") for key, item in coverage.items()}
         changes = [
             {
                 "key": key,
@@ -1587,12 +1773,17 @@ class DeepStockResearchService:
                     "id": f"coverage:{key}",
                     "key": key,
                     "label": label,
-                    "title": f"补齐{label}证据" if not retained else f"重新确认{label}证据",
-                    "status": "pending_data" if status in {"unavailable", "insufficient"} or retained else "watching",
+                    "title": f"补齐{label}证据"
+                    if not retained
+                    else f"重新确认{label}证据",
+                    "status": "pending_data"
+                    if status in {"unavailable", "insufficient"} or retained
+                    else "watching",
                     "coverage_status": status,
                     "last_observed_status": observed_status,
                     "next_step": next_step,
-                    "updated_at": item.get("updated_at") or item.get("last_observed_at"),
+                    "updated_at": item.get("updated_at")
+                    or item.get("last_observed_at"),
                 }
             )
         return tasks
@@ -1627,9 +1818,7 @@ class DeepStockResearchService:
             evidence[target_key] = dict(run_evidence)
         return evidence
 
-    def _public_report(
-        self, report: dict[str, Any] | None
-    ) -> dict[str, Any] | None:
+    def _public_report(self, report: dict[str, Any] | None) -> dict[str, Any] | None:
         if report is None:
             return None
         symbol = str(report.get("symbol") or "")
@@ -1675,9 +1864,7 @@ class DeepStockResearchService:
             (item for item in stages if item.get("status") != "completed"), None
         )
         if current:
-            question = str(
-                current.get("question") or "请继续补充当前阶段的研究证据。"
-            )
+            question = str(current.get("question") or "请继续补充当前阶段的研究证据。")
             return f"关于{name}：{question}" if name else question
         return "七个研究阶段已经完成。后续对话将继续复核新证据与原逻辑是否变化。"
 
@@ -1690,16 +1877,33 @@ class DeepStockResearchService:
         *,
         include_coverage: bool = True,
     ) -> list[str]:
+        selected_modules = {
+            str(item)
+            for item in (
+                (evidence.get("research_plan") or {}).get("selected_modules") or []
+            )
+            if item
+        }
         items = [
             str(item)
             for item in (
-                (evidence.get("research_frame") or {}).get("missing_information")
-                or []
+                (evidence.get("research_frame") or {}).get("missing_information") or []
             )
             if item
+            and self._missing_information_is_selected(str(item), selected_modules)
         ]
         for module in (evidence.get("analysis_board") or {}).get("modules") or []:
             if module.get("status") not in {"ready", "available", "complete"}:
+                required_modules = self.ANALYSIS_BOARD_MODULES.get(
+                    str(module.get("key") or ""),
+                    set(),
+                )
+                if (
+                    selected_modules
+                    and required_modules
+                    and not selected_modules.intersection(required_modules)
+                ):
+                    continue
                 label = module.get("label")
                 if label:
                     items.append(f"{label}仍需补充可核验证据。")
@@ -1711,6 +1915,19 @@ class DeepStockResearchService:
                 if missing:
                     items.append(f"{dimension['label']}：{missing[0]}")
         return self._dedupe(items)
+
+    @classmethod
+    def _missing_information_is_selected(
+        cls,
+        item: str,
+        selected_modules: set[str],
+    ) -> bool:
+        if not selected_modules:
+            return True
+        required_modules = cls.BASE_MISSING_INFORMATION_MODULES.get(item)
+        return required_modules is None or bool(
+            selected_modules.intersection(required_modules)
+        )
 
     @staticmethod
     def _dedupe(items: list[Any]) -> list[str]:

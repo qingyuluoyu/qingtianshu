@@ -4,6 +4,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from app.services.research_reports import StockResearchEvidenceService
+
 
 def _create_user(client: TestClient, name: str) -> dict:
     response = client.post("/users", json={"name": name})
@@ -90,6 +92,22 @@ def test_deep_stock_api_binds_existing_conversation_and_is_user_isolated(app):
     assert other.get("/me/deep-stock/000063").status_code == 404
 
 
+def test_deep_stock_creates_evaluation_conversation_for_isolated_browser_sampling(app):
+    client = TestClient(app)
+    _create_user(client, "Deep Stock Evaluation User")
+
+    created = client.post(
+        "/me/deep-stock",
+        json={"symbol": "601138", "quality_scope": "evaluation"},
+    )
+
+    assert created.status_code == 201
+    conversation_id = created.json()["conversation_id"]
+    conversation = client.get(f"/me/conversations/{conversation_id}")
+    assert conversation.status_code == 200
+    assert conversation.json()["quality_scope"] == "evaluation"
+
+
 def test_deep_stock_rejects_silent_primary_conversation_rebinding(app):
     client = TestClient(app)
     _create_user(client, "Deep Stock Binding User")
@@ -114,14 +132,15 @@ def test_deep_stock_rejects_silent_primary_conversation_rebinding(app):
 def test_deep_stock_rejects_one_conversation_bound_to_two_stocks(app):
     client = TestClient(app)
     _create_user(client, "Deep Stock Shared Conversation User")
-    conversation = client.post(
-        "/me/conversations", json={"title": "单股主会话"}
-    ).json()
+    conversation = client.post("/me/conversations", json={"title": "单股主会话"}).json()
 
-    assert client.post(
-        "/me/deep-stock",
-        json={"symbol": "000063", "conversation_id": conversation["id"]},
-    ).status_code == 201
+    assert (
+        client.post(
+            "/me/deep-stock",
+            json={"symbol": "000063", "conversation_id": conversation["id"]},
+        ).status_code
+        == 201
+    )
     shared = client.post(
         "/me/deep-stock",
         json={"symbol": "300308", "conversation_id": conversation["id"]},
@@ -175,6 +194,7 @@ def test_screening_candidate_entry_is_saved_without_completing_research_stage(ap
                 "source_kind": "stock_screen",
                 "source_label": "经营改善候选",
                 "display_name": "中兴通讯",
+                "industry": "通信设备",
                 "profile_key": "quality",
                 "as_of_date": "2026-07-22",
                 "candidate_status": "ready",
@@ -198,6 +218,7 @@ def test_screening_candidate_entry_is_saved_without_completing_research_stage(ap
         "source_kind": "stock_screen",
         "source_label": "经营改善候选",
         "display_name": "中兴通讯",
+        "industry": "通信设备",
         "profile_key": "quality",
         "as_of_date": "2026-07-22",
         "candidate_status": "ready",
@@ -220,6 +241,7 @@ def test_screening_candidate_entry_is_saved_without_completing_research_stage(ap
     workspace_payload = workspace.json()
     assert workspace_payload["name"] == "中兴通讯"
     assert workspace_payload["research_entry"]["profile_key"] == "quality"
+    assert workspace_payload["research_entry"]["industry"] == "通信设备"
     assert workspace_payload["research_entry"]["research_focus"] == (
         "先核验改善是否来自主营并转化为现金流。"
     )
@@ -317,9 +339,7 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
             "status": "available",
             "report_period": "2026-03-31",
             "factors": [{"label": "利润质量"}],
-            "filing_evidence": {
-                "document": {"source": "测试财报原文源"}
-            },
+            "filing_evidence": {"document": {"source": "测试财报原文源"}},
         },
         "financial_drivers": {
             "status": "available",
@@ -345,9 +365,7 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
         },
         "a_share_information": {
             "status": "available",
-            "announcements": [
-                {"title": "季度报告", "source": "测试公告聚合源"}
-            ],
+            "announcements": [{"title": "季度报告", "source": "测试公告聚合源"}],
         },
         "evidence_debate": {
             "status": "available",
@@ -367,9 +385,7 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
             ],
         },
         "analysis_board": {
-            "modules": [
-                {"key": "fundamental", "label": "基本面", "status": "ready"}
-            ]
+            "modules": [{"key": "fundamental", "label": "基本面", "status": "ready"}]
         },
         "conditional_outlook": {
             "status": "available",
@@ -405,8 +421,7 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
     assert specialized["progress"]["completed"] == 1
     assert _stage(specialized, "company_industry")["status"] == "in_progress"
     specialized_coverage = {
-        item["key"]: item
-        for item in specialized["evidence_coverage"]["dimensions"]
+        item["key"]: item for item in specialized["evidence_coverage"]["dimensions"]
     }
     assert specialized_coverage["company_operating"]["coverage_status"] == "sufficient"
     assert len(specialized["coverage_history"]) == 1
@@ -430,7 +445,7 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
         conversation_id=session["conversation_id"],
         symbol="000063.SZ",
         intent="stock_research",
-        message="请总结失效条件、下一步需要核验的证据和观察条件",
+        message="请说明什么时候需要重新判断、下一步需要核验的证据和观察条件",
         run=_completed_run(),
         evidence=evidence,
     )
@@ -457,11 +472,7 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
     }
 
     stored_user = app.state.database.get_user(user["id"])
-    snapshot = (
-        Path(stored_user["workspace_path"])
-        / "deep-stock"
-        / "000063_SZ.json"
-    )
+    snapshot = Path(stored_user["workspace_path"]) / "deep-stock" / "000063_SZ.json"
     assert snapshot.is_file()
     assert '"guided_deep_stock_v1"' in snapshot.read_text(encoding="utf-8")
 
@@ -489,14 +500,12 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
         "insufficient": 0,
         "unavailable": 0,
         "total": 6,
-        "refresh_attention": 6,
+        "refresh_attention": 1,
     }
-    assert len(thinned["coverage_tasks"]) == 6
-    assert all(
-        task["coverage_status"] == "sufficient"
-        and task["last_observed_status"] != "sufficient"
-        for task in thinned["coverage_tasks"]
-    )
+    assert len(thinned["coverage_tasks"]) == 1
+    assert thinned["coverage_tasks"][0]["key"] == "company_operating"
+    assert thinned["coverage_tasks"][0]["coverage_status"] == "sufficient"
+    assert thinned["coverage_tasks"][0]["last_observed_status"] == "insufficient"
     history_before_failure = list(thinned["coverage_history"])
 
     failed = app.state.deep_stock.observe_chat(
@@ -517,6 +526,156 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
     assert restored_after_failure["evidence_coverage"] == failed["evidence_coverage"]
     assert restored_after_failure["coverage_tasks"] == failed["coverage_tasks"]
     assert restored_after_failure["coverage_history"] == history_before_failure
+
+
+def test_relative_industry_snapshot_only_updates_observed_coverage_dimensions(app):
+    evidence = {
+        "research_plan": {
+            "focus": "relative_industry",
+            "selected_modules": ["market", "analyst_expectations"],
+        },
+        "metrics": {
+            "latest_close": 390.86,
+            "return_20d_pct": -0.55,
+            "ma20": 374.57,
+        },
+        "research_frame": {
+            "supporting_evidence": [],
+            "contrary_evidence": [],
+            "missing_information": [
+                "公司最新公告尚未接入",
+                "结构化财务与估值数据尚未接入",
+                "新闻与事件影响尚未接入",
+            ],
+        },
+        "evidence_debate": {
+            "bear_case": [{"claim": "60日收益为负"}],
+            "risk_committee": [{"risk": "尾部回撤较大"}],
+        },
+        "stock_market_context": {
+            "exact_industry_index": {
+                "status": "same_market_date",
+                "name": "CS电池",
+                "market_date": "2026-07-28",
+                "return_1d_pct": -2.82,
+                "stock_return_1d_pct": -2.285,
+                "stock_minus_industry_pct": 0.535,
+            },
+        },
+        "analysis_board": {
+            "modules": [
+                {"key": "market", "label": "行情结构", "status": "ready"},
+                {
+                    "key": "news",
+                    "label": "公告、新闻与事件脉络",
+                    "status": "missing",
+                },
+                {
+                    "key": "fundamentals",
+                    "label": "基本面与现金流",
+                    "status": "missing",
+                },
+                {
+                    "key": "peers",
+                    "label": "同行估值与经营",
+                    "status": "missing",
+                },
+                {
+                    "key": "analyst_expectations",
+                    "label": "分析师预期与研报",
+                    "status": "ready",
+                },
+            ]
+        },
+    }
+    coverage = app.state.deep_stock._coverage_dimensions(
+        evidence,
+        intent="stock_research",
+    )
+
+    assert coverage["industry_relative"]["coverage_status"] == "sufficient"
+    assert coverage["industry_relative"]["observed_in_run"] is True
+    assert coverage["technical_state"]["coverage_status"] == "sufficient"
+    assert coverage["company_operating"]["observed_in_run"] is False
+    assert coverage["financial_quality"]["observed_in_run"] is False
+    assert coverage["risk_events"]["observed_in_run"] is False
+    assert (
+        app.state.deep_stock._evidence_unresolved(
+            evidence,
+            include_coverage=False,
+        )
+        == []
+    )
+
+
+def test_stale_refresh_warning_is_removed_when_historical_run_never_observed_dimension(
+    app,
+):
+    client = TestClient(app)
+    user = _create_user(client, "Coverage Repair User")
+    stored_user = app.state.database.get_user(user["id"])
+    run = app.state.database.create_run(
+        user["id"],
+        "stock_comparison",
+        "cheap",
+        {"message": "误把CS电池识别成第二只股票"},
+        Path(stored_user["workspace_path"]),
+    )
+    app.state.database.finish_run(
+        run["id"],
+        user["id"],
+        "completed",
+        {
+            "type": "stock_comparison",
+            "symbols": ["300750.SZ", "CS"],
+            "items": [],
+        },
+        "行业指数数据缺失",
+        usage={"output_guard": {"passed": True}},
+    )
+
+    repaired = app.state.deep_stock._repair_stale_coverage_observations(
+        {
+            "valuation": {
+                "key": "valuation",
+                "label": "估值",
+                "coverage_status": "sufficient",
+                "last_observed_status": "unavailable",
+                "last_observed_run_id": run["id"],
+                "last_observed_intent": "stock_comparison",
+            }
+        },
+        user_id=user["id"],
+    )
+
+    assert repaired["valuation"]["coverage_status"] == "sufficient"
+    assert "last_observed_status" not in repaired["valuation"]
+    assert not any(
+        task["key"] == "valuation"
+        for task in app.state.deep_stock._coverage_tasks(repaired)
+    )
+
+
+def test_scoped_research_plan_drops_unselected_base_missing_information():
+    evidence = {
+        "research_frame": {
+            "missing_information": [
+                "公司最新公告尚未接入",
+                "结构化财务与估值数据尚未接入",
+                "行业供需与一致预期尚未接入",
+                "新闻与事件影响尚未接入",
+            ]
+        }
+    }
+
+    StockResearchEvidenceService._prune_unselected_missing_information(
+        evidence,
+        {"market", "analyst_expectations"},
+    )
+
+    assert evidence["research_frame"]["missing_information"] == [
+        "行业供需与一致预期尚未接入"
+    ]
 
 
 def test_thin_packets_do_not_advance_research_stages(app):
@@ -552,9 +711,7 @@ def test_thin_packets_do_not_advance_research_stages(app):
     company_stage = _stage(observed, "company_industry")
     assert company_stage["status"] == "needs_review"
     assert "核心证据包" not in " ".join(company_stage["review_reasons"])
-    assert "证据覆盖尚未达到完成门槛" in " ".join(
-        company_stage["review_reasons"]
-    )
+    assert "证据覆盖尚未达到完成门槛" in " ".join(company_stage["review_reasons"])
     coverage = {
         item["key"]: item for item in observed["evidence_coverage"]["dimensions"]
     }
@@ -591,10 +748,7 @@ def test_completed_run_requires_guard_pass_and_available_evidence(app):
     assert missing_guard is not None
     assert missing_guard["progress"]["completed"] == 1
     assert _stage(missing_guard, "company_industry")["status"] == "in_progress"
-    assert any(
-        "研究进度保持不变" in item
-        for item in missing_guard["unresolved_items"]
-    )
+    assert any("研究进度保持不变" in item for item in missing_guard["unresolved_items"])
     assert "输出守卫" not in " ".join(missing_guard["unresolved_items"])
 
     failed_evidence = app.state.deep_stock.observe_chat(
@@ -609,8 +763,7 @@ def test_completed_run_requires_guard_pass_and_available_evidence(app):
     assert failed_evidence is not None
     assert failed_evidence["progress"]["completed"] == 1
     assert any(
-        "核心证据尚不完整" in item
-        for item in failed_evidence["unresolved_items"]
+        "核心证据尚不完整" in item for item in failed_evidence["unresolved_items"]
     )
 
 
@@ -726,9 +879,7 @@ def test_legacy_completed_stages_are_reconciled_from_their_original_run(app):
             "evidence_modules": ["business_structure"],
         }
     )
-    financial = next(
-        item for item in stages if item["key"] == "financial_cashflow"
-    )
+    financial = next(item for item in stages if item["key"] == "financial_cashflow")
     financial.update(
         {
             "status": "completed",

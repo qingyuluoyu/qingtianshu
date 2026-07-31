@@ -319,7 +319,7 @@ async function ensureUser() {
     function prepareAgentQuestion(question) {
       activateWorkspace("agent");
       startNewConversation(false);
-      $("chatInput").value = question;
+      setChatInputDraft(question, {force: true});
       state.agentContextQuestion = question;
       renderAgentResearchContext(state.agentContextMetadata, question);
       $("chatInput").focus();

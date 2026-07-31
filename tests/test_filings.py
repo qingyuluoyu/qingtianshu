@@ -5,7 +5,10 @@ from pathlib import Path
 
 from app.db import Database
 from app.providers.filings import AShareFilingProvider
-from app.services.filings import AShareFilingService
+from app.services.filings import (
+    AShareFilingService,
+    _is_explicit_company_explanation,
+)
 
 
 class FakeResponse:
@@ -85,6 +88,19 @@ def test_provider_discovers_financial_report_and_fetches_all_text_pages():
         1,
         2,
     ]
+
+
+def test_filing_cause_extractor_rejects_inventory_table_and_policy_templates():
+    assert not _is_explicit_company_explanation(
+        "存货种类 确定可变现净值/剩余对价与将要发生的成本的具体依据 "
+        "本期转回或转销存货跌价准备/合同履约成本减值准备的原因"
+    )
+    assert not _is_explicit_company_explanation(
+        "资产负债表日，存货按成本与可变现净值孰低计量。"
+    )
+    assert _is_explicit_company_explanation(
+        "资产减值损失同比增加，主要因本期存货跌价准备计提增加。"
+    )
 
 
 class StubFilingProvider:

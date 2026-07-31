@@ -63,7 +63,16 @@ def hermes_reasoning_effort(model_tier: str, intent: str = "") -> str:
     ).strip().lower()
     if override in {"none", "low", "medium", "high", "max"}:
         return override
-    if model_tier == "economy" and intent in {"stock_research", "market_brief"}:
+    if model_tier == "economy" and intent in {
+        "stock_research",
+        "market_brief",
+        "earnings_quality",
+        "financial_drivers",
+        "business_structure",
+        "shareholder_structure",
+        "analyst_expectations",
+        "event_timeline",
+    }:
         return "none"
     return "medium" if model_tier == "deep" else "low"
 
@@ -195,6 +204,8 @@ def execute_hermes_streaming(
     trusted_context: list[str] | None,
     stream_callback: Callable[[dict[str, Any]], None],
     callbacks: GuardedStreamCallbacks,
+    required_context_prefix: str | None = None,
+    prompt_path: Path | None = None,
 ) -> tuple[str, dict[str, Any] | None]:
     hermes_bin = resolve_hermes_executable(settings.hermes_bin)
     python_bin = resolve_hermes_python(hermes_bin)
@@ -209,7 +220,7 @@ def execute_hermes_streaming(
         str(python_bin),
         str(bridge),
         "--prompt-file",
-        str(run_dir / "prompt.md"),
+        str(prompt_path or (run_dir / "prompt.md")),
         "--max-tokens",
         str(max_tokens),
         "--max-iterations",
@@ -251,6 +262,7 @@ def execute_hermes_streaming(
     safe_segments: list[str] = []
     visible_start_index: int | None = None
     required_context_deferred = False
+    required_context_prefix_injected = False
     last_visible_draft = ""
     first_token_seconds: float | None = None
     first_visible_seconds: float | None = None
@@ -325,7 +337,23 @@ def execute_hermes_streaming(
                     )
                     if callbacks.waits_for_required_context(visible_guard):
                         required_context_deferred = True
-                        continue
+                        if (
+                            required_context_prefix
+                            and not required_context_prefix_injected
+                            and len(safe_segments) >= 2
+                        ):
+                            safe_segments.insert(0, required_context_prefix)
+                            required_context_prefix_injected = True
+                            required_context_deferred = False
+                            visible_guard = callbacks.validate_output(
+                                callbacks.guard_text(safe_segments),
+                                evidence,
+                                trusted_context=trusted_context,
+                            )
+                            if callbacks.waits_for_required_context(visible_guard):
+                                continue
+                        else:
+                            continue
                 if visible_start_index is None:
                     visible_start_index = 0
                     if required_context_deferred:
@@ -406,5 +434,6 @@ def execute_hermes_streaming(
         "visible_characters": len(last_visible_draft),
         "withheld_segments": withheld_segments,
         "deferred_segments": deferred_segments,
+        "required_context_prefix_injected": required_context_prefix_injected,
     }
     return str(final_event["answer"]).strip(), usage

@@ -155,6 +155,24 @@ class ChatOrchestrationService:
             if earnings_quality_query
             else None
         )
+        if symbol and company_evidence_intent:
+            planned_stock_question = (
+                self.chat_stock_research_evidence.research_plan.build(
+                    message,
+                    conversation_history=history,
+                )
+            )
+            if planned_stock_question.get("focus") in {
+                "mixed",
+                "comprehensive",
+                "quality_review",
+                "valuation_review",
+            }:
+                # A compound user question needs one coherent stock answer with
+                # all selected modules.  Routing it to the first matching
+                # specialist drops the remaining cash-flow, event, industry or
+                # price evidence even though the research plan requested it.
+                company_evidence_intent = None
         upload = prepared.upload
         attached_document = prepared.attached_document
         image_path = prepared.image_path
@@ -333,7 +351,7 @@ class ChatOrchestrationService:
                     "最近完整日线",
                     "最新财务报告期",
                     "反方证据",
-                    "失效条件",
+                    "什么时候需要重新判断",
                     "下一步研究任务",
                 ),
                 "report_scope": "server_public_evidence_snapshot_only",

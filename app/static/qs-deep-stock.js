@@ -31,7 +31,7 @@ async function openDeepStockSymbol(symbol, tabKey = "overview", options = {}) {
           ["为什么入选", `为什么${target}会进入经营改善候选？请逐条核验筛选理由与最新财报，不要把筛选线索当成已确认结论。`],
           ["改善能否持续", `${target}当前的营收和利润改善能否持续？请拆解业务驱动、毛利率、费用率和现金流。`],
           ["一次性因素", `${target}的利润改善中，有多少可能来自一次性损益、会计口径或低基数？`],
-          ["反方证据", `只检查会推翻${target}经营改善判断的反方证据和失效条件。`],
+          ["反方证据", `只检查会推翻${target}经营改善判断的反方证据，并说明什么情况需要重新判断。`],
           ["下期核验", `${target}下一份财报最需要核验哪三个指标，为什么？`]
         ],
         trend: [
@@ -39,7 +39,7 @@ async function openDeepStockSymbol(symbol, tabKey = "overview", options = {}) {
           ["上涨驱动", `${target}这轮上涨主要是行业共振还是个股因素？请给支持证据和反方证据。`],
           ["量价质量", `${target}当前量价结构是否健康？哪些信号仍需完整交易日确认？`],
           ["估值透支", `${target}的上涨是否已经透支估值或盈利预期？请与同行同口径比较。`],
-          ["失效条件", `什么变化会让${target}的相对行业增强逻辑失效？`]
+          ["何时重判", `什么变化会推翻${target}当前的相对行业增强判断？`]
         ],
         value: [
           ["为什么便宜", `${target}为什么看起来估值较低？先核对PE、PB口径和报告期。`],
@@ -60,7 +60,7 @@ async function openDeepStockSymbol(symbol, tabKey = "overview", options = {}) {
           ["怎么赚钱", `${target}主要靠什么业务赚钱？当前最重要的增长驱动是什么？`],
           ["财务质量", `${target}最新财报的盈利质量和现金流怎么样？`],
           ["估值同行", `${target}当前估值与同行相比处于什么位置？`],
-          ["主要风险", `${target}当前最需要警惕的三项反方证据和失效条件是什么？`]
+          ["主要风险", `${target}当前最需要警惕的三项反方证据是什么？出现什么情况需要重新判断？`]
         ]
       };
       return prompts[profile] || prompts.general;
@@ -301,7 +301,10 @@ async function openDeepStockSymbol(symbol, tabKey = "overview", options = {}) {
       try {
         const session = await api("/me/deep-stock", {
           method: "POST",
-          body: JSON.stringify({symbol})
+          body: JSON.stringify({
+            symbol,
+            quality_scope: state.evaluationMode ? "evaluation" : "user"
+          })
         });
         state.deepStock = session;
         await loadConversations(false);
@@ -316,6 +319,7 @@ async function openDeepStockSymbol(symbol, tabKey = "overview", options = {}) {
     }
 
     async function openBoundStockConversation(prefillQuestion = null) {
+      const draftRevision = state.chatDraftRevision;
       const selected = $("deepStockSymbol").value;
       const session = state.deepStock?.symbol === selected
         ? state.deepStock
@@ -327,11 +331,15 @@ async function openDeepStockSymbol(symbol, tabKey = "overview", options = {}) {
         await openConversation(session.conversation_id, false, "none");
       }
       syncAgentPlacement();
-      $("modelTier").value = "deep";
       updateAgentMode();
-      if (prefillQuestion) $("chatInput").value = prefillQuestion;
+      if (prefillQuestion) {
+        setChatInputDraft(prefillQuestion, {expectedRevision: draftRevision});
+      }
       else if (!$("chatInput").value.trim() && !(state.conversationMessages || []).length) {
-        $("chatInput").value = session.next_question || "请继续当前个股研究阶段。";
+        setChatInputDraft(
+          session.next_question || "请继续当前个股研究阶段。",
+          {expectedRevision: draftRevision}
+        );
       }
       $("chatInput").focus();
       return true;
@@ -373,7 +381,7 @@ async function openDeepStockSymbol(symbol, tabKey = "overview", options = {}) {
       });
       sections.push(`反方证据\n${counters.length ? counters.join("\n") : "- 当前快照未形成可确认的结构化反方证据，不能据此理解为没有风险。"}`);
       const invalidations = (workspace?.invalidation_conditions || []).slice(0, 5).map(item => `- ${typeof item === "string" ? item : invalidationConditionText(item)}`);
-      sections.push(`失效条件\n${invalidations.length ? invalidations.join("\n") : "- 当前快照未形成明确失效条件，相关判断只能视为待核验。"}`);
+      sections.push(`什么时候需要重新判断\n${invalidations.length ? invalidations.join("\n") : "- 当前快照尚未明确哪些情况需要重新判断，相关结论只能视为待核验。"}`);
       const nextEvidence = (workspace?.next_evidence || []).slice(0, 4).map(item => `- ${item.description || item.next_step || structuredItemText(item)}`).filter(item => item !== "- ");
       if (nextEvidence.length) sections.push(`下一步证据\n${nextEvidence.join("\n")}`);
       sections.push("边界\n服务器报告是公共证据快照，不是当前用户的私有判断；报告不会替代 Hermes 即时复核，也不构成目标价或买卖建议。");

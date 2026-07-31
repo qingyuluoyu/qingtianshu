@@ -393,6 +393,9 @@ class FinancialDriverAnalysisService:
             "operating_cashflow_change": _difference(
                 operating_cashflow, previous_operating_cashflow
             ),
+            "operating_cashflow_change_pct": _pct_change(
+                operating_cashflow, previous_operating_cashflow
+            ),
             "operating_cashflow_to_net_profit": _ratio(
                 operating_cashflow, net_profit
             ),
@@ -759,14 +762,29 @@ def _driver(
     currency: str,
     statement: str,
 ) -> dict[str, Any]:
+    static_counterfactual = key in {
+        "gross_profit_revenue_scale_effect",
+        "gross_profit_margin_effect",
+    }
     return {
         "key": key,
         "label": label,
         "attribution_level": "confirmed_mechanical_driver",
+        "calculation_nature": (
+            "static_counterfactual"
+            if static_counterfactual
+            else "reported_statement_bridge"
+        ),
         "amount": round(amount, 2),
         "currency": currency,
         "direction": "positive" if amount > 0 else "negative" if amount < 0 else "neutral",
         "statement": statement,
+        "interpretation_boundary": (
+            "这是保持另一项毛利桥变量不变的静态反事实测算，只用于定位报表量级；"
+            "不能写成已经确认的经营原因、直接因果或股价驱动。"
+            if static_counterfactual
+            else "这是报表科目变化的机械桥接，不等于公司已经确认的经营原因或股价驱动。"
+        ),
     }
 
 

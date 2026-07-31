@@ -34,6 +34,9 @@ _STOCK_CURRENT_QUOTE_REQUIRED_LABEL = "用户询问今日时必须给出更新�
 _STOCK_CROSS_DATE_MARKET_LABEL = "跨日期市场广度不能用于排除目标日的系统性拖累"
 _STOCK_INDUSTRY_BREADTH_LABEL = "缺少行业成分涨跌家数时不能确认行业普涨普跌或参与面"
 _STOCK_60D_RETURN_BINDING_LABEL = "60日累计收益不能误用最大回撤数值"
+_STOCK_DEBT_RATIO_SCALE_LABEL = "资产负债率变化不能直接改写为负债绝对规模变化"
+_STOCK_CASHFLOW_CAUSE_LABEL = "缺少公司原文时不能把经营现金流变化归因于收入收缩"
+_STOCK_STATIC_FINANCIAL_CAUSAL_LABEL = "静态毛利桥不能改写为已确认经营原因"
 _STOCK_INDUSTRY_CAUSAL_LABEL = "行业成分广度只能描述同步性不能证明个股涨跌因果"
 _STOCK_CONTRIBUTION_REQUIRED_LABEL = (
     "用户明确询问成分贡献时必须给出标的估算贡献和口径边界"
@@ -48,8 +51,14 @@ _STOCK_MARKET_ABSORPTION_LABEL = (
     "缺少事件研究证据时不能声称基本面已被市场消化或情绪驱动超跌"
 )
 _STOCK_EVENT_SENTIMENT_LABEL = "公告或媒体线索不能在缺少事件研究时评为正面负面或催化"
+_STOCK_SENTIMENT_EXCLUSION_LABEL = (
+    "中性或混合社区样本不能排除未被样本捕捉的市场情绪"
+)
 _STOCK_UNSUPPORTED_CAUSAL_HYPOTHESIS_LABEL = (
     "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
+)
+_STOCK_REASSESSMENT_HEADING = (
+    r"(?:失效条件|不成立条件|什么时候需要重新判断|需要重新判断的情况)"
 )
 _MARKET_CAUSE_FACT_REQUIRED_LABEL = "大盘涨跌原因回答必须保留至少一项同日指数价格事实"
 _STOCK_FAILURE_THRESHOLD_LANGUAGE_RE = re.compile(
@@ -90,8 +99,8 @@ _STOCK_REPORT_NOTICE_CLAIM_RE = re.compile(
 )
 _STOCK_DRAWDOWN_WINDOW_RE = re.compile(r"(?P<days>\d+)\s*日(?:内)?最大回撤")
 _STOCK_SCENARIO_DIRECTION_CONFLICT_RE = re.compile(
-    r"(?:(?:向下|下行风险)[^。；\n]{0,20}失效[^。；\n]{0,140}"
-    r"(?:跌破|继续恶化)|(?:区间|震荡)[^。；\n]{0,20}失效"
+    r"(?:(?:向下|下行风险)[^。；\n]{0,20}(?:失效|需要重新判断)[^。；\n]{0,140}"
+    r"(?:跌破|继续恶化)|(?:区间|震荡)[^。；\n]{0,20}(?:失效|需要重新判断)"
     r"[^。；\n]{0,140}(?:运行在|仍在|处于)[^。；\n]{0,50}(?:之间|区间))"
 )
 
@@ -103,7 +112,7 @@ def _number_unit(text: str, match: re.Match[str]) -> str:
         return "percent"
     if re.match(r"\s*个?百分点", suffix):
         return "percentage_point"
-    if re.match(r"\s*(?:个)?交易日", suffix):
+    if re.match(r"\s*(?:个)?(?:交易日|日)", suffix):
         return "trading_day"
     if re.match(r"\s*(?:个)?(?:报告期|季度|财季)", suffix):
         return "report_period"
@@ -118,6 +127,11 @@ def _sanctioned_stock_failure_text(evidence: dict[str, Any]) -> str:
         "invalidation": outlook.get("invalidation"),
         "horizon": outlook.get("horizon"),
         "price_levels": evidence.get("price_levels") or {},
+        "current_quote": {
+            key: (evidence.get("current_quote") or {}).get(key)
+            for key in ("price", "pct_change", "market_date")
+            if (evidence.get("current_quote") or {}).get(key) is not None
+        },
         "tracking_plan": board.get("tracking_plan") or [],
         "user_thesis": evidence.get("user_thesis"),
         "user_question": evidence.get("user_question"),
@@ -128,7 +142,12 @@ def _sanctioned_stock_failure_text(evidence: dict[str, Any]) -> str:
 def _stock_failure_line_has_unsupported_threshold(
     line: str, evidence: dict[str, Any]
 ) -> bool:
-    if not _STOCK_FAILURE_THRESHOLD_LANGUAGE_RE.search(line):
+    threshold_text = re.sub(
+        r"(?:以上|上述)(?:失效条件|不成立条件|需要重新判断的情况|情况)",
+        "",
+        line,
+    )
+    if not _STOCK_FAILURE_THRESHOLD_LANGUAGE_RE.search(threshold_text):
         return False
     sanctioned_text = _sanctioned_stock_failure_text(evidence)
     if _STOCK_INVENTED_REPORT_WINDOW_RE.search(
@@ -175,7 +194,8 @@ def _has_unsupported_stock_failure_threshold(
         normalized_line = re.sub(r"^[-+*]\s+", "", line)
         section_match = re.match(
             r"^(?:#{1,6}\s*)?(?:\*\*|__)?"
-            r"(?:失效条件|不成立条件)(?:\*\*|__)?"
+            + _STOCK_REASSESSMENT_HEADING
+            + r"(?:\*\*|__)?"
             r"\s*(?:[：:]\s*(?P<remainder>.*))?$",
             normalized_line,
         )
@@ -197,7 +217,8 @@ def _has_unsupported_stock_failure_threshold(
         ):
             return True
         inline_condition = re.search(
-            r"(?:失效条件|不成立条件)\s*(?:是|为|[：:])\s*(?P<condition>.+)",
+            _STOCK_REASSESSMENT_HEADING
+            + r"\s*(?:是|为|[：:])\s*(?P<condition>.+)",
             line,
         )
         if inline_condition and _stock_failure_line_has_unsupported_threshold(
@@ -388,6 +409,17 @@ def _has_stock_report_notice_date_conflict(
             # pairs may participate in the notice-date consistency check.
             if not (1 <= month <= 12 and 1 <= day <= 31):
                 continue
+            date_suffix = clause[date_match.end() : date_match.end() + 8]
+            if re.match(r"\s*(?:%|个百分点|倍|亿元|万元|元)", date_suffix):
+                # A valid-looking ratio such as ``6.13%`` can sit close to
+                # “披露” and otherwise be mistaken for June 13. Units make
+                # clear that this token is a financial value, not a date.
+                continue
+            date_prefix = clause[max(0, date_match.start() - 12) : date_match.start()]
+            if re.search(r"(?:截至|报告期截至|期末为|止于)\s*$", date_prefix):
+                # “2026年中报（截至6月30日）披露”中的6月30日是报告期，
+                # 不是公告日；不能因为它靠近“披露”二字就判为公告日期冲突。
+                continue
             if not any(
                 abs(date_match.start() - position) <= 16
                 or abs(date_match.end() - position) <= 16
@@ -452,19 +484,28 @@ def _stock_current_quote_conflicts(
         return False, False
     direction_conflict = False
     price_conflict = False
-    current_terms = ("今天", "今日", "当前", "现在", "盘中", "最新")
     previous_terms = (
         "上一交易日",
         "前一交易日",
+        "上一完整交易日",
+        "前一完整交易日",
+        "最近完整交易日",
         "此前交易日",
         "上一根日线",
         "完整日线",
         "历史日线",
         "前日",
     )
-    for raw_line in answer.splitlines():
+    for raw_line in re.split(r"(?<=[。！？；])|\n", answer):
         line = raw_line.strip()
-        if not line or not any(term in line for term in current_terms):
+        has_current_quote_reference = any(
+            term in line for term in ("今天", "今日", "现在", "盘中")
+        ) or re.search(
+            r"(?:当前|最新)(?:报价|价格|股价|现价|行情|涨跌)|"
+            r"(?:当前|最新)报(?=\s*[0-9])",
+            line,
+        )
+        if not line or not has_current_quote_reference:
             continue
         explicit_current_quote = re.search(
             r"(?:当前|现在|最新)(?:报价|价格|股价|报)"
@@ -492,12 +533,21 @@ def _stock_current_quote_conflicts(
                 direction_conflict = True
         if isinstance(quote_price, (int, float)):
             price_matches = re.finditer(
-                r"(?:收盘价|股价|价格|报价|(?<!预)报|收于)"
+                r"(?:收盘价|股价|价格|报价|现报|收于)"
                 r"\s*(?:为|是|约|在|至|达到|:|：)?\s*"
                 r"([0-9]+(?:\.[0-9]+)?)",
                 line,
             )
             for price_match in price_matches:
+                trailing = line[price_match.end() : price_match.end() + 3]
+                if re.match(r"\s*(?:%|％|年|月|日|时|分|:|：)", trailing):
+                    # “近5日价格0.00%” is a return statement, not a claim that
+                    # the current share price is 0.00.  A line-level scan used
+                    # to treat it as a stale quote whenever the same paragraph
+                    # also contained the words “最新报价”.
+                    # Likewise, in “报价在7月30日13:42为5.87元”, the first
+                    # number after “报价” is a timestamp component, not price.
+                    continue
                 nearby_prefix = line[
                     max(0, price_match.start() - 28) : price_match.start()
                 ]
@@ -791,11 +841,37 @@ def _stock_current_quote_ma20_conflict(answer: str, evidence: dict[str, Any]) ->
             continue
         if not re.search(r"(?:MA\s*20|20\s*日均线)", clause, re.IGNORECASE):
             continue
-        claims_above = bool(re.search(r"(?:高于|上方|站上|突破)", clause))
-        claims_below = bool(re.search(r"(?:低于|下方|跌破)", clause))
-        if float(quote_price) > float(ma20) and claims_below and not claims_above:
+        negates_above = bool(
+            re.search(
+                r"(?:未|没有|并未|尚未|不能|无法)(?:有效)?"
+                r"(?:高于|位于[^。；\n]{0,8}上方|站上|突破)",
+                clause,
+            )
+        )
+        negates_below = bool(
+            re.search(
+                r"(?:未|没有|并未|尚未|不能|无法)(?:有效)?"
+                r"(?:低于|位于[^。；\n]{0,8}下方|跌破)",
+                clause,
+            )
+        )
+        claims_above = bool(
+            re.search(r"(?:高于|上方|站上|突破)", clause)
+        ) and not negates_above
+        claims_below = bool(
+            re.search(r"(?:低于|下方|跌破)", clause)
+        ) and not negates_below
+        if (
+            float(quote_price) > float(ma20)
+            and (claims_below or negates_above)
+            and not claims_above
+        ):
             return True
-        if float(quote_price) < float(ma20) and claims_above and not claims_below:
+        if (
+            float(quote_price) < float(ma20)
+            and (claims_above or negates_below)
+            and not claims_below
+        ):
             return True
     return False
 
@@ -932,8 +1008,18 @@ def _stock_current_quote_required_but_missing(
     answer: str, evidence: dict[str, Any]
 ) -> bool:
     question = str(evidence.get("user_question") or "")
+    # “最新报告期/最新财报” asks for fresh accounting evidence, not a live
+    # quote.  Leaving the bare word “最新” here used to force an unrelated
+    # price-and-change preamble into valuation and earnings-quality answers.
+    quote_question = re.sub(
+        r"(?:最新|当前)(?:报告期|财报|一季报|半年报|季报|中报|年报|"
+        r"财务报告|业绩报告|正式报告)",
+        "",
+        question,
+    )
     if not any(
-        term in question for term in ("今天", "今日", "当前", "现在", "盘中", "最新")
+        term in quote_question
+        for term in ("今天", "今日", "当前", "现在", "盘中", "最新")
     ):
         return False
     quote = evidence.get("current_quote") or {}
@@ -1086,15 +1172,91 @@ def _has_stock_industry_causal_overclaim(answer: str) -> bool:
         "无法证明",
         "不能单独证明",
         "无法单独证明",
+        "不能单独确认",
+        "无法单独确认",
         "不等于原因",
         "不是原因证明",
+        "直接驱动尚未确认",
+        "不能断定",
+        "不能就此",
+        "不能因此",
+        "不能倒推出",
+        "不能排除",
     )
     for clause in re.split(r"[。；\n]", answer):
         if any(term in clause for term in cautious_terms):
             continue
+        if re.search(
+            r"(?:核心|主要|直接)(?:原因|驱动|因素)?(?:是|来自|源于|在于)?"
+            r"[^。；\n]{0,30}(?:行业|板块)[^。；\n]{0,30}"
+            r"(?:拖累|驱动|带动|导致|造成|原因|因素|抛售)",
+            clause,
+        ):
+            return True
+        if re.search(
+            r"(?:行业|板块)[^。；\n]{0,40}"
+            r"(?:是|构成|成为)?[^。；\n]{0,16}"
+            r"(?:主因|主要原因|核心原因|直接驱动|最大权重)|"
+            r"(?:能确认的是|可以确认)[^。；\n]{0,20}"
+            r"(?:行业|板块)[^。；\n]{0,20}(?:拖累|带动|导致)|"
+            r"(?:行业|板块)[^。；\n]{0,36}"
+            r"(?:拖累了|带动了|整体抛售带动|情绪传染)",
+            clause,
+        ):
+            return True
+        if re.search(
+            r"(?:下跌|回落)[^。；\n]{0,24}(?:更多|主要)?"
+            r"(?:是|来自|源于)?[^。；\n]{0,28}"
+            r"(?:跟随|随同)[^。；\n]{0,20}(?:行业|板块)"
+            r"[^。；\n]{0,20}(?:调整|下跌|抛售)",
+            clause,
+        ):
+            return True
+        if re.search(
+            r"(?:盈利质量|基本面|财务压力)[^。；\n]{0,30}"
+            r"(?:让|使)[^。；\n]{0,24}(?:更容易|容易)"
+            r"[^。；\n]{0,18}(?:随行业|回落|下跌)",
+            clause,
+        ):
+            return True
         if not re.search(r"(?:行业|板块)[^。；\n]{0,30}(?:普涨|普跌)", clause):
             continue
-        if re.search(r"(?:导致|造成|驱动|拖累|共同作用|解释了|原因)", clause):
+        if re.search(
+            r"(?:导致|造成|驱动|带动|拖累|共同作用|解释了|原因|主因)",
+            clause,
+        ):
+            return True
+    return False
+
+
+def _has_stock_sentiment_exclusion_overclaim(
+    answer: str,
+    evidence: dict[str, Any],
+) -> bool:
+    sentiment = (evidence.get("a_share_information") or {}).get("sentiment") or {}
+    band = str(sentiment.get("band") or "")
+    if not any(term in band for term in ("中性", "混合")):
+        return False
+    cautious_terms = (
+        "不能排除",
+        "无法排除",
+        "不代表不存在",
+        "不能证明不存在",
+        "只说明样本",
+        "仅说明样本",
+        "未被样本捕捉",
+    )
+    for clause in re.split(r"[。；\n]", answer):
+        if any(term in clause for term in cautious_terms):
+            continue
+        if re.search(
+            r"(?:市场)?情绪(?:面)?[^。；\n]{0,20}"
+            r"(?:无方向性信号|没有[^。；\n]{0,12}驱动证据|"
+            r"未提供[^。；\n]{0,12}驱动证据|无法解释|不能解释|"
+            r"不是[^。；\n]{0,12}(?:原因|驱动|推手|推动因素)|"
+            r"(?:并无|没有|未有)明确(?:方向|指向)|可以排除|可排除)",
+            clause,
+        ):
             return True
     return False
 
@@ -1221,7 +1383,11 @@ def _has_stock_market_absorption_overclaim(answer: str) -> bool:
             r"(?:基本面|财报|季报|中报|年报|业绩|盈利质量|经营压力)[^。；\n]{0,80}"
             r"(?:此前已存在(?:的)?信息|早已存在(?:的)?信息|"
             r"(?:不是|并非)[^。；\n]{0,20}新出现的驱动)|"
-            r"(?:情绪驱动|情绪面驱动)[^。；\n]{0,24}(?:超跌|下跌|反弹)",
+            r"(?:情绪驱动|情绪面驱动)[^。；\n]{0,24}(?:超跌|下跌|反弹)|"
+            r"(?:财报|一季报|中报|年报|公告)[^。；\n]{0,100}"
+            r"(?:公告后|披露后)[^。；\n]{0,50}(?:未|没有)"
+            r"[^。；\n]{0,24}(?:极端反应|明显反应)"
+            r"[^。；\n]{0,30}(?:因此|所以)",
             answer,
         )
     )
@@ -1343,10 +1509,32 @@ def _has_stock_unsupported_causal_hypothesis(
     question = str(evidence.get("user_question") or "")
     research_focus = str((evidence.get("research_plan") or {}).get("focus") or "")
     price_cause_question = research_focus == "price_cause" or (
-        any(term in question for term in ("为什么", "为何", "原因", "怎么跌", "怎么涨"))
+        any(
+            term in question
+            for term in (
+                "为什么",
+                "为何",
+                "原因",
+                "怎么跌",
+                "怎么涨",
+                "最可能",
+                "有什么关系",
+                "有何关系",
+                "是否有关",
+            )
+        )
         and any(
             term in question
-            for term in ("涨", "跌", "回落", "走弱", "走强", "大涨", "大跌")
+            for term in (
+                "涨",
+                "跌",
+                "回撤",
+                "回落",
+                "走弱",
+                "走强",
+                "大涨",
+                "大跌",
+            )
         )
     )
     cautious_terms = (
@@ -1356,12 +1544,35 @@ def _has_stock_unsupported_causal_hypothesis(
         "无法说明",
         "不能单独证明",
         "无法单独证明",
+        "不能单独确认",
+        "无法单独确认",
         "没有证据",
         "未取得证据",
         "不等于",
         "不能归因",
     )
     for clause in re.split(r"[。；\n]", answer):
+        explicit_causal_rejection = bool(
+            re.search(
+                r"(?:没有|缺少|无|尚无|未有)[^。；\n]{0,32}"
+                r"(?:正文|原文|直接|充分)?(?:依据|证据)[^。；\n]{0,48}"
+                r"(?:能|可以)?把[^。；\n]{0,120}"
+                r"(?:解释为|归因于|认定为|视为|证明为)|"
+                r"(?:不能|无法|不应|不宜|不足以)(?:直接)?把"
+                r"[^。；\n]{0,140}(?:解释为|归因于|认定为|视为|"
+                r"与[^。；\n]{0,50}建立因果)|"
+                r"(?:不能|无法|不足以)[^。；\n]{0,120}建立因果|"
+                r"(?:不能|无法|尚不能|尚无法|未能)(?:直接)?确认"
+                r"[^。；\n]{0,120}(?:是|属于|构成)"
+                r"[^。；\n]{0,40}(?:直接|主要|核心)?(?:原因|驱动)|"
+                r"(?:不能|无法|不应|不宜|不足以)(?:直接)?"
+                r"(?:解读|解释|认定|视为|归因)为[^。；\n]{0,120}"
+                r"(?:原因|驱动|压力|紧张)|"
+                r"(?:不等于|并不等于|不代表)[^。；\n]{0,120}"
+                r"(?:直接|主要|核心)?(?:原因|驱动)",
+                clause,
+            )
+        )
         if price_cause_question:
             market_story = re.search(
                 r"(?:融资余额|融资买入|融资盘)[^。；\n]{0,100}"
@@ -1406,13 +1617,33 @@ def _has_stock_unsupported_causal_hypothesis(
                 clause,
             ):
                 return True
-        if re.search(
+        if not explicit_causal_rejection and re.search(
             r"(?:主要(?:原因|表现为)|核心原因|直接原因|归因于|源于)"
             r"[^。；\n]{0,180}(?:公告|分红|除权除息|回购|新闻|消息|事件|"
             r"前期急涨|获利回吐|技术性回吐|提前调整)|"
             r"(?:公告|分红|除权除息|回购|新闻|消息|事件)"
             r"[^。；\n]{0,100}(?:引发|导致|造成|驱动|带来|触发)"
             r"[^。；\n]{0,80}(?:下跌|大跌|回落|调整|回吐)",
+            clause,
+        ):
+            return True
+        if price_cause_question and not explicit_causal_rejection and re.search(
+            r"(?:这轮|这段|此次|本次|近\s*\d+\s*(?:日|天)|两三周)?"
+            r"(?:的)?(?:股价)?(?:回撤|下跌|走弱)[^。；\n]{0,100}"
+            r"(?:很大程度上)?(?:可能是|可能来自|更可能是|属于)"
+            r"[^。；\n]{0,80}(?:市场对|投资者对)[^。；\n]{0,80}"
+            r"(?:财报|[一三]?季报|中报|半年报|年报|业绩|基本面|盈利|利润|现金流)"
+            r"[^。；\n]{0,40}"
+            r"(?:延续反应|反应|定价|担忧|顾虑)",
+            clause,
+        ):
+            return True
+        if price_cause_question and not explicit_causal_rejection and re.search(
+            r"(?:借款|关联交易|担保|授信|融资)[^。；\n]{0,120}"
+            r"(?:公告|披露|事项)?[^。；\n]{0,80}"
+            r"(?:侧面反映|表明|说明|可能加剧|加剧|引发)"
+            r"[^。；\n]{0,60}(?:资金面|流动性|现金流|融资)"
+            r"[^。；\n]{0,30}(?:压力|紧张|担忧|困难|吃紧)",
             clause,
         ):
             return True
@@ -1513,6 +1744,129 @@ def _has_stock_60d_return_binding_conflict(
         if values and not any(
             abs(value - float(expected)) <= max(0.02, abs(float(expected)) * 0.005)
             for value in values
+        ):
+            return True
+    return False
+
+
+def _has_stock_debt_ratio_scale_conflict(
+    answer: str, evidence: dict[str, Any]
+) -> bool:
+    earnings = evidence.get("earnings_quality") or {}
+    latest = earnings.get("latest_report") or {}
+    comparable = earnings.get("comparable_report") or {}
+    if isinstance(latest.get("total_liabilities"), (int, float)) and isinstance(
+        comparable.get("total_liabilities"), (int, float)
+    ):
+        return False
+    for clause in re.split(r"[。；\n]", answer):
+        if "资产负债率" not in clause:
+            continue
+        debt_scale_is_open_question = bool(
+            re.search(
+                r"(?:负债(?!率)|债务)(?:整体|总体|绝对)?(?:总量|规模|余额|金额)?"
+                r"[^。；\n]{0,16}(?:是否|能否|有无)"
+                r"[^。；\n]{0,16}(?:下降|减少|降低|收缩|减轻|变化)"
+                r"(?:[^。；\n]{0,16}(?:仍|尚)?(?:需|需要|应|应该)?"
+                r"(?:进一步)?(?:核对|确认|验证|查证|复核))?",
+                clause,
+            )
+        )
+        if debt_scale_is_open_question:
+            continue
+        if any(
+            term in clause
+            for term in (
+                "不能说明",
+                "不能证明",
+                "不能据此",
+                "不能判断",
+                "不能直接判断",
+                "无法判断",
+                "尚无法判断",
+                "不代表",
+                "不等于",
+                "并非说明",
+                "并非必然说明",
+                "不能直接改写",
+            )
+        ):
+            continue
+        scale_clause = re.sub(
+            r"负债占(?:总)?资产(?:的)?(?:比例|比重)"
+            r"[^。；\n]{0,12}(?:下降|减少|降低|收缩|减轻)",
+            "",
+            clause,
+        )
+        if re.search(
+            r"(?:负债(?!率)|债务)(?:整体|总体|绝对)?(?:总量|规模|余额)?"
+            r"[^。；\n]{0,16}(?:下降|减少|降低|收缩|减轻)|"
+            r"(?:下降|减少|降低|收缩|减轻)[^。；\n]{0,16}"
+            r"(?:负债(?!率)|债务)(?:整体|总体|绝对)?(?:总量|规模|余额)",
+            scale_clause,
+        ):
+            return True
+    return False
+
+
+def _has_stock_cashflow_causal_conflict(
+    answer: str, evidence: dict[str, Any]
+) -> bool:
+    filing = (evidence.get("financial_drivers") or {}).get("filing_evidence") or {}
+    if filing.get("explicit_company_explanations"):
+        return False
+    for clause in re.split(r"[。；\n]", answer):
+        if "经营现金流" not in clause or not any(
+            term in clause for term in ("营收", "营业收入", "收入规模")
+        ):
+            continue
+        if re.search(
+            r"经营现金流[^。；\n]{0,100}"
+            r"(?:主要原因(?:是|在于)|主要由于|源于|由)[^。；\n]{0,60}"
+            r"(?:营收|营业收入|收入规模)|"
+            r"(?:营收|营业收入|收入规模)[^。；\n]{0,80}"
+            r"(?:导致|造成|拖累|使得)[^。；\n]{0,40}经营现金流",
+            clause,
+        ):
+            return True
+    return False
+
+
+def _has_stock_static_financial_causal_overclaim(
+    answer: str, evidence: dict[str, Any]
+) -> bool:
+    drivers = (evidence.get("financial_drivers") or {}).get(
+        "confirmed_mechanical_drivers"
+    ) or []
+    if not any(
+        item.get("calculation_nature") == "static_counterfactual"
+        for item in drivers
+        if isinstance(item, dict)
+    ):
+        return False
+    cautious_terms = (
+        "不等于实际",
+        "不是实际",
+        "不是已确认",
+        "不能说明",
+        "无法说明",
+        "不能确认",
+        "无法确认",
+        "不能归因",
+        "只是假设",
+        "仅为静态",
+    )
+    for clause in re.split(r"[。；\n]", answer):
+        if "静态" not in clause or any(term in clause for term in cautious_terms):
+            continue
+        if re.search(
+            r"(?:说明|表明|意味着|证明)[^。；\n]{0,80}"
+            r"(?:利润下滑|利润下降|成本端|经营原因|业务原因)|"
+            r"(?:利润下滑|利润下降|经营原因|业务原因)[^。；\n]{0,60}"
+            r"(?:来自|源于|归因于|由于|并非来自|不是来自)|"
+            r"(?:静态测算|静态反事实)[^。；\n]{0,80}"
+            r"(?:实际贡献|实际拖累|直接导致|直接拉低)",
+            clause,
         ):
             return True
     return False

@@ -64,6 +64,21 @@ def _current_quote_from_valuation(
 class StockResearchEvidenceService:
     """Build one auditable stock packet for chat and scheduled reports."""
 
+    BASE_MISSING_INFORMATION_MODULES = {
+        "公司最新公告尚未接入": {"company_information", "event_timeline"},
+        "结构化财务与估值数据尚未接入": {
+            "fundamentals",
+            "earnings_quality",
+            "financial_drivers",
+            "peer_comparison",
+        },
+        "行业供需与一致预期尚未接入": {
+            "analyst_expectations",
+            "peer_comparison",
+        },
+        "新闻与事件影响尚未接入": {"company_information", "event_timeline"},
+    }
+
     def __init__(
         self,
         analysis: MarketAnalysisService,
@@ -79,6 +94,7 @@ class StockResearchEvidenceService:
         shareholders: ShareholderStructureAnalysisService,
         analyst_expectations: AnalystExpectationsService,
         event_timeline: EventTimelineService,
+        security_master: SecurityMasterService,
     ):
         self.analysis = analysis
         self.china_info = china_info
@@ -93,6 +109,7 @@ class StockResearchEvidenceService:
         self.shareholders = shareholders
         self.analyst_expectations = analyst_expectations
         self.event_timeline = event_timeline
+        self.security_master = security_master
 
     def build(
         self,
@@ -142,9 +159,10 @@ class StockResearchEvidenceService:
             evidence.setdefault("warnings", []).append(
                 "最新价格结构暂未更新，当前使用已保存的最近可核验日线。"
             )
-        configured_name = RESEARCH_TARGETS.get(canonical, {}).get("name")
-        if configured_name:
-            evidence["display_name"] = configured_name
+        evidence["display_name"] = self.security_master.display_name(
+            canonical,
+            evidence.get("display_name"),
+        )
         price_signal_label = (evidence.get("conditional_outlook") or {}).get(
             "price_signal_label"
         ) or (evidence.get("conditional_outlook") or {}).get("label")
@@ -407,6 +425,7 @@ class StockResearchEvidenceService:
             evidence.get("current_quote"),
         )
 
+        self._prune_unselected_missing_information(evidence, selected_modules)
         evidence["research_plan"] = dict(plan or {})
         evidence["module_statuses"] = module_statuses
         unavailable_required = [
@@ -420,6 +439,25 @@ class StockResearchEvidenceService:
         evidence["evidence_readiness"] = evidence["analysis_board"]["readiness"]
         evidence["research_claims"] = build_research_claim_ledger(evidence)
         return evidence
+
+    @classmethod
+    def _prune_unselected_missing_information(
+        cls,
+        evidence: dict[str, Any],
+        selected_modules: set[str],
+    ) -> None:
+        frame = evidence.get("research_frame") or {}
+        missing = list(frame.get("missing_information") or [])
+        frame["missing_information"] = [
+            item
+            for item in missing
+            if (
+                cls.BASE_MISSING_INFORMATION_MODULES.get(str(item)) is None
+                or selected_modules.intersection(
+                    cls.BASE_MISSING_INFORMATION_MODULES[str(item)]
+                )
+            )
+        ]
 
     @staticmethod
     def _notify(

@@ -41,7 +41,10 @@ _UNSUPPORTED_PEER_OPERATING_INFERENCE_PATTERNS = (
     (
         "主营构成不得自行加总或混入非分部字段",
         re.compile(
+            r"(?:主营构成|业务构成|收入构成|分部构成)[^。；\n]{0,80}"
             r"(?:应收账款|销售方|三表中未披露)"
+            r"|(?:应收账款|销售方|三表中未披露)[^。；\n]{0,80}"
+            r"(?:主营构成|业务构成|收入构成|分部构成)"
             r"|(?:主营构成|业务构成|占比|合计)[^。；\n]{0,80}"
             r"(?:超过|高于|低于)\s*100"
         ),
@@ -73,7 +76,7 @@ def _is_index_contribution_clause(text: str) -> bool:
 _STREAM_DEFERRED_COMPLETENESS_INFERENCES = frozenset(
     {
         "用户询问全市场广度时回答必须给出涨跌家数和固定分类",
-        "用户明确询问失效条件时回答必须包含失效条件",
+        "用户明确询问何时需要重新判断时回答必须说明对应情况",
         "用户明确询问不能确认的部分时回答必须保留证据边界",
     }
 )
@@ -92,6 +95,18 @@ _NEGATIVE_SENTIMENT_LANGUAGE_RE = re.compile(
 _POSITIVE_SENTIMENT_LANGUAGE_RE = re.compile(
     r"(?:社区|股吧|零售)[^。；\n]{0,24}(?:转正|偏多|看多|正面|乐观)"
 )
+_MARKET_NEWS_CAUSAL_LABEL = (
+    "资讯标题不能扩写为估值压力释放连锁抛售或情绪尚未消化"
+)
+_MARKET_TECHNICAL_REPAIR_CAUSAL_LABEL = (
+    "缺少驱动证据时不能把反弹归因于连续下跌后的技术性修复"
+)
+_MARKET_STYLE_GAP_STORY_LABEL = (
+    "缺少昨日全市场广度或风格指数时不能猜测中小盘此前跌幅较浅"
+)
+_MARKET_NEW_CATALYST_GATE_LABEL = (
+    "重新判断不能要求证据包之外的新宏观政策或行业催化"
+)
 _UNSUPPORTED_MARKET_INFERENCE_PATTERNS = (
     (
         "市场资讯标题不能证明已经被价格消化或产生市场反应",
@@ -100,6 +115,41 @@ _UNSUPPORTED_MARKET_INFERENCE_PATTERNS = (
             r"[^。；\n]{0,120}(?:已在市场上产生反应|已产生市场反应|"
             r"已被市场消化|已经被市场消化|已部分被市场消化|"
             r"已经计价|已计价|市场已经反应|市场已反应)"
+        ),
+    ),
+    (
+        _MARKET_NEWS_CAUSAL_LABEL,
+        re.compile(
+            r"(?:风险提示|风险警示|热门股|公告|资讯|标题)"
+            r"[^。；\n]{0,120}(?:说明|表明|意味着|对应|触发|导致|使得)"
+            r"[^。；\n]{0,80}(?:估值压力|连锁抛售|情绪承压|情绪扰动|"
+            r"影响尚未消化|影响逐渐消化)"
+        ),
+    ),
+    (
+        _MARKET_TECHNICAL_REPAIR_CAUSAL_LABEL,
+        re.compile(
+            r"(?:反弹|上涨)[^。；\n]{0,90}"
+            r"(?:只能|更像|看作|视为)[^。；\n]{0,50}"
+            r"(?:连续下跌后|超跌后|短暂的)?(?:一次)?"
+            r"(?:技术性修复|超跌修复)"
+        ),
+    ),
+    (
+        _MARKET_STYLE_GAP_STORY_LABEL,
+        re.compile(
+            r"(?:可能|或许)[^。；\n]{0,24}(?:中下市值|中小盘|小盘股)"
+            r"[^。；\n]{0,100}(?:此前|昨天)[^。；\n]{0,40}"
+            r"(?:跌幅并不深|跌得不深|受影响较小|调整幅度有限)"
+        ),
+    ),
+    (
+        _MARKET_NEW_CATALYST_GATE_LABEL,
+        re.compile(
+            r"(?:留意|观察|条件|重新判断)[^。；\n]{0,90}"
+            r"(?:政策信号|宏观经济数据|宏观数据|行业重磅信息|"
+            r"新增催化|新的?催化)[^。；\n]{0,60}"
+            r"(?:支撑|确认|判断|基础)"
         ),
     ),
     (
@@ -123,6 +173,13 @@ _UNSUPPORTED_MARKET_INFERENCE_PATTERNS = (
             r"(?:上证|沪指|深证|深成)[^。；\n]{0,100}"
             r"(?:大盘股|中小盘|中小市值|小市值|中盘成长股|大盘权重股|"
             r"成长类板块|成长风格|价值风格|弹性更大的品种|高弹性品种)"
+        ),
+    ),
+    (
+        "缺少权重贡献证据时不能声称权重托底护盘或把它作为确认条件",
+        re.compile(
+            r"(?:权重|大市值)[^。；\n]{0,36}"
+            r"(?:托底|护盘|稳定攀升|结构性防线)"
         ),
     ),
     (
@@ -740,7 +797,96 @@ def _market_cause_fact_required_but_missing(
     return True
 
 
-def _has_whole_market_breadth_overclaim(text: str) -> bool:
+def _market_breadth_claim_is_user_reference(clause: str) -> bool:
+    if not any(
+        term in clause
+        for term in (
+            "你说的",
+            "你所说的",
+            "你感觉的",
+            "你提到的",
+            "问题中的",
+            "按你的描述",
+            "用户所说",
+            "这个普涨快照",
+            "该普涨快照",
+            "上述普涨快照",
+            "前述普涨快照",
+        )
+    ):
+        return False
+    return "普涨" in clause
+
+
+def _market_breadth_claim_is_negated(clause: str) -> bool:
+    return (
+        re.search(
+            r"(?:并非|不是|不等于|未达到|没有达到|不能称为|不可称为|"
+            r"不应称为|而非|非)\s*(?:全市场)?\s*普涨",
+            clause,
+        )
+        is not None
+        or re.search(
+            r"普涨[^，。；\n]{0,12}(?:并不成立|不能确认|无法确认|尚待核验)",
+            clause,
+        )
+        is not None
+    )
+
+
+def _market_breadth_claim_has_matching_evidence(
+    clause: str,
+    evidence: dict[str, Any] | None,
+) -> bool:
+    if not evidence:
+        return False
+    market_breadth = evidence.get("market_breadth") or {}
+    breadth = market_breadth.get("breadth") or {}
+    if (
+        market_breadth.get("status") != "available"
+        or str(breadth.get("state") or "") != "普涨"
+    ):
+        return False
+    if market_breadth.get("same_date_as_analysis_target") is not False:
+        return True
+
+    market_date = str(market_breadth.get("market_date") or "")[:10]
+    if not market_date:
+        return False
+    try:
+        year, month, day = (int(part) for part in market_date.split("-"))
+    except (TypeError, ValueError):
+        return False
+    exact_terms = (
+        market_date,
+        f"{year}年{month}月{day}日",
+        f"{month}月{day}日",
+    )
+    if any(term in clause for term in exact_terms):
+        return True
+
+    explicit_dates = re.findall(r"(?:\d{4}年)?\d{1,2}月\d{1,2}日|\d{4}-\d{2}-\d{2}", clause)
+    if explicit_dates:
+        return False
+    user_question = str(evidence.get("user_question") or "")
+    relative_terms = ("今天", "今日", "当前", "盘中", "午间", "截至目前")
+    if any(term in clause for term in relative_terms) and any(
+        term in user_question for term in relative_terms
+    ):
+        return True
+    return bool(evidence.get("cross_date_comparison")) or (
+        any(term in user_question for term in relative_terms)
+        and any(
+            term in user_question
+            for term in ("昨天", "昨日", "上一交易日", "前一交易日", "前日")
+        )
+    )
+
+
+def _has_whole_market_breadth_overclaim(
+    text: str,
+    evidence: dict[str, Any] | None = None,
+) -> bool:
     cautious_terms = (
         "不能确认",
         "无法确认",
@@ -756,17 +902,17 @@ def _has_whole_market_breadth_overclaim(text: str) -> bool:
         "倾向结构性行情",
     )
     for clause in re.split(r"[。；\n]", text):
-        if "普涨" not in clause and "结构性行情" not in clause:
+        if "普涨" not in clause:
             continue
         if any(term in clause for term in cautious_terms):
             continue
-        if "普涨" in clause:
-            return True
-        if re.search(
-            r"(?:是|属于|已经|可以|能够|确认|明确为)[^，。；\n]{0,12}结构性行情",
-            clause,
-        ):
-            return True
+        if _market_breadth_claim_is_negated(clause):
+            continue
+        if _market_breadth_claim_is_user_reference(clause):
+            continue
+        if _market_breadth_claim_has_matching_evidence(clause, evidence):
+            continue
+        return True
     return False
 
 
@@ -854,6 +1000,9 @@ def _has_unproven_downtrend_claim(text: str) -> bool:
     cautious_terms = (
         "不等于",
         "不代表",
+        "没有形成",
+        "未形成",
+        "尚未形成",
         "不能确认",
         "不能直接确认",
         "无法直接确认",

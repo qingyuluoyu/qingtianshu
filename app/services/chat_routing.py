@@ -109,7 +109,17 @@ def _extract_symbols(
         suffix = message[ticker.end(1) :]
         if re.match(r"\s*\+\s*\d+", suffix):
             continue
-        if ticker.group(1).upper() in {
+        raw_ticker = ticker.group(1)
+        following_text = message[ticker.end(1) : ticker.end(1) + 24]
+        if raw_ticker.upper() == "CS" and re.match(
+            r"\s*[\u4e00-\u9fff]{1,12}(?:行业|板块|指数)",
+            following_text,
+        ):
+            # “CS电池”是中证行业指数简称，不是第二只股票。把 CS 当成
+            # 美股代码会把单股相对行业问题误路由到多股比较，随后整套
+            # 精确行业指数证据都会丢失。
+            continue
+        if raw_ticker.upper() in {
             "PE",
             "PB",
             "PS",
@@ -127,9 +137,28 @@ def _extract_symbols(
             "SH",
         }:
             continue
-        if not _is_market_ticker_reference(ticker.group(1), message):
+        if len(raw_ticker) == 1:
+            before = message[max(0, ticker.start(1) - 16) : ticker.start(1)]
+            after = following_text
+            explicit_single_ticker = bool(
+                re.search(
+                    r"(?:分析|研究|看看|查看|评估|跟踪|股票|美股|证券代码|"
+                    r"ticker)\s*$",
+                    before,
+                    re.IGNORECASE,
+                )
+                or re.match(
+                    r"\s*(?:的\s*)?(?:最新)?(?:股价|股票|公司|财报|业绩|"
+                    r"估值|行情|市值|公告)",
+                    after,
+                    re.IGNORECASE,
+                )
+            )
+            if not explicit_single_ticker:
+                continue
+        if not _is_market_ticker_reference(raw_ticker, message):
             candidates.append(
-                (ticker.start(1), 0, normalize_symbol(ticker.group(1)))
+                (ticker.start(1), 0, normalize_symbol(raw_ticker))
             )
     output: list[str] = []
     for _, _, symbol in sorted(candidates, key=lambda item: (item[0], item[1])):
@@ -180,6 +209,26 @@ def _is_stock_screen_query(message: str) -> bool:
         ):
             return False
     folded = screening_text
+    # Candidate cards are evidence for a bound stock conversation, not a request
+    # to run the whole-market screener again.  In particular, wording such as
+    # "不要复述选股卡片" previously matched the bare "选股" expression below and
+    # silently sent an otherwise stock-specific question back to stock_screen.
+    # Remove references to an existing screening artefact before detecting an
+    # actual screening action.  Explicit requests such as "重新选股" and
+    # "筛选几只股票" remain untouched.
+    folded = re.sub(
+        r"(?:不要|别|无需|不必|不需要|并非要|不是要|没让你|没有让你)"
+        r"(?:再|重新)?[^。！？；]{0,16}"
+        r"(?:选股|候选)(?:卡片|文案|结果|入口|说明)?",
+        "",
+        folded,
+    )
+    folded = re.sub(
+        r"(?:复述|重复|照搬|引用|查看|解释|评价)"
+        r"[^。！？；]{0,8}(?:选股|候选)(?:卡片|文案|结果|入口)",
+        "",
+        folded,
+    )
     direct_terms = (
         "筛选股票",
         "筛股票",
@@ -190,8 +239,10 @@ def _is_stock_screen_query(message: str) -> bool:
         "股票候选",
         "经营改善模板",
         "经营改善候选",
-        "相对行业增强",
-        "估值约束",
+        "相对行业增强模板",
+        "相对行业增强候选",
+        "估值约束模板",
+        "估值约束候选",
         "回撤后待复核",
         "低估值股票",
         "业绩增长股票",
@@ -200,6 +251,12 @@ def _is_stock_screen_query(message: str) -> bool:
     )
     if re.search(r"(?<!自)选股", folded) or any(
         term in folded for term in direct_terms
+    ):
+        return True
+    if re.search(
+        r"(?:按|用|使用|运行|执行)(?:一下|一次)?"
+        r"(?:相对行业增强|估值约束)(?:模板)?(?:筛选|选股|候选)?",
+        folded,
     ):
         return True
     return bool(
@@ -331,6 +388,21 @@ def _stock_screen_parameters(message: str) -> dict[str, Any]:
 
 def _is_market_query(message: str) -> bool:
     folded = re.sub(r"\s+", "", message).casefold()
+    # “市场”也常出现在公司经营语境里，例如“市场需求”“市场份额”或
+    # “市场竞争”。这些短语描述的是公司的终端需求或竞争位置，并不是
+    # 用户要求离开当前个股去诊断大盘。先移除这些高频经营搭配，再识别
+    # 真正的市场、指数和资产类别对象。
+    market_scope_text = re.sub(
+        r"市场(?:需求|份额|占有率|空间|规模|容量|竞争|格局|地位|"
+        r"渗透率|拓展|开拓|销售|订单|定价|价格)",
+        "",
+        folded,
+    )
+    market_scope_text = re.sub(
+        r"行业(?:边界|口径|约束|可比性|比较边界|对比边界|数据|证据)",
+        "",
+        market_scope_text,
+    )
     market_terms = (
         "大盘",
         "市场",
@@ -372,7 +444,7 @@ def _is_market_query(message: str) -> bool:
     # stock follow-ups such as “现在仍在盘中吗” from the current company to the
     # default A-share market.  Explicit market routing therefore requires an
     # actual market, index, sector, or asset-class reference.
-    return any(term in folded for term in market_terms)
+    return any(term in market_scope_text for term in market_terms)
 
 
 def _extract_industry_topic(message: str) -> str | None:
@@ -393,6 +465,11 @@ def _extract_industry_topic(message: str) -> str | None:
         flags=re.IGNORECASE,
     )
     topic = topic.strip("，。！？,.!?：:")
+    # “现金流和行业边界”“估值与行业口径”中的“行业”是研究维度，
+    # 前面的并列成分不是行业名称。若把它抽成行业主题，会让绑定个股的
+    # 财务追问错误离开当前研究空间。
+    if topic.endswith(("和", "与", "及")):
+        return None
     if topic in {"这个", "该", "什么", "哪个", "整体", "当前", "最近"}:
         return None
     return topic or None
@@ -404,7 +481,7 @@ def _market_question_focus(message: str) -> dict[str, Any]:
     focus_rules = (
         (
             "market_risk",
-            "市场风险与失效条件",
+            "市场风险与重新判断条件",
             (
                 "风险",
                 "回撤",
@@ -414,6 +491,7 @@ def _market_question_focus(message: str) -> dict[str, Any]:
                 "承压",
                 "不成立",
                 "推翻",
+                "重新判断",
                 "证据缺口",
             ),
             [
@@ -486,7 +564,7 @@ def _market_question_focus(message: str) -> dict[str, Any]:
     if any(term in folded for term in counter_evidence_terms):
         return {
             "key": "market_risk",
-            "label": "市场风险与失效条件",
+            "label": "市场风险与重新判断条件",
             "answer_requirements": [
                 "优先比较回撤、波动、趋势和关键均线位置",
                 "说明风险已经发生的证据与仍未发生的情形",
@@ -506,7 +584,15 @@ def _market_question_focus(message: str) -> dict[str, Any]:
 
 def _needs_stock_market_context(message: str) -> bool:
     folded = re.sub(r"\s+", "", message).casefold()
-    return any(
+    relative_industry_pattern = re.search(
+        r"相对[^，。；,]{0,12}(?:行业|板块)",
+        folded,
+    )
+    named_industry_index_pattern = re.search(
+        r"相对[^，。；,]{0,12}(?:cs|中证)[^，。；,]{0,8}指数",
+        folded,
+    )
+    return bool(relative_industry_pattern or named_industry_index_pattern) or any(
         term in folded
         for term in (
             "为什么",
@@ -528,6 +614,12 @@ def _needs_stock_market_context(message: str) -> bool:
             "逆势",
             "相对行业",
             "相对板块",
+            "行业增强",
+            "行业走弱",
+            "跑赢行业",
+            "跑输行业",
+            "超额收益",
+            "行业指数",
             "所属行业",
             "更强",
             "更弱",
@@ -761,6 +853,8 @@ def _is_contextual_followup(message: str) -> bool:
         "反证",
         "相反证据",
         "失效条件",
+        "重新判断",
+        "什么情况会推翻",
         "不成立",
         "推翻",
         "证据缺口",
@@ -940,10 +1034,15 @@ def _is_peer_comparison_query(message: str) -> bool:
         "横向比较",
         "同报告期经营差异",
         "分别比较",
+        "同行估值",
+        "同业估值",
+        "估值同行",
+        "相对同行",
+        "相对同业",
     )
     if any(term in folded for term in direct_terms):
         return True
-    comparison_terms = ("比较", "对比", "差异")
+    comparison_terms = ("比较", "对比", "差异", "相对", "位置")
     peer_terms = (
         "同行",
         "同业",
@@ -955,6 +1054,9 @@ def _is_peer_comparison_query(message: str) -> bool:
         "新易盛",
         "天孚通信",
         "光迅科技",
+        "亿纬锂能",
+        "国轩高科",
+        "欣旺达",
     )
     return any(term in folded for term in comparison_terms) and any(
         term in folded for term in peer_terms

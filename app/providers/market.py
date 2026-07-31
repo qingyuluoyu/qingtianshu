@@ -121,7 +121,10 @@ class YahooMarketProvider:
             cached, removed = self._sanitize_history(
                 cached, symbol=symbol, interval=interval
             )
-            if removed:
+            cached, restored = self._restore_newer_persisted_bars(
+                cached, symbol=symbol, interval=interval
+            )
+            if removed or restored:
                 self.database.delete_market_bars(symbol, interval, removed)
                 self.database.put_cache(cache_key, cached, self.ttl_seconds)
             self._persist_history(cached, symbol=symbol, interval=interval)
@@ -140,6 +143,9 @@ class YahooMarketProvider:
             result, removed = self._sanitize_history(
                 result, symbol=symbol, interval=interval
             )
+            result, _ = self._restore_newer_persisted_bars(
+                result, symbol=symbol, interval=interval
+            )
             if removed:
                 self.database.delete_market_bars(symbol, interval, removed)
             self.database.put_cache(cache_key, result, self.ttl_seconds)
@@ -149,6 +155,9 @@ class YahooMarketProvider:
             stale = self.database.get_cache(cache_key, allow_stale=True)
             if stale is not None:
                 stale, removed = self._sanitize_history(
+                    stale, symbol=symbol, interval=interval
+                )
+                stale, _ = self._restore_newer_persisted_bars(
                     stale, symbol=symbol, interval=interval
                 )
                 if removed:
@@ -171,6 +180,81 @@ class YahooMarketProvider:
             str(history.get("source") or "market history"),
             str(history.get("fetched_at") or utc_now()),
         )
+
+    def _restore_newer_persisted_bars(
+        self,
+        history: dict[str, Any],
+        *,
+        symbol: str,
+        interval: str,
+    ) -> tuple[dict[str, Any], int]:
+        """Prevent a transient upstream response from moving complete history back.
+
+        Yahoo occasionally returns an A-share daily series that temporarily omits
+        the newest completed session even though the same session was returned and
+        persisted minutes earlier.  Only strictly newer, already-persisted bars are
+        restored here; older gaps and same-timestamp values are left to the current
+        upstream response so this cannot silently rewrite history.
+        """
+
+        points = list(history.get("points") or [])
+        if not points:
+            return history, 0
+        latest_timestamp = str(points[-1].get("timestamp") or "")
+        if not latest_timestamp:
+            return history, 0
+        try:
+            stored = self.database.get_market_bars(symbol, interval, limit=32)
+        except (AttributeError, TypeError):
+            return history, 0
+        timezone_name = str(history.get("timezone") or "")
+        additions: list[dict[str, Any]] = []
+        for row in stored:
+            timestamp = str(row.get("timestamp") or "")
+            if not timestamp or timestamp <= latest_timestamp:
+                continue
+            point = {
+                key: row.get(key)
+                for key in (
+                    "timestamp",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "adjusted_close",
+                    "volume",
+                )
+            }
+            if not _valid_ohlc(point):
+                continue
+            if interval == "1d" and _is_incomplete_daily_bar(
+                timestamp, timezone_name
+            ):
+                continue
+            additions.append(point)
+        if not additions:
+            return history, 0
+
+        additions.sort(key=lambda item: str(item.get("timestamp") or ""))
+        payload = deepcopy(history)
+        payload["points"] = points + additions
+        payload["market_timestamp"] = additions[-1]["timestamp"]
+        warnings = list(payload.get("warnings") or [])
+        warnings.append(
+            f"上游本次少返回 {len(additions)} 根已完成行情，已从生产数据库补回。"
+        )
+        payload["warnings"] = warnings
+        coverage = dict(payload.get("coverage") or {})
+        coverage.update(
+            {
+                "points": len(payload["points"]),
+                "first_timestamp": payload["points"][0]["timestamp"],
+                "last_timestamp": payload["points"][-1]["timestamp"],
+                "restored_persisted_newer_bars": len(additions),
+            }
+        )
+        payload["coverage"] = coverage
+        return payload, len(additions)
 
     @staticmethod
     def _sanitize_history(
