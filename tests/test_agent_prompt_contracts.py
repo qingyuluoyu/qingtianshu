@@ -226,6 +226,8 @@ def test_financial_quality_followup_obeys_exact_fact_count_without_third_section
     assert "这句话不是第三个事实" in prompt
     assert "不得另起“补充线索”" in prompt
     assert "本轮自然对话表达要求" in prompt
+    assert "财务问题必答字段" not in prompt
+    assert "现金流回答要求" not in prompt
 
 
 def test_natural_analyst_style_request_uses_paragraphs_without_report_scaffolding():
@@ -408,15 +410,11 @@ def test_quality_review_prompt_must_not_deny_explicit_inventory_explanation():
     assert "若公司已经解释库存增加或费用变化" in prompt
     assert "直接引用为公司口径" in prompt
     assert "不要" in prompt and "再次追加同一解释" in prompt
-    assert "边界提醒：边界提醒" in prompt
-    assert "不得据标题自行写成“资金面压力" in prompt
-    assert "不得反向写成“常规安排、正常融资" in prompt
-    assert "只能说明披露存在、标题证据能确认的事项" in prompt
-    assert "return_*d_base_date" in prompt
-    assert "不得写成“窗口之前、偏早" in prompt
-    assert "同一项披露只列一次" in prompt
-    assert "不得换成“市场持续担忧" in prompt
-    assert "不主动加入社区情绪、股吧样本" in prompt
+    assert "财报对话的证据边界" in prompt
+    assert "不展开股价、行业指数、技术指标或公告价格窗口" in prompt
+    assert "return_*d_base_date" not in prompt
+    assert "限售股解禁" not in prompt
+    assert "市场持续担忧" not in prompt
 
 
 def test_business_structure_contract_separates_dimensions_and_neutral_labels():
@@ -614,6 +612,9 @@ def test_quality_review_contract_prioritizes_natural_evidence_discussion():
     assert "不要" in prompt and "再次追加同一解释" in prompt
     assert "输出前自然度核对" in prompt
     assert "不要为了核对补固定句式" in prompt
+    assert "销量增长说明出货规模扩大" in prompt
+    assert "储能销量占比、储能系统占比和储能收入占比" in prompt
+    assert "不写“剔除后主业更强”" in prompt
     assert prompt.rfind("输出前自然度核对") > prompt.rfind("财务问题必答字段")
 
 

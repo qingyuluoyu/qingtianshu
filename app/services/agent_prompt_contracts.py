@@ -104,6 +104,9 @@ def append_prompt_contracts(
         and research_plan.get("contextual_followup")
         and research_plan.get("primary_focus") == "quality_review"
     )
+    quality_review_dialogue = bool(
+        intent == "stock_research" and stock_research_focus == "quality_review"
+    )
     requested_fact_count = _requested_fact_count(message)
     price_move_question = intent == "stock_research" and (
         _is_stock_price_move_question(message) or focused_stock_price_followup
@@ -403,6 +406,15 @@ Hermes/DeepSeek Run 针对用户问题即时生成，第一段直接解决问题
 “该公告在当天收盘后才公开，因此不能解释当日交易时段”，不得扩大成“交易时段内市场并不知晓”；
 也不得补写“限售股解禁通常意味着潜在抛压”等没有进入本轮证据的常识故事。
 """
+        elif quality_review_dialogue:
+            prompt += """
+
+## 财报对话的证据边界
+
+本轮只讨论财报质量，不展开股价、行业指数、技术指标或公告价格窗口。财报数字和正式披露按已确认
+事实表达；公司在业绩说明会、投资者交流或报告中给出的原因明确称为公司口径；其余原因直接说明
+尚未确认。最相关的公司解释自然放进对应段落，不追加公告目录、数据来源说明或系统校验话术。
+"""
         else:
             prompt += """
 
@@ -479,6 +491,21 @@ post_close_snapshot 时称“收盘后最新报价”；当天完整日线尚未
 分化与相对表现，不能证明因果，也不能据此排除个股独立因素。没有同日公司事件证据时，明确说
 具体驱动仍未确认；这时不要再补一个“更可能”的替代原因。禁止猜测短期资金行为、资金选择、
 获利了结、节奏变化、行业轮动、市场情绪、技术因素，也不能据此声称公司基本面没有问题。
+"""
+        elif quality_review_dialogue:
+            prompt += """
+
+## 财报对话回答要求
+
+第一段直接回答这份财报整体好不好以及核心矛盾。随后只展开真正改变判断的两三组事实，把规模增长、
+利润率、现金流、存货和业务结构放在有关系的段落里交叉解释，不按指标逐项点名。篇幅由信息决定，
+默认使用连续自然段；不使用固定标题、项目符号、研究流程或机械的“结论—风险—下一步”模板。
+
+解释只走到证据允许的位置：销量增长说明出货规模扩大，不自动等于市场份额或终端需求兑现；毛利率
+下降说明每百元收入留下的毛利比例下降，不自动等于降价换量或竞争力恶化；经营现金流增速慢于利润、
+覆盖比率下降只能说明两类报表指标的变化不同，具体回款原因仍未确认；存货增加按公司备货解释陈述，
+不要先判断解释合理或库存过量；储能销量占比、储能系统占比和储能收入占比是三个口径，分别命名。
+财务费用和汇兑只解释对应科目，不写“剔除后主业更强”或把汇兑直接称为非经常性因素。
 """
         elif not price_move_question:
             prompt += """
@@ -861,7 +888,11 @@ verified_alias，应说明公司行业标签与中证指数来自不同分类体
 不得向用户展示“尚未接入、未接入、模块未加载、数据源未返回”等后台装配或运行状态；只说明与
 相对行业判断直接有关的事实边界。
 """
-    if intent == "stock_research" and cashflow_in_scope:
+    if (
+        intent == "stock_research"
+        and cashflow_in_scope
+        and not focused_quality_followup
+    ):
         prompt += """
 
 ## 现金流回答要求
@@ -874,8 +905,12 @@ verified_alias，应说明公司行业标签与中证指数来自不同分类体
 称静态测算，不写成已确认的业务驱动。用自然段把现金流放回用户正在讨论的财报、估值或主营问题，
 不要单独生成一份现金流指标报告。
 """
-    if intent == "stock_research" and any(
-        term in message for term in ("财务", "财报", "营收", "净利润", "利润")
+    if (
+        intent == "stock_research"
+        and not focused_quality_followup
+        and any(
+            term in message for term in ("财务", "财报", "营收", "净利润", "利润")
+        )
     ):
         prompt += """
 

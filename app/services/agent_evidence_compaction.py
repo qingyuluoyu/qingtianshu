@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import re
 from statistics import mean, pstdev
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -68,6 +69,43 @@ def evidence_for_prompt(value: Any) -> Any:
     if isinstance(value, list):
         return [evidence_for_prompt(item) for item in value]
     return value
+
+
+def _compact_quality_review_announcement_summary(summary: str) -> str:
+    """Keep only the financial Q&A sentences that can answer a quality review."""
+
+    text = str(summary or "").strip()
+    if len(text) <= 500:
+        return text
+    relevant_terms = (
+        "实现收入",
+        "净利润",
+        "合计销量",
+        "销量及占比",
+        "毛利率",
+        "经营现金流",
+        "库存增加",
+        "存货增加",
+        "提前备货",
+    )
+    pieces = [
+        item.strip()
+        for item in re.split(r"(?<=[。！？?])|\n+", text)
+        if item.strip()
+    ]
+    selected: list[str] = []
+    for piece in pieces:
+        if not any(term in piece for term in relevant_terms):
+            continue
+        if piece not in selected:
+            selected.append(piece)
+    if not selected:
+        return text[:900]
+    prefix = "公司公告原文摘录：" if text.startswith("公司公告原文摘录") else ""
+    compacted = prefix + " ".join(
+        piece.removeprefix("公司公告原文摘录：").strip() for piece in selected
+    )
+    return compacted[:1400]
 
 
 def aligned_market_indices(
@@ -2355,10 +2393,7 @@ def compact_stock_research_evidence(
         compact_quality = compact.get("earnings_quality") or {}
         if compact_quality:
             compact["earnings_quality"] = {
-                **select(
-                    compact_quality,
-                    ("overall_label", "summary", "boundary"),
-                ),
+                **select(compact_quality, ("boundary",)),
                 "latest_report": compact_quality.get("latest_report") or {},
                 "comparable_report": compact_quality.get("comparable_report") or {},
                 "contradictions": (compact_quality.get("contradictions") or [])[:2],
@@ -2636,10 +2671,11 @@ def compact_stock_research_evidence(
                 )
                 summary = str(compact_item.get("summary") or "")
                 if summary:
-                    summary_limit = (
-                        2600 if summary.startswith("公司公告原文摘录") else 350
+                    compact_item["summary"] = (
+                        _compact_quality_review_announcement_summary(summary)
+                        if summary.startswith("公司公告原文摘录")
+                        else summary[:350]
                     )
-                    compact_item["summary"] = summary[:summary_limit]
                 announcements.append(compact_item)
                 if len(announcements) >= 2:
                     break
@@ -2819,21 +2855,35 @@ def compact_stock_research_evidence(
                         )
                     ]
                 filing["explicit_company_explanations"] = explicit_explanations[:2]
+            finance_expenses = [
+                select(
+                    item,
+                    (
+                        "key",
+                        "label",
+                        "current",
+                        "comparable",
+                        "change_amount",
+                        "profit_effect_amount",
+                    ),
+                )
+                for item in (compact_drivers.get("expense_analysis") or [])
+                if item.get("key") == "finance_expense"
+            ]
             compact["financial_drivers"] = select(
                 compact_drivers,
                 (
-                    "overall_label",
-                    "summary",
                     "latest_period",
                     "comparable_period",
                     "cashflow_analysis",
                     "confirmed_mechanical_drivers",
-                    "plausible_clues",
                     "filing_evidence",
                     "unresolved_causes",
                     "boundary",
                 ),
             )
+            if finance_expenses:
+                compact["financial_drivers"]["expense_analysis"] = finance_expenses
 
         workspace_context = compact.get("stock_workspace_context") or {}
         if workspace_context:

@@ -644,6 +644,33 @@ def _has_inventory_classification_boundary(text: str) -> bool:
     return False
 
 
+def _has_natural_inventory_verification_boundary(text: str) -> bool:
+    """Accept a useful inventory check without forcing a fixed three-item phrase."""
+
+    checks = (
+        _has_inventory_classification_boundary(text)
+        or any(term in text for term in ("备货的具体结构", "库存结构", "存货结构")),
+        "库龄" in text,
+        "跌价准备" in text,
+        any(
+            term in text
+            for term in (
+                "订单覆盖",
+                "在手订单",
+                "需求数据",
+                "去化节奏",
+                "实际出货",
+                "出货量",
+                "转化为实际销售",
+            )
+        ),
+    )
+    has_verification_language = any(
+        term in text for term in ("核验", "验证", "待确认", "待核验", "还不能", "无法确认")
+    )
+    return has_verification_language and any(checks)
+
+
 def _has_sales_cash_ratio_label(text: str) -> bool:
     """Recognize the metric name or its natural financial definition."""
 
@@ -736,12 +763,8 @@ def quality_review_required_fact_issue(
     if inventory_explanation:
         if not ("下半年" in text and "备货" in text):
             return "经营改善回答遗漏公告中的库存增加公司原文解释"
-        if not (
-            _has_inventory_classification_boundary(text)
-            and "库龄" in text
-            and "跌价准备" in text
-        ):
-            return "经营改善回答遗漏库存解释后的分类、库龄或跌价准备核验边界"
+        if not _has_natural_inventory_verification_boundary(text):
+            return "经营改善回答遗漏库存解释后的量化核验边界"
 
     return None
 
@@ -3288,6 +3311,47 @@ def normalize_quality_review_language(text: str) -> str:
     normalized = str(text or "")
     replacements = (
         (
+            r"；但利润率全面收缩、经营现金流增速严重滞后于利润、"
+            r"销售收现率明显走低，[^。]{0,120}"
+            r"不能简单把四成利润增长等同于经营质量同幅度提升",
+            "。同时，毛利率、经营现金流增速和销售收现率的变化并不一致，"
+            "这些差异需要分别核验",
+        ),
+        (
+            r"一是整体出货在实实在在放大，不是靠单价；",
+            "一是整体出货在扩大；当前证据没有产品价格变化，"
+            "不能进一步拆成量价原因；",
+        ),
+        (
+            r"这几个数据放在一起，表明同样是赚一块钱利润，"
+            r"今年对应的现金回笼比去年弱了不少。",
+            "这两个比率较可比期下降，但具体原因尚未确认。",
+        ),
+        (
+            r"公司没在公告里给出直接解释，可能是应收规模、回款账期或"
+            r"合同节奏的影响，但目前都无法证实，只能作为一个关键的观察点。",
+            "公司没有给出直接解释，具体原因仍待核验。",
+        ),
+        (
+            r"这是外币敞口的波动，跟动力和储能主业的竞争力没有直接关系，"
+            r"但它实实在在地拖累了当期利润。",
+            "这是公司对财务费用变化的解释；它能说明对应科目发生了什么，"
+            "不能据此判断主业竞争力。",
+        ),
+        (
+            r"这个说法从经营节奏上可以理解，但目前没有在手订单或下游需求兑现"
+            r"数据来验证，备货能不能顺利消化还需要下半年追踪。"
+            r"存货质量和库龄结构在现有证据中也看不到，所以暂时只能按公司口径"
+            r"接受这个解释，但不能完全排除后期存货风险。",
+            "这是公司对库存增加的解释，仍需结合实际出货、存货结构、库龄和"
+            "跌价准备继续核验。",
+        ),
+        (
+            r"而让这份财报不那么[“\"]好[”\"]的地方在于，[^。]{0,180}"
+            r"盈利能力没有随规模同步提升。",
+            "毛利率、经营现金流和存货的后续变化，仍会决定这轮增长的质量能否稳定。",
+        ),
+        (
             r"经营现金流覆盖关系在弱化",
             "经营现金流相关指标与去年同期存在差异",
         ),
@@ -3408,10 +3472,6 @@ def normalize_quality_review_language(text: str) -> str:
             "这是本期最需要核验的反方事实",
         ),
         (
-            r"(?<!最重要的反方事实是)(利润(?:同比)?增速(?:明显)?快于经营现金流)",
-            r"最重要的反方事实是\1",
-        ),
-        (
             r"这是公司管理层的正式口径，可以确认公司当时的备货意图，"
             r"而非被动积压",
             "这是公司管理层给出的备货解释",
@@ -3529,11 +3589,7 @@ def repair_quality_review_answer(answer: str, evidence: dict[str, Any]) -> str |
         inventory_explanation
         and "下半年" in repaired
         and "备货" in repaired
-        and not (
-            _has_inventory_classification_boundary(repaired)
-            and "库龄" in repaired
-            and "跌价准备" in repaired
-        )
+        and not _has_natural_inventory_verification_boundary(repaired)
     ):
         boundary = (
             "这是公司口径，仍需结合存货分类、库龄和跌价准备做量化核验。"

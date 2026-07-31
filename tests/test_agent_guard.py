@@ -11390,6 +11390,74 @@ def test_quality_review_repair_restores_inventory_verification_boundary():
     assert quality_review_required_fact_issue(repaired, evidence) is None
 
 
+def test_quality_review_keeps_natural_inventory_verification_without_canned_appendix():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "a_share_information": {
+            "announcements": [
+                {
+                    "title": "宁德时代投资者关系活动记录表",
+                    "published_at": "2026-07-24",
+                    "summary": (
+                        "公司公告原文摘录：库存增加主要是为下半年市场需求而提前备货。"
+                    ),
+                }
+            ]
+        },
+    }
+    draft = (
+        "宁德时代经营改善有真实进展。公司解释存货增加是为下半年市场需求"
+        "提前备货，但当前还看不到备货的具体结构、在手订单覆盖率和库龄分布。"
+        "因此这项解释可以作为理解库存变化的线索，还不能单独完成量化验证。"
+    )
+
+    repaired = repair_quality_review_answer(draft, evidence)
+
+    assert repaired == draft
+    assert "这是公司口径，仍需结合存货分类" not in repaired
+    assert quality_review_required_fact_issue(repaired, evidence) is None
+
+
+def test_numeric_guard_accepts_rounded_percentage_transition_with_drop_to_wording():
+    evidence = {
+        "type": "stock_research",
+        "earnings_quality": {
+            "latest_report": {"gross_margin_pct": 20.625},
+            "comparable_report": {"gross_margin_pct": 22.4097},
+        },
+    }
+    answer = "动力电池系统毛利率从22.4%降到20.6%。"
+
+    guard = AgentOutputGuard._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is True
+    assert guard["unsupported_numbers"] == []
+
+
+def test_numeric_guard_accepts_rounded_signed_financial_amounts_in_yi():
+    evidence = {
+        "type": "stock_research",
+        "financial_drivers": {
+            "expense_analysis": [
+                {
+                    "key": "finance_expense",
+                    "current": -630_793_000.0,
+                    "comparable": -5_821_810_000.0,
+                }
+            ]
+        },
+    }
+    answer = "财务费用从-58亿元变为-6亿元。"
+
+    guard = AgentOutputGuard._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is True
+    assert guard["unsupported_numbers"] == []
+
+
 def test_quality_review_keeps_grounded_initial_draft_without_editor_or_retry(
     tmp_path: Path, settings, monkeypatch
 ):
@@ -11996,8 +12064,42 @@ def test_quality_review_local_language_normalization_keeps_counter_fact():
     assert "现金回笼节奏出现差异" not in normalized
     assert "不能简单概括" not in normalized
     assert "具体原因尚未确认" in normalized
-    assert "最重要的反方事实是利润增速明显快于经营现金流" in normalized
+    assert "利润增速明显快于经营现金流" in normalized
+    assert "最重要的反方事实是利润" not in normalized
     assert "具体原因仍需核验" in normalized
+
+
+def test_quality_review_repair_rewrites_real_answer_without_fragmenting_paragraphs():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+    }
+    answer = (
+        "宁德时代真实增长值得肯定；但利润率全面收缩、经营现金流增速严重"
+        "滞后于利润、销售收现率明显走低，这些信号说明利润表上的增长有一部分"
+        "是靠规模堆出来的，不能简单把四成利润增长等同于经营质量同幅度提升。\n\n"
+        "一是整体出货在实实在在放大，不是靠单价；储能收入占比也在上升。\n\n"
+        "这几个数据放在一起，表明同样是赚一块钱利润，今年对应的现金回笼比"
+        "去年弱了不少。公司没在公告里给出直接解释，可能是应收规模、回款账期"
+        "或合同节奏的影响，但目前都无法证实，只能作为一个关键的观察点。\n\n"
+        "公司解释财务费用变化来自汇兑损失。这是外币敞口的波动，跟动力和储能"
+        "主业的竞争力没有直接关系，但它实实在在地拖累了当期利润。\n\n"
+        "整体来看，真实进展在于销量和收入规模扩大。而让这份财报不那么“好”"
+        "的地方在于，现金转化效率走弱，盈利能力没有随规模同步提升。"
+    )
+
+    repaired = repair_quality_review_answer(answer, evidence)
+
+    assert repaired is not None
+    assert "不是靠单价" not in repaired
+    assert "可能是应收规模" not in repaired
+    assert "不能据此判断主业竞争力" in repaired
+    assert "仍会决定这轮增长的质量能否稳定" in repaired
+    assert not any(
+        paragraph.rstrip().endswith("；") for paragraph in repaired.split("\n\n")
+    )
 
 
 def test_stream_segmenter_keeps_bold_heading_markers_together():

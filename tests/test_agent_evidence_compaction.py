@@ -1363,6 +1363,42 @@ def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_p
     assert announcements[1]["summary"] == "公司公告原文摘录：经营情况说明。"
 
 
+def test_quality_review_compaction_drops_unrelated_long_ir_questions():
+    compact = compact_stock_research_evidence(
+        {
+            "type": "stock_research",
+            "symbol": "300750.SZ",
+            "display_name": "宁德时代",
+            "user_question": "最新财报好不好？把现金流、毛利率和存货讲透。",
+            "research_plan": {"focus": "quality_review"},
+            "a_share_information": {
+                "announcements": [
+                    {
+                        "title": "2026年投资者关系活动记录表",
+                        "published_at": "2026-07-26",
+                        "summary": (
+                            "公司公告原文摘录：公司实现收入2769亿元，净利润433亿元。"
+                            "1、销量及占比情况？动力和储能电池合计销量增长约60%。"
+                            "2、盈利能力是否稳定？公司过去几个季度单位净利整体稳定。"
+                            "3、怎么看储能需求和系统占比？储能系统占比接近七成，"
+                            "587Ah大电芯实现规模化交付。"
+                            "5、库存增加的原因？库存增加主要是为下半年提前备货。"
+                            + "其他背景材料。" * 100
+                        ),
+                    }
+                ]
+            },
+        }
+    )
+
+    summary = compact["a_share_information"]["announcements"][0]["summary"]
+    assert "合计销量增长约60%" in summary
+    assert "单位净利整体稳定" not in summary
+    assert "库存增加主要是为下半年提前备货" in summary
+    assert "储能系统占比接近七成" not in summary
+    assert "587Ah" not in summary
+
+
 def test_valuation_review_compaction_uses_same_day_peer_packet_without_report_dump():
     compact = compact_stock_research_evidence(
         {

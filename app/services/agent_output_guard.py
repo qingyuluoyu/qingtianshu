@@ -760,7 +760,8 @@ class AgentOutputGuard:
                     )
                     is not None
                     and re.match(
-                        r"\s*(?:下降|降低|回落|上升|提高|提升|增加|减少)",
+                        r"\s*(?:下降|降低|回落|上升|提高|提升|增加|减少|"
+                        r"降到|降至|升到|升至|变为|变成)",
                         answer[match.end() : match.end() + 24],
                     )
                     is not None
@@ -871,6 +872,10 @@ class AgentOutputGuard:
                     r"\s*倍",
                     answer[match.end() : match.end() + 4],
                 )
+                rounded_financial_unit_suffix = re.match(
+                    r"\s*(?:亿(?:元)?|万(?:元)?|千(?:元)?|元)",
+                    answer[match.end() : match.end() + 6],
+                )
                 rounded_range_endpoint = re.match(
                     r"\s*[～~—-]\s*[+-]?\d+(?:\.\d+)?\s*(?:个)?百分点",
                     answer[match.end() : match.end() + 24],
@@ -879,6 +884,8 @@ class AgentOutputGuard:
                     rounded_ratio_suffix or rounded_range_endpoint
                 ):
                     tolerance_floor = max(tolerance_floor, 0.051)
+                if decimal_places == 0 and rounded_financial_unit_suffix:
+                    tolerance_floor = max(tolerance_floor, 0.51)
                 if re.match(
                     r"\s*(?:个)?多(?:个)?百分点",
                     answer[match.end() : match.end() + 8],
