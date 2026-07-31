@@ -1417,6 +1417,16 @@ def compact_stock_research_evidence(
         plan.get("contextual_followup")
         and plan.get("primary_focus") == "price_cause"
     )
+    asks_slow_variable_split = focused_price_followup and any(
+        term in question
+        for term in (
+            "慢变量",
+            "长期背景",
+            "基本面背景",
+            "哪些只是背景",
+            "当天事实",
+        )
+    )
     price_move_question = is_stock_price_move_question(question) or (
         focused_price_followup
     )
@@ -1871,7 +1881,22 @@ def compact_stock_research_evidence(
     business_structure = evidence.get("business_structure") or {}
     if business_structure:
         compact_dimensions = []
+        suppress_top3_dimensions: set[str] = set()
         for dimension in business_structure.get("dimensions") or []:
+            source_segments = list(dimension.get("segments") or [])
+            concentration = select(
+                dimension.get("concentration") or {},
+                (
+                    "top1_item",
+                    "top1_revenue_share_pct",
+                    "top3_revenue_share_pct",
+                ),
+            )
+            if len(source_segments) <= 3:
+                concentration.pop("top3_revenue_share_pct", None)
+                suppress_top3_dimensions.add(
+                    str(dimension.get("classification") or "")
+                )
             compact_dimensions.append(
                 {
                     **select(
@@ -1882,10 +1907,10 @@ def compact_stock_research_evidence(
                             "current_report_date",
                             "comparable_report_date",
                             "report_basis",
-                            "concentration",
                             "margin_coverage",
                         ),
                     ),
+                    **({"concentration": concentration} if concentration else {}),
                     "segments": [
                         select(
                             segment,
@@ -1903,11 +1928,23 @@ def compact_stock_research_evidence(
                                 "gross_margin_change_pp",
                             ),
                         )
-                        for segment in (dimension.get("segments") or [])[:6]
+                        for segment in source_segments[:6]
                     ],
                     "margin_reference": dimension.get("margin_reference"),
                 }
             )
+        key_changes = []
+        for item in business_structure.get("key_changes") or []:
+            if not isinstance(item, dict):
+                key_changes.append(item)
+                continue
+            if (
+                str(item.get("dimension") or "") in suppress_top3_dimensions
+                and item.get("kind") == "concentration"
+                and "前三项" in str(item.get("statement") or "")
+            ):
+                continue
+            key_changes.append(item)
         compact["business_structure"] = {
             **select(
                 business_structure,
@@ -1928,7 +1965,12 @@ def compact_stock_research_evidence(
                 ),
             ),
             "dimensions": compact_dimensions,
-            "key_changes": (business_structure.get("key_changes") or [])[:10],
+            "key_changes": key_changes[:10],
+            "segment_label_boundary": (
+                "分部名称必须按披露标签原样使用。证据只写‘茅台酒’时，"
+                "不得扩写成‘53度飞天茅台’或其他具体SKU；证据只写"
+                "‘其他系列酒’时，也不得自行列举王子酒等具体品牌。"
+            ),
         }
 
     shareholder_structure = evidence.get("shareholder_structure") or {}
@@ -2859,8 +2901,31 @@ def compact_stock_research_evidence(
 
         if focused_price_followup:
             event_packet = compact.get("price_move_event_evidence") or {}
+            industry = compact_market_context.get("exact_industry_index") or {}
+            industry_available = industry.get("status") in {
+                "available",
+                "same_market_date",
+            }
+            missing_evidence = []
+            if not industry_available:
+                missing_evidence.append("目标日精确行业指数或同口径行业成分表现")
+            if not list(event_packet.get("same_date_official_disclosures") or []):
+                missing_evidence.append("目标交易时段内可直接对齐价格的公司公开事件")
+            latest_report = (
+                ((evidence.get("fundamentals") or {}).get("summary") or {}).get(
+                    "latest_report"
+                )
+                or {}
+            )
+            earnings_summary = str(
+                (evidence.get("earnings_quality") or {}).get("summary") or ""
+            ).strip()
             compact["followup_answer_frame"] = {
-                "requested_shape": "two_confirmed_facts_and_one_key_unknown",
+                "requested_shape": (
+                    "same_day_facts_vs_slow_variable_background"
+                    if asks_slow_variable_split
+                    else "two_confirmed_facts_and_one_key_unknown"
+                ),
                 "confirmed_fact_candidates": [
                     {
                         "kind": "target_day_relative_market_performance",
@@ -2883,6 +2948,18 @@ def compact_stock_research_evidence(
                                 compact_market_context.get("indices") or []
                             )[:2]
                         ],
+                        "exact_industry_index": select(
+                            industry,
+                            (
+                                "status",
+                                "name",
+                                "index_name",
+                                "market_date",
+                                "return_1d_pct",
+                                "stock_minus_industry_pct",
+                                "component_breadth",
+                            ),
+                        ),
                         "boundary": (
                             "只确认目标日相对表现；不能据此推断没有公司利空、"
                             "卖压较小、资金承接，或更像随大盘波动。"
@@ -2918,13 +2995,37 @@ def compact_stock_research_evidence(
                         ),
                     },
                 ],
+                **(
+                    {
+                        "slow_variable_background": {
+                            "latest_report": select(
+                                latest_report,
+                                (
+                                    "report_date",
+                                    "report_type",
+                                    "report_date_name",
+                                    "notice_date",
+                                    "revenue_yoy_pct",
+                                    "net_profit_yoy_pct",
+                                    "gross_margin_pct",
+                                    "net_margin_pct",
+                                ),
+                            ),
+                            "earnings_summary": earnings_summary,
+                            "boundary": (
+                                "这些是早于目标日披露的经营背景，不是目标日直接驱动。"
+                                "回答最多用一个自然句概括，不要复述整套财务数字。"
+                            ),
+                        }
+                    }
+                    if asks_slow_variable_split
+                    else {}
+                ),
                 "key_unknown": {
                     "question": "目标日相对表现究竟由行业因素还是公司因素主导",
-                    "missing_evidence": [
-                        "目标日精确行业指数或同口径行业成分表现",
-                        "目标交易时段内可直接对齐价格的公司公开事件",
-                    ],
+                    "missing_evidence": missing_evidence,
                     "boundary": (
+                        "行业数据即使确认同步性，也不能单独证明个股涨跌因果；"
                         "当前不能在行业与公司因素之间强行二选一，也不列新的原因猜测。"
                     ),
                 },

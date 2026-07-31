@@ -304,13 +304,9 @@ class ResearchPlanService:
             "skills": ("shareholder-structure", "evidence-debate"),
         },
         "business": {
-            "required": ("market", "business_structure", "fundamentals"),
-            "optional": ("company_information",),
-            "skills": (
-                "business-structure",
-                "fundamental-evidence",
-                "evidence-debate",
-            ),
+            "required": ("business_structure",),
+            "optional": (),
+            "skills": ("business-structure",),
         },
         "expectations": {
             "required": ("market", "analyst_expectations", "fundamentals"),
@@ -466,6 +462,20 @@ class ResearchPlanService:
                 for item in matched
                 if item[0] == "quality_review" or item[0] in explicit_extra_focuses
             ]
+        if any(key == "business" for key, _ in matched):
+            # “先不谈涨跌”“不要给股价和技术指标”是在明确切换到主营，
+            # 不能因为否定句里出现涨跌、股价或技术字样又把本轮拉回行情。
+            if self._explicitly_excludes_price_focus(question):
+                matched = [
+                    item
+                    for item in matched
+                    if item[0] not in {"price_cause", "price_action"}
+                ]
+            # 分部收入、占比和分部毛利率本来就是主营结构字段。“毛利”
+            # 这个词本身不应额外加载整套财报、现金流和估值；只有用户明确
+            # 同时询问净利润、现金流、负债等报表问题时才保留 financial。
+            if not self._business_question_requests_financials(question):
+                matched = [item for item in matched if item[0] != "financial"]
         if any(key == "price_cause" for key, _ in matched):
             matched = [item for item in matched if item[0] != "price_action"]
         comprehensive = any(
@@ -636,6 +646,56 @@ class ResearchPlanService:
             term.lower() in lowered
             for _, _, terms in cls._FOCUS_RULES
             for term in terms
+        )
+
+    @staticmethod
+    def _explicitly_excludes_price_focus(question: str) -> bool:
+        folded = re.sub(r"\s+", "", str(question or "")).casefold()
+        return any(
+            phrase in folded
+            for phrase in (
+                "先不谈涨跌",
+                "不谈涨跌",
+                "先不谈股价",
+                "不谈股价",
+                "不要给股价",
+                "不要写股价",
+                "不要谈股价",
+                "不要股价",
+                "不要给技术指标",
+                "不要写技术指标",
+                "不要谈技术指标",
+                "不要技术指标",
+                "不看技术指标",
+                "先不谈行情",
+                "不谈行情",
+            )
+        )
+
+    @staticmethod
+    def _business_question_requests_financials(question: str) -> bool:
+        folded = re.sub(r"\s+", "", str(question or "")).casefold()
+        return any(
+            term in folded
+            for term in (
+                "净利润",
+                "归母",
+                "扣非",
+                "经营现金流",
+                "现金流",
+                "资产负债率",
+                "负债",
+                "应收",
+                "存货",
+                "财务费用",
+                "销售费用",
+                "管理费用",
+                "研发费用",
+                "利润表",
+                "资产负债表",
+                "现金流量表",
+                "财报质量",
+            )
         )
 
     @classmethod

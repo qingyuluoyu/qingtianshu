@@ -10482,6 +10482,36 @@ def test_stock_guard_preserves_explicit_industry_causality_boundary():
         not in guard["unsupported_market_inferences"]
     )
 
+    natural_boundary = AgentService._validate_model_output(
+        "行业同步表现只能证明共同运动，无法单独说明个股涨跌因果，"
+        "因此尚不能在行业因素与公司因素之间做出确定区分。",
+        evidence,
+    )
+    assert (
+        "行业成分广度只能描述同步性不能证明个股涨跌因果"
+        not in natural_boundary["unsupported_market_inferences"]
+    )
+
+
+def test_stock_guard_preserves_natural_cannot_force_industry_company_choice():
+    evidence = {
+        "type": "stock_research",
+        "user_question": "贵州茅台7月30日上涨更像行业还是公司因素？",
+        "research_plan": {"focus": "price_cause"},
+    }
+    answer = (
+        "中证白酒指数当日上涨，行业成分也普遍同向。"
+        "在缺少同日公司正式披露或可直接对齐价格的公司事件时，"
+        "不能强行判断是行业因素还是公司因素在主导当天上涨。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert (
+        "行业成分广度只能描述同步性不能证明个股涨跌因果"
+        not in guard["unsupported_market_inferences"]
+    )
+
 
 def test_stock_guard_preserves_natural_missing_industry_and_event_boundary():
     evidence = {

@@ -135,6 +135,36 @@ def test_price_cause_followup_inherits_prior_scope_without_full_stock_report():
     assert plan["selected_skills"] == ["a-share-information", "event-timeline"]
 
 
+def test_business_topic_switch_ignores_negated_price_words_and_uses_specialist_plan():
+    service = ResearchPlanService()
+
+    first = service.build(
+        "先不谈涨跌了，这家公司主要靠什么业务赚钱？请用普通投资者能理解的方式说。"
+    )
+    followup = service.build(
+        "那茅台酒和系列酒的差别是什么？收入结构变化说明了什么，"
+        "哪些结论不能直接推出？不要给股价和技术指标。"
+    )
+
+    for plan in (first, followup):
+        assert plan["focus"] == "business"
+        assert plan["primary_focus"] == "business"
+        assert plan["selected_modules"] == ["business_structure"]
+        assert plan["selected_skills"] == ["business-structure"]
+        assert "market" not in plan["selected_modules"]
+        assert "fundamentals" not in plan["selected_modules"]
+
+
+def test_business_question_keeps_explicit_cashflow_as_a_second_focus():
+    plan = ResearchPlanService().build(
+        "主营收入结构发生了什么变化，这和经营现金流、净利润有什么关系？"
+    )
+
+    assert plan["focus"] == "mixed"
+    assert "business_structure" in plan["selected_modules"]
+    assert "financial_drivers" in plan["selected_modules"]
+
+
 def test_quality_review_focus_uses_disclosures_financials_cashflow_and_business_only():
     service = ResearchPlanService()
 

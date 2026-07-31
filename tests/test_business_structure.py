@@ -163,6 +163,29 @@ def test_business_structure_api_and_chat_routing(client, app):
     assert "53%" in payload["answer"]
     assert "不能混写" in payload["answer"]
 
+    price_conversation = client.post(
+        "/me/chat",
+        json={
+            "message": "中兴通讯7月30日为什么上涨？",
+            "execute_agent": False,
+        },
+    )
+    assert price_conversation.status_code == 200
+    switched = client.post(
+        "/me/chat",
+        json={
+            "message": (
+                "先不谈涨跌了，这家公司主要靠什么业务赚钱？"
+                "不要给股价和技术指标。"
+            ),
+            "conversation_id": price_conversation.json()["conversation_id"],
+            "execute_agent": False,
+        },
+    )
+    assert switched.status_code == 200
+    assert switched.json()["intent"] == "business_structure"
+    assert switched.json()["evidence"]["symbol"] == "000063.SZ"
+
     followup = client.post(
         "/me/chat",
         json={

@@ -136,6 +136,9 @@ def test_stock_price_move_detects_deep_causal_comparison_wording():
     assert "主要推力、主导力量、决定了个股方向" in prompt
     assert "证据不足时也不强行二选一" in prompt
     assert "解释了为什么跑输、压制弹性" in prompt
+    assert "行业成分涨跌广度不是" in prompt
+    assert "资金涌入白酒、板块受到资金关注" in prompt
+    assert "不得扩大成\n“公司层面没有独立利好" in prompt
     assert "账面利润未获验证" in prompt
     assert "特别针对" in prompt
     assert "如果真有抛售盘面应该更明显" in prompt
@@ -175,6 +178,31 @@ def test_stock_price_cause_followup_uses_three_natural_paragraph_contract():
     assert "绝不能由" in prompt
     assert "没有公司额外利空、卖压不突出" in prompt
     assert "不评价公告内容积极或消极" in prompt
+
+
+def test_stock_price_cause_followup_can_answer_same_day_vs_slow_background():
+    prompt = _append(
+        intent="stock_research",
+        message="哪些是7月30日当天事实，哪些只是慢变量背景？不要重复所有数字。",
+        prompt_evidence={
+            "research_plan": {
+                "focus": "price_cause",
+                "primary_focus": "price_cause",
+                "contextual_followup": True,
+            },
+            "followup_answer_frame": {
+                "requested_shape": "same_day_facts_vs_slow_variable_background"
+            },
+        },
+    )
+
+    assert "明确要区分“目标日当天事实”和" in prompt
+    assert "最终写两到三个自然短段落" in prompt
+    assert "第二段只用一句话概括 slow_variable_background" in prompt
+    assert "最多保留一组" in prompt
+    assert "行业资金涌入、资金流入板块" in prompt
+    assert "不得把低于行业指数写成低于行业中位数" in prompt
+    assert "最终只写三个自然短段落" not in prompt
 
 
 def test_deep_price_move_contract_uses_publication_time_without_market_mind_reading():
@@ -331,6 +359,39 @@ def test_business_structure_contract_separates_dimensions_and_neutral_labels():
     assert "不得自行增加采购、运输等环节" in prompt
     assert "产品、地区和行业是三套独立维度" in prompt
     assert "不得合并成“境外工程" in prompt
+    assert "不得自行扩写成“53度飞天茅台”" in prompt
+    assert "不得自行列举王子酒" in prompt
+    assert "不得凭常识补写高端、中端" in prompt
+    assert "不得把合计100%写成“前三大产品" in prompt
+    assert "不得改写成\n“单位利润、每瓶利润" in prompt
+    assert "比较两个分部时只说毛利率更高" in prompt
+    assert "普通对话默认写两到三个自然段" in prompt
+    assert "不要无关切换到投资适当性" in prompt
+    assert "也不要邀请用户讨论“适不适合自己”" in prompt
+
+
+def test_stock_research_business_focus_uses_business_contract_too():
+    prompt = _append(
+        intent="stock_research",
+        message="先不谈涨跌，这家公司靠什么业务赚钱？",
+        prompt_evidence={"research_plan": {"focus": "business"}},
+    )
+
+    assert "主营业务专项回答要求" in prompt
+    assert "所有分部名称必须逐字沿用证据标签" in prompt
+
+
+def test_business_structure_contract_must_answer_explicit_inference_limits():
+    prompt = _append(
+        intent="business_structure",
+        message="收入结构变化说明了什么，哪些结论不能直接推出？",
+    )
+
+    assert "没有同行或行业分部基准时" in prompt
+    assert "不得评价某项毛利率“在行业里" in prompt
+    assert "这一问不得漏答" in prompt
+    assert "最后一个自然段必须直接说明至少两项边界" in prompt
+    assert "收入集中度上升不等于经营风险已经发生" in prompt
 
 
 def test_bound_screening_cashflow_question_preserves_snapshot_and_requires_cashflow():

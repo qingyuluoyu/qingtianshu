@@ -558,10 +558,10 @@ def test_stock_specialist_compaction_keeps_root_business_payload() -> None:
     compact = compact_stock_specialist_evidence(
         {
             "type": "business_structure",
-            "symbol": "000065.SZ",
-            "name": "000065.SZ",
-            "user_question": "北方国际靠什么业务赚钱？",
-            "summary": "最大业务为工程建设与服务。",
+            "symbol": "600519.SS",
+            "name": "600519.SS",
+            "user_question": "贵州茅台靠什么业务赚钱？",
+            "summary": "最大业务为茅台酒。",
             "coverage_limits": [
                 {
                     "key": "regional_product_breakdown",
@@ -574,15 +574,29 @@ def test_stock_specialist_compaction_keeps_root_business_payload() -> None:
                     "classification": "product",
                     "label": "按产品",
                     "current_report_date": "2025-12-31",
+                    "concentration": {
+                        "top1_item": "茅台酒",
+                        "top1_revenue_share_pct": 86.77,
+                        "top3_revenue_share_pct": 100.0,
+                    },
                     "segments": [
-                        {"item_name": "工程建设与服务", "revenue_share_pct": 46.6}
+                        {"item_name": "茅台酒", "revenue_share_pct": 86.77},
+                        {"item_name": "其他系列酒", "revenue_share_pct": 13.19},
+                        {"item_name": "其他(补充)", "revenue_share_pct": 0.04},
                     ],
                 }
             ],
+            "key_changes": [
+                {
+                    "dimension": "product",
+                    "kind": "concentration",
+                    "statement": "按产品第一大项目茅台酒收入占比86.77%，前三项合计100%。",
+                }
+            ],
             "stock_workspace_context": {
-                "name": "北方国际",
+                "name": "贵州茅台",
                 "research_entry": {
-                    "attention_flags": ["最新财报净利润同比 -37.54%"]
+                    "attention_flags": ["最新财报净利润同比 1.47%"]
                 },
                 "important_changes": [
                     {"summary": "保留第一条"},
@@ -592,10 +606,21 @@ def test_stock_specialist_compaction_keeps_root_business_payload() -> None:
         }
     )
 
-    assert compact["display_name"] == "北方国际"
-    assert compact["business_structure"]["summary"] == "最大业务为工程建设与服务。"
-    assert compact["business_structure"]["dimensions"][0]["segments"] == [
-        {"item_name": "工程建设与服务", "revenue_share_pct": 46.6}
+    assert compact["display_name"] == "贵州茅台"
+    assert compact["business_structure"]["summary"] == "最大业务为茅台酒。"
+    product_dimension = compact["business_structure"]["dimensions"][0]
+    assert product_dimension["segments"] == [
+        {"item_name": "茅台酒", "revenue_share_pct": 86.77},
+        {"item_name": "其他系列酒", "revenue_share_pct": 13.19},
+        {"item_name": "其他(补充)", "revenue_share_pct": 0.04},
+    ]
+    assert product_dimension["concentration"] == {
+        "top1_item": "茅台酒",
+        "top1_revenue_share_pct": 86.77,
+    }
+    assert compact["business_structure"]["key_changes"] == []
+    assert "不得扩写成‘53度飞天茅台’" in compact["business_structure"][
+        "segment_label_boundary"
     ]
     assert compact["business_structure"]["coverage_limits"] == [
         {
@@ -604,8 +629,8 @@ def test_stock_specialist_compaction_keeps_root_business_payload() -> None:
             "next_evidence": "年报分部附注。",
         }
     ]
-    assert compact["stock_workspace_context"] == {"name": "北方国际"}
-    assert "-37.54%" not in str(compact)
+    assert compact["stock_workspace_context"] == {"name": "贵州茅台"}
+    assert "1.47%" not in str(compact)
 
 
 def test_business_specialist_boundary_wording_does_not_drop_business_payload() -> None:
@@ -1059,6 +1084,87 @@ def test_historical_price_cause_followup_keeps_target_scope_without_latest_quote
     assert "earnings_quality" not in compact
     assert "financial_drivers" not in compact
     assert "peer_comparison" not in compact
+
+
+def test_price_cause_followup_can_separate_same_day_facts_from_slow_background():
+    compact = compact_stock_research_evidence(
+        {
+            "type": "stock_research",
+            "symbol": "600519.SS",
+            "display_name": "贵州茅台",
+            "user_question": (
+                "哪些是7月30日当天事实，哪些只是慢变量背景？"
+                "不要重复所有数字。"
+            ),
+            "research_plan": {
+                "focus": "price_cause",
+                "primary_focus": "price_cause",
+                "contextual_followup": True,
+                "effective_question": "贵州茅台2026年7月30日为什么上涨？",
+            },
+            "stock_market_context": {
+                "analysis_target": {
+                    "market_date": "2026-07-30",
+                    "basis": "explicit_question_date",
+                },
+                "stock_target": {
+                    "status": "same_market_date",
+                    "market_date": "2026-07-30",
+                    "close": 1361.76,
+                    "return_1d_pct": 3.09,
+                },
+                "indices": [
+                    {
+                        "symbol": "000001.SS",
+                        "name": "上证综指",
+                        "market_date": "2026-07-30",
+                        "return_1d_pct": -0.62,
+                    }
+                ],
+                "exact_industry_index": {
+                    "status": "same_market_date",
+                    "index_name": "中证白酒指数",
+                    "market_date": "2026-07-30",
+                    "return_1d_pct": 4.17,
+                    "stock_minus_industry_pct": -1.08,
+                    "component_breadth": {
+                        "status": "available",
+                        "up_count": 17,
+                        "down_count": 0,
+                    },
+                },
+            },
+            "fundamentals": {
+                "summary": {
+                    "latest_report": {
+                        "report_date": "2026-03-31",
+                        "report_type": "一季报",
+                        "notice_date": "2026-04-25",
+                        "revenue_yoy_pct": 6.34,
+                        "net_profit_yoy_pct": 1.47,
+                    }
+                }
+            },
+            "earnings_quality": {
+                "summary": "2026一季报营收与利润增长，但利润率同比收缩。"
+            },
+        }
+    )
+
+    frame = compact["followup_answer_frame"]
+    assert frame["requested_shape"] == (
+        "same_day_facts_vs_slow_variable_background"
+    )
+    assert frame["confirmed_fact_candidates"][0]["exact_industry_index"][
+        "return_1d_pct"
+    ] == 4.17
+    assert "目标日精确行业指数" not in frame["key_unknown"]["missing_evidence"]
+    assert frame["slow_variable_background"]["latest_report"]["notice_date"] == (
+        "2026-04-25"
+    )
+    assert "完整财务复述" in frame["excluded_topics"]
+    assert "fundamentals" not in compact
+    assert "earnings_quality" not in compact
 
 
 def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_price():

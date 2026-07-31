@@ -1193,6 +1193,8 @@ def _has_stock_industry_causal_overclaim(answer: str) -> bool:
         "无法单独证明",
         "不能单独确认",
         "无法单独确认",
+        "不能单独说明",
+        "无法单独说明",
         "不等于原因",
         "不是原因证明",
         "直接驱动尚未确认",
@@ -1208,6 +1210,9 @@ def _has_stock_industry_causal_overclaim(answer: str) -> bool:
         "无法区分",
         "到底更像",
         "究竟更像",
+        "不能强行判断",
+        "无法强行判断",
+        "尚不能在",
     )
     for clause in re.split(r"[。；\n]", answer):
         if any(term in clause for term in cautious_terms):
@@ -1599,6 +1604,8 @@ def _has_stock_unsupported_causal_hypothesis(
         "无法单独证明",
         "不能单独确认",
         "无法单独确认",
+        "不能单独说明",
+        "无法单独说明",
         "没有证据",
         "未取得证据",
         "不等于",

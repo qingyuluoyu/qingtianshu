@@ -1560,3 +1560,14 @@ uv run pytest
 - 同会话追问 Run `091f050d-c0b7-4514-b6c7-7991e321e878`：`stock_research / completed / deepseek-v4-pro / api_calls=1`，Prompt 14,947 字符、输入 8,720 tokens。回答为三个自然短段落，只给两项确认事实和一个不能确认项；没有最新报价插入、Markdown 标题、MA/RSI/MACD、估值、股东、同行或解禁猜测，最终 Guard 未介入。
 - 全量 `1035 tests collected` 并执行至 100% 通过；`uv run ruff check .`、Python `compileall`、全部跟踪 JavaScript 的 `node --check`、`uv lock --check` 与 `git diff --check` 全部通过。
 - 当前 8773 主服务已加载最新代码，`/health=ok`、Hermes 启用、领域库和运维库均为 PostgreSQL。独立 Worker 当前离线且队列为 degraded，因此 `/ready` 仍为 503；这不影响本轮对话验收，但不能据此声称完整运行态或生产就绪。
+
+## 2026-08-01 W27 主营主题切换与结论边界验收
+
+- 路由回归：包含“先不谈涨跌”“不要给股价和技术指标”的主营问题进入 `business_structure`，ResearchPlan 的 focus 为 `business`，只选择 `business_structure` 模块与 `business-structure` Skill。
+- 证据与生成合同：分部名称保持披露原文；禁止具体 SKU/系列酒品牌补写、无意义的前三项100%、分部毛利率到单瓶利润的口径升级，以及缺少同行基准时的行业高低评价。
+- 隔离用户首问 Run `8e20f8a6-cd6f-463d-bfab-88f660521fdd` 与追问 Run `d11b4557-a159-43af-8264-dcde1558b89f` 均由新的 `deepseek-v4-pro` 调用生成，不使用预存回答。追问为 `api_calls=1`，Prompt 18,295 字符，请求总耗时 26.355 秒。
+- 追问直接比较“茅台酒/其他系列酒”的收入占比与分部毛利率，说明结构变化，并明确回答价格、竞争、成本、需求原因，经营风险，以及分部毛利率与净利润/单瓶利润之间不能直接互推。未出现股价、技术指标、具体 SKU、品牌枚举、“前三大产品100%”或“行业里很高”。
+- `output_guard.json` 为 `passed=true`，没有禁止模式、数字冲突、语义冲突或市场因果问题；Guard 耗时 0.004 秒，未修改最终回答。
+- 定向测试、全量 `1042` 项测试、`uv run ruff check app tests`、Python `compileall`、全部 JavaScript `node --check`、`uv lock --check` 和 `git diff --check` 均通过。唯一提示仍为 Starlette TestClient/httpx 上游弃用警告。
+
+当前边界：本轮证明主营换题与追问质量达到阶段交付标准，不代表所有长会话、基金/债券正式事实、商业数据 SLA、备份恢复或后台 Worker 门禁完成。当前 `/health=ok` 且 Hermes 启用，但 Worker 离线导致 `/ready=503`。
