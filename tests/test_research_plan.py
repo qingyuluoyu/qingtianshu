@@ -165,6 +165,26 @@ def test_business_question_keeps_explicit_cashflow_as_a_second_focus():
     assert "financial_drivers" in plan["selected_modules"]
 
 
+def test_business_growth_question_uses_segments_and_financials_without_market():
+    plan = ResearchPlanService().build(
+        "别写报告，直接聊聊宁德时代这半年增长到底靠什么。储能真的是第二"
+        "增长曲线，还是只是占比变大？把财报和管理层解释分开说。"
+    )
+
+    assert plan["focus"] == "business_growth"
+    assert plan["primary_focus"] == "business_growth"
+    assert plan["selected_modules"] == [
+        "fundamentals",
+        "earnings_quality",
+        "financial_drivers",
+        "business_structure",
+        "company_information",
+        "event_timeline",
+    ]
+    assert "market" not in plan["selected_modules"]
+    assert "business-structure" in plan["selected_skills"]
+
+
 def test_quality_review_focus_uses_disclosures_financials_cashflow_and_business_only():
     service = ResearchPlanService()
 
@@ -347,11 +367,7 @@ def test_valuation_candidate_uses_scoped_quality_and_peer_plan() -> None:
         "fundamentals",
         "earnings_quality",
         "financial_drivers",
-        "business_structure",
-        "analyst_expectations",
         "peer_comparison",
-        "company_information",
-        "event_timeline",
     ]
     assert "shareholder_structure" not in plan["selected_modules"]
     assert "outlook_calibration" not in plan["selected_modules"]
@@ -381,10 +397,10 @@ def test_financial_and_stabilization_followup_avoids_comprehensive_prompt():
 
     assert plan["focus"] == "mixed"
     assert plan["selected_modules"] == [
-        "market",
         "fundamentals",
         "earnings_quality",
         "financial_drivers",
+        "market",
     ]
     assert "business_structure" not in plan["selected_modules"]
     assert "shareholder_structure" not in plan["selected_modules"]

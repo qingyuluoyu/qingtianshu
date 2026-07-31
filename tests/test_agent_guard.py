@@ -282,6 +282,21 @@ def test_natural_valuation_support_question_does_not_force_cashflow_and_debt_dum
     assert not repaired.startswith("动力新科进入估值约束候选")
 
 
+def test_valuation_review_keeps_explicit_negation_of_cashflow_overclaim():
+    evidence, answer = _same_day_valuation_review_case()
+    evidence = {
+        **evidence,
+        "user_question": "动力新科估值怎么看？请比较PE、PB和同行。",
+    }
+    answer += (
+        "销售收现率较可比期下降，但这不能直接等同于回款恶化或收入质量"
+        "出问题，具体原因仍需核验。"
+    )
+
+    assert valuation_review_required_fact_issue(answer, evidence) is None
+    assert stock_specialist_relevance_issue(answer, evidence) is None
+
+
 def _same_day_valuation_review_case() -> tuple[dict, str]:
     evidence = {
         "type": "stock_research",
@@ -845,7 +860,7 @@ def test_valuation_review_repairs_v5_hard_errors_without_duplicate_peer_snapshot
     assert "刚告别亏损" not in repaired
     assert "卖货回款变慢" not in repaired
     assert "盈利基数太薄" not in repaired
-    assert "销售收现率下降原因未明" in repaired
+    assert "销售收现率下降但原因未确认" in repaired
     assert "滚动盈利分母仍待拆解" in repaired
     assert stock_specialist_relevance_issue(repaired, evidence) is None
     assert AgentService._validate_model_output(repaired, evidence)["passed"] is True
@@ -11263,6 +11278,147 @@ def test_quality_review_accepts_natural_positive_cashflow_amount_rounding():
     )
 
 
+def test_quality_review_accepts_w30_cashflow_change_without_repeating_amount():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "earnings_quality": {
+            "comparable_report": {"operating_cashflow_to_net_profit": 1.925}
+        },
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "operating_cashflow": 60_216_851_000,
+                "comparable_operating_cashflow": 58_687_066_000,
+                "operating_cashflow_change_pct": 2.607,
+                "operating_cashflow_to_net_profit": 1.391,
+                "comparable_operating_cashflow_to_net_profit": 1.925,
+                "cash_received_from_sales_to_revenue_pct": 94.769,
+                "comparable_cash_received_from_sales_to_revenue_pct": 124.622,
+            }
+        },
+    }
+    answer = (
+        "宁德时代归母净利润增长约42%，但经营现金流净额同比仅小幅增长约2.6%，"
+        "经营现金流与归母净利润的比值从去年同期的1.93降至现在的1.39。"
+        "销售商品收到的现金占收入的比例也从约125%降至约95%。"
+    )
+
+    assert quality_review_required_fact_issue(answer, evidence) is None
+
+    draft = (
+        "宁德时代经营改善有真实业务进展。经营现金流602亿，同比只微增2.6%，"
+        "意味着增加的近128亿利润里，绝大部分并没有多变成现金。经营现金流与"
+        "归母净利润的比率从1.93降到1.39，销售收现率从124.6%降到94.8%。"
+    )
+    repaired = repair_quality_review_answer(draft, evidence)
+
+    assert repaired is not None
+    assert "经营现金流602亿，同比只微增2.6%" in repaired
+    assert "并没有多变成现金" not in repaired
+    assert quality_review_required_fact_issue(repaired, evidence) is None
+
+
+def test_quality_review_repair_restores_inventory_verification_boundary():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "a_share_information": {
+            "announcements": [
+                {
+                    "summary": (
+                        "公司公告原文摘录：库存增加主要是为下半年市场需求而提前备货。"
+                    )
+                }
+            ]
+        },
+    }
+    draft = (
+        "宁德时代经营改善有真实业务进展。公司解释存货增加是为下半年市场需求"
+        "提前备货，但现金流被库存占用自然跟着出现。"
+    )
+
+    repaired = repair_quality_review_answer(draft, evidence)
+
+    assert repaired is not None
+    assert "存货分类、库龄和跌价准备" in repaired
+    assert quality_review_required_fact_issue(repaired, evidence) is None
+
+
+def test_quality_review_keeps_grounded_initial_draft_when_editor_and_retry_fail(
+    tmp_path: Path, settings, monkeypatch
+):
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "quality-soft-fallback-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Quality Soft Fallback User")
+    service = AgentService(database, guarded_settings)
+    calls = []
+    initial_answer = (
+        "宁德时代这份中报的改善并不只有利润表数字，主营需求和经营现金流仍值得"
+        "结合起来看。当前最重要的矛盾是利润增长较快，而现金流和销售收现率变化"
+        "的原因还没有被公司充分解释；这类差异需要继续核对，但不能直接写成回款"
+        "恶化或利润失真。毛利率和存货结构也应在下一份正式披露里继续追踪。"
+    )
+
+    def fake_stream(**kwargs):
+        calls.append(kwargs.get("prompt_path"))
+        if len(calls) == 1:
+            answer = initial_answer
+        elif len(calls) == 2:
+            answer = (
+                "宁德时代改善质量一般，但当前证据还需要继续核对。公司经营和财务"
+                "变化需要放在一起理解，不能只凭一个指标下结论；毛利率、存货和现金"
+                "流各自反映不同问题，后续仍应阅读正式披露。"
+            )
+        else:
+            answer = (
+                "宁德时代当前财报既有改善也有待核验项。利润、主营、现金流和存货"
+                "应分别理解，不能把其中一个指标直接扩大成完整经营结论；目前更适合"
+                "保留问题，等待公司后续披露补充原因。"
+            )
+        return answer, {"model": "fake-deepseek", "api_calls": 1}
+
+    monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
+    run = service.run(
+        user=user,
+        intent="stock_research",
+        message="宁德时代最新财报究竟好不好？像分析师聊天。",
+        evidence={
+            "type": "stock_research",
+            "symbol": "300750.SZ",
+            "display_name": "宁德时代",
+            "research_plan": {"focus": "quality_review"},
+            "financial_drivers": {
+                "cashflow_analysis": {
+                    "operating_cashflow": 60_216_851_000,
+                    "operating_cashflow_change_pct": 2.607,
+                    "cash_received_from_sales_to_revenue_pct": 94.769,
+                    "comparable_cash_received_from_sales_to_revenue_pct": 124.622,
+                }
+            },
+        },
+        model_tier="economy",
+        execute_agent=True,
+        stream_callback=lambda _event: None,
+    )
+
+    assert len(calls) == 3
+    assert run["status"] == "completed"
+    assert run["answer"] == initial_answer
+    assert run["usage"]["quality_editor"]["passed"] is False
+    assert run["usage"]["relevance_retry"]["preserved_generated_answer"] is True
+    assert run["usage"]["relevance_retry"]["source"] == "initial"
+    assert run["usage"]["output_guard"]["passed"] is True
+
+
 def test_quality_review_repairs_natural_cashflow_paragraph_without_editor():
     evidence = {
         "type": "stock_research",
@@ -11642,6 +11798,39 @@ def test_quality_review_editor_uses_direct_inventory_explanation():
     assert "公司并未解释存货" not in repaired
 
 
+def test_quality_review_repair_does_not_repeat_existing_inventory_explanation():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "a_share_information": {
+            "announcements": [
+                {
+                    "title": "宁德时代投资者关系活动记录表",
+                    "published_at": "2026-07-24",
+                    "summary": (
+                        "公司公告原文摘录：库存增加主要是为下半年市场需求而提前备货。"
+                    ),
+                }
+            ]
+        },
+    }
+    answer = (
+        "宁德时代改善质量一般。公司解释库存增加主要是为下半年市场需求而"
+        "提前备货，但仍需核验存货分类、库龄和跌价准备。存货增速快于收入的"
+        "原因仍未解释。主营结构变化本身不能证明经营质量改善，分部占比变化"
+        "也不能代替订单和产品价格证据。"
+    )
+
+    repaired = repair_quality_review_answer(answer, evidence)
+
+    assert repaired is not None
+    assert repaired.count("提前备货") == 1
+    assert "原因仍未解释" not in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+
+
 def test_quality_review_rejects_mixed_inventory_unresolved_claim_after_direct_explanation():
     evidence = {
         "type": "stock_research",
@@ -11793,7 +11982,7 @@ def test_stream_segmenter_keeps_bold_heading_markers_together():
     assert pending == ""
 
 
-def test_quality_review_rejects_missing_sales_cash_values_and_all_product_claim():
+def test_quality_review_allows_selected_cashflow_facts_but_rejects_all_product_claim():
     evidence = {
         "type": "stock_research",
         "symbol": "300750.SZ",
@@ -11839,9 +12028,7 @@ def test_quality_review_rejects_missing_sales_cash_values_and_all_product_claim(
         "从1.93降至1.39；销售收现率从124.62%降至94.77%。"
     )
 
-    assert stock_specialist_relevance_issue(missing_sales_cash, evidence) == (
-        "经营改善回答遗漏销售收现率的本期或可比期数值"
-    )
+    assert stock_specialist_relevance_issue(missing_sales_cash, evidence) is None
     assert stock_specialist_relevance_issue(all_products, evidence) == (
         "经营改善回答把缺少可比数据的产品分部也写成了毛利率下降"
     )

@@ -194,6 +194,25 @@ def _subject_aliases(evidence: dict[str, Any]) -> list[str]:
     )
 
 
+def generated_answer_preserves_current_subject(
+    answer: str,
+    evidence: dict[str, Any],
+) -> bool:
+    """Return whether a substantial generated draft is still about this company.
+
+    This deliberately checks only the hard subject/off-topic boundary.  A
+    useful model draft can still miss a preferred supporting fact or use a
+    phrase that merits local cleanup; those soft relevance issues should not
+    force the product to replace a real answer with a deterministic report.
+    """
+
+    text = str(answer or "").strip()
+    if len(text) < 120 or any(term in text for term in _CLEAR_OFF_TOPIC_TERMS):
+        return False
+    aliases = _subject_aliases(evidence)
+    return bool(aliases) and any(alias in text for alias in aliases)
+
+
 def _specialist_payload(evidence: dict[str, Any]) -> dict[str, Any]:
     evidence_type = str(evidence.get("type") or "")
     nested = evidence.get(evidence_type)
@@ -632,7 +651,7 @@ def _has_sales_cash_ratio_label(text: str) -> bool:
         return True
     return re.search(
         r"销售商品(?:、提供劳务)?收到的现金"
-        r"[^。；！？\n]{0,20}(?:营收|营业收入)"
+        r"[^。；！？\n]{0,20}(?:营业收入|营收|收入)"
         r"[^。；！？\n]{0,10}(?:比例|比率)",
         text,
     ) is not None
@@ -709,46 +728,9 @@ def quality_review_required_fact_issue(
             comparable_amount_yi is not None
             and _quality_review_number_mentioned(text, comparable_amount_yi)
         )
-        if not (
-            "经营现金流" in text
-            and _directional_amount_mentioned(text, amount_yi)
-            and has_change_context
-        ):
-            return "经营改善回答遗漏经营现金流金额或同比变化"
-
-    current_coverage = cashflow.get("operating_cashflow_to_net_profit")
-    comparable_coverage = cashflow.get("comparable_operating_cashflow_to_net_profit")
-    if current_coverage is not None and comparable_coverage is not None:
-        comparable_coverage_values = [comparable_coverage]
-        raw_comparable_coverage = (
-            (evidence.get("earnings_quality") or {})
-            .get("comparable_report", {})
-            .get("operating_cashflow_to_net_profit")
-        )
-        if raw_comparable_coverage is not None:
-            comparable_coverage_values.append(raw_comparable_coverage)
-        if not (
-            "经营现金流" in text
-            and "归母净利润" in text
-            and _quality_review_number_mentioned(text, current_coverage)
-            and any(
-                _quality_review_number_mentioned(text, value)
-                for value in comparable_coverage_values
-            )
-        ):
-            return "经营改善回答遗漏经营现金流与归母净利润的两期比率"
-
-    current_sales_cash = cashflow.get("cash_received_from_sales_to_revenue_pct")
-    comparable_sales_cash = cashflow.get(
-        "comparable_cash_received_from_sales_to_revenue_pct"
-    )
-    if current_sales_cash is not None and comparable_sales_cash is not None:
-        if not (
-            _has_sales_cash_ratio_label(text)
-            and _quality_review_number_mentioned(text, current_sales_cash)
-            and _quality_review_number_mentioned(text, comparable_sales_cash)
-        ):
-            return "经营改善回答遗漏销售收现率的本期或可比期数值"
+        has_amount = _directional_amount_mentioned(text, amount_yi)
+        if not ("经营现金流" in text and (has_amount or has_change_context)):
+            return "经营改善回答遗漏经营现金流金额和同比变化"
 
     inventory_explanation = _quality_review_inventory_explanation(evidence)
     if inventory_explanation:
@@ -1007,11 +989,14 @@ def valuation_review_required_fact_issue(
         answer,
     ):
         return "估值回答把销售收现率下降直接解释成回款或利润现金质量"
-    if "销售收现率" in answer and re.search(
+    cashflow_overclaim_pattern = re.compile(
         r"(?:卖货)?回款(?:变慢|走弱|恶化|质量下降)|"
         r"销售回款[^。；\n]{0,40}(?:差距|缺口)[^。；\n]{0,20}(?:拉大|扩大)|"
         r"盈利[^。；\n]{0,32}(?:真金白银|转化为现金)[^。；\n]{0,24}"
-        r"(?:能力)?(?:很弱|偏弱|下降|恶化)",
+        r"(?:能力)?(?:很弱|偏弱|下降|恶化)"
+    )
+    if "销售收现率" in answer and _has_affirmative_quality_match(
+        cashflow_overclaim_pattern,
         answer,
     ):
         return "估值回答把销售收现率下降直接解释成回款恶化或利润现金质量"
@@ -1848,11 +1833,22 @@ def _normalize_valuation_review_language(text: str) -> str:
         "经营现金流与利润方向相反，原因仍需核验。",
         normalized,
     )
-    normalized = re.sub(
-        r"(?:卖货)?回款(?:变慢|走弱|恶化|质量下降)",
-        "销售收现率下降原因未明",
-        normalized,
+    cashflow_shortcut = re.compile(
+        r"(?:卖货)?回款(?:变慢|走弱|恶化|质量下降)"
     )
+
+    def replace_cashflow_shortcut(match: re.Match[str]) -> str:
+        prefix_start = max(
+            normalized.rfind("。", 0, match.start()),
+            normalized.rfind("；", 0, match.start()),
+            normalized.rfind("\n", 0, match.start()),
+        )
+        prefix = normalized[prefix_start + 1 : match.start()][-36:]
+        if any(term in prefix for term in _QUALITY_NEGATION_TERMS):
+            return match.group(0)
+        return "销售收现率下降但原因未确认"
+
+    normalized = cashflow_shortcut.sub(replace_cashflow_shortcut, normalized)
     normalized = re.sub(
         r"如果后续现金流迟迟不能改善[^。；\n]{0,180}"
         r"(?:低\s*PE|价值|数字低)[^。；\n]*[。；]?",
@@ -3296,6 +3292,10 @@ def normalize_quality_review_language(text: str) -> str:
             "经营现金流相关指标与去年同期存在差异",
         ),
         (
+            r"最能说明[\"“]钱赚得快但钱没收得一样快[\"”]的是存货和成本端",
+            "存货和成本端也值得单独核验",
+        ),
+        (
             r"但要注意，\d+(?:\.\d+)?亿(?:元)?的经营现金流仍然是正的，"
             r"而且覆盖归母净利润的比率为(-?\d+(?:\.\d+)?倍)，"
             r"说明上半年经营活动的现金净流入依然大于账面净利润",
@@ -3326,6 +3326,11 @@ def normalize_quality_review_language(text: str) -> str:
             r"这些差异叠加在一起，说明利润的高增长有一部分尚未在现金流层面"
             r"得到同等程度的兑现",
             "这些差异是需要继续核验的反方事实，但不能合并推断利润兑现程度",
+        ),
+        (
+            r"(经营现金流[^。；\n]{0,40}同比[^。；\n]{0,24}%)[，,]"
+            r"意味着[^。；\n]{0,80}(?:变成|转化为)现金",
+            r"\1；经营现金流与利润增速差异的具体原因仍需核验",
         ),
         (
             r"最终还是靠收入规模的大幅扩张把归母净利润推到了430亿以上",
@@ -3496,6 +3501,8 @@ def repair_quality_review_answer(answer: str, evidence: dict[str, Any]) -> str |
         return None
     original = str(answer or "").strip()
     normalized = normalize_quality_review_language(original)
+    inventory_explanation = _quality_review_inventory_explanation(evidence)
+    has_inventory_explanation = "下半年" in normalized and "备货" in normalized
     kept_lines: list[str] = []
     for line in normalized.splitlines():
         if not line.strip():
@@ -3508,9 +3515,9 @@ def repair_quality_review_answer(answer: str, evidence: dict[str, Any]) -> str |
             if not sentence.strip():
                 continue
             if quality_review_evidence_conflict_issue(sentence, evidence):
-                if explanation := _quality_review_inventory_explanation(evidence):
-                    if explanation not in safe_sentences:
-                        safe_sentences.append(explanation)
+                if inventory_explanation and not has_inventory_explanation:
+                    safe_sentences.append(inventory_explanation)
+                    has_inventory_explanation = True
                 continue
             if quality_review_overclaim_issue(sentence) is None:
                 safe_sentences.append(sentence)
@@ -3518,6 +3525,20 @@ def repair_quality_review_answer(answer: str, evidence: dict[str, Any]) -> str |
             kept_lines.append("".join(safe_sentences).strip())
     repaired = "\n".join(kept_lines).strip()
     repaired = re.sub(r"\n{3,}", "\n\n", repaired)
+    if (
+        inventory_explanation
+        and "下半年" in repaired
+        and "备货" in repaired
+        and not (
+            _has_inventory_classification_boundary(repaired)
+            and "库龄" in repaired
+            and "跌价准备" in repaired
+        )
+    ):
+        repaired = (
+            f"{repaired.rstrip()} 这是公司口径，仍需结合存货分类、库龄和"
+            "跌价准备做量化核验。"
+        )
     aliases = _subject_aliases(evidence)
     if aliases and not any(alias in repaired for alias in aliases):
         subject = aliases[0]
@@ -3642,27 +3663,10 @@ def build_stock_relevance_retry_prompt(
     peer_valuation_contract = ""
     if str(plan.get("focus") or "") == "quality_review":
         quality_review_contract = """
-本次是经营改善质量专项重答，请在读取完整证据前先遵守这份短检查表：
-- 第一段只给“改善质量较强、一般或仍无法确认”的证据状态。
-- 营收和利润同时增长不得写成“增长主要来自收入规模扩张”。
-- 主营占比变化不得写成“结构优化、结构升级”；公司分部毛利率不得写成行业整体毛利率。
-- 本期利润已经增长时不得写“增收不增利”。
-- 销售收现率下降只能陈述比率差异和原因未确认，不得写回款变慢、现金效率走弱或暗示结算压力。
-- 经营现金流仍为正增长时写具体增速，不得称为几乎或近乎停滞、几乎原地踏步；不得把收现率写成现金效率落差。
-- 营收增速高于利润增速只陈述差异，不得写收入增长拉动、带动或贡献了利润。
-- 存货增速快于收入只能列为待核验线索，不得写产品积压、去库压力或备货节奏错位。
-- 没有存货跌价准备金额、可比变化或公司原文时，不预测未来计提跌价会影响利润；只列下一步核验。
-- 没有公司原文时，不列库存节奏、备货、订单或产销安排等可能原因。
-- 不得用“量增价减”“仍停留在收入规模快速膨胀阶段”等标签概括报表变化。
-- 现金流段依次并列经营现金流金额及同比、覆盖比率两期值、销售收现率两期值；不得概括为收入或
-  利润没有转化为现金流入、利润转化为现金的效率减弱。
-- 列完三项事实后直接转入公司原文和待核验原因，不再追加现金含量、现金兑现程度或现金效率概括。
-- 经营现金流正增长不能写成公司并非资金紧张；三项不同口径不得称为方向一致。
-- 利润率下降与营收增长只能并列，不得写增长主要由规模驱动。
-- 收现率原因缺失时直接写原因未确认；结算、收入确认和预收安排只作为下一步核验项。
-- 有“公司公告原文摘录”时至少使用一项相关管理层表述；只有标题时说明标题不能代替正文。
-- 行业标签只说明筛选分类；没有同报告期同行经营数据时，说明不能判断是否优于行业。
-按当前问题自然组织回答；不要用预存报告正文代替本轮分析，也不要为了格式增加固定段落。
+本次仍围绕用户原问题自然回答。第一段直接判断财报改善质量，再选择真正改变判断的财务、现金流、
+主营和公司原文证据；不要固定四段、固定栏目或强制把所有现金流指标逐项复述。不同现金流口径只
+陈述差异，不合并成回款恶化或利润真假。若公司已经解释库存或费用变化，只引用一次，并保留一句
+量化边界。
 """
     if str(plan.get("focus") or "") == "valuation_review":
         valuation_review_contract = """

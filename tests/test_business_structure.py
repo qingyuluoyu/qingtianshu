@@ -163,6 +163,22 @@ def test_business_structure_api_and_chat_routing(client, app):
     assert "53%" in payload["answer"]
     assert "不能混写" in payload["answer"]
 
+    growth = client.post(
+        "/me/chat",
+        json={
+            "message": (
+                "中兴通讯这半年增长到底靠什么？第二增长曲线是否已经成立？"
+                "把财报和管理层解释分开说。"
+            ),
+            "execute_agent": False,
+        },
+    )
+    assert growth.status_code == 200
+    assert growth.json()["intent"] == "stock_research"
+    assert growth.json()["evidence"]["research_plan"]["focus"] == "business_growth"
+    assert "business_structure" in growth.json()["evidence"]
+    assert "financial_drivers" in growth.json()["evidence"]
+
     price_conversation = client.post(
         "/me/chat",
         json={

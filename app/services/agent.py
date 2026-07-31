@@ -45,6 +45,7 @@ from app.services.agent_response_relevance import (
     build_quality_review_editor_prompt,
     build_stock_guard_retry_prompt,
     build_stock_relevance_retry_prompt,
+    generated_answer_preserves_current_subject,
     quality_review_evidence_conflict_issue,
     quality_review_overclaim_issue,
     normalize_quality_review_language,
@@ -351,7 +352,10 @@ def _aggregate_model_usage(
 ) -> dict[str, Any]:
     """Keep final route metadata while reporting all model work performed."""
 
-    merged = dict(final_usage or initial_usage or {})
+    merged = {
+        **(initial_usage or {}),
+        **(final_usage or {}),
+    }
     for key in _MODEL_USAGE_SUM_KEYS:
         values = [
             value
@@ -669,6 +673,86 @@ class AgentService:
                 if quote_prefix and not normalized.startswith(quote_prefix):
                     normalized = f"{quote_prefix}\n\n{normalized.lstrip()}"
             return normalized
+
+        def recover_subject_preserving_generated_answer() -> tuple[
+            str,
+            dict[str, Any],
+            str,
+            str,
+            str | None,
+        ] | None:
+            """Keep a grounded real-model draft when only a soft check remains."""
+
+            focus = str(
+                (prompt_evidence.get("research_plan") or {}).get("focus") or ""
+            )
+            local_repairers: list[
+                tuple[str, Callable[[str, dict[str, Any]], str | None]]
+            ] = []
+            if focus == "quality_review":
+                local_repairers.append(
+                    (
+                        "neutralize_quality_review_overclaims_v1",
+                        repair_quality_review_answer,
+                    )
+                )
+            if focus == "valuation_review":
+                local_repairers.append(
+                    (
+                        "normalize_and_append_verified_valuation_facts_v1",
+                        repair_valuation_review_answer,
+                    )
+                )
+
+            for generated_answer, generated_usage, source in generated_answer_candidates:
+                variants = [
+                    (method, candidate)
+                    for method, repairer in local_repairers
+                    if (candidate := repairer(generated_answer, prompt_evidence))
+                ]
+                variants.append(("preserve_generated_answer_v1", generated_answer))
+                for method, candidate in variants:
+                    normalized_candidate = normalize_generated_answer(
+                        candidate,
+                        generated_usage,
+                    )
+                    if not generated_answer_preserves_current_subject(
+                        normalized_candidate,
+                        prompt_evidence,
+                    ):
+                        continue
+                    candidate_guard = self._validate_model_output(
+                        normalized_candidate,
+                        prompt_evidence,
+                        trusted_context=trusted_prior_answers,
+                    )
+                    if not candidate_guard.get("passed"):
+                        guard_repair = self._repair_guard_failure(
+                            normalized_candidate,
+                            prompt_evidence,
+                            candidate_guard,
+                            trusted_context=trusted_prior_answers,
+                        )
+                        if guard_repair is not None:
+                            normalized_candidate, candidate_guard = guard_repair
+                    if candidate_guard.get("passed") is not True:
+                        continue
+                    if not generated_answer_preserves_current_subject(
+                        normalized_candidate,
+                        prompt_evidence,
+                    ):
+                        continue
+                    return (
+                        normalized_candidate,
+                        candidate_guard,
+                        source,
+                        method,
+                        stock_specialist_relevance_issue(
+                            normalized_candidate,
+                            prompt_evidence,
+                        ),
+                    )
+            return None
 
         if should_execute:
             notify_progress(
@@ -1056,8 +1140,32 @@ class AgentService:
                                 }
                             )
                     if retry_issue:
-                        raise RuntimeError(
-                            "Hermes retry did not address the current stock question"
+                        preserved = recover_subject_preserving_generated_answer()
+                        if preserved is None:
+                            raise RuntimeError(
+                                "Hermes retry did not address the current stock question"
+                            )
+                        (
+                            answer,
+                            preserved_guard,
+                            preserved_source,
+                            preserved_method,
+                            soft_relevance_issue,
+                        ) = preserved
+                        retry_issue = None
+                        usage["relevance_retry"].update(
+                            {
+                                "passed": True,
+                                "preserved_generated_answer": True,
+                                "source": preserved_source,
+                                "method": preserved_method,
+                                "soft_relevance_issue": soft_relevance_issue,
+                            }
+                        )
+                        usage["output_guard"] = preserved_guard
+                        (run_dir / "answer.relevance_fallback.md").write_text(
+                            answer,
+                            encoding="utf-8",
                         )
                 model_seconds = time.perf_counter() - model_started
                 notify_progress(
@@ -1128,7 +1236,13 @@ class AgentService:
                         prompt_evidence,
                         trusted_context=trusted_prior_answers,
                     )
-                    if retry_relevance_issue:
+                    if retry_relevance_issue and not (
+                        output_guard.get("passed") is True
+                        and generated_answer_preserves_current_subject(
+                            answer,
+                            prompt_evidence,
+                        )
+                    ):
                         output_guard = {
                             **output_guard,
                             "passed": False,
@@ -1141,6 +1255,11 @@ class AgentService:
                             answer,
                             encoding="utf-8",
                         )
+                    elif retry_relevance_issue:
+                        output_guard = {
+                            **output_guard,
+                            "soft_relevance_issue": retry_relevance_issue,
+                        }
                     usage = {
                         **_aggregate_model_usage(initial_usage, retry_usage),
                         "guard_retry": {
@@ -1178,7 +1297,13 @@ class AgentService:
                             answer,
                             prompt_evidence,
                         )
-                        if final_relevance_issue:
+                        if final_relevance_issue and not (
+                            repaired_guard.get("passed") is True
+                            and generated_answer_preserves_current_subject(
+                                answer,
+                                prompt_evidence,
+                            )
+                        ):
                             repaired_guard = {
                                 **repaired_guard,
                                 "passed": False,
@@ -1193,6 +1318,11 @@ class AgentService:
                                         ]
                                     )
                                 ),
+                            }
+                        elif final_relevance_issue:
+                            repaired_guard = {
+                                **repaired_guard,
+                                "soft_relevance_issue": final_relevance_issue,
                             }
                         semantic_repairs = set(
                             output_guard.get("semantic_conflicts") or []
@@ -1371,12 +1501,41 @@ class AgentService:
                     )
                     write_json(run_dir / "output_guard.json", output_guard)
                 else:
-                    answer = self._render_preview(evidence)
-                    status = "degraded"
-                    error = (
-                        "Hermes 调用失败，且已有生成稿未能通过局部修复与证据守卫；"
-                        f"已回退确定性摘要：{type(exc).__name__}: {exc}"
-                    )
+                    preserved = recover_subject_preserving_generated_answer()
+                    if preserved is not None:
+                        (
+                            answer,
+                            output_guard,
+                            recovery_source,
+                            recovery_method,
+                            soft_relevance_issue,
+                        ) = preserved
+                        status = "completed"
+                        error = None
+                        usage = {
+                            **(usage or {}),
+                            "relevance_fallback": {
+                                "triggered": True,
+                                "passed": True,
+                                "source": recovery_source,
+                                "method": recovery_method,
+                                "soft_relevance_issue": soft_relevance_issue,
+                                "original_error": f"{type(exc).__name__}: {exc}",
+                            },
+                            "output_guard": output_guard,
+                        }
+                        (run_dir / "answer.relevance_fallback.md").write_text(
+                            answer,
+                            encoding="utf-8",
+                        )
+                        write_json(run_dir / "output_guard.json", output_guard)
+                    else:
+                        answer = self._render_preview(evidence)
+                        status = "degraded"
+                        error = (
+                            "Hermes 调用失败，且已有生成稿未能通过局部修复与证据守卫；"
+                            f"已回退确定性摘要：{type(exc).__name__}: {exc}"
+                        )
         else:
             answer = self._render_preview(evidence)
             status = "preview"

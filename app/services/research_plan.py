@@ -91,6 +91,18 @@ class ResearchPlanService:
             ),
         ),
         (
+            "business_growth",
+            "主营增长逻辑",
+            (
+                "增长到底靠什么",
+                "增长靠什么",
+                "靠什么增长",
+                "第二增长曲线",
+                "第二曲线",
+                "增长引擎",
+            ),
+        ),
+        (
             "business",
             "主营业务与收入结构",
             (
@@ -253,7 +265,6 @@ class ResearchPlanService:
         },
         "financial": {
             "required": (
-                "market",
                 "fundamentals",
                 "earnings_quality",
                 "financial_drivers",
@@ -288,11 +299,7 @@ class ResearchPlanService:
                 "fundamentals",
                 "earnings_quality",
                 "financial_drivers",
-                "business_structure",
-                "analyst_expectations",
                 "peer_comparison",
-                "company_information",
-                "event_timeline",
             ),
             "optional": (),
             "skills": (
@@ -300,8 +307,6 @@ class ResearchPlanService:
                 "fundamental-evidence",
                 "earnings-quality",
                 "financial-drivers",
-                "business-structure",
-                "analyst-expectations",
                 "evidence-debate",
             ),
         },
@@ -314,6 +319,23 @@ class ResearchPlanService:
             "required": ("business_structure",),
             "optional": (),
             "skills": ("business-structure",),
+        },
+        "business_growth": {
+            "required": (
+                "fundamentals",
+                "earnings_quality",
+                "financial_drivers",
+                "business_structure",
+                "company_information",
+                "event_timeline",
+            ),
+            "optional": (),
+            "skills": (
+                "a-share-filing-evidence",
+                "earnings-quality",
+                "financial-drivers",
+                "business-structure",
+            ),
         },
         "expectations": {
             "required": ("market", "analyst_expectations", "fundamentals"),
@@ -491,6 +513,11 @@ class ResearchPlanService:
                 for item in matched
                 if item[0] == "quality_review" or item[0] in explicit_extra_focuses
             ]
+        if any(key == "business_growth" for key, _ in matched):
+            # “增长靠什么、第二增长曲线”自然会同时出现财报、收入、利润、
+            # 主营和占比等词。专项计划已经把总量财务、分部结构和公司原文放在
+            # 同一证据链里，不应退化成 mixed，更不能因此加载行情。
+            matched = [item for item in matched if item[0] == "business_growth"]
         if any(key == "business" for key, _ in matched):
             # “先不谈涨跌”“不要给股价和技术指标”是在明确切换到主营，
             # 不能因为否定句里出现涨跌、股价或技术字样又把本轮拉回行情。

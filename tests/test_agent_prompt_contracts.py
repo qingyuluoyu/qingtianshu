@@ -227,8 +227,8 @@ def test_quality_review_uses_available_cashflow_company_explanation():
         prompt_evidence={"research_plan": {"focus": "quality_review"}},
     )
 
-    assert "经营现金流变化的公司原文解释" in prompt
-    assert "不得再写公司没有解释经营现金流转负" in prompt
+    assert "公司或管理层明确给出的解释" in prompt
+    assert "公司原文已经解释变化时，明确写成公司口径" in prompt
 
 
 def test_stock_price_cause_followup_can_answer_same_day_vs_slow_background():
@@ -382,11 +382,9 @@ def test_quality_review_prompt_must_not_deny_explicit_inventory_explanation():
         prompt_evidence={"research_plan": {"focus": "quality_review"}},
     )
 
-    assert "库存增加主要是为下半年市场需求" in prompt
-    assert "而提前备货" in prompt
-    assert "不得再写“公司未解释、原文未说明" in prompt
-    assert "原因仍完全" in prompt
-    assert "库存分类、库龄、订单覆盖和跌价准备" in prompt
+    assert "若公司已经解释库存增加或费用变化" in prompt
+    assert "直接引用为公司口径" in prompt
+    assert "不要" in prompt and "再次追加同一解释" in prompt
     assert "边界提醒：边界提醒" in prompt
     assert "不得据标题自行写成“资金面压力" in prompt
     assert "不得反向写成“常规安排、正常融资" in prompt
@@ -462,20 +460,13 @@ def test_bound_screening_cashflow_question_preserves_snapshot_and_requires_cashf
     assert "进入研究空间时的筛选快照" in prompt
     assert "存在同日口径冲突" in prompt
     assert "不能擅自挑一个称为" in prompt
-    assert "现金流问题必须直接作答" in prompt
-    assert "本期经营现金流金额、可比期或" in prompt
-    assert "不得只讨论营收、利润、财务费用或借款公告后跳过现金流" in prompt
-    assert "不能据此概括为“盈利质量没有恶化" in prompt
-    assert "不得把覆盖倍数改写成“利润有现金支撑" in prompt
-    assert "金额下降而覆盖率上升时" in prompt
-    assert "覆盖关系没有恶化" in prompt
-    assert "比率上升也可能来自净利润下降更快" in prompt
-    assert "不得把增加部分解释成借款利息、汇兑损失" in prompt
-    assert "calculation_nature=static_counterfactual" in prompt
-    assert "收入下降直接拉低毛利" in prompt
-    assert "不得自动改写成" in prompt
-    assert "回款节奏改善" in prompt
-    assert "公司实际收到的钱少了" in prompt
+    assert "现金流回答要求" in prompt
+    assert "至少说明经营现金流净额及其可比变化" in prompt
+    assert "不必机械列全" in prompt
+    assert "不把它们合并成“利润真假、回款恶化、现金效率”结论" in prompt
+    assert "静态反事实利润桥" in prompt
+    assert "静态测算" in prompt
+    assert "不要单独生成一份现金流指标报告" in prompt
     assert "财务问题必答字段" in prompt
     assert "至少给出营收同比与归母净利润同比" in prompt
     assert "企稳问题直接回答要求" in prompt
@@ -505,8 +496,8 @@ def test_stock_followup_inherits_cashflow_contract_from_recent_user_question():
         ],
     )
 
-    assert "现金流问题必须直接作答" in prompt
-    assert "经营现金流金额、可比变化和覆盖关系" in prompt
+    assert "现金流回答要求" in prompt
+    assert "经营现金流净额及其可比变化" in prompt
 
 
 def test_peer_valuation_contract_requires_compact_decision_facts() -> None:
@@ -585,44 +576,52 @@ def test_valuation_review_contract_separates_pe_eps_units_and_disclosures() -> N
     assert prompt.rfind("估值回答最后核对") > prompt.rfind("财务问题必答字段")
 
 
-def test_quality_review_contract_blocks_price_and_debt_overinterpretation():
+def test_quality_review_contract_prioritizes_natural_evidence_discussion():
     prompt = _append(
         intent="stock_research",
         message="经营改善候选的改善是否有质量？",
         prompt_evidence={"research_plan": {"focus": "quality_review"}},
     )
 
-    assert "经营改善质量专项回答合同" in prompt
-    assert "改善质量较强、一般，或仍无法确认" in prompt
-    assert "不得把上升改写成借款增加" in prompt
-    assert "年报主营结构只可作为最近可得的业务基线" in prompt
-    assert "不能直接认定一次性收益" in prompt
-    assert "市场没有认可、尚未定价" in prompt
-    assert "小标题不要预告固定数量" in prompt
-    assert "不得写“利润增长依赖收入规模扩张”" in prompt
-    assert "不得概括为“现金兑现效率走弱" in prompt
-    assert "升级为该业务“盈利能力下降”" in prompt
-    assert "不得称为“结构优化、结构升级或结构改善”" in prompt
-    assert "不是同行或行业整体毛利率" in prompt
-    assert "本期净利润同比增长时不得写“增收不增利”" in prompt
-    assert "不得写成产品积压、出货放缓、去库压力" in prompt
-    assert "不得称为“几乎/近乎停滞”" in prompt
-    assert "几乎原地踏步" in prompt
-    assert "收入转化为现金的效率出现落差" in prompt
-    assert "收入增长没有转化为现金流入" in prompt
-    assert "利润转化为现金的效率减弱" in prompt
-    assert "本期经营现金流金额及同比" in prompt
-    assert "存货分类、库龄和存货跌价准备" in prompt
-    assert "不列“可能涉及库存节奏、备货因素" in prompt
-    assert "不得写成当前变化“可能受这些因素影响”" in prompt
-    assert "不得写收入增长拉动" in prompt
-    assert "量增价减" in prompt
-    assert "公司公告原文摘录" in prompt
-    assert "不能判断改善质量是否优于行业" in prompt
-    assert "输出前最后核对" in prompt
-    assert "最终只输出一版连贯回答" in prompt
-    assert "第一句必须以当前公司的中文名称开头" in prompt
-    assert prompt.rfind("输出前最后核对") > prompt.rfind("财务问题必答字段")
+    assert "经营改善质量：自然分析要求" in prompt
+    assert "不要强制固定四段、固定标题或固定顺序" in prompt
+    assert "同一事实和同一公司解释只说一次" in prompt
+    assert "选择最能回答本题的数字" in prompt
+    assert "不必为满足模板把三组两期值全部塞进正文" in prompt
+    assert "不要" in prompt and "再次追加同一解释" in prompt
+    assert "输出前自然度核对" in prompt
+    assert "不要为了核对补固定句式" in prompt
+    assert prompt.rfind("输出前自然度核对") > prompt.rfind("财务问题必答字段")
+
+
+def test_business_growth_contract_uses_segment_evidence_without_report_outline():
+    prompt = _append(
+        intent="stock_research",
+        message="这半年增长靠什么，储能是不是第二增长曲线？别写报告。",
+        prompt_evidence={"research_plan": {"focus": "business_growth"}},
+    )
+
+    assert "主营增长逻辑：自然分析要求" in prompt
+    assert "优先使用 business_structure" in prompt
+    assert "不得用公司整体营收增速替代某个分部的增长证据" in prompt
+    assert "不报股价，不写分析师预期" in prompt
+    assert "不使用编号、固定栏目" in prompt
+    assert "不概括成“赚钱效率下降”" in prompt
+    assert "不写“量撑价跌、价和利下降、量价齐升”" in prompt
+    assert "不写“跟着行业" in prompt
+
+
+def test_business_structure_growth_focus_uses_growth_contract_only():
+    prompt = _append(
+        intent="business_structure",
+        message="这半年增长靠什么，储能算第二增长曲线了吗？",
+        prompt_evidence={"research_plan": {"focus": "business_growth"}},
+    )
+
+    assert "主营增长逻辑：自然分析要求" in prompt
+    assert "主营业务专项回答要求" not in prompt
+    assert "不写数据抓取日期或取数时间" in prompt
+    assert "“有三点”" in prompt
 
 
 def test_market_cause_answers_before_explaining_evidence_layers():

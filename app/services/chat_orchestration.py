@@ -161,6 +161,7 @@ class ChatOrchestrationService:
                 "comprehensive",
                 "quality_review",
                 "valuation_review",
+                "business_growth",
             }:
                 # A compound user question needs one coherent stock answer with
                 # all selected modules.  Routing it to the first matching

@@ -1046,6 +1046,12 @@ def _is_business_structure_query(message: str) -> bool:
         "国内收入",
         "海外收入",
         "毛利来源",
+        "增长到底靠什么",
+        "增长靠什么",
+        "靠什么增长",
+        "第二增长曲线",
+        "第二曲线",
+        "增长引擎",
     )
     return any(term in folded for term in terms)
 
