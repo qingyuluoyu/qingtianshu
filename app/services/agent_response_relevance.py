@@ -139,12 +139,19 @@ _QUALITY_NEGATION_TERMS = (
     "不能",
     "不得",
     "并非",
+    "并未",
     "无法",
     "尚未",
     "未能",
     "没有证据",
     "不能仅凭",
     "不能据此",
+    "不足以",
+    "不够判断",
+    "待核验",
+    "仍需核验",
+    "需要进一步核验",
+    "需要重点核验",
     "是否",
     "是否存在",
 )
@@ -602,6 +609,19 @@ def _has_inventory_classification_boundary(text: str) -> bool:
     return False
 
 
+def _has_sales_cash_ratio_label(text: str) -> bool:
+    """Recognize the metric name or its natural financial definition."""
+
+    if "销售收现率" in text:
+        return True
+    return re.search(
+        r"销售商品(?:、提供劳务)?收到的现金"
+        r"[^。；！？\n]{0,20}(?:营收|营业收入)"
+        r"[^。；！？\n]{0,10}(?:比例|比率)",
+        text,
+    ) is not None
+
+
 def _directional_percentage_mentioned(text: str, value: Any) -> bool:
     """Match signed percentages expressed with either symbols or Chinese direction.
 
@@ -649,6 +669,12 @@ def quality_review_required_fact_issue(
     evidence: dict[str, Any],
 ) -> str | None:
     """Reject polished-looking edits that silently drop core quality facts."""
+
+    if bool((evidence.get("research_plan") or {}).get("contextual_followup")):
+        # A follow-up such as “哪些事实真正会改变判断，别重复整份财报”
+        # should answer the new question instead of being forced to restate the
+        # complete three-metric cash-flow frame from the opening turn.
+        return None
 
     cashflow = (evidence.get("financial_drivers") or {}).get("cashflow_analysis") or {}
     operating_cashflow = cashflow.get("operating_cashflow")
@@ -702,7 +728,7 @@ def quality_review_required_fact_issue(
     )
     if current_sales_cash is not None and comparable_sales_cash is not None:
         if not (
-            "销售收现率" in text
+            _has_sales_cash_ratio_label(text)
             and _quality_review_number_mentioned(text, current_sales_cash)
             and _quality_review_number_mentioned(text, comparable_sales_cash)
         ):
@@ -3239,6 +3265,28 @@ def normalize_quality_review_language(text: str) -> str:
         (
             r"利润的质量缺少现实验证",
             "利润与经营现金流的口径差异仍需核验",
+        ),
+        (
+            r"说明当期的报表利润并没有伴随着实际的现金净流入",
+            "这里只能确认同报告期归母净利润为正，而经营现金流净额为负",
+        ),
+        (
+            r"(销售收现率(?:也)?从-?\d+(?:\.\d+)?%?降(?:到|至)"
+            r"-?\d+(?:\.\d+)?%?)[，,]意味着每百元收入实际收到的现金减少",
+            r"\1，即销售商品、提供劳务收到的现金占营收的比例下降",
+        ),
+        (
+            r"经营现金流由正转负且覆盖关系严重恶化、销售收现率同步走低",
+            "经营现金流由正转负、经营现金流与归母净利润比率转为负值，"
+            "销售收现率较可比期下降",
+        ),
+        (
+            r"反之，则说明成本端或回款节奏的问题比眼下能确认的更持久",
+            "反之，则需要继续核验成本端和收付节奏是否存在更持久的问题",
+        ),
+        (
+            r"这能确认现金流压力来自收付两端的同时挤压",
+            "公司将经营现金流变化解释为收现减少与付现增加同时发生",
         ),
         (
             r"换句话说，收入在扩张，但赚到手的利润和实际收回来的现金都在缩水，"

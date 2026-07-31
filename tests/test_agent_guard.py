@@ -15,6 +15,8 @@ from app.services.agent_response_relevance import (
     build_quality_review_editor_prompt,
     normalize_quality_review_language,
     peer_valuation_required_fact_issue,
+    quality_review_overclaim_issue,
+    quality_review_required_fact_issue,
     relative_industry_required_fact_issue,
     repair_peer_valuation_answer,
     repair_quality_review_answer,
@@ -11038,6 +11040,142 @@ def test_quality_review_rich_draft_is_repaired_before_second_model_call(
     assert "quality_editor" not in run["usage"]
 
 
+def test_quality_review_natural_cash_ratio_draft_skips_editor_and_retry(
+    tmp_path: Path, settings, monkeypatch
+):
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "quality-review-natural-ratio-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Quality Review Natural Ratio User")
+    service = AgentService(database, guarded_settings)
+    stream_calls = []
+
+    def fake_stream(**kwargs):
+        stream_calls.append(kwargs.get("prompt_path"))
+        if len(stream_calls) > 1:
+            raise AssertionError("a natural rich draft should not call another model")
+        return (
+            "中兴通讯这份一季报盈利质量承压，说不上好。营收349.88亿元，"
+            "同比增长6.13%，但归母净利润13.10亿元，同比下降46.58%。\n\n"
+            "经营现金流从去年同期净流入18.51亿元变为本期净流出19.79亿元。"
+            "经营现金流与归母净利润的比率从0.75变成负的1.51，说明当期的"
+            "报表利润并没有伴随着实际的现金净流入。销售商品、提供劳务收到的"
+            "现金占营收的比例从106.25%降至95.96%。销售收现率也从106.25%"
+            "降到95.96%，意味着每百元收入实际收到的现金减少。公司解释是销售商品收到的"
+            "现金减少，同时购买商品、接受劳务支付的现金增加。这能确认现金流"
+            "压力来自收付两端的同时挤压，但具体结算原因仍不能确认。\n\n"
+            "最新主营构成来自年报，不能直接解释一季报利润变化。最重要的反方"
+            "事实是经营现金流由正转负且覆盖关系严重恶化、销售收现率同步走低。"
+            "公司并未说明销售收现率下降的具体业务背景。下一步需要重点核验"
+            "应收账款回款节奏和负债结构。当前也没有同报告期同行经营数据。",
+            {
+                "model": "fake-natural-first",
+                "api_calls": 1,
+                "streaming": {"enabled": True},
+            },
+        )
+
+    monkeypatch.setattr(service, "_execute_hermes_streaming", fake_stream)
+
+    run = service.run(
+        user=user,
+        intent="stock_research",
+        message="中兴通讯最新财报到底好不好？像分析师一样自然聊。",
+        evidence={
+            "type": "stock_research",
+            "symbol": "000063.SZ",
+            "display_name": "中兴通讯",
+            "research_plan": {
+                "focus": "quality_review",
+                "focus_label": "经营改善质量核验",
+            },
+            "earnings_quality": {
+                "comparable_report": {
+                    "operating_cashflow_to_net_profit": 0.7546,
+                }
+            },
+            "financial_drivers": {
+                "cashflow_analysis": {
+                    "operating_cashflow": -1_978_648_000,
+                    "comparable_operating_cashflow": 1_851_253_000,
+                    "operating_cashflow_change_pct": -206.882,
+                    "operating_cashflow_to_net_profit": -1.51,
+                    "comparable_operating_cashflow_to_net_profit": 0.755,
+                    "cash_received_from_sales_to_revenue_pct": 95.96,
+                    "comparable_cash_received_from_sales_to_revenue_pct": 106.245,
+                }
+            },
+        },
+        model_tier="economy",
+        execute_agent=True,
+        stream_callback=lambda _event: None,
+    )
+
+    assert len(stream_calls) == 1
+    assert run["status"] == "completed"
+    assert "经营现金流与归母净利润的比率" in run["answer"]
+    assert "销售商品、提供劳务收到的现金占营收的比例" in run["answer"]
+    assert "销售商品收到的现金减少" in run["answer"]
+    assert "实际的现金净流入" not in run["answer"]
+    assert "每百元收入实际收到的现金减少" not in run["answer"]
+    assert "覆盖关系严重恶化" not in run["answer"]
+    assert "销售收现率较可比期下降" in run["answer"]
+    assert "公司并未说明销售收现率下降的具体业务背景" in run["answer"]
+    assert "需要重点核验应收账款回款节奏" in run["answer"]
+    assert "收付两端的同时挤压" not in run["answer"]
+    assert run["usage"]["api_calls"] == 1
+    assert run["usage"]["relevance_repair"]["passed"] is True
+    assert run["usage"]["relevance_repair"]["method"] == (
+        "neutralize_quality_review_overclaims_v1"
+    )
+    assert "quality_editor" not in run["usage"]
+    assert "relevance_retry" not in run["usage"]
+
+
+def test_quality_review_cautious_short_term_cashflow_sentence_is_not_overclaim():
+    answer = (
+        "公司已经解释经营现金流转负来自收现减少、付现增加，但销售收现率和"
+        "付款节奏的波动在季度之间常有季节因素，仅凭单季数据不够判断长期资金压力。"
+    )
+
+    assert quality_review_overclaim_issue(answer) is None
+
+
+def test_quality_review_contextual_followup_does_not_force_full_fact_recap():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "display_name": "中兴通讯",
+        "research_plan": {
+            "focus": "quality_review",
+            "contextual_followup": True,
+        },
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "operating_cashflow": -1_978_648_000,
+                "comparable_operating_cashflow": 1_851_253_000,
+                "operating_cashflow_change_pct": -206.882,
+                "operating_cashflow_to_net_profit": -1.51,
+                "comparable_operating_cashflow_to_net_profit": 0.755,
+                "cash_received_from_sales_to_revenue_pct": 95.96,
+                "comparable_cash_received_from_sales_to_revenue_pct": 106.245,
+            }
+        },
+    }
+    answer = (
+        "中兴通讯真正值得改变判断的是毛利率大幅下降且原因未披露。"
+        "经营现金流由正转负也值得跟踪，但公司已说明来自收现减少、付现增加，"
+        "单季数据仍不足以判断长期资金压力。"
+    )
+
+    assert quality_review_required_fact_issue(answer, evidence) is None
+    assert stock_specialist_relevance_issue(answer, evidence) is None
+
+
 def test_quality_review_prompt_does_not_reinject_generated_report_body(
     tmp_path: Path, settings, monkeypatch
 ):
@@ -11642,11 +11780,13 @@ def test_quality_review_repair_keeps_ratios_when_removing_cash_mismatch_label():
     answer = (
         "中兴通讯经营现金流从上年同期净流入18.51亿元变为本期净流出"
         "19.79亿元。经营现金流与归母净利润的比率变成负的1.51倍，去年同期"
-        "是0.75倍，说明利润与现金之间出现了严重错位。经营现金流恶化，"
+        "是0.75倍，说明当期的报表利润并没有伴随着实际的现金净流入。"
+        "经营现金流恶化，"
         "公司在报告里也做了解释：主要因为销售商品收到的现金减少，以及购买"
-        "商品支付的现金增加。同时，销售收现率从106.245%降至95.96%，"
-        "回款速度变慢。三项指标指向了同一个方向——回款和付款节奏在本季度"
-        "出现了变化，但具体原因还不能确认。"
+        "商品支付的现金增加。这能确认现金流压力来自收付两端的同时挤压。"
+        "同时，销售商品、提供劳务收到的现金占营收的比例从106.245%降至"
+        "95.96%，回款速度变慢。三项指标指向了同一个方向——回款和付款节奏"
+        "在本季度出现了变化，但具体原因还不能确认。"
     )
 
     repaired = repair_quality_review_answer(answer, evidence)
@@ -11657,7 +11797,8 @@ def test_quality_review_repair_keeps_ratios_when_removing_cash_mismatch_label():
     assert "95.96%" in repaired
     assert "销售商品收到的现金减少" in repaired
     assert "购买商品支付的现金增加" in repaired
-    assert "严重错位" not in repaired
+    assert "报表利润并没有伴随着实际的现金净流入" not in repaired
+    assert "收付两端的同时挤压" not in repaired
     assert "回款速度变慢" not in repaired
     assert "指向了同一个方向" not in repaired
     assert "回款和付款节奏" not in repaired
