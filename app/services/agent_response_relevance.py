@@ -478,10 +478,26 @@ def _directional_amount_mentioned(text: str, value: Any) -> bool:
         number = float(value)
     except (TypeError, ValueError):
         return False
-    if number >= 0:
-        return False
-
     normalized = text.replace(",", "")
+    if number >= 0:
+        rounded = round(number)
+        if abs(number - rounded) > 0.5:
+            return False
+        amount_pattern = (
+            rf"(?<!\d){abs(rounded)}(?:\.0)?\s*(?:亿元|亿|万元|万|元)"
+        )
+        return bool(
+            re.search(
+                rf"经营现金流[^。；！？\n]{{0,28}}(?:净额|净流入)"
+                rf"[^。；！？\n\d]{{0,12}}{amount_pattern}",
+                normalized,
+            )
+            or re.search(
+                rf"经营现金流[^。；！？\n]{{0,28}}{amount_pattern}",
+                normalized,
+            )
+        )
+
     variants: set[str] = set()
     magnitude = abs(number)
     for decimal_places in (1, 2, 3):
@@ -1188,16 +1204,35 @@ def valuation_review_required_fact_issue(
         return "估值回答遗漏同行估值尚未取得的边界"
 
     cashflow = (evidence.get("financial_drivers") or {}).get("cashflow_analysis") or {}
+    question = str(evidence.get("user_question") or "")
+    candidate_review = any(
+        term in question
+        for term in (
+            "估值约束候选",
+            "估值处于约束范围",
+            "估值约束质量",
+            "估值陷阱",
+            "低估值陷阱",
+        )
+    )
+    cashflow_requested = candidate_review or any(
+        term in question
+        for term in ("现金流", "现金", "回款", "收现", "营运资金")
+    )
+    debt_requested = candidate_review or any(
+        term in question
+        for term in ("负债", "杠杆", "偿债", "债务")
+    )
     operating_cashflow = cashflow.get("operating_cashflow")
     coverage = cashflow.get("operating_cashflow_to_net_profit")
-    if operating_cashflow is not None:
+    if cashflow_requested and operating_cashflow is not None:
         amount_yi = float(operating_cashflow) / 100_000_000.0
         if not (
             "经营现金流" in answer
             and _directional_amount_mentioned(answer, amount_yi)
         ):
             return "估值回答遗漏经营现金流金额"
-    if coverage is not None and not (
+    if cashflow_requested and coverage is not None and not (
         "经营现金流" in answer
         and "归母净利润" in answer
         and _quality_review_number_mentioned(answer, coverage)
@@ -1206,7 +1241,7 @@ def valuation_review_required_fact_issue(
 
     latest_report = (evidence.get("earnings_quality") or {}).get("latest_report") or {}
     debt_ratio = latest_report.get("debt_asset_ratio_pct")
-    if debt_ratio is not None and not (
+    if debt_requested and debt_ratio is not None and not (
         "资产负债率" in answer and _quality_review_number_mentioned(answer, debt_ratio)
     ):
         return "估值回答遗漏最新资产负债率"
@@ -2715,6 +2750,26 @@ def _valuation_opening_directly_rejects_cheap(text: str) -> bool:
             r"不能据此(?:说明|判断|认定))[^。！？]{0,28}(?:便宜|低估)",
             opening,
         )
+        or re.search(
+            r"不(?:能|应)(?:仅|只)?因为[^。！？]{0,36}"
+            r"(?:PE|PB|市盈率|市净率|倍数)[^。！？]{0,28}"
+            r"(?:就|便)[^。！？]{0,18}(?:有支撑|便宜|低估|危险)",
+            opening,
+            re.IGNORECASE,
+        )
+        or re.search(
+            r"不能(?:简单)?用[^。！？]{0,24}(?:便宜|低估)"
+            r"[^。！？]{0,16}(?:贵|高估)[^。！？]{0,12}(?:定性|判断|概括)",
+            opening,
+        )
+        or re.search(
+            r"(?:PE|市盈率)[^。！？]{0,80}(?:低于|偏低)"
+            r"[^。！？]{0,100}(?:PB|市净率)[^。！？]{0,80}"
+            r"(?:高于|偏高)[^。！？]{0,60}"
+            r"(?:矛盾|方向相反|方向并不一致|冲突)",
+            opening,
+            re.IGNORECASE,
+        )
     )
 
 
@@ -3237,6 +3292,55 @@ def normalize_quality_review_language(text: str) -> str:
     normalized = str(text or "")
     replacements = (
         (
+            r"经营现金流覆盖关系在弱化",
+            "经营现金流相关指标与去年同期存在差异",
+        ),
+        (
+            r"但要注意，\d+(?:\.\d+)?亿(?:元)?的经营现金流仍然是正的，"
+            r"而且覆盖归母净利润的比率为(-?\d+(?:\.\d+)?倍)，"
+            r"说明上半年经营活动的现金净流入依然大于账面净利润",
+            r"经营现金流与归母净利润的本期比率为\1；"
+            r"这一比率只描述两项报表金额的关系，不能单独判断利润质量",
+        ),
+        (
+            r"经营现金流对归母净利润的覆盖也?从"
+            r"(-?\d+(?:\.\d+)?倍)降(?:到|至)(-?\d+(?:\.\d+)?倍)，"
+            r"销售商品现金占收入的比例从(-?\d+(?:\.\d+)?%)"
+            r"下降到(-?\d+(?:\.\d+)?%)，"
+            r"这意味着利润增长的现金转化效率比去年同期明显变弱",
+            r"经营现金流与归母净利润的比率从\1降到\2，销售收现率从\3降到\4。"
+            r"三项指标口径不同，具体原因尚未由公司解释",
+        ),
+        (
+            r"毛利率全面收缩与经营现金流覆盖弱化这一组矛盾，"
+            r"直接削减了利润增长在经营层面的说服力",
+            "毛利率全面收缩，经营现金流相关指标也与可比期存在差异，"
+            "这些是需要继续核验的反方事实",
+        ),
+        (
+            r"收入涨了近55%，但销售收现率反而大幅下降，"
+            r"说明收入增长转化为现金的能力出现了实质差距",
+            "收入涨了近55%，销售收现率却大幅下降；两者口径不同，具体原因仍待核验",
+        ),
+        (
+            r"这些差异叠加在一起，说明利润的高增长有一部分尚未在现金流层面"
+            r"得到同等程度的兑现",
+            "这些差异是需要继续核验的反方事实，但不能合并推断利润兑现程度",
+        ),
+        (
+            r"最终还是靠收入规模的大幅扩张把归母净利润推到了430亿以上",
+            "最终归母净利润仍增长到430亿以上，但不能仅凭机械拆解把利润增长"
+            "归因为收入规模",
+        ),
+        (
+            r"扣除这个因素后，主营利润的含金量其实比表面数字更高",
+            "这一因素需要与主营经营变化分开理解，不能把它直接归因为主营经营恶化",
+        ),
+        (
+            r"属于主动备货而非被动积压",
+            "这是公司给出的备货解释",
+        ),
+        (
             r"现金流整体充裕，但回款节奏需核验",
             "现金流数据需分项理解",
         ),
@@ -3283,6 +3387,10 @@ def normalize_quality_review_language(text: str) -> str:
         (
             r"反之，则说明成本端或回款节奏的问题比眼下能确认的更持久",
             "反之，则需要继续核验成本端和收付节奏是否存在更持久的问题",
+        ),
+        (
+            r"但增长的利润有一部分被非经营性因素抬高了，最明显的是财务费用",
+            "财务费用是本期利润的一项重要非主营扰动",
         ),
         (
             r"这能确认现金流压力来自收付两端的同时挤压",

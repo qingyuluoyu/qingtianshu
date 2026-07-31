@@ -592,6 +592,27 @@ class ChatRequestContextService:
             symbol = symbols[0] if len(symbols) == 1 else None
 
         explicit_market_query = _is_market_query(message)
+        if (
+            prior_intent
+            in {
+                "stock_research",
+                "research_tracking",
+                "research_outcome",
+                "earnings_quality",
+                "financial_drivers",
+                "business_structure",
+                "shareholder_structure",
+                "analyst_expectations",
+                "event_timeline",
+            }
+            and contextual_followup
+            and not stock_context_followup
+            and not _requests_market_scope_change(message)
+        ):
+            # In a bound stock conversation, “别替市场猜动机” or “市场担心”
+            # usually critiques the company analysis; it is not a request to
+            # discard the security and open a broad-market brief.
+            explicit_market_query = False
         explicit_industry_topic = _extract_industry_topic(message)
         peer_comparison_query = _is_peer_comparison_query(message)
         explicit_stock_screen_query = _is_stock_screen_query(message)
@@ -711,6 +732,7 @@ class ChatRequestContextService:
                 or shareholder_query
                 or analyst_expectations_query
                 or event_timeline_query
+                or peer_comparison_query
             )
         ):
             symbol = _symbol_from_history(history)

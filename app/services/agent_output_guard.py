@@ -847,6 +847,11 @@ class AgentOutputGuard:
                     tolerance_floor = 0.051
             else:
                 numeric_token = token.lstrip("+-").replace(",", "")
+                decimal_places = (
+                    len(numeric_token.rsplit(".", 1)[1])
+                    if "." in numeric_token
+                    else 0
+                )
                 trailing_zeros = len(numeric_token) - len(numeric_token.rstrip("0"))
                 approximate_plain_number = re.search(
                     r"(?:约|大约|约为|近|超过|多于|高于|至少|不少于|"
@@ -862,6 +867,18 @@ class AgentOutputGuard:
                     r"\s*(?:个)?百分点",
                     answer[match.end() : match.end() + 8],
                 )
+                rounded_ratio_suffix = re.match(
+                    r"\s*倍",
+                    answer[match.end() : match.end() + 4],
+                )
+                rounded_range_endpoint = re.match(
+                    r"\s*[～~—-]\s*[+-]?\d+(?:\.\d+)?\s*(?:个)?百分点",
+                    answer[match.end() : match.end() + 24],
+                )
+                if decimal_places == 1 and (
+                    rounded_ratio_suffix or rounded_range_endpoint
+                ):
+                    tolerance_floor = max(tolerance_floor, 0.051)
                 if re.match(
                     r"\s*(?:个)?多(?:个)?百分点",
                     answer[match.end() : match.end() + 8],

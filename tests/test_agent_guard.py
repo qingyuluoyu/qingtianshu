@@ -148,6 +148,11 @@ def test_valuation_review_rejects_unit_mismatch_dynamic_pe_bridge_and_hallucinat
     )
 
     assert valuation_review_required_fact_issue(valid, evidence) is None
+    natural_opening = valid.replace(
+        "命中估值约束不等于便宜。",
+        "不能因为PE偏低就说有支撑，PB较高也不能直接说危险。",
+    )
+    assert valuation_review_required_fact_issue(natural_opening, evidence) is None
     assert "每股收益与利润金额单位" in valuation_review_required_fact_issue(
         valid + "2025年有29.7亿元的每股收益。", evidence
     )
@@ -235,6 +240,46 @@ def test_valuation_review_rejects_unit_mismatch_dynamic_pe_bridge_and_hallucinat
     assert "确定性价值结论" in valuation_review_required_fact_issue(
         valid + "因此它就是财务陷阱。", evidence
     )
+
+
+def test_natural_valuation_support_question_does_not_force_cashflow_and_debt_dump():
+    evidence, _ = _same_day_valuation_review_case()
+    evidence = {
+        **evidence,
+        "user_question": (
+            "动力新科现在估值有没有支撑？把PE、PB和同行放在一起讲，"
+            "但不要因为倍数低就说便宜。"
+        ),
+    }
+    answer = (
+        "不能因为PE偏低就说有支撑，PB较低也不能直接说便宜。"
+        "2026-07-29收盘，动力新科PE TTM为2.50，同行沪光股份、美湖股份、"
+        "旷达科技的中位数为39.39；动力新科PB为1.21，同行中位数为2.26。"
+        "同报告期经营数据不足，不能把倍数差异直接解释为经营质量。"
+    )
+
+    assert valuation_review_required_fact_issue(answer, evidence) is None
+
+    contradiction_evidence = json.loads(json.dumps(evidence))
+    contradiction_evidence["peer_comparison"]["metrics"]["pb"][
+        "peer_median"
+    ] = 0.8
+    contradiction_evidence["peer_comparison"]["metrics"]["pb"][
+        "subject_to_peer_median"
+    ] = 1.516
+    natural_contradiction = (
+        "动力新科当前PE TTM约2.61倍、PB约1.27倍。2026年7月29日收盘，"
+        "同日PE TTM为2.50倍，低于沪光股份、美湖股份、旷达科技的同行中位数"
+        "39.39倍；PB为1.21倍，高于同行中位数0.80倍，两者给出的方向相反，"
+        "是需要解释的估值矛盾。这种分化本身就说明不能简单用便宜或贵来定性。"
+        "同报告期经营数据不足，不能把倍数差异直接解释为经营质量。"
+    )
+    repaired = repair_valuation_review_answer(
+        natural_contradiction,
+        contradiction_evidence,
+    )
+    assert repaired is not None
+    assert not repaired.startswith("动力新科进入估值约束候选")
 
 
 def _same_day_valuation_review_case() -> tuple[dict, str]:
@@ -6300,6 +6345,8 @@ def test_stock_guard_accepts_rounded_ratio_endpoints_and_coarse_summary():
             "cashflow_analysis": {
                 "cash_received_from_sales_to_revenue_pct": 94.769,
                 "comparable_cash_received_from_sales_to_revenue_pct": 124.622,
+                "operating_cashflow_to_net_profit": 1.387,
+                "comparable_operating_cashflow_to_net_profit": 1.918,
             }
         },
         "business_structure": {
@@ -6327,6 +6374,8 @@ def test_stock_guard_accepts_rounded_ratio_endpoints_and_coarse_summary():
         "动力电池系统毛利率下降1.78个百分点至20.63%，"
         "储能电池系统毛利率下降1.56个百分点至23.96%，"
         "境内毛利率下降1.79个百分点至21.16%。"
+        "两大产品毛利率分别下降1.6～1.8个百分点。"
+        "经营现金流与归母净利润的比率从1.9倍降到1.4倍。"
         "销售收现率从超过120%跌到不足95%。"
     )
 
@@ -11174,6 +11223,123 @@ def test_quality_review_contextual_followup_does_not_force_full_fact_recap():
 
     assert quality_review_required_fact_issue(answer, evidence) is None
     assert stock_specialist_relevance_issue(answer, evidence) is None
+
+
+def test_quality_review_accepts_natural_positive_cashflow_amount_rounding():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "earnings_quality": {
+            "comparable_report": {"operating_cashflow_to_net_profit": 1.925}
+        },
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "operating_cashflow": 60_216_851_000,
+                "comparable_operating_cashflow": 58_687_066_000,
+                "operating_cashflow_change_pct": 2.607,
+                "operating_cashflow_to_net_profit": 1.391,
+                "comparable_operating_cashflow_to_net_profit": 1.925,
+                "cash_received_from_sales_to_revenue_pct": 94.769,
+                "comparable_cash_received_from_sales_to_revenue_pct": 124.622,
+            }
+        },
+    }
+    answer = (
+        "宁德时代上半年经营现金流净额602亿元，同比增长2.6%；"
+        "经营现金流与归母净利润比率从1.93降至1.39；"
+        "销售收现率从124.62%降至94.77%。"
+    )
+
+    assert quality_review_required_fact_issue(answer, evidence) is None
+    assert quality_review_required_fact_issue(
+        answer.replace("602亿元", "602亿"), evidence
+    ) is None
+    assert "财务费用是本期利润的一项重要非主营扰动" in (
+        normalize_quality_review_language(
+            "但增长的利润有一部分被非经营性因素抬高了，最明显的是财务费用。"
+        )
+    )
+
+
+def test_quality_review_repairs_natural_cashflow_paragraph_without_editor():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "earnings_quality": {
+            "comparable_report": {"operating_cashflow_to_net_profit": 1.925}
+        },
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "operating_cashflow": 60_216_851_000,
+                "operating_cashflow_change_pct": 2.607,
+                "operating_cashflow_to_net_profit": 1.391,
+                "comparable_operating_cashflow_to_net_profit": 1.925,
+                "cash_received_from_sales_to_revenue_pct": 94.769,
+                "comparable_cash_received_from_sales_to_revenue_pct": 124.622,
+            }
+        },
+    }
+    answer = (
+        "宁德时代经营改善有一定质量，但利润表增速要打两个折扣——一是毛利率"
+        "收缩，二是经营现金流覆盖关系在弱化。\n\n"
+        "本期经营现金流602亿元，同比增长约2.6%，远慢于利润增速；经营现金流"
+        "对归母净利润的覆盖从1.93倍降到1.39倍，销售商品现金占收入的比例从"
+        "124.6%下降到94.8%，这意味着利润增长的现金转化效率比去年同期明显变弱，"
+        "具体原因公司半年报正文尚未给出详细拆解。\n\n"
+        "当前没有同报告期同行经营数据，不能判断是否优于行业。"
+    )
+
+    repaired = repair_quality_review_answer(answer, evidence)
+
+    assert repaired is not None
+    assert "经营现金流602亿元" in repaired
+    assert "从1.93倍降到1.39倍" in repaired
+    assert "从124.6%降到94.8%" in repaired
+    assert "现金转化效率" not in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
+
+
+def test_quality_review_repairs_real_deepseek_cashflow_sentences_locally():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {"focus": "quality_review"},
+        "earnings_quality": {
+            "comparable_report": {"operating_cashflow_to_net_profit": 1.925}
+        },
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "operating_cashflow": 60_216_851_000,
+                "operating_cashflow_change_pct": 2.607,
+                "operating_cashflow_to_net_profit": 1.391,
+                "comparable_operating_cashflow_to_net_profit": 1.925,
+                "cash_received_from_sales_to_revenue_pct": 94.769,
+                "comparable_cash_received_from_sales_to_revenue_pct": 124.622,
+            }
+        },
+    }
+    answer = (
+        "宁德时代经营改善质量一般。经营现金流602亿，同比只增长约2.6%。"
+        "但要注意，602亿的经营现金流仍然是正的，而且覆盖归母净利润的比率"
+        "为1.39倍，说明上半年经营活动的现金净流入依然大于账面净利润。"
+        "这个比率去年是1.93倍。销售收现率从124.6%降到94.8%。\n\n"
+        "最重要的反方事实是毛利率收缩、经营现金流增速慢于利润，销售收现率"
+        "回落，这些差异叠加在一起，说明利润的高增长有一部分尚未在现金流层面"
+        "得到同等程度的兑现。当前没有同报告期同行经营数据。"
+    )
+
+    repaired = repair_quality_review_answer(answer, evidence)
+
+    assert repaired is not None
+    assert "经营现金流602亿" in repaired
+    assert "本期比率为1.39倍" in repaired
+    assert "不能合并推断利润兑现程度" in repaired
+    assert stock_specialist_relevance_issue(repaired, evidence) is None
 
 
 def test_quality_review_prompt_does_not_reinject_generated_report_body(

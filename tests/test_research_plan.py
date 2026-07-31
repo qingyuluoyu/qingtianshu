@@ -206,6 +206,23 @@ def test_plain_financial_quality_question_ignores_style_and_negated_price_words(
     ]
 
 
+def test_natural_quality_wording_does_not_fall_back_to_mixed_or_market():
+    plan = ResearchPlanService().build(
+        "宁德时代最新财报究竟好不好？不要按指标逐项念。先告诉我哪些改善是"
+        "真实经营进展，哪些只是利润表漂亮或短期因素，再把现金流、毛利率、"
+        "存货和主营结构讲透。像分析师聊天，不给股价和技术指标。"
+    )
+
+    assert plan["focus"] == "quality_review"
+    assert plan["primary_focus"] == "quality_review"
+    assert "market" not in plan["selected_modules"]
+    assert "peer_comparison" not in plan["selected_modules"]
+    assert plan["selected_skills"] == [
+        "quality-review",
+        "a-share-filing-evidence",
+    ]
+
+
 def test_financial_quality_followup_inherits_prior_focus_despite_financial_words():
     first_question = (
         "中兴通讯最新财报到底好不好？请把收入、利润、经营现金流、毛利率、"
@@ -248,6 +265,25 @@ def test_quality_review_reanswer_inherits_focus_despite_negated_report_word():
     assert plan["contextual_followup"] is True
     assert plan["effective_question"].startswith(first_question)
     assert "market" not in plan["selected_modules"]
+
+
+def test_valuation_correction_inherits_prior_specialist_focus():
+    first_question = (
+        "宁德时代现在的估值有没有支撑？把PE、PB和同口径同行放在一起讲清楚。"
+    )
+    plan = ResearchPlanService().build(
+        "你上段最大的毛病是把市场担心说得太确定。别替市场猜动机，只用财报"
+        "和同行估值重新说：哪些风险已经确认，哪些只是可能解释？不要重复所有数字。",
+        conversation_history=[
+            {"role": "user", "content": first_question},
+            {"role": "assistant", "content": "上一轮估值回答"},
+        ],
+    )
+
+    assert plan["focus"] == "valuation_review"
+    assert plan["primary_focus"] == "valuation_review"
+    assert plan["contextual_followup"] is True
+    assert plan["effective_question"].startswith(first_question)
 
 
 def test_shareholder_topic_switch_drops_negated_financial_scope_and_market():

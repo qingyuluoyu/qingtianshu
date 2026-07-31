@@ -389,6 +389,44 @@ def test_prepare_restores_stock_target_for_contextual_followup() -> None:
     assert prepared.explicit_market_query is True
 
 
+def test_stock_valuation_correction_does_not_switch_to_market_brief() -> None:
+    service, database, _ = build_service()
+    database.conversation = {
+        "id": "conversation-valuation-correction",
+        "title": "宁德时代估值研究",
+        "status": "active",
+    }
+    database.history = [
+        {
+            "role": "assistant",
+            "intent": "stock_research",
+            "metadata": {
+                "symbol": "300750.SZ",
+                "research_targets": [{"symbol": "300750.SZ"}],
+            },
+        }
+    ]
+
+    prepared = service.prepare(
+        user_id="user-valuation-correction",
+        message=(
+            "你上段最大的毛病是把市场担心说得太确定。别替市场猜动机，只用财报"
+            "和同行估值重新说：哪些风险已经确认，哪些只是可能解释？不要重复所有数字。"
+        ),
+        conversation_id="conversation-valuation-correction",
+        quality_scope="evaluation",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="economy",
+    )
+
+    assert prepared.contextual_followup is True
+    assert prepared.explicit_market_query is False
+    assert prepared.peer_comparison_query is True
+    assert prepared.symbol == "300750.SZ"
+    assert prepared.symbols == []
+
+
 def test_bound_deep_stock_defaults_to_current_symbol_for_natural_research() -> None:
     service, database, _ = build_service()
     database.conversation = {
