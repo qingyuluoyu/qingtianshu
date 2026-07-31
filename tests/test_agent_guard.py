@@ -10814,6 +10814,77 @@ def test_quality_review_prompt_does_not_reinject_generated_report_body(
     assert "主要受汇兑损失影响" in prompt
 
 
+def test_stock_price_move_prompt_does_not_reinject_generated_report_body(
+    tmp_path: Path, settings, monkeypatch
+):
+    guarded_settings = replace(
+        settings,
+        workspace_root=tmp_path / "stock-price-move-prompt-workspaces",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Stock Price Move Prompt User")
+    service = AgentService(database, guarded_settings)
+    monkeypatch.setattr(
+        service,
+        "_execute_hermes_streaming",
+        lambda **kwargs: (
+            "北方国际当日上涨，但现有材料尚不能确认单一直接驱动。",
+            {"model": "fake-price-move", "streaming": {"enabled": True}},
+        ),
+    )
+
+    run = service.run(
+        user=user,
+        intent="stock_research",
+        message="请深度分析北方国际今天为什么上涨",
+        evidence={
+            "type": "stock_research",
+            "symbol": "000065.SZ",
+            "display_name": "北方国际",
+            "user_question": "请深度分析北方国际今天为什么上涨",
+            "research_plan": {
+                "focus": "price_cause",
+                "focus_label": "个股涨跌原因",
+            },
+            "stock_target": {
+                "symbol": "000065.SZ",
+                "name": "北方国际",
+                "market_date": "2026-07-30",
+                "return_1d_pct": 2.29,
+            },
+        },
+        model_tier="economy",
+        execute_agent=True,
+        stream_callback=lambda event: None,
+        conversation_history=[
+            {"role": "user", "content": "先看一下这家公司。"},
+            {"role": "assistant", "content": "旧回答写成了固定报告结构。"},
+            {"role": "user", "content": "今天上涨更像行业还是公司因素？"},
+        ],
+        knowledge_context={
+            "items": [
+                {
+                    "scope": "common",
+                    "source_key": "research-report:000065.SZ",
+                    "title": "北方国际利润与现金流驱动分析",
+                    "excerpt": "盈利质量承压，下一步复核收入和现金流。",
+                }
+            ]
+        },
+    )
+
+    prompt = (Path(run["workspace_path"]) / "runs" / run["id"] / "prompt.md").read_text(
+        encoding="utf-8"
+    )
+    assert "北方国际利润与现金流驱动分析" not in prompt
+    assert "盈利质量承压" not in prompt
+    assert "下一步复核收入和现金流" not in prompt
+    assert "旧回答写成了固定报告结构" not in prompt
+    assert "今天上涨更像行业还是公司因素" in prompt
+
+
 def test_quality_review_retries_unconfirmed_growth_and_cashflow_interpretations():
     evidence = {
         "type": "stock_research",

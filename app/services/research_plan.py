@@ -494,6 +494,8 @@ class ResearchPlanService:
                 self._extend_unique(required, config["required"])
                 self._extend_unique(optional, config["optional"])
                 self._extend_unique(skills, config["skills"])
+            if "price_cause" in focus_keys:
+                skills = [skill for skill in skills if skill != "evidence-debate"]
             if "price_action" in focus_keys and any(
                 term in effective_text
                 for term in (
@@ -516,6 +518,15 @@ class ResearchPlanService:
         if focus == "relative_industry" and "analyst_expectations" in module_labels:
             module_labels["analyst_expectations"] = "所属行业指数与成分"
         labels = [module_labels[item] for item in selected_modules]
+        answer_requirements = [
+            "直接回答本轮问题，不机械重述全景报告",
+            "至少保留一项反方证据或明确证据缺口",
+            "价格、财务和事件必须保留各自时间口径",
+        ]
+        if has_price_cause:
+            answer_requirements[1] = (
+                "区分同日价格表现、基本面背景和仍未确认的直接驱动"
+            )
         return {
             "contract_version": self.CONTRACT_VERSION,
             "focus": focus,
@@ -533,11 +544,7 @@ class ResearchPlanService:
             "progress_label": "正在核验"
             + "、".join(labels[:4])
             + ("等证据…" if len(labels) > 4 else "…"),
-            "answer_requirements": [
-                "直接回答本轮问题，不机械重述全景报告",
-                "至少保留一项反方证据或明确证据缺口",
-                "价格、财务和事件必须保留各自时间口径",
-            ],
+            "answer_requirements": answer_requirements,
         }
 
     @classmethod

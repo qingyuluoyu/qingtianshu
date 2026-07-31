@@ -73,6 +73,10 @@ def test_deep_price_cause_request_keeps_question_scoped_evidence_plan():
     assert "analyst_expectations" not in plan["selected_modules"]
     assert "peer_comparison" not in plan["selected_modules"]
     assert "outlook_calibration" not in plan["selected_modules"]
+    assert "evidence-debate" not in plan["selected_skills"]
+    assert plan["answer_requirements"][1] == (
+        "区分同日价格表现、基本面背景和仍未确认的直接驱动"
+    )
 
 
 def test_quality_review_focus_uses_disclosures_financials_cashflow_and_business_only():

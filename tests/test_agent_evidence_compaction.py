@@ -658,6 +658,31 @@ def test_deep_price_move_compaction_keeps_requested_finance_and_sentiment_only()
                 "return_60d_pct": -12.94,
             },
             "provenance": {"market_timestamp": "2026-07-30T01:30:00+00:00"},
+            "stock_market_context": {
+                "stock_target": {
+                    "status": "same_market_date",
+                    "market_date": "2026-07-30",
+                    "close": 33.3,
+                    "return_1d_pct": -2.29,
+                    "previous_market_date": "2026-07-29",
+                    "previous_return_1d_pct": 1.0,
+                },
+                "exact_industry_index": {
+                    "name": "通信设备",
+                    "return_1d_pct": -3.4,
+                    "subject_weight_pct": 3.741,
+                    "component_breadth": {
+                        "advancers": 3,
+                        "decliners": 47,
+                        "coverage": {
+                            "constituents": 50,
+                            "available_returns": 50,
+                            "weights_available": 50,
+                            "fallback_unadjusted_returns": 30,
+                        },
+                    },
+                },
+            },
             "fundamentals": {
                 "valuation": {"pe_ttm": 36.24},
                 "summary": {
@@ -763,6 +788,18 @@ def test_deep_price_move_compaction_keeps_requested_finance_and_sentiment_only()
         "operating_cashflow": -19.79,
         "comparable_operating_cashflow": 18.51,
     }
+    assert "overall_label" not in compact["earnings_quality"]
+    assert "overall_label" not in compact["financial_drivers"]
+    assert "plausible_clues" not in compact["financial_drivers"]
+    industry = compact["stock_market_context"]["exact_industry_index"]
+    assert "subject_weight_pct" not in industry
+    assert "weights_available" not in industry["component_breadth"]["coverage"]
+    assert "fallback_unadjusted_returns" not in industry["component_breadth"][
+        "coverage"
+    ]
+    assert "previous_return_1d_pct" not in compact["stock_market_context"][
+        "stock_target"
+    ]
     explanation = compact["financial_drivers"]["filing_evidence"][
         "explicit_company_explanations"
     ][0]
@@ -773,13 +810,6 @@ def test_deep_price_move_compaction_keeps_requested_finance_and_sentiment_only()
         item["key"]
         for item in compact["financial_drivers"]["confirmed_mechanical_drivers"]
     ] == ["financial_expense"]
-    assert [
-        item["key"] for item in compact["financial_drivers"]["plausible_clues"]
-    ] == [
-        "operating_cashflow_coverage",
-        "sales_cash_collection",
-        "inventory",
-    ]
     assert compact["a_share_information"] == {
         "sentiment": {
             "band": "中性或混合",

@@ -83,6 +83,7 @@ from app.services.agent_output_guard_stock import (
     _normalize_relative_event_dates,
     _is_evidence_security_entity_clause,
 )
+from app.services.stock_price_move import is_stock_price_move_question
 from app.utils import write_json
 
 
@@ -521,7 +522,9 @@ class AgentService:
             # inside the deterministic evidence JSON.
             prompt_evidence.pop("knowledge_context", None)
             prompt_history = self._compact_stock_conversation_history(prompt_history)
-            if str((prompt_evidence.get("research_plan") or {}).get("focus") or "") in {
+            if is_stock_price_move_question(message) or str(
+                (prompt_evidence.get("research_plan") or {}).get("focus") or ""
+            ) in {
                 "relative_industry",
                 "valuation_review",
             }:

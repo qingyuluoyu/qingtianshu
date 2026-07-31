@@ -1473,6 +1473,10 @@ def compact_stock_research_evidence(
         industry = market_context.get("exact_industry_index") or {}
         breadth = market_context.get("market_breadth") or {}
         component_breadth = industry.get("component_breadth") or {}
+        source_scope_question = any(
+            term in question
+            for term in ("数据源", "行情源", "口径", "未复权", "复权", "除权除息")
+        )
         prompt_component_breadth = select(
             component_breadth,
             (
@@ -1485,15 +1489,26 @@ def compact_stock_research_evidence(
                 "unchanged",
                 "median_pct_change",
                 "state",
-                "coverage",
                 "failures",
                 "boundary",
             ),
         )
-        if any(
-            term in question
-            for term in ("数据源", "行情源", "口径", "未复权", "复权", "除权除息")
-        ):
+        coverage_keys = [
+            "constituents",
+            "available_returns",
+            "missing_returns",
+            "coverage_ratio",
+        ]
+        if source_scope_question:
+            coverage_keys.extend(
+                ("primary_adjusted_returns", "fallback_unadjusted_returns")
+            )
+        prompt_component_breadth["coverage"] = select(
+            component_breadth.get("coverage") or {}, tuple(coverage_keys)
+        )
+        if not prompt_component_breadth["coverage"]:
+            prompt_component_breadth.pop("coverage", None)
+        if source_scope_question:
             prompt_component_breadth["source_fallbacks"] = [
                 select(
                     item,
@@ -1506,6 +1521,20 @@ def compact_stock_research_evidence(
                 )
                 for item in (component_breadth.get("source_fallbacks") or [])[:3]
             ]
+        industry_keys = [
+            "status",
+            "index_code",
+            "name",
+            "market_date",
+            "close",
+            "return_1d_pct",
+            "stock_return_1d_pct",
+            "stock_minus_industry_pct",
+            "constituent_count",
+            "subject_is_constituent",
+        ]
+        if any(term in question for term in ("贡献", "权重", "归因")):
+            industry_keys.append("subject_weight_pct")
         compact["stock_market_context"] = {
             **select(
                 market_context,
@@ -1538,19 +1567,7 @@ def compact_stock_research_evidence(
             "exact_industry_index": {
                 **select(
                     industry,
-                    (
-                        "status",
-                        "index_code",
-                        "name",
-                        "market_date",
-                        "close",
-                        "return_1d_pct",
-                        "stock_return_1d_pct",
-                        "stock_minus_industry_pct",
-                        "constituent_count",
-                        "subject_is_constituent",
-                        "subject_weight_pct",
-                    ),
+                    tuple(industry_keys),
                 ),
                 "industry_mapping": select(
                     industry.get("industry_mapping") or {},
@@ -2707,6 +2724,29 @@ def compact_stock_research_evidence(
         compact["peer_comparison"] = compact_peers
     if price_move_question:
         compact_market_context = compact.get("stock_market_context") or {}
+        if compact_market_context:
+            target_keys = ["status", "market_date", "close", "return_1d_pct"]
+            if any(
+                term in question
+                for term in ("昨天", "前日", "前一日", "前一天", "两日", "连续")
+            ):
+                target_keys.extend(
+                    (
+                        "previous_market_date",
+                        "previous_close",
+                        "previous_return_1d_pct",
+                    )
+                )
+            compact_market_context["stock_target"] = select(
+                compact_market_context.get("stock_target") or {}, tuple(target_keys)
+            )
+            if not compact_market_context["stock_target"]:
+                compact_market_context.pop("stock_target", None)
+            compact_market_context.pop("market_state", None)
+            if not any(term in question for term in ("贡献", "权重", "归因")):
+                (compact_market_context.get("exact_industry_index") or {}).pop(
+                    "subject_weight_pct", None
+                )
         compact_breadth = compact_market_context.get("market_breadth") or {}
         if not any(term in question for term in ("成交额", "量能", "放量", "缩量")):
             compact_breadth.pop("turnover", None)
@@ -2821,14 +2861,7 @@ def compact_stock_research_evidence(
             compact["earnings_quality"] = {
                 **select(
                     quality,
-                    (
-                        "overall_label",
-                        "confidence",
-                        "summary",
-                        "contradictions",
-                        "company_explanations",
-                        "boundary",
-                    ),
+                    ("boundary",),
                 ),
                 "latest_report": select(
                     quality.get("latest_report") or {}, quality_report_keys
@@ -2842,7 +2875,6 @@ def compact_stock_research_evidence(
                         (
                             "key",
                             "label",
-                            "status",
                             "value_pct",
                             "comparable_pct",
                             "change_pp",
@@ -2874,19 +2906,6 @@ def compact_stock_research_evidence(
                 for item in (drivers.get("confirmed_mechanical_drivers") or [])
                 if item.get("calculation_nature") != "static_counterfactual"
             ]
-            clue_priority = {
-                "operating_cashflow_coverage": 0,
-                "sales_cash_collection": 1,
-                "inventory": 2,
-            }
-            plausible_clues = sorted(
-                (
-                    item
-                    for item in (drivers.get("plausible_clues") or [])
-                    if item.get("key") in clue_priority
-                ),
-                key=lambda item: clue_priority[str(item.get("key"))],
-            )
             company_explanations = sorted(
                 filing.get("explicit_company_explanations") or [],
                 key=explanation_rank,
@@ -2894,11 +2913,7 @@ def compact_stock_research_evidence(
             compact["financial_drivers"] = {
                 **select(
                     drivers,
-                    (
-                        "overall_label",
-                        "confidence",
-                        "boundary",
-                    ),
+                    ("boundary",),
                 ),
                 "cashflow_analysis": cashflow_analysis,
                 "confirmed_mechanical_drivers": [
@@ -2915,12 +2930,8 @@ def compact_stock_research_evidence(
                     )
                     for item in mechanical_drivers[:4]
                 ],
-                "plausible_clues": [
-                    select(item, ("key", "label", "evidence"))
-                    for item in plausible_clues[:3]
-                ],
                 "filing_evidence": {
-                    **select(filing, ("status", "summary", "boundary")),
+                    **select(filing, ("status", "boundary")),
                     "document": select(
                         filing.get("document") or {},
                         (
