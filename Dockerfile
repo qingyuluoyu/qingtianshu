@@ -49,7 +49,8 @@ RUN apt-get update \
 
 COPY pyproject.toml ./
 COPY app ./app
-RUN pip install --no-cache-dir .
+ARG PIP_INDEX_URL=https://mirrors.cloud.tencent.com/pypi/simple
+RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" .
 
 COPY scripts ./scripts
 
