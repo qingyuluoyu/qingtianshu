@@ -51,6 +51,30 @@ def test_research_plan_routes_price_financial_shareholder_and_comprehensive():
     assert "analyst_expectations" in research_priority["selected_modules"]
 
 
+def test_deep_price_cause_request_keeps_question_scoped_evidence_plan():
+    plan = ResearchPlanService().build(
+        "请深度分析中兴通讯今天的涨跌究竟更像行业因素还是公司自身因素。"
+        "不要套模板，结合最新价格、通信设备行业、财务、现金流、公告和市场情绪，"
+        "给出信息量充分但自然的结论；如果近期直接驱动没有证据，"
+        "请明确区分背景和直接原因。"
+    )
+
+    assert plan["focus"] == "mixed"
+    assert plan["selected_modules"] == [
+        "market",
+        "company_information",
+        "event_timeline",
+        "fundamentals",
+        "earnings_quality",
+        "financial_drivers",
+    ]
+    assert "business_structure" not in plan["selected_modules"]
+    assert "shareholder_structure" not in plan["selected_modules"]
+    assert "analyst_expectations" not in plan["selected_modules"]
+    assert "peer_comparison" not in plan["selected_modules"]
+    assert "outlook_calibration" not in plan["selected_modules"]
+
+
 def test_quality_review_focus_uses_disclosures_financials_cashflow_and_business_only():
     service = ResearchPlanService()
 

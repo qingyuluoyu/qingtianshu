@@ -1472,6 +1472,40 @@ def compact_stock_research_evidence(
     if market_context:
         industry = market_context.get("exact_industry_index") or {}
         breadth = market_context.get("market_breadth") or {}
+        component_breadth = industry.get("component_breadth") or {}
+        prompt_component_breadth = select(
+            component_breadth,
+            (
+                "status",
+                "market_date",
+                "total_constituents",
+                "available_returns",
+                "advancers",
+                "decliners",
+                "unchanged",
+                "median_pct_change",
+                "state",
+                "coverage",
+                "failures",
+                "boundary",
+            ),
+        )
+        if any(
+            term in question
+            for term in ("数据源", "行情源", "口径", "未复权", "复权", "除权除息")
+        ):
+            prompt_component_breadth["source_fallbacks"] = [
+                select(
+                    item,
+                    (
+                        "symbol",
+                        "name",
+                        "public_source_label",
+                        "adjustment",
+                    ),
+                )
+                for item in (component_breadth.get("source_fallbacks") or [])[:3]
+            ]
         compact["stock_market_context"] = {
             **select(
                 market_context,
@@ -1527,24 +1561,7 @@ def compact_stock_research_evidence(
                         "boundary",
                     ),
                 ),
-                "component_breadth": select(
-                    industry.get("component_breadth") or {},
-                    (
-                        "status",
-                        "market_date",
-                        "total_constituents",
-                        "available_returns",
-                        "advancers",
-                        "decliners",
-                        "unchanged",
-                        "median_pct_change",
-                        "state",
-                        "coverage",
-                        "failures",
-                        "source_fallbacks",
-                        "boundary",
-                    ),
-                ),
+                "component_breadth": prompt_component_breadth,
             },
             "market_breadth": {
                 **select(

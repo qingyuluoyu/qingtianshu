@@ -2255,10 +2255,10 @@ def test_output_guard_rejects_reversed_community_sentiment_direction():
             "sentiment": {
                 "band": "轻微偏多",
                 "score": 0.1713,
-                "sample_size": 21,
-                "positive_count": 6,
-                "negative_count": 3,
-                "neutral_count": 12,
+                "sample_size": 26,
+                "positive_count": 5,
+                "negative_count": 0,
+                "neutral_count": 21,
             }
         },
     }
@@ -2272,11 +2272,18 @@ def test_output_guard_rejects_reversed_community_sentiment_direction():
     negated = AgentService._validate_model_output(
         "社区样本轻微偏多，无明确负面声音，但只能作为弱证据。", evidence
     )
+    explicit_counts = AgentService._validate_model_output(
+        "社区样本中5条偏多、0条偏空、21条中性，"
+        "没有出现集中的负面声音，但仍只是弱证据。",
+        evidence,
+    )
 
     assert valid["passed"] is True
     assert valid["semantic_conflicts"] == []
     assert negated["passed"] is True
     assert negated["semantic_conflicts"] == []
+    assert explicit_counts["passed"] is True
+    assert explicit_counts["semantic_conflicts"] == []
     assert invalid["passed"] is False
     assert invalid["semantic_conflicts"] == ["社区情绪方向与证据不一致：证据为轻微偏多"]
 
@@ -3314,7 +3321,7 @@ def test_stock_cause_guard_rejects_indirect_media_sentiment_wording():
     assert "视为负面" not in repaired[0]
     assert "方向不一" not in repaired[0]
     assert "解释方向" not in repaired[0]
-    assert "利空事件" not in repaired[0]
+    assert "未出现同日公告或可确认的利空事件" in repaired[0]
 
 
 def test_stock_cause_guard_rejects_generic_positive_report_label():
@@ -3409,6 +3416,37 @@ def test_stock_cause_guard_allows_explicit_media_sentiment_boundary():
 
     assert (
         "公告或媒体线索不能在缺少事件研究时评为正面负面或催化"
+        not in guard["unsupported_market_inferences"]
+    )
+
+
+def test_stock_cause_guard_allows_negated_event_labels_and_unconfirmed_examples():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯今天为什么涨？",
+        "metrics": {"latest_close": 33.81, "return_1d_pct": 1.53},
+        "stock_market_context": {
+            "analysis_target": {"market_date": "2026-07-31"},
+            "exact_industry_index": {"component_breadth": {"status": "available"}},
+        },
+    }
+    answer = (
+        "近期直接驱动尚未找到同日公司事件，所以无法确认是某个具体利好推动。"
+        "今天上涨的直接原因并非来自明确的公司层面正面事件。"
+        "近期价格上涨的直接驱动，如具体订单、政策利好或业绩预告，"
+        "尚未找到同日公告或媒体确证。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is True
+    assert (
+        "公告或媒体线索不能在缺少事件研究时评为正面负面或催化"
+        not in guard["unsupported_market_inferences"]
+    )
+    assert (
+        "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
         not in guard["unsupported_market_inferences"]
     )
 
@@ -4181,10 +4219,16 @@ def test_market_guard_rejects_news_absorption_and_coverage_overclaims():
         "上证综指上涨1.79%。今天能否延续取决于是否出现新增催化剂。",
         evidence,
     )
+    evidence_scoped = AgentService._validate_model_output(
+        "上证综指上涨1.79%。当前证据里并没有可以核验的政策公告或宏观数据"
+        "来解释今天为何触发上涨，因此直接原因仍未确认。",
+        evidence,
+    )
 
     assert absorption["passed"] is False
     assert missing_events["passed"] is False
     assert future_catalyst["passed"] is False
+    assert evidence_scoped["passed"] is True
 
 
 def test_market_guard_requires_turnover_snapshot_date_when_user_asks_time(settings):
@@ -8777,13 +8821,13 @@ def test_market_reassessment_cleanup_removes_duplicate_observation_language():
         "indices": [{"metrics": {"ma20": 3904.0}}],
     }
     answer = (
-        "在接下来的完整交易日里，后续完整交易日里，"
+        "一要看后续完整交易日中，后续完整交易日里，"
         "全市场上涨家数是否仍占明显优势是否延续。"
     )
 
     cleaned = agent_module._normalize_market_reassessment_language(answer, evidence)
 
-    assert cleaned == "后续完整交易日里，全市场上涨家数是否仍占明显优势。"
+    assert cleaned == "一要看后续完整交易日里，全市场上涨家数是否仍占明显优势。"
 
 
 def test_market_guard_rejects_wrong_index_count_ma5_and_wave_label():

@@ -12,6 +12,62 @@ from app.services.agent_evidence_compaction import (
 )
 
 
+def test_stock_compaction_only_keeps_component_fallbacks_for_source_questions():
+    base = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "display_name": "中兴通讯",
+        "research_plan": {"focus": "mixed", "selected_modules": ["market"]},
+        "stock_market_context": {
+            "exact_industry_index": {
+                "status": "same_market_date",
+                "name": "通信设备",
+                "component_breadth": {
+                    "status": "available",
+                    "advancers": 44,
+                    "decliners": 6,
+                    "coverage": {"fallback_unadjusted_returns": 3},
+                    "source_fallbacks": [
+                        {
+                            "symbol": "000063.SZ",
+                            "name": "中兴通讯",
+                            "public_source_label": "新浪公开日线",
+                            "adjustment": "unadjusted",
+                            "internal_reason": "provider_error",
+                        }
+                    ],
+                },
+            }
+        },
+    }
+
+    ordinary = compact_stock_research_evidence(
+        {
+            **base,
+            "user_question": "结合通信设备行业分析中兴通讯今天为什么上涨？",
+        }
+    )
+    source_question = compact_stock_research_evidence(
+        {**base, "user_question": "行业成分行情用了什么数据口径？"}
+    )
+
+    ordinary_breadth = ordinary["stock_market_context"]["exact_industry_index"][
+        "component_breadth"
+    ]
+    source_breadth = source_question["stock_market_context"][
+        "exact_industry_index"
+    ]["component_breadth"]
+    assert "source_fallbacks" not in ordinary_breadth
+    assert source_breadth["source_fallbacks"] == [
+        {
+            "symbol": "000063.SZ",
+            "name": "中兴通讯",
+            "public_source_label": "新浪公开日线",
+            "adjustment": "unadjusted",
+        }
+    ]
+
+
 def test_market_compaction_preserves_explicit_session_alignment() -> None:
     compact = compact_market_brief_evidence(
         {

@@ -107,6 +107,9 @@ _MARKET_STYLE_GAP_STORY_LABEL = (
 _MARKET_NEW_CATALYST_GATE_LABEL = (
     "重新判断不能要求证据包之外的新宏观政策或行业催化"
 )
+_MARKET_EVENT_COVERAGE_OVERCLAIM_LABEL = (
+    "有限资讯覆盖不能证明当前不存在新的宏观政策或外部事件"
+)
 _UNSUPPORTED_MARKET_INFERENCE_PATTERNS = (
     (
         "市场资讯标题不能证明已经被价格消化或产生市场反应",
@@ -153,7 +156,7 @@ _UNSUPPORTED_MARKET_INFERENCE_PATTERNS = (
         ),
     ),
     (
-        "有限资讯覆盖不能证明当前不存在新的宏观政策或外部事件",
+        _MARKET_EVENT_COVERAGE_OVERCLAIM_LABEL,
         re.compile(
             r"(?:当前|目前)[^。；\n]{0,24}(?:没有|不存在|尚无)"
             r"[^。；\n]{0,60}(?:新的?)?(?:宏观数据|政策公告|外部事件|催化剂)"

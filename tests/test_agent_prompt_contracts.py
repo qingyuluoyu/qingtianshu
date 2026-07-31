@@ -141,6 +141,23 @@ def test_stock_price_move_detects_deep_causal_comparison_wording():
     assert "结尾在当前分层结论处结束" in prompt
 
 
+def test_explicit_deep_stock_question_uses_deep_contract_on_economy_tier():
+    prompt = _append(
+        intent="stock_research",
+        model_tier="economy",
+        message=(
+            "请深度分析中兴通讯今天的涨跌究竟更像行业因素还是公司因素，"
+            "结合财务和现金流，信息量充分。"
+        ),
+    )
+
+    assert "个股涨跌原因回答合同（深度）" in prompt
+    assert "这是用户明确要求的深度分析" in prompt
+    assert "700—1100 个中文字" in prompt
+    assert "标准回答控制在约 250—500 个中文字" not in prompt
+    assert "不能在行业和公司之间强行二选一" in prompt
+
+
 def test_market_followup_adds_short_final_quality_check():
     prompt = _append(
         intent="market_brief",
@@ -158,6 +175,8 @@ def test_market_followup_adds_short_final_quality_check():
     assert "不得再引用具体上涨下跌家数、比例或成交额" in prompt
     assert "不增加第三项量能观察" in prompt
     assert "不得使用单日修复、情绪回暖、持续性存疑" in prompt
+    assert "不要使用“涨跌各半、持续压倒、站稳、受阻、碰一下又被压回”" in prompt
+    assert "主要指数与 MA20 的关系是否改善" in prompt
 
 
 def test_stock_research_separates_official_and_media_sources_without_fixed_counts():
@@ -428,6 +447,12 @@ def test_market_risk_question_with_why_keeps_cause_contract_and_final_check():
     assert "不要自行添加“六大指数、四个核心指数”等固定数量标签" in prompt
     assert "previous_return_1d_pct" in prompt
     assert "不能只用“此前同步下跌”代替数字" in prompt
+    assert "不得罗列“几个来源、多少条来源”等检索统计" in prompt
+    assert "不能在没有权重贡献证据时推出“并非权重股拉动”" in prompt
+    assert "不切换到 MA60，不列均线点位" in prompt
+    assert "不能再补“更像系统性抛售后的回弹" in prompt
+    assert "不能写交易意愿回升" in prompt
+    assert "只说“四个核心指数同步下跌”" not in prompt
 
 
 def test_relative_industry_contract_hides_unselected_modules_and_fixed_day_thresholds():

@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.services.stock_price_move import is_stock_price_move_question
+
 
 class ResearchPlanService:
     """Build a deterministic, question-scoped evidence plan for stock chat."""
@@ -382,6 +384,10 @@ class ResearchPlanService:
             for key, label, terms in self._FOCUS_RULES
             if any(term.lower() in effective_text.lower() for term in terms)
         ]
+        if is_stock_price_move_question(effective_text) and not any(
+            key == "price_cause" for key, _ in matched
+        ):
+            matched = [("price_cause", "行情涨跌原因"), *matched]
         if self._is_relative_industry_question(effective_text):
             relative_item = ("relative_industry", "相对行业表现")
             matched = [
@@ -469,7 +475,8 @@ class ResearchPlanService:
             )
         )
 
-        if comprehensive or not matched:
+        has_price_cause = any(key == "price_cause" for key, _ in matched)
+        if (comprehensive and not has_price_cause) or not matched:
             focus = "comprehensive"
             focus_label = "综合个股研究"
             required = list(self._FULL_MODULES)

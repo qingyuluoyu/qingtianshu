@@ -19,6 +19,7 @@ from app.services.agent_output_guard_market import (
     _MARKET_TECHNICAL_REPAIR_CAUSAL_LABEL,
     _MARKET_STYLE_GAP_STORY_LABEL,
     _MARKET_NEW_CATALYST_GATE_LABEL,
+    _MARKET_EVENT_COVERAGE_OVERCLAIM_LABEL,
     _UNSUPPORTED_PEER_OPERATING_INFERENCE_PATTERNS,
     _is_index_contribution_clause,
     _NEGATIVE_SENTIMENT_LANGUAGE_RE,
@@ -164,6 +165,17 @@ def _has_asserted_sentiment_language(
 ) -> bool:
     for match in pattern.finditer(text):
         context = text[max(0, match.start() - 16) : match.end() + 8]
+        zero_count = any(
+            re.search(
+                rf"(?:(?:0|零)\s*(?:条|个|则|篇|项)?[^。；\n]{{0,4}}"
+                rf"{re.escape(term)}|{re.escape(term)}[^。；\n]{{0,4}}"
+                rf"(?:为|共|有)?\s*(?:0|零)\s*(?:条|个|则|篇|项)?)",
+                context,
+            )
+            for term in direction_terms
+        )
+        if zero_count:
+            continue
         negated = any(
             re.search(
                 rf"(?:无|没有|并无|未见|不存在|并未|不是|不算)"
@@ -971,6 +983,17 @@ class AgentOutputGuard:
                 if label == _MARKET_NEWS_CAUSAL_LABEL and any(
                     term in match.group(0)
                     for term in ("不能说明", "无法说明", "不能证明", "无法证明")
+                ):
+                    continue
+                if label == _MARKET_EVENT_COVERAGE_OVERCLAIM_LABEL and any(
+                    term in match.group(0)
+                    for term in (
+                        "当前证据",
+                        "现有证据",
+                        "证据中",
+                        "可以核验",
+                        "能够核验",
+                    )
                 ):
                     continue
                 if (

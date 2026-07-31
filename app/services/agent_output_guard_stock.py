@@ -1469,6 +1469,20 @@ def _has_stock_event_sentiment_overclaim(answer: str) -> bool:
             r"(?:正面|负面|中性|利好|利空|催化)",
             clause,
         )
+        negated_or_hypothetical_label = re.search(
+            r"(?:尚未找到|未找到|尚未取得|未取得|并无|未见|未出现|"
+            r"尚无|不存在|并非来自|不是来自|不构成|无法确认|不能确认|"
+            r"尚不能确认)[^。；\n]{0,48}"
+            r"(?:正面|负面|中性|利好|利空|催化)|"
+            r"没有[^。；\n]{0,12}(?:找到|取得|发现|出现|看到|可确认的|"
+            r"明确的|新的)[^。；\n]{0,20}(?:正面|负面|利好|利空)"
+            r"(?:事件|公告|消息|线索|证据)?|"
+            r"(?:如|例如)[^。；\n]{0,48}(?:正面|负面|中性|利好|利空|催化)"
+            r"[^。；\n]{0,48}(?:尚未找到|未找到|未取得|"
+            r"没有[^。；\n]{0,12}(?:证据|确证)|尚未[^。；\n]{0,12}(?:证实|确认))",
+            clause,
+        )
+        has_boundary = bool(explicit_boundary or negated_or_hypothetical_label)
         if (
             any(
                 term in clause
@@ -1501,10 +1515,10 @@ def _has_stock_event_sentiment_overclaim(answer: str) -> bool:
                     "构成催化剂",
                 )
             )
-            and not explicit_boundary
+            and not has_boundary
         ):
             return True
-        if not explicit_boundary and (
+        if not has_boundary and (
             re.search(
                 r"(?:公告|媒体|报道|事件|披露)[^。；\n]{0,18}"
                 r"(?:正面|负面|中性|利好|利空|催化)",
@@ -1568,6 +1582,8 @@ def _has_stock_unsupported_causal_hypothesis(
         "未取得证据",
         "不等于",
         "不能归因",
+        "并非来自",
+        "不是来自",
     )
     for clause in re.split(r"[。；\n]", answer):
         explicit_causal_rejection = bool(
@@ -1587,7 +1603,10 @@ def _has_stock_unsupported_causal_hypothesis(
                 r"(?:解读|解释|认定|视为|归因)为[^。；\n]{0,120}"
                 r"(?:原因|驱动|压力|紧张)|"
                 r"(?:不等于|并不等于|不代表)[^。；\n]{0,120}"
-                r"(?:直接|主要|核心)?(?:原因|驱动)",
+                r"(?:直接|主要|核心)?(?:原因|驱动)|"
+                r"(?:直接|主要|核心)?(?:原因|驱动)[^。；\n]{0,36}"
+                r"(?:并非|不是)(?:来自|源于|由)[^。；\n]{0,80}"
+                r"(?:公告|新闻|消息|事件|利好|利空)",
                 clause,
             )
         )
