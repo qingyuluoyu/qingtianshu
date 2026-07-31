@@ -1607,6 +1607,12 @@ def test_hermes_reasoning_effort_keeps_standard_turns_faster(monkeypatch):
 
     assert agent_module._hermes_reasoning_effort("economy") == "low"
     assert agent_module._hermes_reasoning_effort("economy", "stock_research") == "none"
+    assert (
+        agent_module._hermes_reasoning_effort(
+            "economy", "stock_research", "quality_review"
+        )
+        == "low"
+    )
     assert agent_module._hermes_reasoning_effort("economy", "market_brief") == "none"
     assert (
         agent_module._hermes_reasoning_effort("economy", "business_structure") == "none"
@@ -1632,6 +1638,26 @@ def test_hermes_turn_budget_allows_completion_without_long_loops(monkeypatch):
 
     monkeypatch.setenv("HERMES_ECONOMY_MAX_ITERATIONS", "1")
     assert agent_module._hermes_max_iterations("economy") == 2
+
+
+def test_hermes_quality_review_uses_steady_sampling_with_override(monkeypatch):
+    evidence = {
+        "type": "stock_research",
+        "research_plan": {"focus": "quality_review"},
+    }
+    monkeypatch.delenv("HERMES_ECONOMY_TEMPERATURE", raising=False)
+
+    assert agent_module._hermes_temperature("economy", evidence) == 0.3
+    assert agent_module._hermes_temperature("economy", {"type": "market_brief"}) is None
+
+    monkeypatch.setenv("HERMES_ECONOMY_TEMPERATURE", "0.15")
+    assert agent_module._hermes_temperature("economy", evidence) == 0.15
+
+    monkeypatch.setenv("HERMES_ECONOMY_TEMPERATURE", "3")
+    assert agent_module._hermes_temperature("economy", evidence) == 2.0
+
+    monkeypatch.setenv("HERMES_ECONOMY_TEMPERATURE", "invalid")
+    assert agent_module._hermes_temperature("economy", evidence) == 0.3
 
 
 def test_hermes_oneshot_fallback_disables_all_tools(
@@ -9848,12 +9874,14 @@ def test_streaming_bridge_publishes_only_guarded_cumulative_sentences(
     assert usage["streaming"]["max_tokens"] == 900
     assert usage["streaming"]["max_iterations"] == 4
     assert usage["streaming"]["reasoning_effort"] == "none"
+    assert usage["streaming"]["temperature"] is None
     max_tokens_index = captured["command"].index("--max-tokens")
     assert captured["command"][max_tokens_index + 1] == "900"
     max_iterations_index = captured["command"].index("--max-iterations")
     assert captured["command"][max_iterations_index + 1] == "4"
     reasoning_index = captured["command"].index("--reasoning-effort")
     assert captured["command"][reasoning_index + 1] == "none"
+    assert "--temperature" not in captured["command"]
 
 
 def test_streaming_bridge_keeps_substantial_guarded_partial_without_final_event(
@@ -11443,6 +11471,77 @@ def test_quality_review_followup_does_not_append_inventory_checklist():
 
     assert repaired == draft
     assert "存货分类、库龄和跌价准备" not in repaired
+
+
+def test_quality_review_followup_repairs_locally_without_dropping_cashflow_fact():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {
+            "focus": "quality_review",
+            "primary_focus": "quality_review",
+            "contextual_followup": True,
+        },
+        "earnings_quality": {
+            "latest_report": {
+                "revenue_yoy_pct": 54.8,
+                "net_profit_yoy_pct": 42.0,
+                "gross_margin_pct": 23.93,
+            },
+            "comparable_report": {"gross_margin_pct": 25.02},
+        },
+        "financial_drivers": {
+            "cashflow_analysis": {
+                "operating_cashflow": 60_216_851_000,
+                "operating_cashflow_change_pct": 2.607,
+                "operating_cashflow_to_net_profit": 1.39,
+                "comparable_operating_cashflow_to_net_profit": 1.93,
+            }
+        },
+        "business_structure": {
+            "dimensions": [
+                {
+                    "classification": "product",
+                    "segments": [
+                        {
+                            "item_name": "动力电池系统",
+                            "gross_margin_change_pp": -1.78,
+                        },
+                        {
+                            "item_name": "储能电池系统",
+                            "gross_margin_change_pp": -1.56,
+                        },
+                    ],
+                }
+            ]
+        },
+    }
+    draft = (
+        "上半年营收和净利增速都在四五十，电池总销量增长约六成。"
+        "综合毛利率从去年同期的25%降到23.9%，动力电池和储能两大主业的"
+        "毛利率各降了大约1.8和1.6个百分点，这是“增收不增利”在毛利层面的"
+        "直接信号。目前公司没有解释毛利率下滑是价格竞争、产品结构还是成本端"
+        "的压力。\n\n"
+        "经营现金流净额602亿元，同比只增加了2.6%，而净利润增了42%，现金流"
+        "对利润的覆盖比率从去年同期的1.93降到1.39，说明盈利转化成真金白银的"
+        "速度在放缓。这很重要，因为利润表漂亮的时候，现金流的变化往往更能"
+        "暴露应收账款或存货占款的真实程度——公司现在只解释库存增加是为了备货，"
+        "并没有说明客户回款节奏是否在变慢。如果只能跟踪一项，我会盯住毛利率，"
+        "因为当前毛利率下降和现金流转化率走弱可能指向同一个价格或成本压力源头。"
+    )
+
+    repaired = repair_quality_review_answer(draft, evidence)
+
+    assert repaired is not None
+    assert "经营现金流净额602亿元" in repaired
+    assert "1.93降到1.39" in repaired
+    assert "经营现金流与净利润的增长速度不同" in repaired
+    assert repaired.count("\n\n") == 1
+    assert "真金白银" not in repaired
+    assert "应收账款或存货占款" not in repaired
+    assert "价格或成本压力源头" not in repaired
+    assert "增收不增利" not in repaired
 
 
 def test_numeric_guard_accepts_rounded_percentage_transition_with_drop_to_wording():

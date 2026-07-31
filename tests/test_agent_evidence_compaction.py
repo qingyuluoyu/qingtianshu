@@ -1335,6 +1335,8 @@ def test_quality_review_compaction_builds_opening_frame_without_price():
     }
     frame = compact["quality_review_answer_frame"]
     assert frame["requested_shape"] == "analyst_quality_review_opening"
+    assert "写四个连贯自然段" in frame["answer_contract"]
+    assert "不举可能原因或替代情景" in frame["answer_contract"]
     assert frame["cashflow"]["operating_cashflow"] == 120.0
     assert frame["scale_and_margin"]["product_segments"][0]["item_name"] == (
         "云计算产品"
@@ -1346,7 +1348,7 @@ def test_quality_review_compaction_builds_opening_frame_without_price():
     )
     assert frame["finance_expense"]["change_amount"] == 4.0
     assert "应收账款" in frame["cashflow"]["interpretation"]
-    assert "写三到四个连贯自然段" in frame["answer_contract"]
+    assert "写四个连贯自然段" in frame["answer_contract"]
     assert "只能说两类指标增长速度不同" in frame["cashflow"]["preferred_expression"]
     assert (
         "不能确认51.91亿元同比变化全部由汇兑造成"
@@ -1485,6 +1487,7 @@ def test_quality_review_followup_compacts_to_exact_fact_frame():
     frame = compact["followup_answer_frame"]
     assert frame["requested_fact_count"] == 2
     assert frame["requested_shape"] == "exact_facts_then_choose_one_tracker"
+    assert len(frame["fact_candidates"]) == 2
     assert frame["fact_candidates"][0]["combined_battery_sales_yoy_pct"] == 60.0
     assert frame["fact_candidates"][1]["operating_cashflow_change_pct"] == 2.6
     assert "原因尚未确认" in frame["fact_candidates"][1]["meaning"]
@@ -1493,7 +1496,10 @@ def test_quality_review_followup_compacts_to_exact_fact_frame():
     assert "优先选择整体及两大主营毛利率" in frame["tracking_rule"]
     assert "直接写 2 个自然段" in frame["answer_contract"]
     assert "中间不能再换行" in frame["answer_contract"]
-    assert frame["fact_candidates"][2]["company_explanation"].startswith("公司表示")
+    assert all(
+        item["kind"] != "inventory_company_explanation"
+        for item in frame["fact_candidates"]
+    )
 
 
 def test_valuation_review_compaction_uses_same_day_peer_packet_without_report_dump():

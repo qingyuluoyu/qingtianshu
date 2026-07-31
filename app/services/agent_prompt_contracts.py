@@ -102,6 +102,18 @@ def append_prompt_contracts(
         and research_plan.get("contextual_followup")
         and research_plan.get("primary_focus") == "quality_review"
     )
+    quality_opening_frame = bool(
+        (prompt_evidence.get("quality_review_answer_frame") or {}).get(
+            "requested_shape"
+        )
+        == "analyst_quality_review_opening"
+    )
+    quality_followup_frame = bool(
+        focused_quality_followup
+        and (prompt_evidence.get("followup_answer_frame") or {}).get("requested_shape")
+        == "exact_facts_then_choose_one_tracker"
+    )
+    compact_quality_frame = quality_opening_frame or quality_followup_frame
     quality_review_dialogue = bool(
         intent == "stock_research" and stock_research_focus == "quality_review"
     )
@@ -408,7 +420,8 @@ Hermes/DeepSeek Run 针对用户问题即时生成，第一段直接解决问题
 也不得补写“限售股解禁通常意味着潜在抛压”等没有进入本轮证据的常识故事。
 """
         elif quality_review_dialogue:
-            prompt += """
+            if not compact_quality_frame:
+                prompt += """
 
 ## 财报对话的证据边界
 
@@ -494,7 +507,8 @@ post_close_snapshot 时称“收盘后最新报价”；当天完整日线尚未
 获利了结、节奏变化、行业轮动、市场情绪、技术因素，也不能据此声称公司基本面没有问题。
 """
         elif quality_review_dialogue:
-            prompt += """
+            if not compact_quality_frame:
+                prompt += """
 
 ## 财报对话回答要求
 
@@ -830,7 +844,11 @@ PE TTM/PB 和同行中位数；相对比例不是必答项，不必逐家公司�
 只选择会改变当前判断的少数关键事项，例如滚动盈利分母、扣非与非经常性损益、应收存货附注、
 总负债绝对额、同行同报告期经营数据。最终输出一版连贯、有信息量、不过度重复的金融分析。
 """
-    if intent == "stock_research" and stock_research_focus == "quality_review":
+    if (
+        intent == "stock_research"
+        and stock_research_focus == "quality_review"
+        and not compact_quality_frame
+    ):
         prompt += """
 
 ## 经营改善质量：自然分析要求
@@ -893,6 +911,7 @@ verified_alias，应说明公司行业标签与中证指数来自不同分类体
         intent == "stock_research"
         and cashflow_in_scope
         and not focused_quality_followup
+        and not compact_quality_frame
     ):
         prompt += """
 
@@ -909,6 +928,7 @@ verified_alias，应说明公司行业标签与中证指数来自不同分类体
     if (
         intent == "stock_research"
         and not focused_quality_followup
+        and not compact_quality_frame
         and any(term in message for term in ("财务", "财报", "营收", "净利润", "利润"))
     ):
         prompt += """
@@ -1219,7 +1239,11 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 成交额没有单独标注市场日期。回答必须明确说明成交额只是成交金额，不等于资金净流入。
 历史比较为 building_history 时，只能说同口径历史仍在积累；不得声称已确认放量或缩量。
 """
-    if intent == "stock_research" and stock_research_focus == "quality_review":
+    if (
+        intent == "stock_research"
+        and stock_research_focus == "quality_review"
+        and not compact_quality_frame
+    ):
         prompt += """
 
 ## 输出前自然度核对
@@ -1384,7 +1408,7 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 不能排除其他公司特定因素。不能确认项中不要再举“是否提前消化解禁、是否纯粹资金行为、是否有人
 提前交易”等替代猜测，也不要用反问句列出新的原因候选。
 """
-    if focused_quality_followup:
+    if focused_quality_followup and not quality_followup_frame:
         prompt += """
 
 ## 财报质量连续追问最后核对
@@ -1416,31 +1440,40 @@ followup_answer_frame 是本轮唯一事实框架。只从其中的 fact_candida
 {requested_fact_count - 1} 个空行分段，不得生成额外段落。现金流原因即使用“如果、可能、后续”
 等条件句也不得猜应收、存货、客户账期或短期节奏。
 """
-    elif quality_review_dialogue and (
-        (prompt_evidence.get("quality_review_answer_frame") or {}).get(
-            "requested_shape"
+    if quality_followup_frame:
+        followup_count = requested_fact_count or int(
+            (prompt_evidence.get("followup_answer_frame") or {}).get(
+                "requested_fact_count"
+            )
+            or 2
         )
-        == "analyst_quality_review_opening"
-    ):
+        prompt += f"""
+
+## 财报质量连续追问
+
+followup_answer_frame 是本轮完整事实范围，其中 fact_candidates 已按用户要求选好。按列表顺序逐项
+回答，共 {followup_count} 个自然段；最后一个自然段的最后一句直接说明唯一跟踪项和理由，不另起
+总结段。每段按“事实变化、它为何影响判断、当前原因仍未知到哪一步”自然推进，不恢复上一轮全文
+或加入框架外主题。
+
+使用平实、专业的分析师口吻，以数字和财务含义为主，不使用标题、编号、口号或比喻。现金流差异
+只描述增长速度和比率变化；原因未确认时只写“具体原因尚未确认”并结束这个事实，不解释可能是
+什么，不列替代情景。
+"""
+    elif quality_opening_frame:
         prompt += """
 
-## 财报质量开场最后核对
+## 财报质量开场
 
-quality_review_answer_frame 是本轮唯一事实框架。先用一句自然判断直接回答财报整体好不好，再用
-三到四个连贯自然段完成回答：先给整体判断并说规模增长，再解释毛利率和主营结构、现金流，最后
-合并存货公司解释与财务费用后自然收束。重点说清哪些是已发生的经营进展，哪些指标没有同步改善，
-以及哪些原因仍未被证据确认。
+quality_review_answer_frame 是本轮完整事实范围。先直接回答整体好不好，并用四个自然段串起规模
+与毛利、主营结构、现金流、存货公司解释和财务费用。每段按“事实变化、它为何影响判断、当前证据
+还不能确认什么”推进；现金流和财务费用优先沿用框架中的 preferred_expression。
+毛利率段保留整体毛利率的本期与可比期数值，并写出动力、储能两项主营毛利率的变化。
 
-使用直白、专业、像分析师交谈的中文。公司解释明确称为公司口径，不把提前备货改写成“主动备货”
-或需求已经兑现，也不把销量增长写成市场份额上升或排除会计及非经常性因素。储能收入占比上升只
-说明结构变化，不推断它缓冲了毛利率。现金流只写“金额仍为正且增长、但增速低于利润、比率下降”，
-不写时间错位、现金流吃紧、现金转化变慢或现金覆盖健康，也不猜测应收账款、客户账期或回款恶化。财务费用中的
-汇兑说明只解释本期科目，不把它扩写成全部同比变化原因。两期财务费用均为负数，本期负值绝对额
-缩小表示财务收益减少，是本期利润同比的逆风而不是利润增长来源；不得反向写成利润增长来自可比期
-更大的财务收益或同比基数。毛利率与现金流原因不要列出产品价格、成本、客户、应收或存货等候选项。
-现金流和财务费用优先按框架中的 preferred_expression 表达，不再创造新的质量标签或因果故事。
-不追加固定核验清单、来源目录、免责声明、邀请继续提问或“成绩单、含金量、原地踏步、现金回笼、
-油水、抽水、油箱、绳索、真金白银、严重脱节”等比喻和口号。
+使用平实、专业的分析师口吻，以数字和财务含义为主，不给回答贴标签，不使用标题、项目符号、口号
+或比喻。公司解释明确称为公司口径；原因未确认时只写“具体原因尚未确认”并进入下一事实，不解释
+可能是什么，不列替代情景或后续核验清单。
+财务费用为负数表示财务收益，本期负值绝对额缩小是利润同比的逆风，不是利润增长来源。
 """
     if intent == "market_brief" and market_cross_date_cause_question:
         prompt += """
@@ -1484,7 +1517,7 @@ MA20 不是市场平均持仓成本，也不能推出抛压、压力或市场是
 不写“被均线压住、挡回来”，也不增加成交额、资讯、第三个变量、未来天数或通过门槛。
 回答必须以完整句子结束。
 """
-    if _asks_for_natural_conversation_style(message):
+    if _asks_for_natural_conversation_style(message) and not compact_quality_frame:
         prompt += """
 
 ## 本轮自然对话表达要求

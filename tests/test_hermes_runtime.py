@@ -34,6 +34,8 @@ def test_packaged_stream_bridge_accepts_output_budget():
             "4",
             "--reasoning-effort",
             "low",
+            "--temperature",
+            "0.3",
         ],
         check=False,
         capture_output=True,

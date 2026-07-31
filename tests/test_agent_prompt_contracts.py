@@ -261,16 +261,44 @@ def test_quality_review_opening_uses_compact_answer_frame():
         },
     )
 
-    assert "财报质量开场最后核对" in prompt
-    assert "quality_review_answer_frame 是本轮唯一事实框架" in prompt
-    assert "三到四个连贯自然段" in prompt
-    assert "不猜测应收账款" in prompt
-    assert "不把提前备货改写成“主动备货”" in prompt
-    assert "不写时间错位、现金流吃紧、现金转化变慢" in prompt
-    assert "现金覆盖健康" in prompt
-    assert "优先按框架中的 preferred_expression 表达" in prompt
-    assert "含金量、原地踏步、现金回笼" in prompt
-    assert "是本期利润同比的逆风而不是利润增长来源" in prompt
+    assert "财报质量开场" in prompt
+    assert "quality_review_answer_frame 是本轮完整事实范围" in prompt
+    assert "用四个自然段" in prompt
+    assert "原因未确认时只写“具体原因尚未确认”" in prompt
+    assert "不解释\n可能是什么" in prompt
+    assert "本期负值绝对额缩小是利润同比的逆风" in prompt
+    assert "动力、储能两项主营毛利率的变化" in prompt
+    assert "经营改善质量：自然分析要求" not in prompt
+    assert "财务问题必答字段" not in prompt
+    assert "输出前自然度核对" not in prompt
+    assert "本轮自然对话表达要求" not in prompt
+
+
+def test_quality_review_followup_frame_uses_one_concise_contract():
+    prompt = _append(
+        intent="stock_research",
+        message="真正会改变判断的两个事实是什么？只跟踪一项你选什么？",
+        prompt_evidence={
+            "research_plan": {
+                "focus": "quality_review",
+                "primary_focus": "quality_review",
+                "contextual_followup": True,
+            },
+            "followup_answer_frame": {
+                "requested_shape": "exact_facts_then_choose_one_tracker",
+                "requested_fact_count": 2,
+            },
+        },
+    )
+
+    assert "财报质量连续追问" in prompt
+    assert "共 2 个自然段" in prompt
+    assert "fact_candidates 已按用户要求选好" in prompt
+    assert "不解释可能是\n什么" in prompt
+    assert "不列替代情景" in prompt
+    assert "经营改善质量：自然分析要求" not in prompt
+    assert "输出前自然度核对" not in prompt
+    assert "本轮自然对话表达要求" not in prompt
 
 
 def test_quality_review_uses_available_cashflow_company_explanation():

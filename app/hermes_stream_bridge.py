@@ -29,9 +29,7 @@ _BRIDGE_DIR = Path(__file__).resolve().parent
 
 def _without_bridge_dir(paths: list[str]) -> list[str]:
     return [
-        entry
-        for entry in paths
-        if Path(entry or os.getcwd()).resolve() != _BRIDGE_DIR
+        entry for entry in paths if Path(entry or os.getcwd()).resolve() != _BRIDGE_DIR
     ]
 
 
@@ -76,6 +74,7 @@ def run_bridge(
     max_tokens: int | None,
     max_iterations: int,
     reasoning_effort: str | None,
+    temperature: float | None,
 ) -> int:
     os.environ["HERMES_SAFE_MODE"] = "1"
     os.environ["HERMES_IGNORE_USER_CONFIG"] = "1"
@@ -138,6 +137,9 @@ def run_bridge(
                 max_iterations=max_iterations,
                 max_tokens=max_tokens,
                 reasoning_config=reasoning_config,
+                request_overrides=(
+                    {"temperature": temperature} if temperature is not None else None
+                ),
                 skip_context_files=True,
                 skip_memory=True,
                 stream_delta_callback=on_delta,
@@ -195,6 +197,7 @@ def main() -> int:
         "--reasoning-effort",
         choices=("none", "low", "medium", "high", "max"),
     )
+    parser.add_argument("--temperature", type=float)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
@@ -216,6 +219,8 @@ def main() -> int:
         parser.error("--max-tokens must be positive")
     if args.max_iterations <= 0:
         parser.error("--max-iterations must be positive")
+    if args.temperature is not None and not 0 <= args.temperature <= 2:
+        parser.error("--temperature must be between 0 and 2")
     return run_bridge(
         prompt,
         args.model,
@@ -223,6 +228,7 @@ def main() -> int:
         args.max_tokens,
         args.max_iterations,
         args.reasoning_effort,
+        args.temperature,
     )
 
 

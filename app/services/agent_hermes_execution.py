@@ -54,14 +54,20 @@ def hermes_max_tokens(intent: str, model_tier: str) -> int:
     }.get(intent, 1100)
 
 
-def hermes_reasoning_effort(model_tier: str, intent: str = "") -> str:
+def hermes_reasoning_effort(
+    model_tier: str, intent: str = "", research_focus: str = ""
+) -> str:
     """Choose a latency-conscious reasoning level for the same text model."""
 
-    override = str(
-        os.getenv(f"HERMES_{model_tier.upper()}_REASONING_EFFORT") or ""
-    ).strip().lower()
+    override = (
+        str(os.getenv(f"HERMES_{model_tier.upper()}_REASONING_EFFORT") or "")
+        .strip()
+        .lower()
+    )
     if override in {"none", "low", "medium", "high", "max"}:
         return override
+    if model_tier == "economy" and research_focus == "quality_review":
+        return "low"
     if model_tier == "economy" and intent in {
         "stock_research",
         "market_brief",
@@ -88,6 +94,26 @@ def hermes_max_iterations(model_tier: str) -> int:
         except ValueError:
             pass
     return 6 if model_tier == "deep" else 4
+
+
+def hermes_temperature(model_tier: str, evidence: dict[str, Any]) -> float | None:
+    """Use steadier sampling for evidence-dense financial conversations."""
+
+    override = str(os.getenv(f"HERMES_{model_tier.upper()}_TEMPERATURE") or "").strip()
+    if override:
+        try:
+            return max(0.0, min(float(override), 2.0))
+        except ValueError:
+            pass
+
+    research_plan = evidence.get("research_plan") or {}
+    if (
+        model_tier == "economy"
+        and str(evidence.get("type") or "") == "stock_research"
+        and str(research_plan.get("focus") or "") == "quality_review"
+    ):
+        return 0.3
+    return None
 
 
 @dataclass(frozen=True)
@@ -202,7 +228,9 @@ def execute_hermes_streaming(
     intent = str(evidence.get("type") or "")
     max_tokens = hermes_max_tokens(intent, model_tier)
     max_iterations = hermes_max_iterations(model_tier)
-    reasoning_effort = hermes_reasoning_effort(model_tier, intent)
+    research_focus = str((evidence.get("research_plan") or {}).get("focus") or "")
+    reasoning_effort = hermes_reasoning_effort(model_tier, intent, research_focus)
+    temperature = hermes_temperature(model_tier, evidence)
     command = [
         str(python_bin),
         str(bridge),
@@ -215,6 +243,8 @@ def execute_hermes_streaming(
         "--reasoning-effort",
         reasoning_effort,
     ]
+    if temperature is not None:
+        command.extend(["--temperature", str(temperature)])
     if provider:
         command.extend(["--provider", provider])
     if model:
@@ -260,13 +290,16 @@ def execute_hermes_streaming(
     final_event: dict[str, Any] | None = None
     bridge_error: str | None = None
 
-    def streaming_usage(*, partial: bool = False, reason: str | None = None) -> dict[str, Any]:
+    def streaming_usage(
+        *, partial: bool = False, reason: str | None = None
+    ) -> dict[str, Any]:
         metadata: dict[str, Any] = {
             "enabled": True,
             "mode": "guarded_cumulative_stream_v3",
             "max_tokens": max_tokens,
             "max_iterations": max_iterations,
             "reasoning_effort": reasoning_effort,
+            "temperature": temperature,
             "first_token_seconds": (
                 round(first_token_seconds, 3)
                 if first_token_seconds is not None
@@ -394,9 +427,7 @@ def execute_hermes_streaming(
                         {
                             "type": "delta",
                             "draft": visible_draft,
-                            "elapsed_seconds": round(
-                                time.perf_counter() - started, 3
-                            ),
+                            "elapsed_seconds": round(time.perf_counter() - started, 3),
                             "event_index": visible_events,
                             "withheld_segments": withheld_segments,
                             "is_unverified": True,

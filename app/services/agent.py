@@ -15,6 +15,7 @@ from app.services.agent_hermes_execution import (
     hermes_max_iterations,
     hermes_max_tokens,
     hermes_reasoning_effort,
+    hermes_temperature,
     resolve_hermes_route,
 )
 from app.services.agent_evidence_compaction import (
@@ -320,11 +321,15 @@ def _market_followup_question_context(
     prior model prose remains excluded.
     """
 
-    if not history or re.search(
-        r"(?:你)?刚才|刚刚|上(?:一轮|一条|面)|前面|你说的|"
-        r"这个判断|这一判断|这个结论|这一结论|继续说|接着说",
-        message,
-    ) is None:
+    if (
+        not history
+        or re.search(
+            r"(?:你)?刚才|刚刚|上(?:一轮|一条|面)|前面|你说的|"
+            r"这个判断|这一判断|这个结论|这一结论|继续说|接着说",
+            message,
+        )
+        is None
+    ):
         return []
     questions = [
         str(item.get("content") or "")[:500]
@@ -332,6 +337,7 @@ def _market_followup_question_context(
         if item.get("role") == "user" and str(item.get("content") or "").strip()
     ]
     return questions[-4:]
+
 
 _MODEL_USAGE_SUM_KEYS = (
     "estimated_cost_usd",
@@ -379,12 +385,18 @@ def _hermes_max_tokens(intent: str, model_tier: str) -> int:
     return hermes_max_tokens(intent, model_tier)
 
 
-def _hermes_reasoning_effort(model_tier: str, intent: str = "") -> str:
-    return hermes_reasoning_effort(model_tier, intent)
+def _hermes_reasoning_effort(
+    model_tier: str, intent: str = "", research_focus: str = ""
+) -> str:
+    return hermes_reasoning_effort(model_tier, intent, research_focus)
 
 
 def _hermes_max_iterations(model_tier: str) -> int:
     return hermes_max_iterations(model_tier)
+
+
+def _hermes_temperature(model_tier: str, evidence: dict[str, Any]) -> float | None:
+    return hermes_temperature(model_tier, evidence)
 
 
 _prompt_local_time = prompt_local_time
@@ -609,9 +621,7 @@ class AgentService:
         error: str | None = None
         model_seconds = 0.0
         guard_seconds = 0.0
-        generated_answer_candidates: list[
-            tuple[str, dict[str, Any] | None, str]
-        ] = []
+        generated_answer_candidates: list[tuple[str, dict[str, Any] | None, str]] = []
         # Prior assistant text helps the model understand the conversation, but
         # it is not an independent financial source.  Never whitelist numbers
         # merely because a previous model answer contained them; every price,
@@ -673,18 +683,19 @@ class AgentService:
                     normalized = f"{quote_prefix}\n\n{normalized.lstrip()}"
             return normalized
 
-        def recover_subject_preserving_generated_answer() -> tuple[
-            str,
-            dict[str, Any],
-            str,
-            str,
-            str | None,
-        ] | None:
+        def recover_subject_preserving_generated_answer() -> (
+            tuple[
+                str,
+                dict[str, Any],
+                str,
+                str,
+                str | None,
+            ]
+            | None
+        ):
             """Keep a grounded real-model draft when only a soft check remains."""
 
-            focus = str(
-                (prompt_evidence.get("research_plan") or {}).get("focus") or ""
-            )
+            focus = str((prompt_evidence.get("research_plan") or {}).get("focus") or "")
             local_repairers: list[
                 tuple[str, Callable[[str, dict[str, Any]], str | None]]
             ] = []
@@ -703,7 +714,11 @@ class AgentService:
                     )
                 )
 
-            for generated_answer, generated_usage, source in generated_answer_candidates:
+            for (
+                generated_answer,
+                generated_usage,
+                source,
+            ) in generated_answer_candidates:
                 variants = [
                     (method, candidate)
                     for method, repairer in local_repairers
@@ -908,9 +923,9 @@ class AgentService:
                                 },
                                 "output_guard": preserved_guard,
                             }
-                            (
-                                run_dir / "answer.soft_relevance_preserved.md"
-                            ).write_text(answer, encoding="utf-8")
+                            (run_dir / "answer.soft_relevance_preserved.md").write_text(
+                                answer, encoding="utf-8"
+                            )
                 if relevance_issue:
                     repaired_relative_answer = repair_relative_industry_answer(
                         answer,
@@ -1336,16 +1351,21 @@ class AgentService:
                     model_seconds=round(model_seconds, 3),
                 )
                 recovery_started = time.perf_counter()
-                recovered: tuple[
-                    str,
-                    dict[str, Any],
-                    str,
-                    str,
-                ] | None = None
+                recovered: (
+                    tuple[
+                        str,
+                        dict[str, Any],
+                        str,
+                        str,
+                    ]
+                    | None
+                ) = None
                 focus = str(
                     (prompt_evidence.get("research_plan") or {}).get("focus") or ""
                 )
-                repairers: list[tuple[str, Callable[[str, dict[str, Any]], str | None]]] = []
+                repairers: list[
+                    tuple[str, Callable[[str, dict[str, Any]], str | None]]
+                ] = []
                 if focus == "valuation_review":
                     repairers.append(
                         (
@@ -1372,7 +1392,11 @@ class AgentService:
                         ),
                     )
                 )
-                for generated_answer, generated_usage, source in generated_answer_candidates:
+                for (
+                    generated_answer,
+                    generated_usage,
+                    source,
+                ) in generated_answer_candidates:
                     candidates = [("preserve_generated_answer_v1", generated_answer)]
                     candidates.extend(
                         (method, candidate)
@@ -1384,10 +1408,13 @@ class AgentService:
                             candidate,
                             generated_usage,
                         )
-                        if stock_specialist_relevance_issue(
-                            normalized_candidate,
-                            prompt_evidence,
-                        ) is not None:
+                        if (
+                            stock_specialist_relevance_issue(
+                                normalized_candidate,
+                                prompt_evidence,
+                            )
+                            is not None
+                        ):
                             continue
                         recovered_guard = self._validate_model_output(
                             normalized_candidate,
@@ -1938,9 +1965,7 @@ class AgentService:
                 # no body yet. During streaming, however, the body may arrive in
                 # the next delta. Preserve that complete Markdown segment so the
                 # guarded cumulative draft remains a prefix of the final answer.
-                normalized = raw_segment.replace(
-                    "失效条件", "什么时候需要重新判断"
-                )
+                normalized = raw_segment.replace("失效条件", "什么时候需要重新判断")
             if str(evidence.get("type") or "") == "stock_research":
                 research_focus = str(
                     (evidence.get("research_plan") or {}).get("focus") or ""
