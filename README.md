@@ -228,13 +228,13 @@ Agent 失败、守卫未完成或只返回 preview 时不会创建候选。确�
 | `HERMES_ENABLED` | `false` | 是否调用 Hermes 生成深度回答 |
 | `HERMES_BIN` | `hermes` | Hermes 命令名或可执行文件路径 |
 | `HERMES_PYTHON_BIN` | 自动识别 | 可选；Hermes 流式桥接所用虚拟环境 Python，自动识别失败时再配置 |
-| `HERMES_ECONOMY_PROVIDER` | `deepseek` | 普通文字对话的 Hermes Provider |
-| `HERMES_ECONOMY_MODEL` | `deepseek-v4-pro` | 普通文字对话模型 |
+| `HERMES_ECONOMY_PROVIDER` | `custom` | 普通文字对话的 Hermes Provider |
+| `HERMES_ECONOMY_MODEL` | `step-3.7-flash` | 普通文字对话模型 |
 | `HERMES_ECONOMY_MAX_TOKENS` | 按意图 900—1800 | 普通文字回答的输出上限；未设置时按大盘、个股、文章等场景自动选择 |
 | `HERMES_ECONOMY_MAX_ITERATIONS` | `4` | 标准对话单轮迭代预算；避免一轮即被截断，同时限制无工具长循环 |
-| `HERMES_ECONOMY_REASONING_EFFORT` | 按意图选择 | 标准大盘使用 `low`，标准个股使用 `none`；保持 DeepSeek v4 Pro 不变，环境变量可统一覆盖 |
-| `HERMES_DEEP_PROVIDER` | `deepseek` | 深度研究文字对话的 Hermes Provider |
-| `HERMES_DEEP_MODEL` | `deepseek-v4-pro` | 深度研究文字模型 |
+| `HERMES_ECONOMY_REASONING_EFFORT` | 按意图选择 | 标准大盘使用 `low`，标准个股使用 `none`；环境变量可统一覆盖 |
+| `HERMES_DEEP_PROVIDER` | `custom` | 深度研究文字对话的 Hermes Provider |
+| `HERMES_DEEP_MODEL` | `step-3.7-flash` | 深度研究文字模型 |
 | `HERMES_DEEP_MAX_TOKENS` | `2200` | 深度研究回答的输出上限 |
 | `HERMES_DEEP_MAX_ITERATIONS` | `6` | 深入研究单轮迭代预算 |
 | `HERMES_DEEP_REASONING_EFFORT` | `medium` | 深入研究的推理档 |
@@ -510,9 +510,9 @@ export HERMES_ENABLED=true
 - `HERMES_DEEP_PROVIDER` / `HERMES_DEEP_MODEL`
 - `HERMES_VISION_PROVIDER` / `HERMES_VISION_MODEL`
 
-文字对话未设置路由时默认使用 `deepseek / deepseek-v4-pro`，避免受用户 Hermes 全局默认模型影响；显式环境变量仍可覆盖。视觉路由不自动套用 `deepseek-v4-pro`，未设置时由 Hermes 的多模态配置决定。密钥由 Hermes 或进程环境管理，本项目不会读取、打印或复制密钥。
+文字对话未设置路由时默认使用 `custom / step-3.7-flash`，通过 `CUSTOM_BASE_URL=https://api.stepfun.com/v1` 连接阶跃星辰的 OpenAI 兼容接口；显式环境变量仍可覆盖。视觉路由未设置时由 Hermes 的多模态配置决定。阶跃密钥使用 `STEPFUN_API_KEY`，只由 Hermes 或进程环境读取，不写入仓库。
 
-一键启动检测到 `HERMES_BIN` 后会启用 Hermes，文字对话默认路由到 DeepSeek；如需其他模型，可用上述环境变量覆盖。密钥只由 Hermes 或进程环境读取，不写入项目。
+一键启动检测到 `HERMES_BIN` 后会启用 Hermes，文字对话默认路由到 StepFun；如需其他模型，可用上述环境变量覆盖。密钥只由 Hermes 或进程环境读取，不写入项目。
 
 `HERMES_BIN=hermes` 会按当前进程的 `PATH` 解析，不要求写本机绝对路径。流式回答会从 Hermes 控制台脚本或启动包装器识别其虚拟环境 Python，并保留虚拟环境入口；只有非标准安装无法自动识别时，才需要设置 `HERMES_PYTHON_BIN`。应用不会读取或复制 Hermes 密钥。
 

@@ -1517,18 +1517,18 @@ class _FakeStreamingProcess:
         self.terminated = True
 
 
-def test_hermes_text_routes_default_to_deepseek_v4_pro(monkeypatch):
+def test_hermes_text_routes_default_to_step_3_7_flash(monkeypatch):
     for tier in ("ECONOMY", "DEEP"):
         monkeypatch.delenv(f"HERMES_{tier}_PROVIDER", raising=False)
         monkeypatch.delenv(f"HERMES_{tier}_MODEL", raising=False)
 
     assert agent_module._resolve_hermes_route("economy") == (
-        "deepseek",
-        "deepseek-v4-pro",
+        "custom",
+        "step-3.7-flash",
     )
     assert agent_module._resolve_hermes_route("deep") == (
-        "deepseek",
-        "deepseek-v4-pro",
+        "custom",
+        "step-3.7-flash",
     )
 
 

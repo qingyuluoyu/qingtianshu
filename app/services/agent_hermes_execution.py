@@ -25,8 +25,8 @@ def resolve_hermes_route(model_tier: str) -> tuple[str | None, str | None]:
     provider = os.getenv(f"HERMES_{model_tier.upper()}_PROVIDER") or None
     model = os.getenv(f"HERMES_{model_tier.upper()}_MODEL") or None
     if model_tier in {"economy", "deep"}:
-        provider = provider or "deepseek"
-        model = model or "deepseek-v4-pro"
+        provider = provider or "custom"
+        model = model or "step-3.7-flash"
     return provider, model
 
 
