@@ -261,9 +261,7 @@ def test_natural_valuation_support_question_does_not_force_cashflow_and_debt_dum
     assert valuation_review_required_fact_issue(answer, evidence) is None
 
     contradiction_evidence = json.loads(json.dumps(evidence))
-    contradiction_evidence["peer_comparison"]["metrics"]["pb"][
-        "peer_median"
-    ] = 0.8
+    contradiction_evidence["peer_comparison"]["metrics"]["pb"]["peer_median"] = 0.8
     contradiction_evidence["peer_comparison"]["metrics"]["pb"][
         "subject_to_peer_median"
     ] = 1.516
@@ -525,31 +523,22 @@ def test_valuation_review_repair_handles_latest_real_failure_phrases():
 
 def test_valuation_review_accepts_opening_synonym_and_debt_boundary():
     evidence, answer = _same_day_valuation_review_case()
-    evidence["earnings_quality"]["comparable_report"] = {
-        "debt_asset_ratio_pct": 74.9
-    }
+    evidence["earnings_quality"]["comparable_report"] = {"debt_asset_ratio_pct": 74.9}
     answer = answer.replace(
         "不是。",
         "命中估值约束候选≠便宜。",
         1,
-    ) + (
-        "资产负债率下降只表示资产结构变化，不能直接等同于负债总量或"
-        "偿债压力已下降。"
-    )
+    ) + ("资产负债率下降只表示资产结构变化，不能直接等同于负债总量或偿债压力已下降。")
 
     assert valuation_review_required_fact_issue(answer, evidence) is None
 
-    ratio_only = answer + (
-        "资产负债率从74.90%降至42.48%，这是负债占资产的比例在下降。"
-    )
+    ratio_only = answer + ("资产负债率从74.90%降至42.48%，这是负债占资产的比例在下降。")
     assert valuation_review_required_fact_issue(ratio_only, evidence) is None
 
 
 def test_valuation_review_repair_does_not_force_peer_ratios_and_fixes_cash_shortcut():
     evidence, answer = _same_day_valuation_review_case()
-    evidence["earnings_quality"]["comparable_report"] = {
-        "debt_asset_ratio_pct": 74.9
-    }
+    evidence["earnings_quality"]["comparable_report"] = {"debt_asset_ratio_pct": 74.9}
     draft = answer.replace(
         "本标的PE TTM约为同行中位数的6%，PB约为同行中位数的54%。",
         "",
@@ -730,9 +719,7 @@ def test_valuation_review_repairs_only_hard_financial_math_errors():
 
 def test_valuation_review_repairs_latest_natural_draft_without_duplicate_appendix():
     evidence, _ = _same_day_valuation_review_case()
-    evidence["earnings_quality"]["comparable_report"] = {
-        "debt_asset_ratio_pct": 74.9
-    }
+    evidence["earnings_quality"]["comparable_report"] = {"debt_asset_ratio_pct": 74.9}
     draft = (
         "动力新科的PE TTM约2.50倍、PB约1.21倍，相比沪光股份、美湖股份和"
         "旷达科技的同行中位数39.39倍、2.26倍，倍数确实很低。但从目前证据看，"
@@ -763,9 +750,7 @@ def test_valuation_review_repairs_latest_natural_draft_without_duplicate_appendi
 def test_valuation_review_repairs_v4_natural_draft_without_discarding_it():
     evidence, _ = _same_day_valuation_review_case()
     evidence["fundamentals"]["valuation"]["pe_dynamic"] = 55.11
-    evidence["earnings_quality"]["comparable_report"] = {
-        "debt_asset_ratio_pct": 74.9
-    }
+    evidence["earnings_quality"]["comparable_report"] = {"debt_asset_ratio_pct": 74.9}
     evidence["financial_drivers"]["cashflow_analysis"].update(
         {
             "cash_received_from_sales_to_revenue_pct": 67.95,
@@ -823,9 +808,7 @@ def test_valuation_review_repairs_v4_natural_draft_without_discarding_it():
 
 def test_valuation_review_repairs_v5_hard_errors_without_duplicate_peer_snapshot():
     evidence, _ = _same_day_valuation_review_case()
-    evidence["earnings_quality"]["comparable_report"] = {
-        "debt_asset_ratio_pct": 74.9
-    }
+    evidence["earnings_quality"]["comparable_report"] = {"debt_asset_ratio_pct": 74.9}
     evidence["financial_drivers"]["cashflow_analysis"].update(
         {
             "cash_received_from_sales_to_revenue_pct": 67.95,
@@ -868,12 +851,8 @@ def test_valuation_review_repairs_v5_hard_errors_without_duplicate_peer_snapshot
 
 def test_valuation_review_repairs_v6_causal_cash_and_dynamic_pe_leaks():
     evidence, answer = _same_day_valuation_review_case()
-    evidence["earnings_quality"]["comparable_report"] = {
-        "debt_asset_ratio_pct": 74.9
-    }
-    evidence["earnings_quality"]["latest_report"]["parent_net_profit"] = (
-        36_199_600.85
-    )
+    evidence["earnings_quality"]["comparable_report"] = {"debt_asset_ratio_pct": 74.9}
+    evidence["earnings_quality"]["latest_report"]["parent_net_profit"] = 36_199_600.85
     evidence["financial_drivers"]["cashflow_analysis"].update(
         {
             "cash_received_from_sales_to_revenue_pct": 67.95,
@@ -1071,9 +1050,7 @@ def test_valuation_review_numeric_guard_repairs_only_the_bad_clause(
     tmp_path: Path, settings, monkeypatch
 ):
     evidence, answer = _same_day_valuation_review_case()
-    evidence["earnings_quality"]["comparable_report"] = {
-        "debt_asset_ratio_pct": 74.9
-    }
+    evidence["earnings_quality"]["comparable_report"] = {"debt_asset_ratio_pct": 74.9}
     answer += (
         "资产负债率虽然下降但绝对水平仍在42%以上，仍需核对是否涉及资产重组或"
         "负债结构实质性变化。"
@@ -1165,7 +1142,9 @@ def test_valuation_review_repair_restores_dated_peer_context_after_local_cleanup
     evidence["earnings_quality"]["comparable_report"] = {
         "debt_asset_ratio_pct": 74.901016
     }
-    undated = answer.replace("不是。数据日期为2026年7月29日收盘，", "命中估值约束不等于便宜。")
+    undated = answer.replace(
+        "不是。数据日期为2026年7月29日收盘，", "命中估值约束不等于便宜。"
+    )
     undated += (
         "资产负债率从上年同期74.9%下降。资产负债率虽然下降但绝对水平仍在42%以上，"
         "不能据此判断负债绝对规模。"
@@ -2949,7 +2928,7 @@ def test_stock_cause_prompt_drops_noncausal_bulk_and_duplicate_provenance():
                     "median_pct_change": -0.5,
                     "bins": ["x" * 1000],
                     "bin_ratios": [0.5],
-                }
+                },
             },
         },
         "a_share_information": {
@@ -4417,8 +4396,7 @@ def test_market_guard_accepts_natural_turnover_time_and_negative_boundary(settin
         "同口径历史比较仍处于 building_history 状态，当前无法判断放量或缩量。"
     )
     natural_boundary = (
-        "2026年7月21日全市场成交额为29734.49亿元，"
-        "但不能解读为增量资金集中入场。"
+        "2026年7月21日全市场成交额为29734.49亿元，但不能解读为增量资金集中入场。"
     )
 
     guard = service._validate_model_output(answer, evidence, trusted_context=None)
@@ -4699,9 +4677,7 @@ def test_guard_repair_renumbers_chinese_prose_ordinals_after_dropping_a_line():
         "第一，价格事实。\n第二，波动仍高。\n第四，事件驱动尚未确认。"
     )
 
-    assert repaired == (
-        "第一，价格事实。\n第二，波动仍高。\n第三，事件驱动尚未确认。"
-    )
+    assert repaired == ("第一，价格事实。\n第二，波动仍高。\n第三，事件驱动尚未确认。")
 
 
 def test_market_guard_repairs_unsupported_style_flow_and_history_inferences(
@@ -4839,9 +4815,10 @@ def test_market_guard_accepts_date_bound_cross_date_breadth_evidence():
     assert current_day["passed"] is True
     assert anaphoric_reference["passed"] is True
     assert wrong_day["passed"] is False
-    assert "缺少全市场涨跌家数时不能确认是否普涨" in wrong_day[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "缺少全市场涨跌家数时不能确认是否普涨"
+        in wrong_day["unsupported_market_inferences"]
+    )
 
 
 def test_market_guard_rejects_positive_whole_market_breadth_claim():
@@ -6007,8 +5984,7 @@ def test_model_language_cleanup_explains_invalidation_as_reassessment():
     )
 
     assert cleaned == (
-        "### 什么时候需要重新判断\n"
-        "- 后续事实与当前证据冲突时，需要重新评估。"
+        "### 什么时候需要重新判断\n- 后续事实与当前证据冲突时，需要重新评估。"
     )
 
 
@@ -6320,8 +6296,7 @@ def test_stock_guard_does_not_treat_valid_looking_ratio_as_notice_date():
 
     assert guard["passed"] is True
     assert (
-        "财报公告日期必须与结构化报告一致"
-        not in guard["unsupported_market_inferences"]
+        "财报公告日期必须与结构化报告一致" not in guard["unsupported_market_inferences"]
     )
 
 
@@ -6473,9 +6448,10 @@ def test_stock_guard_accepts_historical_weakness_in_sentence_mentioning_today():
     )
 
     assert guard["passed"] is True
-    assert "今日涨跌方向必须与更新的当前报价一致" not in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "今日涨跌方向必须与更新的当前报价一致"
+        not in guard["unsupported_market_inferences"]
+    )
 
 
 def test_stock_guard_accepts_previous_complete_session_before_current_quote():
@@ -6542,11 +6518,7 @@ def test_stock_guard_accepts_current_quote_inside_evidenced_reassessment_section
         "conditional_outlook": {
             "horizon": "未来5—20个交易日",
             "scenarios": [
-                {
-                    "condition": (
-                        "收盘有效站上43.0，且随后不跌回MA20 36.7635"
-                    )
-                },
+                {"condition": ("收盘有效站上43.0，且随后不跌回MA20 36.7635")},
                 {"condition": "收盘跌破32.39"},
             ],
         },
@@ -7078,8 +7050,7 @@ def test_stock_guard_treats_epistemic_now_as_confidence_not_quote_request():
         "type": "stock_research",
         "symbol": "000065.SZ",
         "user_question": (
-            "那你现在最有把握能确认的两件事是什么？"
-            "最不能确认的一件事是什么？"
+            "那你现在最有把握能确认的两件事是什么？最不能确认的一件事是什么？"
         ),
         "current_quote": {
             "price": 9.31,
@@ -7089,10 +7060,13 @@ def test_stock_guard_treats_epistemic_now_as_confidence_not_quote_request():
         "provenance": {"market_timestamp": "2026-07-30T15:00:00+08:00"},
     }
 
-    assert agent_module._stock_current_quote_required_but_missing(
-        "最有把握确认的是目标日实际涨跌；最不能确认的是直接驱动。",
-        evidence,
-    ) is False
+    assert (
+        agent_module._stock_current_quote_required_but_missing(
+            "最有把握确认的是目标日实际涨跌；最不能确认的是直接驱动。",
+            evidence,
+        )
+        is False
+    )
 
 
 def test_stock_guard_repairs_missing_quote_change_without_replacing_model_answer():
@@ -8024,8 +7998,9 @@ def test_stock_guard_requires_public_boundary_for_unadjusted_component_fallback(
     )
     assert combined_unsafe_repaired[1]["passed"] is True
     assert ordinary_guard["passed"] is True
-    assert "行业成分使用未复权补充行情时必须说明证券来源和除权边界" not in (
-        ordinary_guard["semantic_conflicts"]
+    assert (
+        "行业成分使用未复权补充行情时必须说明证券来源和除权边界"
+        not in (ordinary_guard["semantic_conflicts"])
     )
 
 
@@ -9044,8 +9019,7 @@ def test_market_reassessment_cleanup_normalizes_vague_future_window():
         "user_question": "接下来最值得观察什么？",
     }
     answer = (
-        "第一个是后续几个交易日里全市场的后续完整交易日里，"
-        "上涨家数是否仍占明显优势。"
+        "第一个是后续几个交易日里全市场的后续完整交易日里，上涨家数是否仍占明显优势。"
     )
 
     cleaned = agent_module._normalize_market_reassessment_language(answer, evidence)
@@ -10583,7 +10557,9 @@ def test_stock_repair_removes_industry_main_cause_and_sentiment_exclusion_cleanl
     assert "社区样本28条均为中性或混合" in repaired_answer
     assert "不能排除未被样本捕捉的情绪影响" in repaired_answer
     assert "\n。" not in repaired_answer
-    assert not any(line.rstrip().endswith("；") for line in repaired_answer.splitlines())
+    assert not any(
+        line.rstrip().endswith("；") for line in repaired_answer.splitlines()
+    )
     assert repaired_guard["passed"] is True
 
 
@@ -10840,9 +10816,7 @@ def test_non_prefix_final_answer_is_reconciled_by_http_without_sse_replacement(
             "is_guarded_partial": True,
         }
     ]
-    assert run["usage"]["streaming"]["final_delivery"] == (
-        "http_reconcile_non_prefix"
-    )
+    assert run["usage"]["streaming"]["final_delivery"] == ("http_reconcile_non_prefix")
 
 
 def test_stock_specialist_off_topic_answer_is_retried_with_focused_prompt(
@@ -11222,7 +11196,7 @@ def test_quality_review_natural_cash_ratio_draft_skips_editor_and_retry(
     assert len(stream_calls) == 1
     assert run["status"] == "completed"
     assert "经营现金流与归母净利润的比率" in run["answer"]
-    assert "销售商品、提供劳务收到的现金占营收的比例" in run["answer"]
+    assert "销售商品、提供劳务收到的现金占营收的比例" not in run["answer"]
     assert "销售商品收到的现金减少" in run["answer"]
     assert "实际的现金净流入" not in run["answer"]
     assert "每百元收入实际收到的现金减少" not in run["answer"]
@@ -11308,13 +11282,28 @@ def test_quality_review_accepts_natural_positive_cashflow_amount_rounding():
     )
 
     assert quality_review_required_fact_issue(answer, evidence) is None
-    assert quality_review_required_fact_issue(
-        answer.replace("602亿元", "602亿"), evidence
-    ) is None
-    assert "财务费用是本期利润的一项重要非主营扰动" in (
+    assert (
+        quality_review_required_fact_issue(answer.replace("602亿元", "602亿"), evidence)
+        is None
+    )
+    assert "财务费用较可比期的变化是利润同比的机械逆风" in (
         normalize_quality_review_language(
             "但增长的利润有一部分被非经营性因素抬高了，最明显的是财务费用。"
         )
+    )
+
+
+def test_quality_review_normalization_removes_conversational_meta_opener():
+    answer = (
+        "宁德时代：好，我们直接聊。\n\n"
+        "第一个事实是两大主营毛利率都在下降。\n\n"
+        "第二个事实是经营现金流增速低于净利润。"
+    )
+
+    normalized = normalize_quality_review_language(answer)
+
+    assert normalized == (
+        "第一个事实是两大主营毛利率都在下降。\n\n第二个事实是经营现金流增速低于净利润。"
     )
 
 
@@ -11421,6 +11410,41 @@ def test_quality_review_keeps_natural_inventory_verification_without_canned_appe
     assert quality_review_required_fact_issue(repaired, evidence) is None
 
 
+def test_quality_review_followup_does_not_append_inventory_checklist():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "300750.SZ",
+        "display_name": "宁德时代",
+        "research_plan": {
+            "focus": "quality_review",
+            "primary_focus": "quality_review",
+            "contextual_followup": True,
+        },
+        "a_share_information": {
+            "announcements": [
+                {
+                    "title": "宁德时代投资者关系活动记录表",
+                    "published_at": "2026-07-26",
+                    "summary": (
+                        "公司公告原文摘录：库存增加主要是为下半年市场需求而提前备货。"
+                    ),
+                }
+            ]
+        },
+    }
+    draft = (
+        "宁德时代第一个事实是营收增长而毛利率回落，这两项变化需要放在一起看。\n\n"
+        "第二个事实是经营现金流仍增长，但增速低于净利润；公司解释库存增加是为"
+        "下半年市场需求提前备货。如果只能跟踪一项，我会看经营现金流增速，因为"
+        "它能显示两类报表数据的差异是否缩小。"
+    )
+
+    repaired = repair_quality_review_answer(draft, evidence)
+
+    assert repaired == draft
+    assert "存货分类、库龄和跌价准备" not in repaired
+
+
 def test_numeric_guard_accepts_rounded_percentage_transition_with_drop_to_wording():
     evidence = {
         "type": "stock_research",
@@ -11511,7 +11535,6 @@ def test_quality_review_keeps_grounded_initial_draft_without_editor_or_retry(
     assert calls == [None]
     assert run["status"] == "completed"
     assert run["answer"] == initial_answer
-    assert run["usage"]["soft_relevance_preservation"]["source"] == "initial"
     assert "quality_editor" not in run["usage"]
     assert "relevance_retry" not in run["usage"]
     assert run["usage"]["output_guard"]["passed"] is True

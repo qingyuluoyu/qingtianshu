@@ -477,10 +477,13 @@ def _valuation_metric_number_mentioned(text: str, value: Any) -> bool:
     rounded = round(number)
     if abs(number - rounded) > 0.5:
         return False
-    return re.search(
-        rf"(?:约|大约|近|中位数(?:为|约为)?)\s*{abs(rounded)}(?:\.0)?(?:\s*倍)?",
-        text.replace(",", ""),
-    ) is not None
+    return (
+        re.search(
+            rf"(?:约|大约|近|中位数(?:为|约为)?)\s*{abs(rounded)}(?:\.0)?(?:\s*倍)?",
+            text.replace(",", ""),
+        )
+        is not None
+    )
 
 
 def _directional_amount_mentioned(text: str, value: Any) -> bool:
@@ -502,9 +505,7 @@ def _directional_amount_mentioned(text: str, value: Any) -> bool:
         rounded = round(number)
         if abs(number - rounded) > 0.5:
             return False
-        amount_pattern = (
-            rf"(?<!\d){abs(rounded)}(?:\.0)?\s*(?:亿元|亿|万元|万|元)"
-        )
+        amount_pattern = rf"(?<!\d){abs(rounded)}(?:\.0)?\s*(?:亿元|亿|万元|万|元)"
         return bool(
             re.search(
                 rf"经营现金流[^。；！？\n]{{0,28}}(?:净额|净流入)"
@@ -666,7 +667,8 @@ def _has_natural_inventory_verification_boundary(text: str) -> bool:
         ),
     )
     has_verification_language = any(
-        term in text for term in ("核验", "验证", "待确认", "待核验", "还不能", "无法确认")
+        term in text
+        for term in ("核验", "验证", "待确认", "待核验", "还不能", "无法确认")
     )
     return has_verification_language and any(checks)
 
@@ -676,12 +678,15 @@ def _has_sales_cash_ratio_label(text: str) -> bool:
 
     if "销售收现率" in text:
         return True
-    return re.search(
-        r"销售商品(?:、提供劳务)?收到的现金"
-        r"[^。；！？\n]{0,20}(?:营业收入|营收|收入)"
-        r"[^。；！？\n]{0,10}(?:比例|比率)",
-        text,
-    ) is not None
+    return (
+        re.search(
+            r"销售商品(?:、提供劳务)?收到的现金"
+            r"[^。；！？\n]{0,20}(?:营业收入|营收|收入)"
+            r"[^。；！？\n]{0,10}(?:比例|比率)",
+            text,
+        )
+        is not None
+    )
 
 
 def _directional_percentage_mentioned(text: str, value: Any) -> bool:
@@ -901,22 +906,26 @@ def valuation_review_required_fact_issue(
             re.I,
         ):
             return "估值回答把滚动十二个月市盈率错误说成只基于单一年度利润"
-    if re.search(
-        r"TTM\s*(?:盈利|利润)[^。；\n]{0,32}(?:很低|偏低|较低|很少)"
-        r"[^。；\n]{0,24}(?:拉低|压低|降低)[^。；\n]{0,16}(?:PE|市盈率)",
-        answer,
-        re.I,
-    ) or re.search(
-        r"(?:PE\s*低|低\s*PE)[^。；\n]{0,100}(?:因为|来自|由于)"
-        r"[^。；\n]{0,100}(?:过去四个季度|历史亏损|总体赚得很少|利润很低)",
-        answer,
-        re.I,
-    ) or re.search(
-        r"(?:历史亏损|低利润基数)[^。；\n]{0,100}(?:导致|使得?|从而)"
-        r"[^。；\n]{0,32}(?:PE|市盈率)[^。；\n]{0,24}"
-        r"(?:被)?(?:压得很低|压低|降低)",
-        answer,
-        re.I,
+    if (
+        re.search(
+            r"TTM\s*(?:盈利|利润)[^。；\n]{0,32}(?:很低|偏低|较低|很少)"
+            r"[^。；\n]{0,24}(?:拉低|压低|降低)[^。；\n]{0,16}(?:PE|市盈率)",
+            answer,
+            re.I,
+        )
+        or re.search(
+            r"(?:PE\s*低|低\s*PE)[^。；\n]{0,100}(?:因为|来自|由于)"
+            r"[^。；\n]{0,100}(?:过去四个季度|历史亏损|总体赚得很少|利润很低)",
+            answer,
+            re.I,
+        )
+        or re.search(
+            r"(?:历史亏损|低利润基数)[^。；\n]{0,100}(?:导致|使得?|从而)"
+            r"[^。；\n]{0,32}(?:PE|市盈率)[^。；\n]{0,24}"
+            r"(?:被)?(?:压得很低|压低|降低)",
+            answer,
+            re.I,
+        )
     ):
         return "估值回答用未拆解的滚动盈利或历史利润错误解释低PE"
     if re.search(
@@ -1067,10 +1076,7 @@ def valuation_review_required_fact_issue(
         return "估值回答把阶段性扭亏和业绩预告外推成了盈利改善趋势延续"
     if issue := valuation_review_stream_overclaim_issue(answer):
         return issue
-    if any(
-        term in answer
-        for term in ("半年度预告延续盈利", "半年度业绩预告延续盈利")
-    ):
+    if any(term in answer for term in ("半年度预告延续盈利", "半年度业绩预告延续盈利")):
         return "估值回答把半年度业绩预告写成了盈利延续"
     if re.search(
         r"经营层面[^。；\n]{0,20}方向性变化[^。；\n]{0,20}"
@@ -1089,10 +1095,7 @@ def valuation_review_required_fact_issue(
         return "估值回答把资产负债率变化升级成了财务结构变化"
     if re.search(r"(?:预示|说明|确认)[^。；\n]{0,12}扭亏持续", answer):
         return "估值回答把阶段性扭亏和业绩预告外推成了扭亏持续"
-    if any(
-        term in answer
-        for term in ("业务结构简单且方向明确", "业务结构清晰且专注")
-    ):
+    if any(term in answer for term in ("业务结构简单且方向明确", "业务结构清晰且专注")):
         return "估值回答把主营集中度美化成了结构简单明确"
     if re.search(
         r"主营(?:业务)?集中度[^。；\n]{0,16}(?:方向清晰|方向明确)",
@@ -1224,33 +1227,39 @@ def valuation_review_required_fact_issue(
         )
     )
     cashflow_requested = candidate_review or any(
-        term in question
-        for term in ("现金流", "现金", "回款", "收现", "营运资金")
+        term in question for term in ("现金流", "现金", "回款", "收现", "营运资金")
     )
     debt_requested = candidate_review or any(
-        term in question
-        for term in ("负债", "杠杆", "偿债", "债务")
+        term in question for term in ("负债", "杠杆", "偿债", "债务")
     )
     operating_cashflow = cashflow.get("operating_cashflow")
     coverage = cashflow.get("operating_cashflow_to_net_profit")
     if cashflow_requested and operating_cashflow is not None:
         amount_yi = float(operating_cashflow) / 100_000_000.0
         if not (
-            "经营现金流" in answer
-            and _directional_amount_mentioned(answer, amount_yi)
+            "经营现金流" in answer and _directional_amount_mentioned(answer, amount_yi)
         ):
             return "估值回答遗漏经营现金流金额"
-    if cashflow_requested and coverage is not None and not (
-        "经营现金流" in answer
-        and "归母净利润" in answer
-        and _quality_review_number_mentioned(answer, coverage)
+    if (
+        cashflow_requested
+        and coverage is not None
+        and not (
+            "经营现金流" in answer
+            and "归母净利润" in answer
+            and _quality_review_number_mentioned(answer, coverage)
+        )
     ):
         return "估值回答遗漏经营现金流与归母净利润比率"
 
     latest_report = (evidence.get("earnings_quality") or {}).get("latest_report") or {}
     debt_ratio = latest_report.get("debt_asset_ratio_pct")
-    if debt_requested and debt_ratio is not None and not (
-        "资产负债率" in answer and _quality_review_number_mentioned(answer, debt_ratio)
+    if (
+        debt_requested
+        and debt_ratio is not None
+        and not (
+            "资产负债率" in answer
+            and _quality_review_number_mentioned(answer, debt_ratio)
+        )
     ):
         return "估值回答遗漏最新资产负债率"
     return None
@@ -1856,9 +1865,7 @@ def _normalize_valuation_review_language(text: str) -> str:
         "经营现金流与利润方向相反，原因仍需核验。",
         normalized,
     )
-    cashflow_shortcut = re.compile(
-        r"(?:卖货)?回款(?:变慢|走弱|恶化|质量下降)"
-    )
+    cashflow_shortcut = re.compile(r"(?:卖货)?回款(?:变慢|走弱|恶化|质量下降)")
 
     def replace_cashflow_shortcut(match: re.Match[str]) -> str:
         prefix_start = max(
@@ -2261,15 +2268,13 @@ def _normalize_valuation_review_language(text: str) -> str:
     normalized = re.sub(
         r"(?:资产)?负债率下降[^。；\n]{0,36}(?:不宜|不能|不可)"
         r"[^。；\n]{0,24}(?:视为|等同于)财务结构(?:改善|优化)[。；]?",
-        "资产负债率下降只说明负债占资产比例下降，不能据此判断负债绝对规模或"
-        "偿债压力。",
+        "资产负债率下降只说明负债占资产比例下降，不能据此判断负债绝对规模或偿债压力。",
         normalized,
     )
     normalized = re.sub(
         r"财务结构(?:相较[^。；\n]{0,20})?(?:有所)?(?:收缩|改善|优化)"
         r"[^。；\n]*[。；]?",
-        "资产负债率下降只说明负债占资产比例下降，不能据此判断负债绝对规模或"
-        "偿债压力。",
+        "资产负债率下降只说明负债占资产比例下降，不能据此判断负债绝对规模或偿债压力。",
         normalized,
     )
     normalized = re.sub(
@@ -2281,16 +2286,14 @@ def _normalize_valuation_review_language(text: str) -> str:
         r"(?:低\s*PE|PE\s*TTM)[^。；\n]{0,80}"
         r"(?:可能|主要)?(?:是|来自|由于|受)[^。；\n]{0,36}"
         r"(?:利润基数偏低|历史亏损|亏损基数)[^。；\n]*[。；]?",
-        "PE TTM 的滚动盈利分母尚未拆解，当前不能归因于单季利润、历史亏损或"
-        "低利润基数。",
+        "PE TTM 的滚动盈利分母尚未拆解，当前不能归因于单季利润、历史亏损或低利润基数。",
         normalized,
         flags=re.IGNORECASE,
     )
     normalized = re.sub(
         r"[^。；\n]{0,180}(?:历史基数|历史亏损|刚扭亏)[^。；\n]{0,120}"
         r"(?:拉低|压低|降低)[^。；\n]{0,24}(?:PE|市盈率)[^。；\n]*[。；]?",
-        "PE TTM 的滚动盈利分母尚未拆解，当前不能归因于单季利润、历史亏损或"
-        "低利润基数。",
+        "PE TTM 的滚动盈利分母尚未拆解，当前不能归因于单季利润、历史亏损或低利润基数。",
         normalized,
         flags=re.IGNORECASE,
     )
@@ -2298,8 +2301,7 @@ def _normalize_valuation_review_language(text: str) -> str:
         r"(?:PE\s*低|低\s*PE)[^。；\n]{0,140}(?:因为|来自|由于)"
         r"[^。；\n]{0,160}(?:过去四个季度|历史亏损|总体赚得很少|利润很低)"
         r"[^。；\n]*[。；]?",
-        "PE TTM 的滚动盈利分母尚未拆解，当前不能归因于单季利润、历史亏损或"
-        "低利润基数。",
+        "PE TTM 的滚动盈利分母尚未拆解，当前不能归因于单季利润、历史亏损或低利润基数。",
         normalized,
         flags=re.IGNORECASE,
     )
@@ -2337,14 +2339,12 @@ def _normalize_valuation_review_language(text: str) -> str:
         r"[^。；\n]{0,80}(?:历史亏损|低利润基数)[^。；\n]{0,100}"
         r"(?:导致|使得?|从而)[^。；\n]{0,32}(?:PE|市盈率)"
         r"[^。；\n]{0,24}(?:被)?(?:压得很低|压低|降低)[^。；\n]*[。；]?",
-        "PE TTM 的滚动盈利分母尚未拆解，当前不能归因于单季利润、历史亏损或"
-        "低利润基数。",
+        "PE TTM 的滚动盈利分母尚未拆解，当前不能归因于单季利润、历史亏损或低利润基数。",
         normalized,
         flags=re.IGNORECASE,
     )
     denominator_boundary = (
-        "PE TTM 的滚动盈利分母尚未拆解，当前不能归因于单季利润、历史亏损或"
-        "低利润基数。"
+        "PE TTM 的滚动盈利分母尚未拆解，当前不能归因于单季利润、历史亏损或低利润基数。"
     )
     normalized = re.sub(
         rf"(?:{re.escape(denominator_boundary)}\s*){{2,}}",
@@ -2412,7 +2412,9 @@ def _normalize_valuation_review_language(text: str) -> str:
         "经营现金流与利润方向相反，原因仍需核验",
     )
     normalized = normalized.replace("这些事实这两个会计口径", "这两个会计口径")
-    normalized = normalized.replace("这经营现金流与利润方向相反", "经营现金流与利润方向相反")
+    normalized = normalized.replace(
+        "这经营现金流与利润方向相反", "经营现金流与利润方向相反"
+    )
     normalized = normalized.replace(
         "现金流与利润方向相反，这两个会计口径方向相反",
         "经营现金流与利润方向相反",
@@ -2650,12 +2652,13 @@ def _normalize_valuation_review_language(text: str) -> str:
         "经营现金流与利润差异的原因和同行经营质量",
     )
     normalized = normalized.replace("比例在改善", "比例下降")
-    normalized = normalized.replace("估值的分母太容易变", "PE TTM 的滚动盈利分母仍需拆解")
+    normalized = normalized.replace(
+        "估值的分母太容易变", "PE TTM 的滚动盈利分母仍需拆解"
+    )
     normalized = normalized.replace("盈利基数太薄", "滚动盈利分母仍待拆解")
     normalized = normalized.replace("主营结构脆弱", "主营集中度较高")
     normalized = normalized.replace(
-        "低估值更像是一面反映出盈利波动和现金矛盾的危险信号灯，"
-        "而不是已确认的价值洼地",
+        "低估值更像是一面反映出盈利波动和现金矛盾的危险信号灯，而不是已确认的价值洼地",
         "低倍数仍需结合盈利持续性和经营现金流核验，不能据此确认低估",
     )
     normalized = normalized.replace("危险信号灯", "仍需核验的风险信号")
@@ -2664,8 +2667,7 @@ def _normalize_valuation_review_language(text: str) -> str:
         r"(?:它|这组低倍数|当前倍数)[^。；\n]{0,36}反映的?[^。；\n]{0,24}"
         r"(?:更有可能|可能)是市场对[^。；\n]{0,160}(?:持谨慎态度|担忧|顾虑)"
         r"[^。；\n]*[。；]?",
-        "这些事实只说明仍需核验盈利持续性、现金流和亏损业务，"
-        "不能据此推断市场意图。",
+        "这些事实只说明仍需核验盈利持续性、现金流和亏损业务，不能据此推断市场意图。",
         normalized,
     )
     normalized = re.sub(
@@ -2687,9 +2689,8 @@ def _normalize_valuation_review_language(text: str) -> str:
     first_boundary = normalized.find(standard_denominator_boundary)
     if first_boundary >= 0:
         boundary_end = first_boundary + len(standard_denominator_boundary)
-        normalized = (
-            normalized[:boundary_end]
-            + normalized[boundary_end:].replace(standard_denominator_boundary, "")
+        normalized = normalized[:boundary_end] + normalized[boundary_end:].replace(
+            standard_denominator_boundary, ""
         )
     valuation_snapshot_boundary = (
         "低倍数只说明当前估值截面偏低，不能据此认定盈利质量或资产质量"
@@ -2706,13 +2707,10 @@ def _normalize_valuation_review_language(text: str) -> str:
         snapshot_boundary_end = first_snapshot_boundary + len(
             valuation_snapshot_boundary
         )
-        normalized = (
-            normalized[:snapshot_boundary_end]
-            + re.sub(
-                rf"(?:无法判断)?{re.escape(valuation_snapshot_boundary)}[；;。]?",
-                "",
-                normalized[snapshot_boundary_end:],
-            )
+        normalized = normalized[:snapshot_boundary_end] + re.sub(
+            rf"(?:无法判断)?{re.escape(valuation_snapshot_boundary)}[；;。]?",
+            "",
+            normalized[snapshot_boundary_end:],
         )
     normalized = normalized.replace("① ", "首先，")
     normalized = normalized.replace("② ", "其次，")
@@ -3112,7 +3110,10 @@ def _drop_redundant_valuation_summary(text: str) -> str:
 
     for index in range(len(paragraphs) - 1):
         if (
-            any(term in paragraphs[index] for term in ("归母净利润", "利润已扭亏", "同比扭亏"))
+            any(
+                term in paragraphs[index]
+                for term in ("归母净利润", "利润已扭亏", "同比扭亏")
+            )
             and "经营现金流" in paragraphs[index + 1]
             and not paragraphs[index + 1].lstrip().startswith(("**", "#"))
         ):
@@ -3193,7 +3194,9 @@ def repair_valuation_review_answer(
         subject_name = str(
             evidence.get("display_name") or evidence.get("symbol") or "这只股票"
         ).strip()
-        repaired = re.sub(r"^(?:不能这样说|不能这么说|不是这样)[。！!]\s*", "", repaired)
+        repaired = re.sub(
+            r"^(?:不能这样说|不能这么说|不是这样)[。！!]\s*", "", repaired
+        )
         repaired = f"{subject_name}进入估值约束候选，不等于它便宜。\n\n{repaired}"
     repaired = _add_same_day_peer_date(repaired, evidence)
     appendices: list[str] = []
@@ -3309,6 +3312,11 @@ def normalize_quality_review_language(text: str) -> str:
     """Apply narrow, evidence-preserving wording fixes used by stream and final."""
 
     normalized = str(text or "")
+    normalized = re.sub(
+        r"^(?:[^\n：]{1,20}：)?好[，,]?(?:我们)?直接聊[。！]?\s*(?:\n+)?",
+        "",
+        normalized,
+    )
     replacements = (
         (
             r"；但利润率全面收缩、经营现金流增速严重滞后于利润、"
@@ -3319,8 +3327,7 @@ def normalize_quality_review_language(text: str) -> str:
         ),
         (
             r"一是整体出货在实实在在放大，不是靠单价；",
-            "一是整体出货在扩大；当前证据没有产品价格变化，"
-            "不能进一步拆成量价原因；",
+            "一是整体出货在扩大；当前证据没有产品价格变化，不能进一步拆成量价原因；",
         ),
         (
             r"这几个数据放在一起，表明同样是赚一块钱利润，"
@@ -3459,7 +3466,7 @@ def normalize_quality_review_language(text: str) -> str:
         ),
         (
             r"但增长的利润有一部分被非经营性因素抬高了，最明显的是财务费用",
-            "财务费用是本期利润的一项重要非主营扰动",
+            "财务费用较可比期的变化是利润同比的机械逆风，不是本期利润增长来源",
         ),
         (
             r"这能确认现金流压力来自收付两端的同时挤压",
@@ -3561,6 +3568,9 @@ def repair_quality_review_answer(answer: str, evidence: dict[str, Any]) -> str |
         return None
     original = str(answer or "").strip()
     normalized = normalize_quality_review_language(original)
+    contextual_followup = bool(
+        (evidence.get("research_plan") or {}).get("contextual_followup")
+    )
     inventory_explanation = _quality_review_inventory_explanation(evidence)
     has_inventory_explanation = "下半年" in normalized and "备货" in normalized
     kept_lines: list[str] = []
@@ -3586,14 +3596,13 @@ def repair_quality_review_answer(answer: str, evidence: dict[str, Any]) -> str |
     repaired = "\n".join(kept_lines).strip()
     repaired = re.sub(r"\n{3,}", "\n\n", repaired)
     if (
-        inventory_explanation
+        not contextual_followup
+        and inventory_explanation
         and "下半年" in repaired
         and "备货" in repaired
         and not _has_natural_inventory_verification_boundary(repaired)
     ):
-        boundary = (
-            "这是公司口径，仍需结合存货分类、库龄和跌价准备做量化核验。"
-        )
+        boundary = "这是公司口径，仍需结合存货分类、库龄和跌价准备做量化核验。"
         paragraphs = repaired.split("\n\n")
         for index, paragraph in enumerate(paragraphs):
             if "下半年" in paragraph and "备货" in paragraph:

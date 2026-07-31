@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import app.services.agent as agent_module
 from app.services.agent import AgentService
 from app.services.agent_evidence_compaction import (
@@ -54,9 +56,9 @@ def test_stock_compaction_only_keeps_component_fallbacks_for_source_questions():
     ordinary_breadth = ordinary["stock_market_context"]["exact_industry_index"][
         "component_breadth"
     ]
-    source_breadth = source_question["stock_market_context"][
-        "exact_industry_index"
-    ]["component_breadth"]
+    source_breadth = source_question["stock_market_context"]["exact_industry_index"][
+        "component_breadth"
+    ]
     assert "source_fallbacks" not in ordinary_breadth
     assert source_breadth["source_fallbacks"] == [
         {
@@ -175,7 +177,9 @@ def test_market_experience_gap_compacts_causal_titles_without_story_counts() -> 
     assert compact["market_breadth"]["distribution"]["bin_threshold_abs_pct"] == 3
 
 
-def test_market_compaction_keeps_newer_breadth_for_explicit_today_vs_yesterday() -> None:
+def test_market_compaction_keeps_newer_breadth_for_explicit_today_vs_yesterday() -> (
+    None
+):
     compact = compact_market_brief_evidence(
         {
             "type": "market_brief",
@@ -271,12 +275,12 @@ def test_market_risk_cause_query_prefers_deduplicated_causal_candidates():
                 "available_indices": 6,
             },
             "indices": [
-                    {
-                        "name": "上证综指",
-                        "group": "china",
-                        "market_date": "2026-07-31",
-                        "same_date_as_analysis_target": True,
-                        "metrics": {
+                {
+                    "name": "上证综指",
+                    "group": "china",
+                    "market_date": "2026-07-31",
+                    "same_date_as_analysis_target": True,
+                    "metrics": {
                         "latest_close": 3836.51,
                         "return_1d_pct": 0.84,
                         "return_20d_pct": -5.56,
@@ -407,18 +411,16 @@ def test_market_observation_followup_drops_old_stories_and_extra_metrics():
         {
             "type": "market_brief",
             "user_question": "接下来最值得看什么？不要重复上一轮。",
-            "_conversation_user_questions": [
-                "今天为什么和昨天反差这么大？"
-            ],
+            "_conversation_user_questions": ["今天为什么和昨天反差这么大？"],
             "question_focus": {"key": "market_risk"},
             "analysis_target": {"market_date": "2026-07-30", "market_key": "china"},
             "indices": [
-                    {
-                        "name": "沪深300",
-                        "group": "china",
-                        "market_date": "2026-07-30",
-                        "same_date_as_analysis_target": True,
-                        "metrics": {
+                {
+                    "name": "沪深300",
+                    "group": "china",
+                    "market_date": "2026-07-30",
+                    "same_date_as_analysis_target": True,
+                    "metrics": {
                         "latest_close": 4549.72,
                         "return_1d_pct": -1.1,
                         "ma20": 4712.458,
@@ -595,9 +597,7 @@ def test_stock_specialist_compaction_keeps_root_business_payload() -> None:
             ],
             "stock_workspace_context": {
                 "name": "贵州茅台",
-                "research_entry": {
-                    "attention_flags": ["最新财报净利润同比 1.47%"]
-                },
+                "research_entry": {"attention_flags": ["最新财报净利润同比 1.47%"]},
                 "important_changes": [
                     {"summary": "保留第一条"},
                     {"summary": "不发送第二条"},
@@ -619,9 +619,10 @@ def test_stock_specialist_compaction_keeps_root_business_payload() -> None:
         "top1_revenue_share_pct": 86.77,
     }
     assert compact["business_structure"]["key_changes"] == []
-    assert "不得扩写成‘53度飞天茅台’" in compact["business_structure"][
-        "segment_label_boundary"
-    ]
+    assert (
+        "不得扩写成‘53度飞天茅台’"
+        in compact["business_structure"]["segment_label_boundary"]
+    )
     assert compact["business_structure"]["coverage_limits"] == [
         {
             "key": "regional_product_breakdown",
@@ -810,7 +811,7 @@ def test_deep_price_move_compaction_keeps_requested_finance_and_sentiment_only()
                         "label": "财务费用变化",
                         "calculation_nature": "reported_statement_bridge",
                         "statement": "财务费用同比增加。",
-                    }
+                    },
                 ],
                 "plausible_clues": [
                     {"key": "inventory", "label": "存货", "evidence": "存货上升。"},
@@ -850,7 +851,7 @@ def test_deep_price_move_compaction_keeps_requested_finance_and_sentiment_only()
                                 "收到的现金减少及购买商品、接受劳务支付的现金增加"
                             ),
                             "notice_date": "2026-04-25",
-                        }
+                        },
                     ],
                 },
             },
@@ -873,9 +874,9 @@ def test_deep_price_move_compaction_keeps_requested_finance_and_sentiment_only()
         "latest_close": 33.3,
         "return_1d_pct": -2.29,
     }
-    assert compact["fundamentals"]["summary"]["latest_report"][
-        "revenue_yoy_pct"
-    ] == 6.13
+    assert (
+        compact["fundamentals"]["summary"]["latest_report"]["revenue_yoy_pct"] == 6.13
+    )
     assert compact["financial_drivers"]["cashflow_analysis"] == {
         "operating_cashflow": -19.79,
         "comparable_operating_cashflow": 18.51,
@@ -886,12 +887,12 @@ def test_deep_price_move_compaction_keeps_requested_finance_and_sentiment_only()
     industry = compact["stock_market_context"]["exact_industry_index"]
     assert "subject_weight_pct" not in industry
     assert "weights_available" not in industry["component_breadth"]["coverage"]
-    assert "fallback_unadjusted_returns" not in industry["component_breadth"][
-        "coverage"
-    ]
-    assert "previous_return_1d_pct" not in compact["stock_market_context"][
-        "stock_target"
-    ]
+    assert (
+        "fallback_unadjusted_returns" not in industry["component_breadth"]["coverage"]
+    )
+    assert (
+        "previous_return_1d_pct" not in compact["stock_market_context"]["stock_target"]
+    )
     explanation = compact["financial_drivers"]["filing_evidence"][
         "explicit_company_explanations"
     ][0]
@@ -922,8 +923,7 @@ def test_deep_price_move_keeps_finance_without_explicit_finance_words():
             "symbol": "000065.SZ",
             "display_name": "北方国际",
             "user_question": (
-                "北方国际7月30日上涨更像行业还是公司因素？"
-                "请深度分析，信息量要大。"
+                "北方国际7月30日上涨更像行业还是公司因素？请深度分析，信息量要大。"
             ),
             "research_plan": {"focus": "price_cause"},
             "fundamentals": {
@@ -952,15 +952,16 @@ def test_deep_price_move_keeps_finance_without_explicit_finance_words():
         }
     )
 
-    assert compact["fundamentals"]["summary"]["latest_report"][
-        "revenue_yoy_pct"
-    ] == -35.56
-    assert compact["earnings_quality"]["latest_report"]["report_date"] == (
-        "2026-03-31"
+    assert (
+        compact["fundamentals"]["summary"]["latest_report"]["revenue_yoy_pct"] == -35.56
     )
-    assert compact["financial_drivers"]["cashflow_analysis"][
-        "comparable_operating_cashflow"
-    ] == 333_946_803.6
+    assert compact["earnings_quality"]["latest_report"]["report_date"] == ("2026-03-31")
+    assert (
+        compact["financial_drivers"]["cashflow_analysis"][
+            "comparable_operating_cashflow"
+        ]
+        == 333_946_803.6
+    )
 
 
 def test_historical_price_cause_followup_keeps_target_scope_without_latest_quote():
@@ -1064,21 +1065,20 @@ def test_historical_price_cause_followup_keeps_target_scope_without_latest_quote
     assert compact["stock_market_context"]["analysis_target"]["market_date"] == (
         "2026-07-30"
     )
-    assert compact["stock_market_context"]["stock_target"]["return_1d_pct"] == (
-        -0.43
-    )
+    assert compact["stock_market_context"]["stock_target"]["return_1d_pct"] == (-0.43)
     assert "price_move_event_evidence" not in compact
     frame = compact["followup_answer_frame"]
     assert frame["requested_shape"] == "two_confirmed_facts_and_one_key_unknown"
-    assert frame["confirmed_fact_candidates"][0]["stock_target"][
-        "return_1d_pct"
-    ] == -0.43
+    assert (
+        frame["confirmed_fact_candidates"][0]["stock_target"]["return_1d_pct"] == -0.43
+    )
     assert frame["confirmed_fact_candidates"][1]["coverage_status"] == (
         "same_date_after_close_only"
     )
-    assert frame["confirmed_fact_candidates"][1]["after_close_events"][0][
-        "title"
-    ] == "重大项目进展公告"
+    assert (
+        frame["confirmed_fact_candidates"][1]["after_close_events"][0]["title"]
+        == "重大项目进展公告"
+    )
     assert "邻近日解禁或其他旧事件" in frame["excluded_topics"]
     assert "fundamentals" not in compact
     assert "earnings_quality" not in compact
@@ -1093,8 +1093,7 @@ def test_price_cause_followup_can_separate_same_day_facts_from_slow_background()
             "symbol": "600519.SS",
             "display_name": "贵州茅台",
             "user_question": (
-                "哪些是7月30日当天事实，哪些只是慢变量背景？"
-                "不要重复所有数字。"
+                "哪些是7月30日当天事实，哪些只是慢变量背景？不要重复所有数字。"
             ),
             "research_plan": {
                 "focus": "price_cause",
@@ -1152,12 +1151,11 @@ def test_price_cause_followup_can_separate_same_day_facts_from_slow_background()
     )
 
     frame = compact["followup_answer_frame"]
-    assert frame["requested_shape"] == (
-        "same_day_facts_vs_slow_variable_background"
+    assert frame["requested_shape"] == ("same_day_facts_vs_slow_variable_background")
+    assert (
+        frame["confirmed_fact_candidates"][0]["exact_industry_index"]["return_1d_pct"]
+        == 4.17
     )
-    assert frame["confirmed_fact_candidates"][0]["exact_industry_index"][
-        "return_1d_pct"
-    ] == 4.17
     assert "目标日精确行业指数" not in frame["key_unknown"]["missing_evidence"]
     assert frame["slow_variable_background"]["latest_report"]["notice_date"] == (
         "2026-04-25"
@@ -1167,7 +1165,7 @@ def test_price_cause_followup_can_separate_same_day_facts_from_slow_background()
     assert "earnings_quality" not in compact
 
 
-def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_price():
+def test_quality_review_compaction_builds_opening_frame_without_price():
     compact = compact_stock_research_evidence(
         {
             "type": "stock_research",
@@ -1206,6 +1204,15 @@ def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_p
             },
             "financial_drivers": {
                 "latest_period": {"report_date": "2026-03-31"},
+                "expense_analysis": [
+                    {
+                        "key": "finance_expense",
+                        "current": -6.0,
+                        "comparable": -10.0,
+                        "change_amount": 4.0,
+                        "profit_effect_amount": -4.0,
+                    }
+                ],
                 "cashflow_analysis": {
                     "operating_cashflow": 120.0,
                     "comparable_operating_cashflow": 80.0,
@@ -1220,7 +1227,7 @@ def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_p
                         "key": "gross_profit_revenue_scale_effect",
                         "statement": "收入规模变化对应毛利增加",
                         "calculation_nature": "static_counterfactual",
-                    }
+                    },
                 ],
                 "filing_evidence": {
                     "status": "available",
@@ -1282,11 +1289,9 @@ def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_p
                         "segments": [
                             {"item_name": "电子设备制造业", "gross_margin_pct": 8.0}
                         ],
-                    }
+                    },
                 ],
-                "coverage_limits": [
-                    {"boundary": "年报分部不能证明一季报增长来源。"}
-                ],
+                "coverage_limits": [{"boundary": "年报分部不能证明一季报增长来源。"}],
             },
             "a_share_information": {
                 "announcements": [
@@ -1299,10 +1304,11 @@ def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_p
                         "title": "2026年投资者关系活动记录表",
                         "published_at": "2026-07-26",
                         "summary": (
-                            "公司公告原文摘录：" + "经营情况。" * 90
+                            "公司公告原文摘录："
+                            + "经营情况。" * 90
                             + "库存增加主要是为下半年市场需求而提前备货。"
                         ),
-                    }
+                    },
                 ]
             },
             "event_timeline": {
@@ -1319,48 +1325,34 @@ def test_quality_review_compaction_keeps_business_cashflow_and_filings_without_p
         }
     )
 
-    assert "current_quote" not in compact
-    assert "metrics" not in compact
-    assert "price_levels" not in compact
-    assert "stock_market_context" not in compact
-    assert "analyst_expectations" not in compact
-    assert "peer_comparison" not in compact
-    assert "fundamentals" not in compact
-    assert compact["financial_drivers"]["cashflow_analysis"][
-        "operating_cashflow"
-    ] == 120.0
-    assert compact["business_structure"]["dimensions"][0]["segments"][0][
-        "item_name"
-    ] == "云计算产品"
-    assert "comparable_gross_margin_pct" not in compact["business_structure"][
-        "dimensions"
-    ][0]["segments"][0]
-    assert len(compact["business_structure"]["dimensions"]) == 1
-    assert "不等于结构优化" in compact["business_structure"][
-        "quality_review_boundary"
-    ]
-    assert all(
-        item["key"] != "gross_profit_revenue_scale_effect"
-        for item in compact["financial_drivers"]["confirmed_mechanical_drivers"]
-    )
-    explanation_themes = {
-        item["theme"]
-        for item in compact["financial_drivers"]["filing_evidence"][
-            "explicit_company_explanations"
-        ]
+    assert set(compact) == {
+        "type",
+        "symbol",
+        "display_name",
+        "user_question",
+        "research_plan",
+        "quality_review_answer_frame",
     }
-    assert explanation_themes == {
-        "financial_expense_fx_interest",
-        "operating_cashflow",
-    }
-    assert "event_timeline" not in compact
-    announcements = compact["a_share_information"]["announcements"]
-    assert announcements[0]["title"] == "2026年投资者关系活动记录表"
-    assert "库存增加主要是为下半年市场需求而提前备货" in (
-        announcements[0]["summary"]
+    frame = compact["quality_review_answer_frame"]
+    assert frame["requested_shape"] == "analyst_quality_review_opening"
+    assert frame["cashflow"]["operating_cashflow"] == 120.0
+    assert frame["scale_and_margin"]["product_segments"][0]["item_name"] == (
+        "云计算产品"
     )
-    assert announcements[1]["title"] == "2026年第一季度报告"
-    assert announcements[1]["summary"] == "公司公告原文摘录：经营情况说明。"
+    assert frame["inventory"]["company_explanation"].startswith("公司表示")
+    assert "主动备货" in frame["inventory"]["interpretation"]
+    assert frame["finance_expense"]["company_explanation"]["excerpt"] == (
+        "财务费用增加主要因汇兑损失。"
+    )
+    assert frame["finance_expense"]["change_amount"] == 4.0
+    assert "应收账款" in frame["cashflow"]["interpretation"]
+    assert "写三到四个连贯自然段" in frame["answer_contract"]
+    assert "只能说两类指标增长速度不同" in frame["cashflow"]["preferred_expression"]
+    assert (
+        "不能确认51.91亿元同比变化全部由汇兑造成"
+        in frame["finance_expense"]["preferred_expression"]
+    )
+    assert "不是本期利润增长来源" in frame["finance_expense"]["preferred_expression"]
 
 
 def test_quality_review_compaction_drops_unrelated_long_ir_questions():
@@ -1383,7 +1375,8 @@ def test_quality_review_compaction_drops_unrelated_long_ir_questions():
                             "3、怎么看储能需求和系统占比？储能系统占比接近七成，"
                             "587Ah大电芯实现规模化交付。"
                             "5、库存增加的原因？库存增加主要是为下半年提前备货。"
-                            + "其他背景材料。" * 100
+                            + "其他背景材料。"
+                            * 100
                         ),
                     }
                 ]
@@ -1391,12 +1384,116 @@ def test_quality_review_compaction_drops_unrelated_long_ir_questions():
         }
     )
 
-    summary = compact["a_share_information"]["announcements"][0]["summary"]
-    assert "合计销量增长约60%" in summary
-    assert "单位净利整体稳定" not in summary
-    assert "库存增加主要是为下半年提前备货" in summary
-    assert "储能系统占比接近七成" not in summary
-    assert "587Ah" not in summary
+    frame = compact["quality_review_answer_frame"]
+    assert frame["scale_and_margin"]["combined_battery_sales_yoy_pct"] == 60.0
+    assert frame["inventory"]["company_explanation"].startswith("公司表示")
+    serialized = json.dumps(frame, ensure_ascii=False)
+    assert "单位净利整体稳定" not in serialized
+    assert "储能系统占比接近七成" not in serialized
+    assert "587Ah" not in serialized
+
+
+def test_quality_review_followup_compacts_to_exact_fact_frame():
+    compact = compact_stock_research_evidence(
+        {
+            "type": "stock_research",
+            "symbol": "300750.SZ",
+            "display_name": "宁德时代",
+            "user_question": (
+                "真正会改变你判断的两个事实是什么？如果只能继续跟踪一项，"
+                "你选哪项，为什么？像我们接着聊。"
+            ),
+            "research_plan": {
+                "focus": "quality_review",
+                "primary_focus": "quality_review",
+                "contextual_followup": True,
+                "selected_modules": [
+                    "earnings_quality",
+                    "financial_drivers",
+                    "business_structure",
+                    "company_information",
+                ],
+            },
+            "earnings_quality": {
+                "latest_report": {
+                    "report_date": "2026-06-30",
+                    "revenue_yoy_pct": 54.8,
+                    "net_profit_yoy_pct": 42.0,
+                    "parent_net_profit": 43_280_000_000.0,
+                    "gross_margin_pct": 23.9,
+                },
+                "comparable_report": {"gross_margin_pct": 25.0},
+            },
+            "financial_drivers": {
+                "cashflow_analysis": {
+                    "operating_cashflow": 60_220_000_000.0,
+                    "operating_cashflow_change_pct": 2.6,
+                    "operating_cashflow_to_net_profit": 1.39,
+                    "comparable_operating_cashflow_to_net_profit": 1.93,
+                    "cash_received_from_sales_to_revenue_pct": 94.8,
+                    "comparable_cash_received_from_sales_to_revenue_pct": 124.6,
+                }
+            },
+            "business_structure": {
+                "dimensions": [
+                    {
+                        "classification": "product",
+                        "segments": [
+                            {
+                                "item_name": "动力电池系统",
+                                "revenue_share_pct": 69.4,
+                                "gross_margin_pct": 20.6,
+                                "comparable_gross_margin_pct": 22.4,
+                                "gross_margin_change_pp": -1.8,
+                            },
+                            {
+                                "item_name": "储能电池系统",
+                                "revenue_share_pct": 19.2,
+                                "gross_margin_pct": 24.0,
+                                "comparable_gross_margin_pct": 25.5,
+                                "gross_margin_change_pp": -1.6,
+                            },
+                        ],
+                    }
+                ]
+            },
+            "a_share_information": {
+                "announcements": [
+                    {
+                        "title": "2026年投资者关系活动记录表",
+                        "summary": (
+                            "公司公告原文摘录：动力和储能电池合计销量同比增长约60%。"
+                            "库存增加主要是为下半年市场需求而提前备货。"
+                        ),
+                    },
+                    {"title": "无关回购公告", "summary": "不应进入连续追问。"},
+                ]
+            },
+            "event_timeline": {"events": [{"title": "不应进入连续追问"}]},
+            "stock_workspace_context": {"research_entry": {"status": "active"}},
+        }
+    )
+
+    assert set(compact) == {
+        "type",
+        "symbol",
+        "display_name",
+        "user_question",
+        "research_plan",
+        "followup_answer_frame",
+    }
+    frame = compact["followup_answer_frame"]
+    assert frame["requested_fact_count"] == 2
+    assert frame["requested_shape"] == "exact_facts_then_choose_one_tracker"
+    assert frame["fact_candidates"][0]["combined_battery_sales_yoy_pct"] == 60.0
+    assert frame["fact_candidates"][1]["operating_cashflow_change_pct"] == 2.6
+    assert "原因尚未确认" in frame["fact_candidates"][1]["meaning"]
+    assert "即使用假设句也不猜应收" in frame["fact_candidates"][1]["meaning"]
+    assert "cash_received_from_sales_to_revenue_pct" not in frame["fact_candidates"][1]
+    assert "优先选择整体及两大主营毛利率" in frame["tracking_rule"]
+    assert "直接写 2 个自然段" in frame["answer_contract"]
+    assert "中间不能再换行" in frame["answer_contract"]
+    assert frame["fact_candidates"][2]["company_explanation"].startswith("公司表示")
 
 
 def test_valuation_review_compaction_uses_same_day_peer_packet_without_report_dump():

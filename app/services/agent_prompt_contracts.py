@@ -89,9 +89,7 @@ def append_prompt_contracts(
         and any("现金流" in question for question in recent_user_questions)
     )
     research_plan = (
-        prompt_evidence.get("research_plan")
-        or evidence.get("research_plan")
-        or {}
+        prompt_evidence.get("research_plan") or evidence.get("research_plan") or {}
     )
     stock_research_focus = str(research_plan.get("focus") or "")
     focused_stock_price_followup = bool(
@@ -124,26 +122,31 @@ def append_prompt_contracts(
             )
         )
     )
-    market_followup = intent == "market_brief" and bool(conversation_history) and any(
-        term in message for term in ("接下来", "最值得看", "观察", "不要重复")
+    market_followup = (
+        intent == "market_brief"
+        and bool(conversation_history)
+        and any(term in message for term in ("接下来", "最值得看", "观察", "不要重复"))
     )
-    market_experience_gap_question = intent == "market_brief" and any(
-        term in message for term in ("为什么", "为何", "怎么回事", "发生了什么")
-    ) and any(
-        term in message
-        for term in (
-            "指数表现",
-            "指数和大多数个股",
-            "指数与大多数个股",
-            "多数个股的体感",
-            "大多数个股的体感",
-            "个股的体感",
-            "账户体感",
+    market_experience_gap_question = (
+        intent == "market_brief"
+        and any(
+            term in message for term in ("为什么", "为何", "怎么回事", "发生了什么")
+        )
+        and any(
+            term in message
+            for term in (
+                "指数表现",
+                "指数和大多数个股",
+                "指数与大多数个股",
+                "多数个股的体感",
+                "大多数个股的体感",
+                "个股的体感",
+                "账户体感",
+            )
         )
     )
     deep_price_move_request = (
-        _is_deep_stock_price_move_question(message)
-        and not focused_stock_price_followup
+        _is_deep_stock_price_move_question(message) and not focused_stock_price_followup
     )
 
     if intent == "general_research":
@@ -312,9 +315,7 @@ confirmed_risk_profile 来自用户主动填写并确认的问卷。可以根据
 """
     if (
         intent == "business_structure" and stock_research_focus != "business_growth"
-    ) or (
-        intent == "stock_research" and stock_research_focus == "business"
-    ):
+    ) or (intent == "stock_research" and stock_research_focus == "business"):
         prompt += """
 
 ## 主营业务专项回答要求
@@ -908,9 +909,7 @@ verified_alias，应说明公司行业标签与中证指数来自不同分类体
     if (
         intent == "stock_research"
         and not focused_quality_followup
-        and any(
-            term in message for term in ("财务", "财报", "营收", "净利润", "利润")
-        )
+        and any(term in message for term in ("财务", "财报", "营收", "净利润", "利润"))
     ):
         prompt += """
 
@@ -1121,10 +1120,14 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 用户同时询问“昨天为什么涨跌”和“今天盘前关注什么”时，必须拆成两个时间段回答：
 上一交易日只使用同日行情与资讯，盘前部分只列新的可核验事件或观察变量，不能混成一个结论。
 """
-        if not market_followup and not market_experience_gap_question and (
-            (prompt_evidence.get("question_focus") or {}).get("key")
-            == "market_cause"
-            or market_cause_question
+        if (
+            not market_followup
+            and not market_experience_gap_question
+            and (
+                (prompt_evidence.get("question_focus") or {}).get("key")
+                == "market_cause"
+                or market_cause_question
+            )
         ):
             prompt += """
 涨跌原因回答必须先给结论，再按证据强弱解释，而不是罗列新闻或照抄固定栏目：
@@ -1200,11 +1203,15 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 分档统一使用“上涨至少3% / 上涨不足3% / 下跌不足3% / 下跌至少3%”这类自然语言，
 不得写成“跌幅0~-3%”或“跌幅≥-3%”等符号方向错误的表达。
 """
-        if not market_experience_gap_question and (
-            prompt_evidence.get("question_focus") or {}
-        ).get("key") == "volume_flows" and (
-            (prompt_evidence.get("market_breadth") or {}).get("turnover") or {}
-        ).get("status") == "available":
+        if (
+            not market_experience_gap_question
+            and (prompt_evidence.get("question_focus") or {}).get("key")
+            == "volume_flows"
+            and (
+                (prompt_evidence.get("market_breadth") or {}).get("turnover") or {}
+            ).get("status")
+            == "available"
+        ):
             prompt += """
 全市场成交额必须使用 `market_breadth.market_date` 作为市场日期，并可同时引用
 `coverage.latest_tick_time` 说明快照内最新成交时点；`snapshot_local_time` 只是系统取得快照的时间。
@@ -1392,16 +1399,48 @@ analysis_target.market_date 是本次综合判断的唯一目标交易日。只�
 财务费用的公司解释，但不能因此断言它不属于经营判断、可以忽略或必然会反转。年报或中报主营
 分部只能作为最近可得业务底盘，报告期与一季报不同就不能直接解释当季利润变化。
 
-不要复述上一轮所有数字，不增加新的估值、股价、技术指标、分析师评级或完整风险清单。最后只说
-下一份报告中哪一两项证据最可能改变当前判断，不预设结论。
+不要复述上一轮所有数字，不增加新的估值、股价、技术指标、分析师评级或完整风险清单。用户没有
+指定事实数量时，最后才简短说下一份报告中哪一两项证据最可能改变当前判断，不预设结论。
+
+followup_answer_frame 是本轮唯一事实框架。只从其中的 fact_candidates 选择用户要求的数量，不能从
+对话历史恢复整份财报，也不能把未选择的库存、费用或业务结构作为补充第三项。优先直接说事实为何
+改变判断；自然交流不需要“成绩单、油门、油箱、第二条腿、炸裂、没有水分”等比喻或情绪化口号。
 """
         if requested_fact_count is not None:
             prompt += f"""
 
 用户本轮明确要求 {requested_fact_count} 个事实。正文必须恰好回答 {requested_fact_count} 个事实，
 每个事实用一个自然段表达，不使用 Markdown 小标题、加粗标签、编号或项目符号。若用户还问
-“只能继续跟踪一项”，只在最后一个事实段末尾加一句，从前述事实对应的变量中选一项并解释原因；
-这句话不是第三个事实，也不得另起“补充线索”“继续跟踪”或总结段。
+“只能继续跟踪一项”，最后一个事实段的最后一句必须直接完成选择和原因，中间不能再换行；这句话不是第三个事实，
+也不得另起“补充线索”“继续跟踪”或总结段。全文只能有
+{requested_fact_count - 1} 个空行分段，不得生成额外段落。现金流原因即使用“如果、可能、后续”
+等条件句也不得猜应收、存货、客户账期或短期节奏。
+"""
+    elif quality_review_dialogue and (
+        (prompt_evidence.get("quality_review_answer_frame") or {}).get(
+            "requested_shape"
+        )
+        == "analyst_quality_review_opening"
+    ):
+        prompt += """
+
+## 财报质量开场最后核对
+
+quality_review_answer_frame 是本轮唯一事实框架。先用一句自然判断直接回答财报整体好不好，再用
+三到四个连贯自然段完成回答：先给整体判断并说规模增长，再解释毛利率和主营结构、现金流，最后
+合并存货公司解释与财务费用后自然收束。重点说清哪些是已发生的经营进展，哪些指标没有同步改善，
+以及哪些原因仍未被证据确认。
+
+使用直白、专业、像分析师交谈的中文。公司解释明确称为公司口径，不把提前备货改写成“主动备货”
+或需求已经兑现，也不把销量增长写成市场份额上升或排除会计及非经常性因素。储能收入占比上升只
+说明结构变化，不推断它缓冲了毛利率。现金流只写“金额仍为正且增长、但增速低于利润、比率下降”，
+不写时间错位、现金流吃紧、现金转化变慢或现金覆盖健康，也不猜测应收账款、客户账期或回款恶化。财务费用中的
+汇兑说明只解释本期科目，不把它扩写成全部同比变化原因。两期财务费用均为负数，本期负值绝对额
+缩小表示财务收益减少，是本期利润同比的逆风而不是利润增长来源；不得反向写成利润增长来自可比期
+更大的财务收益或同比基数。毛利率与现金流原因不要列出产品价格、成本、客户、应收或存货等候选项。
+现金流和财务费用优先按框架中的 preferred_expression 表达，不再创造新的质量标签或因果故事。
+不追加固定核验清单、来源目录、免责声明、邀请继续提问或“成绩单、含金量、原地踏步、现金回笼、
+油水、抽水、油箱、绳索、真金白银、严重脱节”等比喻和口号。
 """
     if intent == "market_brief" and market_cross_date_cause_question:
         prompt += """

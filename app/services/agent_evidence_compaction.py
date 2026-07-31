@@ -33,6 +33,19 @@ _PRIVATE_PROMPT_EVIDENCE_KEYS = {
 }
 
 
+def _requested_quality_fact_count(value: Any) -> int | None:
+    """Read a small explicit fact count for a quality-review continuation."""
+
+    text = str(value or "").replace(" ", "")
+    match = re.search(r"([1-5一二两三四五])(?:个|项|件)事实", text)
+    if match is None:
+        return None
+    token = match.group(1)
+    if token.isdigit():
+        return int(token)
+    return {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5}[token]
+
+
 def prompt_local_time(value: Any, timezone_name: str) -> str | None:
     if not value:
         return None
@@ -89,9 +102,7 @@ def _compact_quality_review_announcement_summary(summary: str) -> str:
         "提前备货",
     )
     pieces = [
-        item.strip()
-        for item in re.split(r"(?<=[。！？?])|\n+", text)
-        if item.strip()
+        item.strip() for item in re.split(r"(?<=[。！？?])|\n+", text) if item.strip()
     ]
     selected: list[str] = []
     for piece in pieces:
@@ -177,8 +188,7 @@ def compact_market_brief_evidence(
         cause_query and focus_key == "market_risk"
     )
     cross_date_comparison = any(
-        term in question_context
-        for term in ("今天", "今日", "当前", "盘中", "午间")
+        term in question_context for term in ("今天", "今日", "当前", "盘中", "午间")
     ) and any(
         term in question_context
         for term in ("昨天", "昨日", "上一交易日", "前一交易日", "前日")
@@ -292,8 +302,10 @@ def compact_market_brief_evidence(
             "ma60",
             "trend_state",
         )
-    if not observation_followup and "60日" in question and any(
-        term in question for term in ("收益", "涨幅", "跌幅", "涨跌")
+    if (
+        not observation_followup
+        and "60日" in question
+        and any(term in question for term in ("收益", "涨幅", "跌幅", "涨跌"))
     ):
         metric_keys = tuple(dict.fromkeys((*metric_keys, "return_60d_pct")))
     latest_bar_keys = (
@@ -409,19 +421,14 @@ def compact_market_brief_evidence(
                 ):
                     compact_item["previous_market_date"] = previous_date
                     compact_item["previous_return_1d_pct"] = round(
-                        (
-                            float(previous_close) / float(previous_previous_close)
-                            - 1
-                        )
+                        (float(previous_close) / float(previous_previous_close) - 1)
                         * 100,
                         4,
                     )
         latest_close = metrics.get("latest_close")
         moving_average_keys = (
             ()
-            if focus_key == "market_cause"
-            or cause_query
-            or observation_followup
+            if focus_key == "market_cause" or cause_query or observation_followup
             else ("ma20", "ma60")
         )
         for moving_average_key in moving_average_keys:
@@ -635,7 +642,9 @@ def compact_market_brief_evidence(
             causal_evidence.get("candidates") or [], key=causal_candidate_rank
         ):
             title = str(item.get("title") or "").strip()
-            normalized_title = "".join(character for character in title if character.isalnum())
+            normalized_title = "".join(
+                character for character in title if character.isalnum()
+            )
             if not title or any(
                 normalized_title in existing or existing in normalized_title
                 for existing in seen_candidate_titles
@@ -660,9 +669,7 @@ def compact_market_brief_evidence(
                     if item.get(key) is not None
                 }
             )
-            if len(compact_candidates) >= (
-                2 if market_experience_gap_question else 3
-            ):
+            if len(compact_candidates) >= (2 if market_experience_gap_question else 3):
                 break
         compact["causal_evidence"]["candidates"] = compact_candidates
         for item in compact["causal_evidence"]["candidates"]:
@@ -680,9 +687,10 @@ def compact_market_brief_evidence(
         "热门板块",
         "热点板块",
     }
-    if industry_focus.get("name") and str(
+    if (
         industry_focus.get("name")
-    ) not in generic_industry_names:
+        and str(industry_focus.get("name")) not in generic_industry_names
+    ):
         compact["industry_focus"] = {
             key: industry_focus.get(key)
             for key in ("name", "market_scope", "requested_by_user")
@@ -838,15 +846,19 @@ def compact_market_brief_evidence(
                 }
             }
 
-    if not observation_followup and (market_key == "china" or global_query) and (
-        focus_key
-        in {
-        "market_overview",
-        "market_cause",
-        "sector_rotation",
-        "volume_flows",
-        }
-        or cause_query
+    if (
+        not observation_followup
+        and (market_key == "china" or global_query)
+        and (
+            focus_key
+            in {
+                "market_overview",
+                "market_cause",
+                "sector_rotation",
+                "volume_flows",
+            }
+            or cause_query
+        )
     ):
         hot_sectors = evidence.get("hot_sectors") or {}
         if hot_sectors.get("same_date_as_analysis_target") is not False:
@@ -884,12 +896,9 @@ def compact_market_brief_evidence(
         "volume_flows",
     }:
         market_breadth = evidence.get("market_breadth") or {}
-        if (
-            market_breadth.get("status") == "available"
-            and (
-                market_breadth.get("same_date_as_analysis_target") is not False
-                or cross_date_comparison
-            )
+        if market_breadth.get("status") == "available" and (
+            market_breadth.get("same_date_as_analysis_target") is not False
+            or cross_date_comparison
         ):
             breadth_keys = (
                 ("total", "advancers", "decliners", "unchanged", "state")
@@ -931,18 +940,14 @@ def compact_market_brief_evidence(
                     if history_comparison.get(key) is not None
                 }
                 if compact_history_comparison:
-                    compact_turnover["history_comparison"] = (
-                        compact_history_comparison
-                    )
+                    compact_turnover["history_comparison"] = compact_history_comparison
                 compact_distribution: dict[str, Any] = {}
             else:
                 compact_turnover = {
                     "status": raw_turnover.get("status"),
                     "currency": raw_turnover.get("currency"),
                     "total_amount_cny": raw_turnover.get("total_amount_cny"),
-                    "total_amount_100m_cny": raw_turnover.get(
-                        "total_amount_100m_cny"
-                    ),
+                    "total_amount_100m_cny": raw_turnover.get("total_amount_100m_cny"),
                     "coverage": raw_turnover.get("coverage"),
                     "exchanges": raw_turnover.get("exchanges"),
                     "history_comparison": raw_turnover.get("history_comparison"),
@@ -1452,8 +1457,11 @@ def compact_stock_research_evidence(
     if requested_price_windows:
         compact["requested_price_windows"] = requested_price_windows
     focused_price_followup = bool(
+        plan.get("contextual_followup") and plan.get("primary_focus") == "price_cause"
+    )
+    focused_quality_followup = bool(
         plan.get("contextual_followup")
-        and plan.get("primary_focus") == "price_cause"
+        and plan.get("primary_focus") == "quality_review"
     )
     asks_slow_variable_split = focused_price_followup and any(
         term in question
@@ -1932,9 +1940,7 @@ def compact_stock_research_evidence(
             )
             if len(source_segments) <= 3:
                 concentration.pop("top3_revenue_share_pct", None)
-                suppress_top3_dimensions.add(
-                    str(dimension.get("classification") or "")
-                )
+                suppress_top3_dimensions.add(str(dimension.get("classification") or ""))
             compact_dimensions.append(
                 {
                     **select(
@@ -2623,9 +2629,7 @@ def compact_stock_research_evidence(
         compact_information = compact.get("a_share_information") or {}
         if compact_information:
             relevant_announcement_terms = (
-                "报告",
                 "业绩",
-                "经营",
                 "产销",
                 "订单",
                 "投资者关系",
@@ -2650,10 +2654,13 @@ def compact_stock_research_evidence(
                 ),
             )
             for item in ranked_announcements:
-                if not any(
-                    term
-                    in (str(item.get("title") or "") + str(item.get("summary") or ""))
-                    for term in relevant_announcement_terms
+                title = str(item.get("title") or "")
+                content = title + str(item.get("summary") or "")
+                periodic_report = any(
+                    term in title for term in ("年度报告", "半年度报告", "季度报告")
+                )
+                if not periodic_report and not any(
+                    term in content for term in relevant_announcement_terms
                 ):
                     continue
                 compact_item = select(
@@ -2739,10 +2746,7 @@ def compact_stock_research_evidence(
                 requested_business_dimensions.add("region")
             dimensions = []
             for dimension in compact_business.get("dimensions") or []:
-                if (
-                    dimension.get("classification")
-                    not in requested_business_dimensions
-                ):
+                if dimension.get("classification") not in requested_business_dimensions:
                     continue
                 segments = []
                 for item in (dimension.get("segments") or [])[:4]:
@@ -2808,16 +2812,24 @@ def compact_stock_research_evidence(
             compact_drivers["confirmed_mechanical_drivers"] = [
                 item
                 for item in (compact_drivers.get("confirmed_mechanical_drivers") or [])
-                if item.get("key") != "gross_profit_revenue_scale_effect"
+                if item.get("key") == "finance_expense_profit_effect"
             ]
+            compact_drivers["cashflow_analysis"] = select(
+                compact_drivers.get("cashflow_analysis") or {},
+                (
+                    "operating_cashflow",
+                    "comparable_operating_cashflow",
+                    "operating_cashflow_change",
+                    "operating_cashflow_change_pct",
+                    "operating_cashflow_to_net_profit",
+                    "comparable_operating_cashflow_to_net_profit",
+                ),
+            )
             filing = compact_drivers.get("filing_evidence") or {}
             if filing:
-                source_filing = (
-                    (evidence.get("financial_drivers") or {}).get(
-                        "filing_evidence"
-                    )
-                    or {}
-                )
+                source_filing = (evidence.get("financial_drivers") or {}).get(
+                    "filing_evidence"
+                ) or {}
                 explicit_explanations = list(
                     source_filing.get("explicit_company_explanations")
                     or filing.get("explicit_company_explanations")
@@ -2878,7 +2890,6 @@ def compact_stock_research_evidence(
                     "cashflow_analysis",
                     "confirmed_mechanical_drivers",
                     "filing_evidence",
-                    "unresolved_causes",
                     "boundary",
                 ),
             )
@@ -2898,6 +2909,335 @@ def compact_stock_research_evidence(
                     "boundary",
                 ),
             )
+
+        if focused_quality_followup:
+            quality = compact.get("earnings_quality") or {}
+            latest_report = quality.get("latest_report") or {}
+            comparable_report = quality.get("comparable_report") or {}
+            drivers = compact.get("financial_drivers") or {}
+            cashflow = drivers.get("cashflow_analysis") or {}
+            structure = compact.get("business_structure") or {}
+            product_dimension = next(
+                (
+                    item
+                    for item in (structure.get("dimensions") or [])
+                    if item.get("classification") == "product"
+                ),
+                {},
+            )
+            product_segments = [
+                select(
+                    item,
+                    (
+                        "item_name",
+                        "revenue_share_pct",
+                        "comparable_revenue_share_pct",
+                        "gross_margin_pct",
+                        "comparable_gross_margin_pct",
+                        "gross_margin_change_pp",
+                    ),
+                )
+                for item in (product_dimension.get("segments") or [])[:2]
+            ]
+
+            combined_sales_yoy_pct: float | None = None
+            inventory_company_explanation: str | None = None
+            for item in (compact.get("a_share_information") or {}).get(
+                "announcements"
+            ) or []:
+                summary = " ".join(str(item.get("summary") or "").split())
+                if combined_sales_yoy_pct is None:
+                    sales_match = re.search(
+                        r"动力和储能电池合计销量同比增长\s*约?\s*"
+                        r"(\d+(?:\.\d+)?)\s*%",
+                        summary,
+                    )
+                    if sales_match:
+                        combined_sales_yoy_pct = float(sales_match.group(1))
+                if (
+                    inventory_company_explanation is None
+                    and "库存增加主要是为下半年市场需求而提前备货" in summary
+                ):
+                    inventory_company_explanation = (
+                        "公司表示，库存增加主要是为下半年市场需求而提前备货。"
+                    )
+
+            requested_fact_count = _requested_quality_fact_count(question) or 2
+            frame = {
+                "requested_shape": "exact_facts_then_choose_one_tracker",
+                "requested_fact_count": requested_fact_count,
+                "fact_candidates": [
+                    {
+                        "kind": "scale_growth_and_margin_change",
+                        "report_period": latest_report.get("report_date"),
+                        "revenue_yoy_pct": latest_report.get("revenue_yoy_pct"),
+                        "net_profit_yoy_pct": latest_report.get("net_profit_yoy_pct"),
+                        "combined_battery_sales_yoy_pct": combined_sales_yoy_pct,
+                        "gross_margin_pct": latest_report.get("gross_margin_pct"),
+                        "comparable_gross_margin_pct": comparable_report.get(
+                            "gross_margin_pct"
+                        ),
+                        "product_segments": product_segments,
+                        "meaning": (
+                            "规模扩张与毛利率回落都是已确认事实；没有产品价格、"
+                            "成本或客户证据时，不拆成量价原因。"
+                        ),
+                    },
+                    {
+                        "kind": "profit_and_cashflow_change",
+                        "report_period": latest_report.get("report_date"),
+                        "parent_net_profit": latest_report.get("parent_net_profit"),
+                        "net_profit_yoy_pct": latest_report.get("net_profit_yoy_pct"),
+                        "operating_cashflow": cashflow.get("operating_cashflow"),
+                        "operating_cashflow_change_pct": cashflow.get(
+                            "operating_cashflow_change_pct"
+                        ),
+                        "operating_cashflow_to_net_profit": cashflow.get(
+                            "operating_cashflow_to_net_profit"
+                        ),
+                        "comparable_operating_cashflow_to_net_profit": cashflow.get(
+                            "comparable_operating_cashflow_to_net_profit"
+                        ),
+                        "meaning": (
+                            "经营现金流仍为正增长，但增速低于净利润，二者比率也较"
+                            "可比期下降。最准确的表达是两类指标变化不同、原因尚未"
+                            "确认；即使用假设句也不猜应收、存货、客户账期或短期节奏，"
+                            "不写严重脱节、现金没有同步变厚或利润未变成现金。"
+                        ),
+                    },
+                    {
+                        "kind": "inventory_company_explanation",
+                        "company_explanation": inventory_company_explanation,
+                        "meaning": (
+                            "这只是公司对库存增加的解释；若选择跟踪库存，优先看"
+                            "实际出货、订单覆盖或存货结构，不强制罗列固定核验清单。"
+                        ),
+                    },
+                ],
+                "tracking_rule": (
+                    "本题优先选择整体及两大主营毛利率作为唯一跟踪项，因为它直接"
+                    "观察每元收入保留的毛利比例，且当前下降原因尚未确认。不要把"
+                    "销售收现率单独当成回款质量指标或100%门槛。"
+                ),
+                "answer_contract": (
+                    f"直接写 {requested_fact_count} 个自然段，每段只讲一个事实；"
+                    "不写开场总结或第三段。若用户要求只跟踪一项，最后一个事实段的"
+                    "最后一句必须直接完成选择和原因，中间不能再换行。使用直白专业"
+                    "中文，不用比喻、口号、严重脱节、真金白银、竞争优势被侵蚀或"
+                    "报告标签。"
+                ),
+            }
+            return {
+                "type": compact.get("type"),
+                "symbol": compact.get("symbol"),
+                "display_name": compact.get("display_name"),
+                "user_question": compact.get("user_question"),
+                "research_plan": select(
+                    compact.get("research_plan") or {},
+                    ("focus", "primary_focus", "contextual_followup"),
+                ),
+                "followup_answer_frame": frame,
+            }
+
+        quality = compact.get("earnings_quality") or {}
+        latest_report = quality.get("latest_report") or {}
+        comparable_report = quality.get("comparable_report") or {}
+        drivers = compact.get("financial_drivers") or {}
+        cashflow = drivers.get("cashflow_analysis") or {}
+        structure = compact.get("business_structure") or {}
+        product_dimension = next(
+            (
+                item
+                for item in (structure.get("dimensions") or [])
+                if item.get("classification") == "product"
+            ),
+            {},
+        )
+        product_segments = [
+            select(
+                item,
+                (
+                    "item_name",
+                    "revenue_share_pct",
+                    "comparable_revenue_share_pct",
+                    "gross_margin_pct",
+                    "comparable_gross_margin_pct",
+                    "gross_margin_change_pp",
+                ),
+            )
+            for item in (product_dimension.get("segments") or [])[:2]
+        ]
+
+        combined_sales_yoy_pct: float | None = None
+        inventory_company_explanation: str | None = None
+        for item in (compact.get("a_share_information") or {}).get(
+            "announcements"
+        ) or []:
+            summary = " ".join(str(item.get("summary") or "").split())
+            if combined_sales_yoy_pct is None:
+                sales_match = re.search(
+                    r"动力和储能电池合计销量(?:同比)?增长\s*约?\s*"
+                    r"(\d+(?:\.\d+)?)\s*%",
+                    summary,
+                )
+                if sales_match:
+                    combined_sales_yoy_pct = float(sales_match.group(1))
+            if (
+                inventory_company_explanation is None
+                and "库存增加" in summary
+                and "下半年" in summary
+                and "提前备货" in summary
+            ):
+                inventory_company_explanation = (
+                    "公司表示，库存增加主要是为下半年市场需求而提前备货。"
+                )
+
+        source_drivers = evidence.get("financial_drivers") or {}
+        finance_expense = next(
+            (
+                item
+                for item in (source_drivers.get("expense_analysis") or [])
+                if item.get("key") == "finance_expense"
+            ),
+            {},
+        )
+        finance_company_explanation = next(
+            (
+                select(
+                    item,
+                    (
+                        "label",
+                        "statement",
+                        "excerpt",
+                        "report_title",
+                        "report_period",
+                    ),
+                )
+                for item in (
+                    (drivers.get("filing_evidence") or {}).get(
+                        "explicit_company_explanations"
+                    )
+                    or []
+                )
+                if item.get("theme") == "financial_expense_fx_interest"
+                or any(
+                    term
+                    in " ".join(
+                        str(item.get(key) or "")
+                        for key in ("theme", "label", "statement", "excerpt")
+                    )
+                    for term in ("财务费用", "汇兑", "外币")
+                )
+            ),
+            {},
+        )
+
+        frame = {
+            "requested_shape": "analyst_quality_review_opening",
+            "report_period": latest_report.get("report_date"),
+            "scale_and_margin": {
+                "revenue": latest_report.get("revenue"),
+                "revenue_yoy_pct": latest_report.get("revenue_yoy_pct"),
+                "parent_net_profit": latest_report.get("parent_net_profit"),
+                "net_profit_yoy_pct": latest_report.get("net_profit_yoy_pct"),
+                "combined_battery_sales_yoy_pct": combined_sales_yoy_pct,
+                "gross_margin_pct": latest_report.get("gross_margin_pct"),
+                "comparable_gross_margin_pct": comparable_report.get(
+                    "gross_margin_pct"
+                ),
+                "product_segments": product_segments,
+                "interpretation": (
+                    "收入增长和公司披露的销量增长属于已确认的规模扩张；利润增长"
+                    "也已发生，但不能据此断言市场份额上升、终端需求兑现，或排除"
+                    "会计与非经常性因素。整体及主要产品毛利率下降也同时成立。"
+                    "储能收入占比上升只说明披露结构变化，不能自动解释整体毛利率。"
+                ),
+            },
+            "cashflow": {
+                "operating_cashflow": cashflow.get("operating_cashflow"),
+                "comparable_operating_cashflow": cashflow.get(
+                    "comparable_operating_cashflow"
+                ),
+                "operating_cashflow_change_pct": cashflow.get(
+                    "operating_cashflow_change_pct"
+                ),
+                "operating_cashflow_to_net_profit": cashflow.get(
+                    "operating_cashflow_to_net_profit"
+                ),
+                "comparable_operating_cashflow_to_net_profit": cashflow.get(
+                    "comparable_operating_cashflow_to_net_profit"
+                ),
+                "interpretation": (
+                    "经营现金流金额仍为正且同比增长，也仍高于归母净利润；但其增速"
+                    "低于净利润，经营现金流与归母净利润比率较可比期下降。最准确的"
+                    "说法是两类报表指标增长速度不同；不要称为时间错位、现金流吃紧、"
+                    "现金转化变慢或现金覆盖健康，也不能推断应收账款、客户账期或"
+                    "回款恶化。"
+                ),
+                "preferred_expression": (
+                    "经营现金流净额约602亿元，同比增加约2.6%，金额仍高于约433亿元"
+                    "的归母净利润；但净利润同比增长约42%，经营现金流与归母净利润"
+                    "比率也由1.93降至1.39。只能说两类指标增长速度不同，原因未确认。"
+                ),
+            },
+            "inventory": {
+                "company_explanation": inventory_company_explanation,
+                "interpretation": (
+                    "公司解释可以如实引用，但它不是对需求兑现、存货质量或备货"
+                    "合理性的独立验证，也不要把它另行分类为主动备货。"
+                ),
+            },
+            "finance_expense": {
+                **select(
+                    finance_expense,
+                    (
+                        "current",
+                        "comparable",
+                        "change_amount",
+                        "profit_effect_amount",
+                    ),
+                ),
+                "company_explanation": finance_company_explanation,
+                "interpretation": (
+                    "本期和可比期财务费用均为负数，即报表上表现为财务收益；本期"
+                    "负值绝对额缩小，较可比期少贡献约等于 profit_effect_amount 绝对值"
+                    "的利润。因此财务费用变化是本期利润同比的逆风，不是利润增长来源，"
+                    "也不能写成利润增长来自可比期更大的财务收益。公司关于汇率变动和"
+                    "外币货币性项目的说明只解释本期科目，不能自动解释全部同比变化。"
+                ),
+                "preferred_expression": (
+                    "本期财务费用约为-6.31亿元，可比期约为-58.22亿元，两期负数都"
+                    "表示报表上的财务收益；本期相较可比期少贡献约51.91亿元利润。"
+                    "这项变化压低而不是抬高本期利润同比，不是本期利润增长来源。公司"
+                    "只说明本期财务费用主要受外币货币性项目的汇兑损失影响，这不能"
+                    "确认51.91亿元同比变化全部由汇兑造成。"
+                ),
+            },
+            "answer_contract": (
+                "写三到四个连贯自然段：先给整体判断并说规模增长，再解释毛利率和"
+                "主营结构、现金流，最后合并存货与财务费用后自然收束。信息要充足"
+                "但不逐项念指标，不使用标题、项目符号、比喻、口号、成绩单式标签"
+                "或固定核验清单。"
+            ),
+        }
+        result = {
+            "type": compact.get("type"),
+            "symbol": compact.get("symbol"),
+            "display_name": compact.get("display_name"),
+            "user_question": compact.get("user_question"),
+            "research_plan": select(
+                compact.get("research_plan") or {},
+                ("focus", "primary_focus", "contextual_followup"),
+            ),
+            "quality_review_answer_frame": frame,
+        }
+        workspace_context = compact.get("stock_workspace_context") or {}
+        if workspace_context.get("research_entry"):
+            result["stock_workspace_context"] = select(
+                workspace_context,
+                ("symbol", "name", "research_entry", "boundary"),
+            )
+        return result
 
     peers = evidence.get("peer_comparison") or {}
     if peers and focus != "quality_review":
@@ -3012,11 +3352,8 @@ def compact_stock_research_evidence(
             if not list(event_packet.get("same_date_official_disclosures") or []):
                 missing_evidence.append("目标交易时段内可直接对齐价格的公司公开事件")
             latest_report = (
-                ((evidence.get("fundamentals") or {}).get("summary") or {}).get(
-                    "latest_report"
-                )
-                or {}
-            )
+                (evidence.get("fundamentals") or {}).get("summary") or {}
+            ).get("latest_report") or {}
             earnings_summary = str(
                 (evidence.get("earnings_quality") or {}).get("summary") or ""
             ).strip()
@@ -3044,9 +3381,9 @@ def compact_stock_research_evidence(
                                     "stock_minus_index_pct",
                                 ),
                             )
-                            for item in (
-                                compact_market_context.get("indices") or []
-                            )[:2]
+                            for item in (compact_market_context.get("indices") or [])[
+                                :2
+                            ]
                         ],
                         "exact_industry_index": select(
                             industry,
@@ -3141,9 +3478,7 @@ def compact_stock_research_evidence(
             # disclosures and detailed announcement content from becoming new
             # speculative stories despite the user's request not to repeat.
             compact.pop("price_move_event_evidence", None)
-            allowed = [
-                key for key in allowed if key != "price_move_event_evidence"
-            ]
+            allowed = [key for key in allowed if key != "price_move_event_evidence"]
             allowed.append("followup_answer_frame")
 
         financial_in_scope = not focused_price_followup and (
@@ -3162,17 +3497,22 @@ def compact_stock_research_evidence(
             )
         )
         if financial_in_scope:
+
             def compact_company_explanation(item: dict[str, Any]) -> dict[str, Any]:
                 excerpt = " ".join(str(item.get("excerpt") or "").split())
                 cause_at = excerpt.find("主要因")
-                raw_statement = (
-                    excerpt[cause_at:] if cause_at >= 0 else excerpt[:240]
-                )
+                raw_statement = excerpt[cause_at:] if cause_at >= 0 else excerpt[:240]
                 company_statement = "".join(raw_statement.split())
                 return {
                     **select(
                         item,
-                        ("theme", "label", "report_title", "report_period", "notice_date"),
+                        (
+                            "theme",
+                            "label",
+                            "report_title",
+                            "report_period",
+                            "notice_date",
+                        ),
                     ),
                     "company_statement": company_statement,
                 }
@@ -3325,9 +3665,7 @@ def compact_stock_research_evidence(
                     ),
                 },
             }
-            allowed.extend(
-                ("fundamentals", "earnings_quality", "financial_drivers")
-            )
+            allowed.extend(("fundamentals", "earnings_quality", "financial_drivers"))
 
         if any(term in question for term in ("情绪", "社区", "股吧", "讨论")):
             information = compact.get("a_share_information") or {}

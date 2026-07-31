@@ -225,6 +225,11 @@ def test_financial_quality_followup_obeys_exact_fact_count_without_third_section
     assert "每个事实用一个自然段表达" in prompt
     assert "这句话不是第三个事实" in prompt
     assert "不得另起“补充线索”" in prompt
+    assert "全文只能有\n1 个空行分段" in prompt
+    assert "条件句也不得猜应收、存货" in prompt
+    assert "followup_answer_frame 是本轮唯一事实框架" in prompt
+    assert "恢复整份财报" in prompt
+    assert "油门、油箱、第二条腿、炸裂、没有水分" in prompt
     assert "本轮自然对话表达要求" in prompt
     assert "财务问题必答字段" not in prompt
     assert "现金流回答要求" not in prompt
@@ -234,8 +239,7 @@ def test_natural_analyst_style_request_uses_paragraphs_without_report_scaffoldin
     prompt = _append(
         intent="stock_research",
         message=(
-            "中兴通讯最新财报到底好不好？像分析师和我聊天一样写，"
-            "不要写成报告目录。"
+            "中兴通讯最新财报到底好不好？像分析师和我聊天一样写，不要写成报告目录。"
         ),
         prompt_evidence={"research_plan": {"focus": "quality_review"}},
     )
@@ -243,6 +247,30 @@ def test_natural_analyst_style_request_uses_paragraphs_without_report_scaffoldin
     assert "本轮自然对话表达要求" in prompt
     assert "用连贯自然段组织" in prompt
     assert "不说“好，我们直接聊”" in prompt
+
+
+def test_quality_review_opening_uses_compact_answer_frame():
+    prompt = _append(
+        intent="stock_research",
+        message="宁德时代最新财报究竟好不好？像分析师聊天。",
+        prompt_evidence={
+            "research_plan": {"focus": "quality_review"},
+            "quality_review_answer_frame": {
+                "requested_shape": "analyst_quality_review_opening"
+            },
+        },
+    )
+
+    assert "财报质量开场最后核对" in prompt
+    assert "quality_review_answer_frame 是本轮唯一事实框架" in prompt
+    assert "三到四个连贯自然段" in prompt
+    assert "不猜测应收账款" in prompt
+    assert "不把提前备货改写成“主动备货”" in prompt
+    assert "不写时间错位、现金流吃紧、现金转化变慢" in prompt
+    assert "现金覆盖健康" in prompt
+    assert "优先按框架中的 preferred_expression 表达" in prompt
+    assert "含金量、原地踏步、现金回笼" in prompt
+    assert "是本期利润同比的逆风而不是利润增长来源" in prompt
 
 
 def test_quality_review_uses_available_cashflow_company_explanation():
@@ -364,10 +392,7 @@ def test_market_followup_adds_short_final_quality_check():
 def test_market_experience_gap_uses_breadth_without_style_story():
     prompt = _append(
         intent="market_brief",
-        message=(
-            "今天为什么指数表现和大多数个股的体感不一样？"
-            "请结合成交额自然回答。"
-        ),
+        message=("今天为什么指数表现和大多数个股的体感不一样？请结合成交额自然回答。"),
         prompt_evidence={
             "question_focus": {"key": "volume_flows"},
             "market_breadth": {"turnover": {"status": "available"}},
