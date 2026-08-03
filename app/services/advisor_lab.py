@@ -52,6 +52,13 @@ class AdvisorLabPolicy:
         return None
 
 
+def investment_profile_questions(message: str) -> list[str]:
+    folded = "".join(str(message or "").split())
+    if not any(term in folded for term in ("加仓", "补仓", "加码")):
+        return []
+    return ["当前持仓成本与仓位", "资金使用期限", "可承受的最大回撤", "计划加仓比例"]
+
+
 def _safe_text(value: Any, limit: int = _MAX_TEXT_LENGTH) -> str:
     text = str(value or "").strip()
     return text[:limit]
@@ -254,4 +261,5 @@ __all__ = [
     "SNAPSHOT_VERSION",
     "build_advisor_lab_snapshot",
     "filter_knowledge_for_symbol",
+    "investment_profile_questions",
 ]

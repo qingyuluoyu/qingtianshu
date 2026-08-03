@@ -21,6 +21,7 @@ from app.services.advisor_lab import (
     AdvisorLabPolicy,
     build_advisor_lab_snapshot,
     filter_knowledge_for_symbol,
+    investment_profile_questions,
 )
 from app.services.chat_routing import (
     _extract_thesis,
@@ -275,6 +276,16 @@ class ChatOrchestrationService:
                 assistant_content=blocked_reason,
                 response_intent="advisor_lab_blocked",
                 evidence_payload={"type": "advisor_lab_blocked", "reason": blocked_reason},
+            )
+        profile_questions = investment_profile_questions(message) if advisor_lab else []
+        if profile_questions:
+            clarification = "是否加仓不能只根据跌幅或单一价格信号判断。请补充：" + "、".join(profile_questions) + "。补充后我会按支持证据、反方证据、数据缺口和失效条件给出条件化研究框架。"
+            policy_events.append({"type": "decision_context_required", "fields": profile_questions})
+            return persist_response(
+                {"intent": "advisor_lab_clarification", "status": "clarification", "model_tier": model_tier, "answer": clarification, "evidence": {"type": "advisor_lab_clarification", "required_fields": profile_questions}, "error": None},
+                assistant_content=clarification,
+                response_intent="advisor_lab_clarification",
+                evidence_payload={"type": "advisor_lab_clarification", "required_fields": profile_questions},
             )
 
         if any(

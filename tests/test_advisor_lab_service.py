@@ -6,6 +6,7 @@ from app.services.advisor_lab import (
     AdvisorLabPolicy,
     build_advisor_lab_snapshot,
     filter_knowledge_for_symbol,
+    investment_profile_questions,
 )
 
 
@@ -99,3 +100,10 @@ def test_symbol_filter_removes_other_securities_but_keeps_target_and_user_upload
     assert excluded == [
         {"title": "宁德时代研究报告", "reason": "证券标识不匹配当前研究对象"}
     ]
+
+
+def test_add_position_question_requires_decision_context() -> None:
+    questions = investment_profile_questions("德明利腰斩后有必要加仓吗")
+
+    assert questions == ["当前持仓成本与仓位", "资金使用期限", "可承受的最大回撤", "计划加仓比例"]
+    assert investment_profile_questions("德明利为什么下跌") == []
