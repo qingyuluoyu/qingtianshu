@@ -17,7 +17,11 @@ from app.services.chat_context import (
     build_financial_advisor_context,
 )
 from app.services.chat_knowledge_context import _filter_knowledge_context
-from app.services.advisor_lab import AdvisorLabPolicy, build_advisor_lab_snapshot
+from app.services.advisor_lab import (
+    AdvisorLabPolicy,
+    build_advisor_lab_snapshot,
+    filter_knowledge_for_symbol,
+)
 from app.services.chat_routing import (
     _extract_thesis,
     _is_deep_stock_coverage_query,
@@ -183,6 +187,12 @@ class ChatOrchestrationService:
         image_path = prepared.image_path
         model_tier = prepared.model_tier
         knowledge_context = prepared.knowledge_context
+        knowledge_exclusions: list[dict[str, str]] = []
+        if advisor_lab and symbol:
+            knowledge_context, knowledge_exclusions = filter_knowledge_for_symbol(
+                knowledge_context, symbol
+            )
+            prepared.knowledge_context = knowledge_context
         confirmed_risk_profile = self.risk_profiles.confirmed_context(user_id)
         financial_advisor_context = build_financial_advisor_context(
             message,
@@ -247,7 +257,9 @@ class ChatOrchestrationService:
                 advisor_lab_snapshot=snapshot,
             )
 
-        policy_events: list[dict[str, Any]] = []
+        policy_events: list[dict[str, Any]] = [
+            {"type": "excluded_context", **item} for item in knowledge_exclusions
+        ]
         blocked_reason = AdvisorLabPolicy.blocked_operation(message) if advisor_lab else None
         if blocked_reason:
             policy_events.append({"type": "blocked_operation", "reason": blocked_reason})

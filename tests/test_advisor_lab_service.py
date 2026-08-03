@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.services.advisor_lab import AdvisorLabPolicy, build_advisor_lab_snapshot
+from app.services.advisor_lab import (
+    AdvisorLabPolicy,
+    build_advisor_lab_snapshot,
+    filter_knowledge_for_symbol,
+)
 
 
 def _prepared() -> SimpleNamespace:
@@ -75,3 +79,23 @@ def test_policy_blocks_business_write_operations() -> None:
     assert AdvisorLabPolicy.blocked_operation("确认写回研究结论")
     assert AdvisorLabPolicy.blocked_operation("创建一个买入操作")
     assert AdvisorLabPolicy.blocked_operation("今天市场怎么样") is None
+
+
+def test_symbol_filter_removes_other_securities_but_keeps_target_and_user_upload() -> None:
+    context = {
+        "items": [
+            {"title": "德明利研究报告", "content": "证券代码：001309.SZ", "scope": "common"},
+            {"title": "宁德时代研究报告", "content": "证券代码：300750.SZ", "scope": "common"},
+            {"title": "用户上传材料", "content": "我的关注理由", "scope": "user", "attached": True},
+        ]
+    }
+
+    filtered, excluded = filter_knowledge_for_symbol(context, "001309.SZ")
+
+    assert [item["title"] for item in filtered["items"]] == [
+        "德明利研究报告",
+        "用户上传材料",
+    ]
+    assert excluded == [
+        {"title": "宁德时代研究报告", "reason": "证券标识不匹配当前研究对象"}
+    ]

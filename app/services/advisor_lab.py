@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -54,6 +55,40 @@ class AdvisorLabPolicy:
 def _safe_text(value: Any, limit: int = _MAX_TEXT_LENGTH) -> str:
     text = str(value or "").strip()
     return text[:limit]
+
+
+def filter_knowledge_for_symbol(
+    context: dict[str, Any], symbol: str | None
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Keep only the target security or an explicitly attached user document."""
+
+    if not symbol:
+        return context, []
+    canonical = str(symbol).upper().replace(".SH", ".SS")
+    target_code = canonical.split(".", 1)[0]
+    kept: list[dict[str, Any]] = []
+    excluded: list[dict[str, str]] = []
+    for item in context.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        scope = str(item.get("scope") or "")
+        attached = bool(item.get("attached"))
+        searchable = " ".join(
+            str(item.get(key) or "")
+            for key in ("title", "source_key", "content", "excerpt", "symbol")
+        ).upper().replace(".SH", ".SS")
+        mentioned_codes = set(re.findall(r"(?<!\d)(\d{6})(?:\.(?:SZ|SS))?", searchable))
+        matches_target = canonical in searchable or target_code in mentioned_codes
+        if matches_target or (scope == "user" and attached):
+            kept.append(item)
+            continue
+        reason = (
+            "证券标识不匹配当前研究对象"
+            if mentioned_codes
+            else "未标注当前研究对象，未作为个股研究资料使用"
+        )
+        excluded.append({"title": _safe_text(item.get("title"), 120), "reason": reason})
+    return {**context, "items": kept}, excluded
 
 
 def _is_sensitive_key(key: Any) -> bool:
@@ -214,4 +249,9 @@ def build_advisor_lab_snapshot(
     }
 
 
-__all__ = ["AdvisorLabPolicy", "SNAPSHOT_VERSION", "build_advisor_lab_snapshot"]
+__all__ = [
+    "AdvisorLabPolicy",
+    "SNAPSHOT_VERSION",
+    "build_advisor_lab_snapshot",
+    "filter_knowledge_for_symbol",
+]
