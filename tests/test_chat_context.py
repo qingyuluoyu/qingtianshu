@@ -31,7 +31,12 @@ class FakeDatabase:
         return self.conversation
 
     def create_conversation(
-        self, user_id: str, title: str, *, quality_scope: str
+        self,
+        user_id: str,
+        title: str,
+        *,
+        quality_scope: str,
+        conversation_mode: str = "formal",
     ) -> dict[str, Any]:
         del user_id
         self.conversation = {
@@ -39,6 +44,7 @@ class FakeDatabase:
             "title": title,
             "status": "active",
             "quality_scope": quality_scope,
+            "conversation_mode": conversation_mode,
         }
         return self.conversation
 
@@ -120,6 +126,25 @@ def build_service() -> tuple[ChatRequestContextService, FakeDatabase, FakeKnowle
     database = FakeDatabase()
     knowledge = FakeKnowledge()
     return ChatRequestContextService(database, knowledge), database, knowledge
+
+
+def test_prepare_creates_advisor_lab_conversation_mode() -> None:
+    service, database, _ = build_service()
+
+    prepared = service.prepare(
+        user_id="user-1",
+        message="今天市场怎么样",
+        conversation_id=None,
+        quality_scope="user",
+        conversation_mode="advisor_test",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="economy",
+    )
+
+    assert prepared.conversation["conversation_mode"] == "advisor_test"
+    assert database.conversation is not None
+    assert database.conversation["conversation_mode"] == "advisor_test"
 
 
 def test_chat_context_module_does_not_import_main() -> None:

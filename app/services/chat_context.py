@@ -519,17 +519,24 @@ class ChatRequestContextService:
         image_id: str | None,
         model_tier: str,
         document_id: str | None = None,
+        conversation_mode: str = "formal",
     ) -> PreparedChatContext:
         message = message.strip()
         if conversation_id:
             conversation = self.database.get_conversation(user_id, conversation_id)
-            if conversation is None or conversation.get("status") != "active":
+            if (
+                conversation is None
+                or conversation.get("status") != "active"
+                or str(conversation.get("conversation_mode") or "formal")
+                != conversation_mode
+            ):
                 raise ChatConversationNotFound
         else:
             conversation = self.database.create_conversation(
                 user_id,
                 _conversation_title(message),
                 quality_scope=quality_scope,
+                conversation_mode=conversation_mode,
             )
         resolved_conversation_id = str(conversation["id"])
         history = self.database.list_conversation_messages(

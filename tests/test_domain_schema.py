@@ -24,6 +24,10 @@ def test_domain_schema_keeps_required_product_tables() -> None:
         assert f"CREATE TABLE IF NOT EXISTS {table}" in DOMAIN_SCHEMA_SQL
 
 
+def test_conversations_default_to_formal_mode() -> None:
+    assert "conversation_mode TEXT NOT NULL DEFAULT 'formal'" in DOMAIN_SCHEMA_SQL
+
+
 def test_database_initialize_stays_a_migration_orchestrator() -> None:
     tree = ast.parse((ROOT / "app" / "db.py").read_text(encoding="utf-8"))
     initialize = next(

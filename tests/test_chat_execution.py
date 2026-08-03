@@ -172,3 +172,36 @@ def test_structured_failure_keeps_valid_agent_answer() -> None:
     assert persisted[0]["answer"] == "本轮针对性回答"
     assert persisted[0]["structured_answer"] is None
     assert result["status"] == "completed"
+
+
+def test_read_only_execution_skips_mutation_capable_collaborators() -> None:
+    service, _, structured = build_service()
+    stream = FakeChatStream()
+
+    result = service.execute(
+        user={"id": "user-3"},
+        user_id="user-3",
+        intent="market_brief",
+        message="今天市场怎么样",
+        evidence={"type": "market_brief"},
+        model_tier="economy",
+        execute_agent=False,
+        image_path=None,
+        conversation_id="conversation-3",
+        conversation_history=[],
+        knowledge_context={"items": []},
+        request_started=0.0,
+        request_id=None,
+        symbol=None,
+        chat_stream=stream,
+        persist_response=lambda response_payload, **metadata: {
+            **response_payload,
+            **metadata,
+        },
+        read_only=True,
+    )
+
+    assert structured.calls == []
+    assert result["structured_answer"] is None
+    assert result["evidence_tasks"] == {}
+    assert result["deep_stock_session"] is None

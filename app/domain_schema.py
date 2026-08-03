@@ -516,6 +516,7 @@ DOMAIN_SCHEMA_SQL = r"""
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     title TEXT NOT NULL,
                     quality_scope TEXT NOT NULL DEFAULT 'user',
+                    conversation_mode TEXT NOT NULL DEFAULT 'formal',
                     status TEXT NOT NULL DEFAULT 'active'
                         CHECK(status IN ('active', 'archived')),
                     created_at TEXT NOT NULL,

@@ -17,6 +17,7 @@ from app.services.chat_context import (
     build_financial_advisor_context,
 )
 from app.services.chat_knowledge_context import _filter_knowledge_context
+from app.services.advisor_lab import AdvisorLabPolicy, build_advisor_lab_snapshot
 from app.services.chat_routing import (
     _extract_thesis,
     _is_deep_stock_coverage_query,
@@ -72,6 +73,9 @@ class ChatOrchestrationService:
         self,
         user: dict[str, Any],
         payload: ChatRequest,
+        *,
+        conversation_mode: str = "formal",
+        advisor_lab: bool = False,
     ) -> dict[str, Any]:
         user_id = str(user["id"])
         request_started = time.perf_counter()
@@ -105,6 +109,7 @@ class ChatOrchestrationService:
                 image_id=payload.image_id,
                 model_tier=payload.model_tier,
                 document_id=payload.document_id,
+                conversation_mode=conversation_mode,
             )
         except ChatConversationNotFound as exc:
             raise HTTPException(status_code=404, detail="研究对话不存在") from exc
@@ -212,6 +217,20 @@ class ChatOrchestrationService:
             evidence_payload: dict[str, Any] | None = None,
             structured_answer: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
+            snapshot = (
+                build_advisor_lab_snapshot(
+                    prepared=prepared,
+                    intent=response_intent,
+                    evidence=evidence_payload or {},
+                    policy_events=policy_events,
+                    run={
+                        "id": run_id,
+                        "status": response_payload.get("status"),
+                    },
+                )
+                if advisor_lab
+                else None
+            )
             return self.chat_persistence.persist(
                 response_payload,
                 user_id=user_id,
@@ -225,6 +244,25 @@ class ChatOrchestrationService:
                 run_id=run_id,
                 evidence_payload=evidence_payload,
                 structured_answer=structured_answer,
+                advisor_lab_snapshot=snapshot,
+            )
+
+        policy_events: list[dict[str, Any]] = []
+        blocked_reason = AdvisorLabPolicy.blocked_operation(message) if advisor_lab else None
+        if blocked_reason:
+            policy_events.append({"type": "blocked_operation", "reason": blocked_reason})
+            return persist_response(
+                {
+                    "intent": "advisor_lab_blocked",
+                    "status": "blocked",
+                    "model_tier": model_tier,
+                    "answer": blocked_reason,
+                    "evidence": {"type": "advisor_lab_blocked", "reason": blocked_reason},
+                    "error": None,
+                },
+                assistant_content=blocked_reason,
+                response_intent="advisor_lab_blocked",
+                evidence_payload={"type": "advisor_lab_blocked", "reason": blocked_reason},
             )
 
         if any(
@@ -570,4 +608,5 @@ class ChatOrchestrationService:
             symbol=symbol,
             chat_stream=chat_stream,
             persist_response=persist_response,
+            read_only=advisor_lab,
         )

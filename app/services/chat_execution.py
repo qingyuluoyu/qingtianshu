@@ -44,6 +44,7 @@ class ChatAgentExecutionService:
         symbol: str | None,
         chat_stream: Any,
         persist_response: Callable[..., dict[str, Any]],
+        read_only: bool = False,
     ) -> dict[str, Any]:
         chat_stream.progress(
             "evidence_ready",
@@ -77,49 +78,53 @@ class ChatAgentExecutionService:
 
         structured_answer = None
         structured_answer_failed = False
-        try:
-            structured_answer = self.structured_ai.build_and_persist(
-                user_id=user_id,
-                run=run,
-                evidence=evidence,
-                answer=str(run.get("answer") or ""),
-                message=message,
-                conversation_id=conversation_id,
-                symbol=symbol,
-            )
-        except Exception:
-            # Structured cards and writeback candidates must never hide an
-            # otherwise valid financial answer. The Run and evidence remain
-            # available for diagnosis and a later retry.
-            logger.exception(
-                "Failed to persist structured AI answer for run %s",
-                run.get("id"),
-            )
-            structured_answer_failed = True
-            structured_answer = None
+        if not read_only:
+            try:
+                structured_answer = self.structured_ai.build_and_persist(
+                    user_id=user_id,
+                    run=run,
+                    evidence=evidence,
+                    answer=str(run.get("answer") or ""),
+                    message=message,
+                    conversation_id=conversation_id,
+                    symbol=symbol,
+                )
+            except Exception:
+                # Structured cards and writeback candidates must never hide an
+                # otherwise valid financial answer. The Run and evidence remain
+                # available for diagnosis and a later retry.
+                logger.exception(
+                    "Failed to persist structured AI answer for run %s",
+                    run.get("id"),
+                )
+                structured_answer_failed = True
+                structured_answer = None
         chat_stream.publish_structured(
             structured_answer,
             failed=structured_answer_failed,
         )
 
-        deep_stock_session = self.deep_stock.observe_chat(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            symbol=symbol,
-            intent=intent,
-            message=message,
-            run=run,
-            evidence=evidence,
-        )
-        captured_evidence_tasks = self.evidence_tasks.capture_from_chat(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            run_id=run["id"],
-            intent=intent,
-            message=message,
-            evidence=evidence,
-            symbol=symbol,
-        )
+        deep_stock_session = None
+        captured_evidence_tasks: dict[str, Any] = {}
+        if not read_only:
+            deep_stock_session = self.deep_stock.observe_chat(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                symbol=symbol,
+                intent=intent,
+                message=message,
+                run=run,
+                evidence=evidence,
+            )
+            captured_evidence_tasks = self.evidence_tasks.capture_from_chat(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                run_id=run["id"],
+                intent=intent,
+                message=message,
+                evidence=evidence,
+                symbol=symbol,
+            )
         response_payload = {
             "run_id": run["id"],
             "status": run["status"],

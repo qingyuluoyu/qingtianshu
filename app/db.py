@@ -16,7 +16,8 @@ from app.utils import json_dumps, utc_now, write_json
 
 class Database:
     SYSTEM_EDITOR_ID = "system-market-editor"
-    SCHEMA_VERSION = 5
+    SCHEMA_VERSION = 6
+    VALID_CONVERSATION_MODES = {"formal", "advisor_test"}
 
     def __init__(
         self,
@@ -61,6 +62,12 @@ class Database:
                 "conversations",
                 "quality_scope",
                 "TEXT NOT NULL DEFAULT 'user'",
+            )
+            self._ensure_column(
+                connection,
+                "conversations",
+                "conversation_mode",
+                "TEXT NOT NULL DEFAULT 'formal'",
             )
             self._ensure_column(connection, "financial_periods", "eps_diluted", "REAL")
             self._ensure_column(
@@ -1020,23 +1027,28 @@ class Database:
         user_id: str,
         title: str = "新的研究对话",
         quality_scope: str = "user",
+        conversation_mode: str = "formal",
     ) -> dict[str, Any]:
         if quality_scope not in {"user", "evaluation"}:
             raise ValueError("Unsupported conversation quality scope")
+        if conversation_mode not in self.VALID_CONVERSATION_MODES:
+            raise ValueError("Unsupported conversation mode")
         conversation_id = str(uuid4())
         now = utc_now()
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT INTO conversations(
-                    id, user_id, title, quality_scope, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'active', ?, ?)
+                    id, user_id, title, quality_scope, conversation_mode, status,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
                 """,
                 (
                     conversation_id,
                     user_id,
                     title.strip() or "新的研究对话",
                     quality_scope,
+                    conversation_mode,
                     now,
                     now,
                 ),
@@ -1074,10 +1086,22 @@ class Database:
         return self._conversation_row(row)
 
     def list_conversations(
-        self, user_id: str, include_archived: bool = False, limit: int = 100
+        self,
+        user_id: str,
+        include_archived: bool = False,
+        limit: int = 100,
+        conversation_mode: str | None = None,
     ) -> list[dict[str, Any]]:
+        if (
+            conversation_mode is not None
+            and conversation_mode not in self.VALID_CONVERSATION_MODES
+        ):
+            raise ValueError("Unsupported conversation mode")
         status_clause = (
             "" if include_archived else "AND conversations.status = 'active'"
+        )
+        mode_clause = (
+            "" if conversation_mode is None else "AND conversations.conversation_mode = ?"
         )
         with self.connect() as connection:
             rows = connection.execute(
@@ -1103,10 +1127,14 @@ class Database:
                      WHERE conversation_id = conversations.id
                      ORDER BY updated_at DESC, rowid DESC LIMIT 1) AS bound_name
                 FROM conversations
-                WHERE user_id = ? {status_clause}
+                WHERE user_id = ? {status_clause} {mode_clause}
                 ORDER BY updated_at DESC, rowid DESC LIMIT ?
                 """,
-                (user_id, limit),
+                (
+                    (user_id, limit)
+                    if conversation_mode is None
+                    else (user_id, conversation_mode, limit)
+                ),
             ).fetchall()
         return [
             self._conversation_row(row)  # type: ignore[misc]

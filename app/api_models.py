@@ -42,6 +42,17 @@ class ChatRequest(BaseModel):
     quality_scope: Literal["user", "evaluation"] = "user"
 
 
+class AdvisorLabChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    symbol: str | None = Field(default=None, max_length=24)
+    model_tier: Literal["economy", "deep", "vision"] = "economy"
+    execute_agent: bool = True
+    image_id: str | None = Field(default=None, max_length=36)
+    document_id: str | None = Field(default=None, max_length=36)
+    conversation_id: str | None = Field(default=None, max_length=36)
+    request_id: str | None = Field(default=None, min_length=8, max_length=64)
+
+
 class ChatRefineRequest(BaseModel):
     preview_run_id: str = Field(min_length=36, max_length=36)
     conversation_id: str = Field(min_length=36, max_length=36)

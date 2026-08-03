@@ -21,6 +21,7 @@ from app.api_models import (
     ActionPlanPatch,
     ActionPlanTransition,
     ArticleGenerateRequest,
+    AdvisorLabChatRequest,
     BackgroundJobEnqueueRequest,
     ChangeRelevanceUpdate,
     ChatRefineRequest,
@@ -774,6 +775,7 @@ def create_app(
                 "id",
                 "title",
                 "quality_scope",
+                "conversation_mode",
                 "status",
                 "message_count",
                 "last_message_preview",
@@ -855,6 +857,13 @@ def create_app(
                 "Cache-Control": "no-store, max-age=0",
                 "Pragma": "no-cache",
             },
+        )
+
+    @app.get("/advisor-lab", include_in_schema=False)
+    def advisor_lab_page() -> FileResponse:
+        return FileResponse(
+            Path(__file__).resolve().parent / "static" / "advisor-lab.html",
+            headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
         )
 
     @app.get("/static/{asset_name}", include_in_schema=False)
@@ -1155,7 +1164,9 @@ def create_app(
         return {
             "items": [
                 public_conversation(item)
-                for item in database.list_conversations(user["id"], limit=limit)
+                for item in database.list_conversations(
+                    user["id"], limit=limit, conversation_mode="formal"
+                )
             ]
         }
 
@@ -1183,7 +1194,11 @@ def create_app(
     def get_my_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
         user = require_session_user(request)
         conversation = database.get_conversation(user["id"], conversation_id)
-        if conversation is None or conversation.get("status") != "active":
+        if (
+            conversation is None
+            or conversation.get("status") != "active"
+            or conversation.get("conversation_mode") != "formal"
+        ):
             raise HTTPException(status_code=404, detail="研究对话不存在")
         messages = database.list_conversation_messages(
             user["id"], conversation_id, limit=500
@@ -3299,6 +3314,50 @@ def create_app(
     def my_chat(payload: ChatRequest, request: Request) -> dict[str, Any]:
         user = require_session_user(request)
         return chat_orchestration.handle(user, payload)
+
+    @app.post("/me/advisor-lab/chat")
+    def advisor_lab_chat(
+        payload: AdvisorLabChatRequest, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        return chat_orchestration.handle(
+            user,
+            ChatRequest(**payload.model_dump(), quality_scope="user"),
+            conversation_mode="advisor_test",
+            advisor_lab=True,
+        )
+
+    @app.get("/me/advisor-lab/conversations")
+    def list_advisor_lab_conversations(
+        request: Request, limit: int = Query(default=100, ge=1, le=200)
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        return {
+            "items": [
+                public_conversation(item)
+                for item in database.list_conversations(
+                    user["id"], limit=limit, conversation_mode="advisor_test"
+                )
+            ]
+        }
+
+    @app.get("/me/advisor-lab/context/{assistant_message_id}")
+    def get_advisor_lab_context(
+        assistant_message_id: str, request: Request
+    ) -> dict[str, Any]:
+        user = require_session_user(request)
+        message = database.get_conversation_message(user["id"], assistant_message_id)
+        if message is None or message.get("role") != "assistant":
+            raise HTTPException(status_code=404, detail="测试上下文不存在")
+        conversation = database.get_conversation(user["id"], message["conversation_id"])
+        snapshot = (message.get("metadata") or {}).get("advisor_lab_snapshot")
+        if (
+            conversation is None
+            or conversation.get("conversation_mode") != "advisor_test"
+            or not isinstance(snapshot, dict)
+        ):
+            raise HTTPException(status_code=404, detail="测试上下文不存在")
+        return snapshot
 
     @app.post("/me/chat/refine")
     def refine_my_chat(payload: ChatRefineRequest, request: Request) -> dict[str, Any]:

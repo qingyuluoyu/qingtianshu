@@ -154,6 +154,7 @@ class ChatResponsePersistence:
         run_id: str | None = None,
         evidence_payload: dict[str, Any] | None = None,
         structured_answer: dict[str, Any] | None = None,
+        advisor_lab_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         evidence = evidence_payload or {}
         sources = self._knowledge_sources(
@@ -199,6 +200,7 @@ class ChatResponsePersistence:
                 "conversation_scope": conversation_scope,
                 "structured_answer": structured_answer,
                 "model_tier": model_tier,
+                "advisor_lab_snapshot": advisor_lab_snapshot,
                 "stock_screen_profile": (
                     (evidence.get("profile") or {}).get("key")
                     if response_intent == "stock_screen"

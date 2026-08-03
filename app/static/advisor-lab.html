@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>金融顾问测试台</title>
+  <link rel="stylesheet" href="/static/advisor-lab.css">
+</head>
+<body>
+  <main class="lab-shell">
+    <section class="chat-column">
+      <header><h1>金融顾问测试台</h1><p>独立测试会话 · 只读模式</p></header>
+      <div id="messages" class="messages" aria-live="polite"></div>
+      <form id="chat-form"><textarea id="question" required placeholder="输入问题，例如：中兴通讯为什么下跌？"></textarea><button>发送</button></form>
+    </section>
+    <aside class="context-column"><h2>本轮解读</h2><div id="context"><p>发送问题后，这里会显示本轮实际带入的背景、证据、缺口与安全边界。</p></div></aside>
+  </main>
+  <script src="/static/advisor-lab.js"></script>
+</body>
+</html>

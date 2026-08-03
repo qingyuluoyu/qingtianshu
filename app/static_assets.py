@@ -3,6 +3,8 @@ from __future__ import annotations
 
 STATIC_ASSET_MEDIA_TYPES = {
     "demo.css": "text/css",
+    "advisor-lab.css": "text/css",
+    "advisor-lab.js": "application/javascript",
     "demo.js": "application/javascript",
     "demo-boot.js": "application/javascript",
     "qs-agent-entry.js": "application/javascript",
