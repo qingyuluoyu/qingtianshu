@@ -16,3 +16,4 @@ tmp/
 .qa-*/
 .docx-product-report-assets/
 report_render*/
+.worktrees/
