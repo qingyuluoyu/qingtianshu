@@ -715,3 +715,23 @@ uv run python scripts/live_smoke.py
 ## 2026-07-28 W23 连续基准、年K与候选到Agent链路
 
 李总策略组合版本升级为 `li_zong_2w_no_cost_full_benchmark_v5`：策略净值继续保持零交易成本、最短10个交易日换仓和冷却期最新候选规则；沪深300改为完整区间每日收盘连续基准。已验证v4策略曲线通过同一输入版本的审计迁移生成v5，策略净值不变；首次三档同日审计快照均截至2026-07-27，连续基准分别为近3个月 `-1.40%`、近1年 `+17.04%`、近3年 `+21.67%`，逐点独立复算最大误差约 `5e-9`，且每档均找到策略空仓但指数继续变化的真实日期段。2026-07-28 20:15交付核对时，近3个月已严格重算为策略 `-5.16%`、沪深300 `-4.22%`、超额 `-0.94%`，近1年为 `+44.94% / +13.70% / +31.25%`；近3年仍保留2026-07-27稳定结果，不能表述为三档均已完成2026-07-28。K线新增真实年K和近5年范围。候选进入个股空间后，入选理由、数据日和缺失项现在会进入Agent证据与Prompt；绑定个股对话中的候选逻辑追问不再误路由回全市场筛选。双视口报告 `artifacts/browser-smoke-w23-benchmark-yeark-agent-context/result.json` 为 `20 passed / 0 failed`。
+
+## 2026-08-03 ~ 2026-08-04 顾问实验台与 React 生产就绪
+
+### 2026-08-03 金融顾问实验台（Advisor Lab）独立模块
+
+新增独立顾问实验台页面 `app/static/advisor-lab.html`，通过 `/advisor-lab` 路由直接访问。服务层新增 `app/services/advisor_lab.py`（217行），封装 `AddPositionQuestion` 模型、安全过滤和上下文注入逻辑；`app/services/chat_orchestration.py` 增加 advisor lab 专用编排路径，`app/services/chat_context.py` 和 `chat_execution.py` 相应扩展上下文传递。新增测试文件 `tests/test_advisor_lab_service.py`（77行）、`test_chat_context.py`、`test_chat_execution.py` 和 `test_domain_schema.py`。
+
+2026-08-03 修复 advisor lab 上下文安全过滤：`advisor_lab.py` 增加按 security code 过滤对话上下文的逻辑，确保实验台只访问当前用户关联的持仓数据，防止跨用户数据泄露。`chat_orchestration.py` 的 add-position 问题强制要求携带上下文参数。
+
+### 2026-08-04 React 生产环境认证与 E2E 测试
+
+后端新增完整认证中间件 `app/auth.py`（56行）和速率限制 `app/auth_rate_limit.py`（108行），`app/main.py` 增加 `/auth/login`、`/auth/me`、`/auth/logout` 路由和 JWT/session 校验；`app/db.py` 增加用户与会话表迁移（185行）；`app/config.py` 增加认证相关配置项（29行）；`app/frontend.py` 和 `app/api_models.py` 相应扩展。Docker 配置增加生产环境多阶段构建（`Dockerfile` 14行，`docker-compose.yml` 10行），`.dockerignore` 排除构建缓存。
+
+前端完整迁移至 React + TypeScript + Vite 生产栈：`frontend/src/` 下建立 `features/auth`（AuthModal、useUnauthorizedBoundary）、`features/today`（TodayPage、adapters、queries、events）、`components/AppShell` 等模块；`frontend/e2e/` 下新增 Playwright E2E 套件（`auth-gate`、`today`、`production`、`today-real` 四套规格）；`frontend/scripts/` 增加 Docker 生产 E2E 和真实环境 E2E 运行脚本；`frontend/playwright.config.ts` 等三套 Playwright 配置；`frontend/openapi.json` 和 `frontend/src/api/openapi.generated.ts` 为前端生成类型安全的 API 客户端。新增测试 `tests/test_auth.py`（258行）、`test_auth_contract.py`、`test_auth_rate_limit.py`、`test_registered_user_isolation.py`、`test_production_frontend.py`、`test_docker_frontend_contract.py`。
+
+### 2026-08-04 UI 就绪度资产与测试
+
+新增 `frontend/e2e-production/capture-today-ui.spec.ts`（50行）用于生产环境 Today 页面截图对比；`frontend/today-ui-readiness/` 下收集桌面（1440px、1920px）和移动端（390px）多个视口的完整截图、顶部截图和滚动截图，以及页面录屏 `page@2db1e87318381510c5e05de54c9200f8.webm`，用于视觉回归基准建立。
+
+新增 `docs/superpowers/plans/2026-08-03-financial-advisor-test-lab.md`（186行）记录顾问实验台设计规划；`.audit-ui-doc/` 下新增 `update_ui_docx_v14.py`（273行）和 6 张 UI 截图，用于自动生成设计确认与批注意见表（V1.0）。`.gitignore` 补充 `.vite/`、`*.log`、`.test-env` 等构建产物过滤规则。
