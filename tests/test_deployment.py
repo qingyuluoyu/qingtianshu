@@ -36,7 +36,7 @@ def test_deployment_uses_matching_postgres_17_client_and_isolated_staging():
     assert 'HERMES_ECONOMY_MODEL: "${HERMES_ECONOMY_MODEL:-step-3.7-flash}"' in compose
     assert 'HERMES_DEEP_MODEL: "${HERMES_DEEP_MODEL:-step-3.7-flash}"' in compose
     assert 'STEPFUN_API_KEY: "${STEPFUN_API_KEY:-}"' in compose
-    assert 'SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-false}"' in compose
+    assert 'SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-true}"' in compose
     assert "HERMES_BIN: /opt/hermes/bin/hermes" in compose
     assert "HERMES_PYTHON_BIN: /opt/hermes/bin/python" in compose
     assert "COMPOSE_PROJECT_NAME=qingshu-staging" in staging

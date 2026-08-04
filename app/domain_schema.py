@@ -7,7 +7,11 @@ DOMAIN_SCHEMA_SQL = r"""
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     workspace_path TEXT NOT NULL UNIQUE,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    account TEXT,
+                    phone TEXT,
+                    password_hash TEXT,
+                    last_login_at TIMESTAMPTZ
                 );
 
                 CREATE TABLE IF NOT EXISTS user_sessions (

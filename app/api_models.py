@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class UserCreate(BaseModel):
@@ -11,6 +11,53 @@ class UserCreate(BaseModel):
 
 class LegacySessionClaim(BaseModel):
     user_id: str = Field(min_length=36, max_length=36)
+
+
+class AuthRegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account: str = Field(min_length=1, max_length=128)
+    phone: str = Field(min_length=1, max_length=32)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class AuthLoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    login: str = Field(min_length=1, max_length=128)
+    password: str = Field(max_length=128)
+
+
+class AuthSessionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    account: str | None
+    name: str
+    masked_phone: str | None
+    auth_type: Literal["account", "legacy_anonymous"]
+    is_registered: bool
+    created_at: str
+    session_expires_at: str | None
+
+
+class AuthErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    message: str
+
+
+class AuthValidationIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    loc: list[str | int]
+    msg: str
+    type: str
+
+
+class AuthValidationErrorResponse(AuthErrorResponse):
+    detail: list[AuthValidationIssue]
 
 
 class WatchlistUpsert(BaseModel):

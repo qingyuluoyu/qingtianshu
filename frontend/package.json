@@ -1,0 +1,38 @@
+{
+  "name": "qingshu-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:real": "uv run --isolated --frozen --project .. python scripts/run_real_today_e2e.py",
+    "test:e2e:docker": "py -3 scripts/run_docker_production_e2e.py",
+    "generate:api": "openapi-typescript http://127.0.0.1:8000/openapi.json -o src/api/openapi.generated.ts",
+    "generate:api:file": "openapi-typescript ./openapi.json -o src/api/openapi.generated.ts"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.66.0",
+    "openapi-fetch": "^0.13.5",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.2.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.51.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.2.0",
+    "@types/node": "^22.13.0",
+    "@types/react": "^19.0.8",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.4.1",
+    "jsdom": "^26.0.0",
+    "openapi-typescript": "^7.6.1",
+    "typescript": "~5.7.3",
+    "vite": "^6.1.0",
+    "vitest": "^3.0.5"
+  }
+}

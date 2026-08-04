@@ -99,6 +99,12 @@ class Settings:
     background_data_quality_seconds: int = 60
     session_ttl_days: int = 365
     session_cookie_secure: bool = False
+    auth_rate_limit_per_source: int = 120
+    auth_rate_limit_per_principal: int = 10
+    auth_rate_limit_window_seconds: int = 60
+    auth_rate_limit_max_keys: int = 4096
+    auth_password_hash_concurrency: int = 2
+    legacy_anonymous_mode: bool = True
     max_image_upload_bytes: int = 10 * 1024 * 1024
     max_image_pixels: int = 25_000_000
     max_document_upload_bytes: int = 20 * 1024 * 1024
@@ -128,6 +134,7 @@ class Settings:
     background_run_completed_retention_hours: int = 720
     background_run_failed_retention_hours: int = 2160
     data_health_retention_hours: int = 720
+    frontend_dist_dir: Path = PROJECT_ROOT / "frontend" / "dist"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -216,6 +223,25 @@ class Settings:
             session_ttl_days=int(os.getenv("SESSION_TTL_DAYS", "365")),
             session_cookie_secure=os.getenv("SESSION_COOKIE_SECURE", "false").lower()
             in {"1", "true", "yes"},
+            auth_rate_limit_per_source=max(
+                1, int(os.getenv("AUTH_RATE_LIMIT_PER_SOURCE", "120"))
+            ),
+            auth_rate_limit_per_principal=max(
+                1, int(os.getenv("AUTH_RATE_LIMIT_PER_PRINCIPAL", "10"))
+            ),
+            auth_rate_limit_window_seconds=max(
+                1, int(os.getenv("AUTH_RATE_LIMIT_WINDOW_SECONDS", "60"))
+            ),
+            auth_rate_limit_max_keys=max(
+                2, int(os.getenv("AUTH_RATE_LIMIT_MAX_KEYS", "4096"))
+            ),
+            auth_password_hash_concurrency=max(
+                1, int(os.getenv("AUTH_PASSWORD_HASH_CONCURRENCY", "2"))
+            ),
+            legacy_anonymous_mode=os.getenv(
+                "QINGSHU_LEGACY_ANONYMOUS_MODE", "true"
+            ).lower()
+            in {"1", "true", "yes"},
             max_image_upload_bytes=int(
                 os.getenv("MAX_IMAGE_UPLOAD_BYTES", str(10 * 1024 * 1024))
             ),
@@ -296,6 +322,9 @@ class Settings:
             ),
             data_health_retention_hours=max(
                 1, int(os.getenv("DATA_HEALTH_RETENTION_HOURS", "720"))
+            ),
+            frontend_dist_dir=_path_from_env(
+                "QINGSHU_FRONTEND_DIST_DIR", PROJECT_ROOT / "frontend" / "dist"
             ),
         )
 

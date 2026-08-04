@@ -13,13 +13,20 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from PIL import Image, ImageOps, UnidentifiedImageError
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from app.api_models import (
     ActionPlanCreate,
     ActionPlanPatch,
     ActionPlanTransition,
+    AuthErrorResponse,
+    AuthLoginRequest,
+    AuthRegisterRequest,
+    AuthSessionResponse,
+    AuthValidationErrorResponse,
     ArticleGenerateRequest,
     AdvisorLabChatRequest,
     BackgroundJobEnqueueRequest,
@@ -61,7 +68,15 @@ from app.catalog import (
     normalize_symbol,
 )
 from app.config import PROJECT_ROOT, Settings
-from app.db import Database
+from app.db import AccountAlreadyExists, Database, PhoneAlreadyExists
+from app.auth import hash_password, masked_phone, normalize_account, normalize_phone, verify_password
+from app.auth_rate_limit import AuthRateLimiter
+from app.frontend import (
+    react_asset,
+    react_index,
+    registered_backend_prefixes,
+    should_serve_spa,
+)
 from app.operations import build_operations_report
 from app.static_assets import STATIC_ASSET_MEDIA_TYPES
 from app.providers.market import (
@@ -668,6 +683,14 @@ def create_app(
         lifespan=lifespan,
     )
     app.state.settings = settings
+    auth_rate_limiter = AuthRateLimiter(
+        per_source_limit=settings.auth_rate_limit_per_source,
+        per_principal_limit=settings.auth_rate_limit_per_principal,
+        window_seconds=settings.auth_rate_limit_window_seconds,
+        max_keys=settings.auth_rate_limit_max_keys,
+        password_hash_concurrency=settings.auth_password_hash_concurrency,
+    )
+    app.state.auth_rate_limiter = auth_rate_limiter
     app.state.database = database
     app.state.security_master = security_master
     app.state.analysis = analysis
@@ -751,10 +774,73 @@ def create_app(
     def public_user(user: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": user["id"],
+            "account": user.get("account"),
             "name": user["name"],
+            "masked_phone": masked_phone(user.get("phone")),
+            "auth_type": "account" if user.get("password_hash") else "legacy_anonymous",
+            "is_registered": bool(user.get("password_hash")),
             "created_at": user["created_at"],
             "session_expires_at": user.get("session_expires_at"),
         }
+
+    def auth_error(
+        status_code: int,
+        code: str,
+        message: str | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> JSONResponse:
+        content: dict[str, str] = {"code": code}
+        if message is not None:
+            content["message"] = message
+        return JSONResponse(
+            status_code=status_code,
+            content=content,
+            headers=headers,
+        )
+
+    def auth_rate_error(retry_after_seconds: int) -> JSONResponse:
+        return auth_error(
+            429,
+            "rate_limited",
+            "请求过于频繁，请稍后再试",
+            headers={"Retry-After": str(max(1, retry_after_seconds))},
+        )
+
+    def check_auth_rate(
+        request: Request, *, action: str, principal: str
+    ) -> JSONResponse | None:
+        source = request.client.host if request.client is not None else "unknown"
+        decision = auth_rate_limiter.check(
+            action=action,
+            source=source,
+            principal=principal,
+        )
+        if decision.allowed:
+            return None
+        return auth_rate_error(decision.retry_after_seconds)
+
+    @app.exception_handler(RequestValidationError)
+    async def redact_auth_validation_error(
+        request: Request, exc: RequestValidationError
+    ) -> Response:
+        if request.url.path not in {"/auth/register", "/auth/login"}:
+            return await request_validation_exception_handler(request, exc)
+        detail = [
+            {
+                "loc": list(error.get("loc") or []),
+                "msg": str(error.get("msg") or "请求参数无效"),
+                "type": str(error.get("type") or "value_error"),
+            }
+            for error in exc.errors()
+        ]
+        return JSONResponse(
+            status_code=422,
+            content={
+                "code": "validation_error",
+                "message": "请求参数校验失败",
+                "detail": detail,
+            },
+        )
 
     def public_upload(upload: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -849,8 +935,7 @@ def create_app(
     def root() -> RedirectResponse:
         return RedirectResponse(url="/today")
 
-    @app.get("/demo", include_in_schema=False)
-    def demo_page() -> FileResponse:
+    def legacy_demo_page() -> FileResponse:
         return FileResponse(
             Path(__file__).resolve().parent / "static" / "demo.html",
             headers={
@@ -859,12 +944,32 @@ def create_app(
             },
         )
 
-    @app.get("/advisor-lab", include_in_schema=False)
-    def advisor_lab_page() -> FileResponse:
+    def legacy_advisor_lab_page() -> FileResponse:
         return FileResponse(
             Path(__file__).resolve().parent / "static" / "advisor-lab.html",
             headers={"Cache-Control": "no-store, max-age=0", "Pragma": "no-cache"},
         )
+
+    @app.get("/legacy", include_in_schema=False)
+    def legacy_root() -> FileResponse:
+        return legacy_demo_page()
+
+    @app.get("/legacy/advisor-lab", include_in_schema=False)
+    def legacy_advisor_lab() -> FileResponse:
+        return legacy_advisor_lab_page()
+
+    @app.get("/legacy/{legacy_path:path}", include_in_schema=False)
+    def legacy_route(legacy_path: str) -> FileResponse:
+        del legacy_path
+        return legacy_demo_page()
+
+    @app.get("/demo", include_in_schema=False)
+    def demo_redirect() -> RedirectResponse:
+        return RedirectResponse(url="/legacy")
+
+    @app.get("/advisor-lab", include_in_schema=False)
+    def advisor_lab_redirect() -> RedirectResponse:
+        return RedirectResponse(url="/legacy/advisor-lab")
 
     @app.get("/static/{asset_name}", include_in_schema=False)
     def static_asset(asset_name: str) -> FileResponse:
@@ -876,20 +981,34 @@ def create_app(
             headers={"Cache-Control": "no-store, max-age=0"},
         )
 
+    @app.get("/assets/{asset_path:path}", include_in_schema=False)
+    def react_static_asset(asset_path: str) -> FileResponse:
+        return react_asset(settings.frontend_dist_dir, asset_path)
+
     @app.get("/today", include_in_schema=False)
-    @app.get("/search", include_in_schema=False)
+    @app.get("/screening", include_in_schema=False)
     @app.get("/watchlist", include_in_schema=False)
+    @app.get("/stocks/{symbol}", include_in_schema=False)
+    @app.get("/advisor", include_in_schema=False)
+    @app.get("/advisor/{conversation_id}", include_in_schema=False)
+    @app.get("/research-center", include_in_schema=False)
+    def react_page(
+        conversation_id: str | None = None, symbol: str | None = None
+    ) -> FileResponse:
+        del conversation_id, symbol
+        return react_index(settings.frontend_dist_dir)
+
+    @app.get("/search", include_in_schema=False)
     @app.get("/research", include_in_schema=False)
     @app.get("/research/{conversation_id}", include_in_schema=False)
     @app.get("/reviews", include_in_schema=False)
     @app.get("/account", include_in_schema=False)
     @app.get("/knowledge", include_in_schema=False)
-    @app.get("/stocks/{symbol}", include_in_schema=False)
-    def demo_route(
-        conversation_id: str | None = None, symbol: str | None = None
-    ) -> FileResponse:
-        del conversation_id, symbol
-        return demo_page()
+    def old_frontend_route(
+        request: Request, conversation_id: str | None = None
+    ) -> RedirectResponse:
+        del conversation_id
+        return RedirectResponse(url=f"/legacy{request.url.path}")
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -1057,6 +1176,8 @@ def create_app(
 
     @app.post("/users", status_code=201)
     def create_user(payload: UserCreate, response: Response) -> dict[str, Any]:
+        if not settings.legacy_anonymous_mode:
+            return auth_error(403, "legacy_anonymous_disabled")
         user = database.create_user(payload.name)
         seed_demo_watchlist(user)
         session = database.create_user_session(user["id"], settings.session_ttl_days)
@@ -1067,6 +1188,8 @@ def create_app(
     def claim_legacy_session(
         payload: LegacySessionClaim, response: Response
     ) -> dict[str, Any]:
+        if not settings.legacy_anonymous_mode:
+            return auth_error(403, "legacy_anonymous_disabled")
         try:
             UUID(payload.user_id)
         except ValueError as exc:
@@ -1081,9 +1204,96 @@ def create_app(
         seed_demo_watchlist(user)
         return public_user({**user, "session_expires_at": session["expires_at"]})
 
-    @app.get("/session")
-    def get_session(request: Request) -> dict[str, Any]:
-        return public_user(require_session_user(request))
+    @app.post(
+        "/auth/register",
+        status_code=201,
+        response_model=AuthSessionResponse,
+        responses={
+            409: {"model": AuthErrorResponse},
+            429: {"model": AuthErrorResponse},
+            422: {"model": AuthValidationErrorResponse},
+        },
+    )
+    def register_auth_user(
+        payload: AuthRegisterRequest, request: Request, response: Response
+    ) -> Any:
+        try:
+            account = normalize_account(payload.account)
+            phone = normalize_phone(payload.phone)
+        except ValueError:
+            return auth_error(422, "validation_error", "请求参数校验失败")
+        limited = check_auth_rate(request, action="register", principal=account)
+        if limited is not None:
+            return limited
+        with auth_rate_limiter.password_slot() as acquired:
+            if not acquired:
+                return auth_rate_error(1)
+            try:
+                password_hash = hash_password(payload.password)
+            except ValueError:
+                return auth_error(422, "validation_error", "请求参数校验失败")
+        try:
+            user = database.create_registered_user(account, phone, password_hash)
+        except AccountAlreadyExists:
+            return auth_error(409, "account_exists", "账号已存在")
+        except PhoneAlreadyExists:
+            return auth_error(409, "phone_exists", "手机号已存在")
+        session = database.create_authenticated_session(
+            user["id"], request.cookies.get(SESSION_COOKIE_NAME), settings.session_ttl_days
+        )
+        set_session_cookie(response, session)
+        return public_user({**user, "session_expires_at": session["expires_at"]})
+
+    @app.post(
+        "/auth/login",
+        response_model=AuthSessionResponse,
+        responses={
+            401: {"model": AuthErrorResponse},
+            429: {"model": AuthErrorResponse},
+            422: {"model": AuthValidationErrorResponse},
+        },
+    )
+    def login_auth_user(
+        payload: AuthLoginRequest, request: Request, response: Response
+    ) -> Any:
+        try:
+            account = normalize_account(payload.login)
+        except ValueError:
+            account = None
+        try:
+            phone = normalize_phone(payload.login)
+        except ValueError:
+            phone = None
+        principal = phone or account or payload.login.casefold()
+        limited = check_auth_rate(request, action="login", principal=principal)
+        if limited is not None:
+            return limited
+        user = database.get_user_by_login(account, phone)
+        with auth_rate_limiter.password_slot() as acquired:
+            if not acquired:
+                return auth_rate_error(1)
+            valid_password = verify_password(
+                user.get("password_hash") if user is not None else None,
+                payload.password,
+            )
+        if user is None or not valid_password:
+            return auth_error(401, "invalid_credentials", "账号或密码错误")
+        session = database.create_authenticated_session(
+            user["id"], request.cookies.get(SESSION_COOKIE_NAME), settings.session_ttl_days
+        )
+        set_session_cookie(response, session)
+        return public_user({**user, "session_expires_at": session["expires_at"]})
+
+    @app.get(
+        "/session",
+        response_model=AuthSessionResponse,
+        responses={401: {"model": AuthErrorResponse}},
+    )
+    def get_session(request: Request) -> Any:
+        user = database.get_user_by_session(request.cookies.get(SESSION_COOKIE_NAME))
+        if user is None:
+            return auth_error(401, "session_expired", "会话已失效或不存在")
+        return public_user(user)
 
     @app.delete("/session", status_code=204)
     def delete_session(request: Request) -> Response:
@@ -3381,6 +3591,24 @@ def create_app(
         if run is None:
             raise HTTPException(status_code=404, detail="运行不存在或不属于当前用户")
         return run
+
+    backend_prefixes = registered_backend_prefixes(app.routes)
+
+    @app.api_route(
+        "/{frontend_path:path}",
+        methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        include_in_schema=False,
+    )
+    def react_router_fallback(frontend_path: str, request: Request) -> FileResponse:
+        path = "/" + frontend_path
+        if not should_serve_spa(
+            method=request.method,
+            path=path,
+            accept=request.headers.get("accept", ""),
+            backend_prefixes=backend_prefixes,
+        ):
+            raise HTTPException(status_code=404, detail="Not Found")
+        return react_index(settings.frontend_dist_dir)
 
     return app
 

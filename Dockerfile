@@ -1,3 +1,15 @@
+FROM node:22-bookworm-slim AS frontend-build
+
+WORKDIR /frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend ./
+RUN npm run generate:api:file && npm run build \
+    && test -f dist/index.html
+
+
 FROM python:3.11-slim-bookworm AS hermes-runtime
 
 ARG HERMES_COMMIT=ab158e8088a847890057b75a63a951155ea93004
@@ -27,6 +39,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HERMES_HOME=/data/hermes \
     HERMES_BIN=/opt/hermes/bin/hermes \
     HERMES_PYTHON_BIN=/opt/hermes/bin/python \
+    QINGSHU_FRONTEND_DIST_DIR=/app/frontend/dist \
     HERMES_ENABLED=false
 
 WORKDIR /app
@@ -49,6 +62,7 @@ RUN apt-get update \
 
 COPY pyproject.toml ./
 COPY app ./app
+COPY --from=frontend-build /frontend/dist /app/frontend/dist
 ARG PIP_INDEX_URL=https://mirrors.cloud.tencent.com/pypi/simple
 RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" .
 

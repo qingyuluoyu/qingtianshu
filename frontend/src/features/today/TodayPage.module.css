@@ -1,0 +1,84 @@
+.page { display: grid; gap: 18px; max-width: 1480px; margin: 0 auto; color: var(--ink); }
+.hero { min-height: 148px; display: flex; justify-content: space-between; gap: 28px; padding: 24px 28px; border: 1px solid #d9e2ef; border-radius: 14px; background: linear-gradient(135deg, #f9fbff 0%, #eef4fc 100%); }
+.eyebrow { margin-bottom: 8px; color: #53708f; font-size: 11px; font-weight: 700; letter-spacing: .16em; }
+.hero h1 { margin: 0; font-size: clamp(28px, 4vw, 40px); letter-spacing: -.04em; }
+.hero p { max-width: 720px; margin: 12px 0 0; color: var(--ink-muted); line-height: 1.65; }
+.heroStatus { display: flex; min-width: 180px; flex-direction: column; align-items: flex-end; justify-content: center; gap: 7px; color: var(--ink-muted); font-size: 12px; }
+.refresh { margin-top: 3px; padding: 6px 12px; border: 1px solid #cbd5e1; border-radius: 7px; color: #344054; background: #fff; cursor: pointer; }
+.refresh:hover { border-color: #84adff; color: var(--brand); }
+.badge { display: inline-flex; width: fit-content; padding: 5px 9px; border-radius: 999px; font-weight: 700; }
+.badgeLive { color: #067647; background: #dcfae6; }
+.badgeMuted { color: #475467; background: #eaecf0; }
+.notice { padding: 11px 14px; border: 1px solid #fedf89; border-radius: 9px; color: #93370d; background: #fffaeb; font-size: 13px; }
+.card { min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 1px 2px rgb(16 24 40 / 3%); }
+.full { width: 100%; }
+.cardHeader { display: flex; min-height: 30px; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.cardHeader h2 { margin: 0; font-size: 17px; letter-spacing: -.01em; }
+.meta { color: var(--ink-muted); font-size: 12px; }
+.skeleton { min-height: 96px; display: grid; place-items: center; border-radius: 8px; color: #98a2b3; background: linear-gradient(90deg, #f5f7fa 25%, #edf1f5 38%, #f5f7fa 63%); background-size: 400% 100%; animation: shimmer 1.3s infinite; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+.moduleError { min-height: 96px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; color: var(--ink-muted); text-align: center; }
+.moduleError button { padding: 7px 11px; border: 1px solid var(--border); border-radius: 7px; color: var(--ink); background: var(--surface); cursor: pointer; }
+.indexGrid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.indexCard { min-width: 0; padding: 14px; border: 1px solid #eaecf0; border-radius: 9px; background: #fcfcfd; }
+.indexName { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.indexName strong { overflow: hidden; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
+.indexName span, .indexCard small { color: #98a2b3; font-size: 10px; }
+.indexValue { margin: 16px 0 5px; font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.up { color: #d92d20; }
+.down { color: #039855; }
+.flat { color: #475467; }
+.twoColumns { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr); gap: 18px; }
+.breadthLead { display: flex; justify-content: space-between; gap: 12px; }
+.breadthLead span { color: var(--ink-muted); font-size: 12px; }
+.statGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.statGrid div, .metricRow div { display: flex; flex-direction: column; gap: 5px; }
+.statGrid span, .metricRow span { color: var(--ink-muted); font-size: 11px; }
+.statGrid strong, .metricRow strong { font-size: 17px; font-variant-numeric: tabular-nums; }
+.metricRow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 18px; padding-top: 16px; border-top: 1px solid #eaecf0; }
+.helper { margin: 12px 0 0; color: var(--ink-muted); font-size: 11px; line-height: 1.5; }
+.stale { padding: 4px 8px; border-radius: 999px; color: #b54708; background: #fef0c7; font-weight: 700; }
+.sectorList { display: grid; gap: 2px; }
+.sectorList > div { display: grid; grid-template-columns: 28px minmax(100px, 1fr) auto 62px; align-items: center; gap: 8px; min-height: 36px; border-bottom: 1px solid #f2f4f7; font-size: 12px; }
+.sectorList > div > span:not(.rank) { color: var(--ink-muted); }
+.sectorList b { text-align: right; font-variant-numeric: tabular-nums; }
+.rank { color: #98a2b3; font-size: 10px; font-variant-numeric: tabular-nums; }
+.priorityList { display: grid; gap: 5px; }
+.priorityList article { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 11px; padding: 11px 0; border-bottom: 1px solid #f2f4f7; }
+.priorityIndex { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 7px; color: #344054; background: #f2f4f7; font-size: 11px; font-weight: 700; }
+.itemTitle { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.itemTitle span, .changeList article span { padding: 3px 6px; border-radius: 5px; color: #175cd3; background: #eff8ff; font-size: 10px; }
+.itemTitle a, .changeList a { color: var(--ink); text-decoration-color: #b2ccff; text-underline-offset: 3px; }
+.itemTitle a:hover, .changeList a:hover { color: var(--brand); }
+.priorityList p, .changeList p { margin: 5px 0; color: #475467; font-size: 12px; line-height: 1.55; }
+.priorityList small, .changeList small { color: #98a2b3; font-size: 10px; }
+.personalMeta { margin-top: 14px; padding: 10px 12px; border-radius: 8px; color: #475467; background: #f8fafc; font-size: 11px; }
+.changeList { display: grid; gap: 4px; }
+.changeList article { padding: 11px 0; border-bottom: 1px solid #f2f4f7; }
+.changeList article > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.empty, .emptyCompact { min-height: 104px; display: grid; place-items: center; color: #98a2b3; font-size: 12px; text-align: center; }
+.emptyCompact { min-height: 72px; }
+.healthLayout { display: grid; grid-template-columns: minmax(330px, .9fr) minmax(0, 1.1fr); gap: 20px; }
+.healthSummary { display: grid; grid-template-columns: 12px minmax(140px, 1fr) auto; align-items: center; gap: 12px; }
+.healthSummary > div { display: flex; flex-direction: column; gap: 5px; }
+.healthSummary small { color: var(--ink-muted); font-size: 10px; }
+.healthDot { width: 10px; height: 10px; border-radius: 50%; }
+.healthGood { background: #12b76a; box-shadow: 0 0 0 4px #d1fadf; }
+.healthAttention { background: #f79009; box-shadow: 0 0 0 4px #fef0c7; }
+.healthSummary dl { display: flex; gap: 14px; margin: 0; }
+.healthSummary dl div { text-align: center; }
+.healthSummary dt { color: var(--ink-muted); font-size: 10px; }
+.healthSummary dd { margin: 3px 0 0; font-weight: 700; }
+.healthChecks { display: grid; align-content: center; gap: 6px; }
+.healthCategories { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.healthCategories div { display: grid; grid-template-columns: auto auto auto; gap: 5px; align-items: center; padding: 5px 7px; border: 1px solid #eaecf0; border-radius: 6px; background: #fcfcfd; font-size: 10px; }
+.healthCategories span, .healthCategories small { color: var(--ink-muted); }
+.healthCategories strong { color: #344054; }
+.healthChecks > div { display: grid; grid-template-columns: 42px 1fr; align-items: center; gap: 8px; }
+.healthChecks span { color: var(--ink-muted); font-size: 11px; }
+.healthChecks > div span { color: #b54708; font-weight: 700; }
+.healthChecks strong { font-size: 12px; font-weight: 500; }
+.boundary { padding: 3px 6px 16px; color: #667085; font-size: 11px; line-height: 1.6; text-align: center; }
+@media (max-width: 1120px) { .indexGrid { grid-template-columns: repeat(3, 1fr); } .twoColumns { grid-template-columns: 1fr; } }
+@media (max-width: 760px) { .hero { flex-direction: column; padding: 20px; } .heroStatus { align-items: flex-start; } .indexGrid { grid-template-columns: repeat(2, 1fr); } .healthLayout { grid-template-columns: 1fr; } .healthSummary { grid-template-columns: 12px 1fr; } .healthSummary dl { grid-column: 1 / -1; justify-content: space-around; } }
+@media (max-width: 460px) { .indexGrid { grid-template-columns: 1fr; } .statGrid, .metricRow { grid-template-columns: repeat(2, 1fr); } .sectorList > div { grid-template-columns: 22px minmax(80px, 1fr) 58px; } .sectorList > div > span:not(.rank) { display: none; } }

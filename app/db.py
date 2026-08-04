@@ -9,14 +9,23 @@ import secrets
 from typing import Any
 from uuid import uuid4
 
+from app.auth import normalize_phone
 from app.domain_schema import DOMAIN_SCHEMA_SQL
 from app.postgres_compat import PostgresConnection, create_postgres_pool
 from app.utils import json_dumps, utc_now, write_json
 
 
+class AccountAlreadyExists(Exception):
+    pass
+
+
+class PhoneAlreadyExists(Exception):
+    pass
+
+
 class Database:
     SYSTEM_EDITOR_ID = "system-market-editor"
-    SCHEMA_VERSION = 6
+    SCHEMA_VERSION = 7
     VALID_CONVERSATION_MODES = {"formal", "advisor_test"}
 
     def __init__(
@@ -68,6 +77,20 @@ class Database:
                 "conversations",
                 "conversation_mode",
                 "TEXT NOT NULL DEFAULT 'formal'",
+            )
+            self._ensure_column(connection, "users", "account", "TEXT")
+            self._ensure_column(connection, "users", "phone", "TEXT")
+            self._ensure_column(connection, "users", "password_hash", "TEXT")
+            self._ensure_column(connection, "users", "last_login_at", "TIMESTAMPTZ")
+            self._ensure_index(
+                connection,
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_account_not_null "
+                "ON users(account) WHERE account IS NOT NULL",
+            )
+            self._ensure_index(
+                connection,
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_phone_not_null "
+                "ON users(phone) WHERE phone IS NOT NULL",
             )
             self._ensure_column(connection, "financial_periods", "eps_diluted", "REAL")
             self._ensure_column(
@@ -217,6 +240,10 @@ class Database:
         }
         if column not in columns:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @staticmethod
+    def _ensure_index(connection: PostgresConnection, statement: str) -> None:
+        connection.execute(statement)
 
     @staticmethod
     def _upgrade_postgres_real_columns(connection: PostgresConnection) -> None:
@@ -465,6 +492,82 @@ class Database:
         write_json(workspace / "watchlist.json", [])
         return user  # type: ignore[return-value]
 
+    def create_registered_user(
+        self, account: str, phone: str, password_hash: str
+    ) -> dict[str, Any]:
+        try:
+            account_phone_alias = normalize_phone(account)
+        except ValueError:
+            account_phone_alias = None
+        national_phone = phone.removeprefix("+86")
+        phone_account_aliases = (national_phone, f"86{national_phone}")
+        login_aliases = {
+            account,
+            phone,
+            *phone_account_aliases,
+        }
+        if account_phone_alias is not None:
+            login_aliases.add(account_phone_alias)
+        user_id = str(uuid4())
+        workspace = (self.workspace_root / user_id).resolve()
+        created_at = utc_now()
+        workspace_created = False
+        try:
+            with self.connect() as connection:
+                for alias in sorted(login_aliases):
+                    connection.execute(
+                        "SELECT pg_advisory_xact_lock(hashtext(?))",
+                        (f"qingshu_login_alias:{alias}",),
+                    )
+                account_conflict = connection.execute(
+                    "SELECT id FROM users WHERE account = ? OR phone = ? LIMIT 1",
+                    (account, account_phone_alias or ""),
+                ).fetchone()
+                if account_conflict is not None:
+                    raise AccountAlreadyExists
+                phone_conflict = connection.execute(
+                    """
+                    SELECT id FROM users
+                    WHERE phone = ? OR account IN (?, ?)
+                    LIMIT 1
+                    """,
+                    (phone, *phone_account_aliases),
+                ).fetchone()
+                if phone_conflict is not None:
+                    raise PhoneAlreadyExists
+                workspace.mkdir(parents=True, exist_ok=False)
+                workspace_created = True
+                connection.execute(
+                    """
+                    INSERT INTO users(
+                        id, name, workspace_path, created_at, account, phone,
+                        password_hash, last_login_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        user_id,
+                        account,
+                        str(workspace),
+                        created_at,
+                        account,
+                        phone,
+                        password_hash,
+                        created_at,
+                    ),
+                )
+        except Exception as exc:
+            if workspace_created:
+                workspace.rmdir()
+            if isinstance(exc, (AccountAlreadyExists, PhoneAlreadyExists)):
+                raise
+            constraint = str(getattr(getattr(exc, "diag", None), "constraint_name", ""))
+            if constraint == "uq_users_account_not_null":
+                raise AccountAlreadyExists from exc
+            if constraint == "uq_users_phone_not_null":
+                raise PhoneAlreadyExists from exc
+            raise
+        return self.get_user(user_id)  # type: ignore[return-value]
+
     def ensure_system_editor(self) -> dict[str, Any]:
         workspace = (self.workspace_root / "_system_market_editor").resolve()
         workspace.mkdir(parents=True, exist_ok=True)
@@ -486,6 +589,44 @@ class Database:
                 ).fetchone()
             )
 
+    def get_user_by_account(self, account: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            return self._row(
+                connection.execute("SELECT * FROM users WHERE account = ?", (account,)).fetchone()
+            )
+
+    def get_user_by_phone(self, phone: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            return self._row(
+                connection.execute("SELECT * FROM users WHERE phone = ?", (phone,)).fetchone()
+            )
+
+    def get_user_by_login(
+        self, account: str | None, phone: str | None
+    ) -> dict[str, Any] | None:
+        if not account and not phone:
+            return None
+        with self.connect() as connection:
+            rows = []
+            if account:
+                rows.extend(
+                    connection.execute(
+                        "SELECT * FROM users WHERE account = ?", (account,)
+                    ).fetchall()
+                )
+            if phone:
+                rows.extend(
+                    connection.execute(
+                        "SELECT * FROM users WHERE phone = ?", (phone,)
+                    ).fetchall()
+                )
+        users = {
+            user["id"]: user
+            for row in rows
+            if (user := self._row(row)) is not None
+        }
+        return next(iter(users.values())) if len(users) == 1 else None
+
     @staticmethod
     def _session_token_hash(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
@@ -497,6 +638,49 @@ class Database:
         expires_at = (now + timedelta(days=ttl_days)).isoformat(timespec="seconds")
         session_id = str(uuid4())
         with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO user_sessions(
+                    id, token_hash, user_id, created_at, expires_at, last_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    self._session_token_hash(token),
+                    user_id,
+                    created_at,
+                    expires_at,
+                    created_at,
+                ),
+            )
+        return {
+            "id": session_id,
+            "token": token,
+            "user_id": user_id,
+            "created_at": created_at,
+            "expires_at": expires_at,
+        }
+
+    def create_authenticated_session(
+        self, user_id: str, current_token: str | None, ttl_days: int = 365
+    ) -> dict[str, Any]:
+        token = secrets.token_urlsafe(32)
+        now = datetime.now(timezone.utc)
+        created_at = now.isoformat(timespec="seconds")
+        expires_at = (now + timedelta(days=ttl_days)).isoformat(timespec="seconds")
+        session_id = str(uuid4())
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE users SET last_login_at = ? WHERE id = ?", (created_at, user_id)
+            )
+            if current_token:
+                connection.execute(
+                    """
+                    UPDATE user_sessions SET revoked_at = ?
+                    WHERE token_hash = ? AND revoked_at IS NULL
+                    """,
+                    (created_at, self._session_token_hash(current_token)),
+                )
             connection.execute(
                 """
                 INSERT INTO user_sessions(

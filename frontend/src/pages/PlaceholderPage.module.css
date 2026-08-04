@@ -1,0 +1,5 @@
+.card { max-width: 760px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 32px; box-shadow: var(--shadow); }
+.eyebrow { margin: 0; color: var(--brand); font-weight: 600; font-size: 13px; }
+h1 { margin: 12px 0; color: var(--ink); font-size: clamp(26px, 4vw, 38px); }
+.card > p { color: var(--ink-muted); line-height: 1.7; }
+.state { margin-top: 24px; padding: 14px; border-radius: 8px; background: var(--surface-subtle); color: var(--ink-muted); }

@@ -1,0 +1,16 @@
+.backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px; background: color-mix(in srgb, var(--ink) 45%, transparent); }
+.modal { position: relative; width: min(100%, 420px); background: var(--surface); border-radius: 14px; padding: 24px; box-shadow: 0 24px 80px rgb(0 0 0 / 25%); outline: none; }
+.titleRow { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.titleRow h2 { margin: 0; color: var(--ink); }
+.close { display: grid; width: 36px; height: 36px; flex: 0 0 auto; place-items: center; border: 1px solid var(--border); border-radius: 8px; color: var(--ink-muted); background: var(--surface); cursor: pointer; font: inherit; font-size: 24px; line-height: 1; }
+.close:hover, .close:focus-visible { border-color: var(--brand); color: var(--brand); outline: 2px solid color-mix(in srgb, var(--brand) 24%, transparent); outline-offset: 2px; }
+.tabs { display: flex; gap: 18px; border-bottom: 1px solid var(--border); }
+.tabs button { padding: 0 0 10px; border: 0; background: transparent; color: var(--ink-muted); cursor: pointer; }
+.tabs .selected { color: var(--brand); border-bottom: 2px solid var(--brand); }
+.modeTitle { margin: 20px 0 4px; color: var(--ink); font-size: 18px; font-weight: 700; }
+.modal label { display: grid; gap: 7px; margin: 14px 0; color: var(--ink-muted); font-size: 14px; }
+.modal input { border: 1px solid var(--border); border-radius: 8px; padding: 11px; font: inherit; color: var(--ink); }
+.submit { width: 100%; margin-top: 12px; border: 0; border-radius: 8px; padding: 12px; color: white; background: var(--brand); cursor: pointer; }
+.submit:disabled { opacity: .7; cursor: wait; }
+.error { color: var(--danger); font-size: 14px; }
+@media (max-width: 390px) { .backdrop { padding: 10px; align-items: end; } .modal { padding: 18px; max-height: calc(100dvh - 20px); overflow: auto; } .close { width: 40px; height: 40px; } }

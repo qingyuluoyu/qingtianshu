@@ -1,0 +1,4 @@
+:root { font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; color: #182230; background: #f6f8fb; --surface: #fff; --surface-subtle: #f6f8fb; --ink: #182230; --ink-muted: #667085; --border: #e4e7ec; --brand: #2164d8; --brand-soft: #edf4ff; --danger: #b42318; --shadow: 0 4px 18px rgb(16 24 40 / 6%); }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; }
+button, input { font: inherit; }

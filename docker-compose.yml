@@ -20,6 +20,7 @@ services:
       - "${QINGSHU_HTTP_BIND:-0.0.0.0}:${QINGSHU_HTTP_PORT:-8000}:8000"
     environment: &qingshu-environment
       QINGSHU_DATA_DIR: /data
+      QINGSHU_FRONTEND_DIST_DIR: /app/frontend/dist
       QINGSHU_DATABASE_URL: "postgresql://qingshu:${POSTGRES_PASSWORD:-qingshu-local-only}@postgres:5432/qingshu"
       QINGSHU_DB_POOL_MIN_SIZE: "${QINGSHU_DB_POOL_MIN_SIZE:-1}"
       QINGSHU_DB_POOL_MAX_SIZE: "${QINGSHU_DB_POOL_MAX_SIZE:-8}"
@@ -65,7 +66,15 @@ services:
       STEPFUN_API_KEY: "${STEPFUN_API_KEY:-}"
       TOKENDANCE_API_KEY: "${TOKENDANCE_API_KEY:-}"
       SESSION_TTL_DAYS: "${SESSION_TTL_DAYS:-365}"
-      SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-false}"
+      # Production ingress must terminate HTTPS; false is only for loopback tests.
+      SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-true}"
+      # Per-process defense in depth; scaled deployments still require ingress limits.
+      AUTH_RATE_LIMIT_PER_SOURCE: "${AUTH_RATE_LIMIT_PER_SOURCE:-120}"
+      AUTH_RATE_LIMIT_PER_PRINCIPAL: "${AUTH_RATE_LIMIT_PER_PRINCIPAL:-10}"
+      AUTH_RATE_LIMIT_WINDOW_SECONDS: "${AUTH_RATE_LIMIT_WINDOW_SECONDS:-60}"
+      AUTH_RATE_LIMIT_MAX_KEYS: "${AUTH_RATE_LIMIT_MAX_KEYS:-4096}"
+      AUTH_PASSWORD_HASH_CONCURRENCY: "${AUTH_PASSWORD_HASH_CONCURRENCY:-2}"
+      QINGSHU_LEGACY_ANONYMOUS_MODE: "${QINGSHU_LEGACY_ANONYMOUS_MODE:-false}"
       TUSHARE_ENABLED: "${TUSHARE_ENABLED:-false}"
       TUSHARE_TOKEN: "${TUSHARE_TOKEN:-}"
       TUSHARE_API_URL: "${TUSHARE_API_URL:-https://teajoin.com}"
