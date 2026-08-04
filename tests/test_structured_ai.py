@@ -572,6 +572,58 @@ def test_writeback_confirm_reject_stale_and_user_isolation(app):
     assert owner.get(stale_path).json()["status"] == "stale"
 
 
+def test_registered_user_cannot_access_real_writeback_or_chat_stream(app):
+    owner = TestClient(app)
+    other = TestClient(app)
+    owner_user = owner.post(
+        "/auth/register",
+        json={
+            "account": "writeback-owner",
+            "phone": "13800138000",
+            "password": "Password-123",
+        },
+    ).json()
+    assert owner_user["is_registered"] is True
+    assert other.post(
+        "/auth/register",
+        json={
+            "account": "writeback-other",
+            "phone": "13900139000",
+            "password": "Password-123",
+        },
+    ).status_code == 201
+    _add_stock(owner, "正式判断：验证注册用户隔离")
+    evidence = _evidence()
+    message = "形成判断草稿，供我确认，不要直接修改正式判断。"
+    run = _run(app, owner_user["id"], "completed", message, evidence)
+    persisted = app.state.structured_ai.build_and_persist(
+        user_id=owner_user["id"],
+        run=run,
+        evidence=evidence,
+        answer=run["answer"],
+        message=message,
+        conversation_id=None,
+        symbol="000063.SZ",
+    )
+    assert persisted is not None
+    candidate_id = persisted["candidate_writebacks"][0]["id"]
+    candidate_path = f"/v1/ai-writebacks/{candidate_id}"
+    for path in (candidate_path, f"{candidate_path}/confirm", f"{candidate_path}/reject"):
+        response = other.get(path) if path == candidate_path else other.post(path)
+        assert response.status_code == 404
+        assert "注册用户隔离" not in response.text
+
+    request_id = "registered-owner-stream-001"
+    app.state.agent_streams.open(request_id, owner_user["id"])
+    app.state.agent_streams.publish(
+        request_id,
+        owner_user["id"],
+        {"type": "agent_stream_complete", "status": "completed"},
+    )
+    assert other.get(f"/me/chat/stream/{request_id}").status_code == 404
+    assert owner.get(f"/me/chat/stream/{request_id}").status_code == 200
+
+
 def test_chat_history_and_private_stream_include_structured_answer(client):
     _create_user(client, "Structured AI Chat")
     request_id = "structured-sse-001"

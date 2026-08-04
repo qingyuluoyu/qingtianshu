@@ -17,3 +17,7 @@ tmp/
 .docx-product-report-assets/
 report_render*/
 .worktrees/
+.vite/
+*.log
+.test-env
+~$*
