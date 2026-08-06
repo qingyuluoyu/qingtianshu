@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
 
 from app.catalog import RESEARCH_TARGETS
@@ -21,6 +22,9 @@ from app.services.stock_research_contract import (
     finalize_stock_research_contract,
 )
 from app.utils import utc_now
+
+
+logger = logging.getLogger(__name__)
 
 
 class ChatStockResearchEvidenceService:
@@ -113,30 +117,39 @@ class ChatStockResearchEvidenceService:
                     evidence_contract.get("force_online_refresh")
                 ),
             )
-        except ProviderError:
+        except ProviderError as exc:
             if (
                 not evidence_contract.get("precomputed_report_reuse_allowed")
                 or latest_report is None
                 or not latest_report.get("evidence")
             ):
-                raise
-            evidence = dict(latest_report["evidence"])
-            evidence["generated_at"] = utc_now()
-            evidence["research_plan"] = plan
-            evidence["evidence_status"] = "partial"
-            evidence["module_statuses"] = {
-                key: {
-                    "module": key,
-                    "label": (plan.get("module_labels") or {}).get(key, key),
-                    "status": "reused_fallback",
-                    "required": key in (plan.get("required_modules") or []),
+                logger.warning(
+                    "Online stock evidence unavailable for %s: %s",
+                    symbol,
+                    type(exc).__name__,
+                )
+                evidence = self._unavailable_online_evidence(
+                    symbol=symbol,
+                    plan=plan,
+                )
+            else:
+                evidence = dict(latest_report["evidence"])
+                evidence["generated_at"] = utc_now()
+                evidence["research_plan"] = plan
+                evidence["evidence_status"] = "partial"
+                evidence["module_statuses"] = {
+                    key: {
+                        "module": key,
+                        "label": (plan.get("module_labels") or {}).get(key, key),
+                        "status": "reused_fallback",
+                        "required": key in (plan.get("required_modules") or []),
+                    }
+                    for key in plan.get("selected_modules") or []
+                    if key == "market" or key in evidence
                 }
-                for key in plan.get("selected_modules") or []
-                if key == "market" or key in evidence
-            }
-            evidence.setdefault("warnings", []).append(
-                "本轮使用已保存的最近可核验证据，并继续由 AI 针对当前问题生成回答。"
-            )
+                evidence.setdefault("warnings", []).append(
+                    "本轮使用已保存的最近可核验证据，并继续由 AI 针对当前问题生成回答。"
+                )
 
         self._annotate_reused_report(evidence, latest_report)
         self._attach_user_context(evidence, user_id=user_id, symbol=symbol)
@@ -171,6 +184,54 @@ class ChatStockResearchEvidenceService:
             latest_report=latest_report,
         )
         return evidence
+
+    @staticmethod
+    def _unavailable_online_evidence(
+        *,
+        symbol: str,
+        plan: dict[str, Any],
+    ) -> dict[str, Any]:
+        selected_modules = list(plan.get("selected_modules") or [])
+        required_modules = set(plan.get("required_modules") or [])
+        target = RESEARCH_TARGETS.get(symbol) or {}
+        return {
+            "type": "stock_research",
+            "symbol": symbol,
+            "display_name": target.get("name") or symbol,
+            "generated_at": utc_now(),
+            "evidence_status": "partial",
+            "research_plan": plan,
+            "metrics": {
+                "latest_close": None,
+                "trend_state": "行情暂不可用",
+                "return_1d_pct": None,
+                "return_20d_pct": None,
+                "return_60d_pct": None,
+                "volatility_20d_annualized_pct": None,
+                "max_drawdown_60d_pct": None,
+            },
+            "research_frame": {
+                "missing_information": [
+                    "重新取得最近完整日线与当前报价",
+                    "核对最新公司公告、财务与反方证据",
+                ]
+            },
+            "module_statuses": {
+                key: {
+                    "module": key,
+                    "label": (plan.get("module_labels") or {}).get(key, key),
+                    "status": "unavailable",
+                    "required": key in required_modules,
+                }
+                for key in selected_modules
+            },
+            "warnings": [
+                "外部行情或公司证据刷新暂时未完成；本轮不会补写价格、涨跌、财务或事件事实。"
+            ],
+            "boundary": (
+                "当前只确认在线证据暂时不可用；任何价格、财务、事件原因或正式判断都需要在数据恢复后重新核验。"
+            ),
+        }
 
     def attach_workspace_context(
         self,

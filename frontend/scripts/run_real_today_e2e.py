@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 import shutil
@@ -35,6 +36,11 @@ def test_database_url() -> str:
         parsed = urlsplit(configured)
         configured = urlunsplit((parsed.scheme, parsed.netloc, f"/{EXPECTED_DATABASE}", parsed.query, parsed.fragment))
     parsed = urlsplit(configured)
+    if parsed.scheme not in {"postgresql", "postgres"} or not parsed.netloc:
+        raise RuntimeError(
+            "真实 E2E 需要完整 PostgreSQL 测试库 URL；"
+            "请设置 QINGSHU_TEST_POSTGRES_URL，不能使用本地文件路径"
+        )
     if parsed.path.lstrip("/") != EXPECTED_DATABASE:
         raise RuntimeError(f"真实 E2E 只允许使用 {EXPECTED_DATABASE}，当前配置被拒绝")
     return configured
@@ -74,6 +80,12 @@ def stop_process(process: subprocess.Popen[bytes]) -> None:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Run isolated real frontend E2E.")
+    parser.add_argument(
+        "--spec",
+        help="Optional Playwright spec path, for example e2e-real/advisor-real.spec.ts",
+    )
+    args = parser.parse_args()
     base_url = test_database_url()
     schema = f"e2e_today_{uuid4().hex}"
     runtime_dir = Path(tempfile.mkdtemp(prefix="qingshu-today-real-e2e-"))
@@ -107,12 +119,20 @@ def main() -> int:
             )
             wait_for_backend(backend, log_path)
             playwright = playwright_executable()
+            command = [str(playwright), "test", "--config=playwright.real.config.ts"]
+            if args.spec:
+                command.append(args.spec)
             result = subprocess.run(
-                [str(playwright), "test", "--config=playwright.real.config.ts"],
+                command,
                 cwd=FRONTEND,
                 env=env,
                 check=False,
             )
+            if result.returncode != 0:
+                backend_log.flush()
+                print("[real-e2e] fastapi_log_tail_begin")
+                print(log_path.read_text(encoding="utf-8", errors="replace")[-4000:])
+                print("[real-e2e] fastapi_log_tail_end")
             return result.returncode
     finally:
         if backend is not None:

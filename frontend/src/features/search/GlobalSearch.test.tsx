@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getGlobalSearch } from "../../api/search";
@@ -28,13 +28,17 @@ function renderSearch() {
 }
 
 describe("GlobalSearch", () => {
-  afterEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
 
   it("does not request search for whitespace-only input", async () => {
+    vi.useFakeTimers();
     renderSearch();
 
     fireEvent.change(screen.getByRole("combobox", { name: "全局搜索" }), { target: { value: "   " } });
-    await new Promise((resolve) => window.setTimeout(resolve, 300));
+    await act(async () => vi.advanceTimersByTime(300));
 
     expect(getGlobalSearch).not.toHaveBeenCalled();
   });

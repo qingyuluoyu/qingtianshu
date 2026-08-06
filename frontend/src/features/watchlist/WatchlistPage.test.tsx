@@ -30,7 +30,7 @@ const mockGetHistory = vi.mocked(getStockHistory);
 const mockPatchRelation = vi.mocked(patchStockRelation);
 
 function renderPage(entry = "/watchlist", authenticated = true) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[entry]}>
@@ -196,8 +196,8 @@ describe("WatchlistPage", () => {
   it("shows a page-level error with retry when the list request fails", async () => {
     mockGetAssets.mockRejectedValue(new WatchlistApiError(503, "数据暂时不可用"));
     renderPage();
-    // 503 按查询策略最多重试 2 次后才进入错误态，等待放宽到 8s。
-    expect(await screen.findByText("关注列表暂时不可用。", undefined, { timeout: 8000 })).toBeInTheDocument();
+    // 保留生产重试次数，但测试客户端取消退避等待，使错误态断言保持确定性。
+    expect(await screen.findByText("关注列表暂时不可用。")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重新读取" })).toBeInTheDocument();
   });
 

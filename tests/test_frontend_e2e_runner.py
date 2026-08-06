@@ -21,3 +21,15 @@ def test_playwright_executable_is_cross_platform():
 
     assert runner.playwright_executable("posix").name == "playwright"
     assert runner.playwright_executable("nt").name == "playwright.cmd"
+
+
+def test_real_e2e_rejects_file_database_configuration(monkeypatch):
+    runner = _load_runner()
+    monkeypatch.setenv("QINGSHU_TEST_POSTGRES_URL", "/tmp/qingshu_auth_test")
+
+    try:
+        runner.test_database_url()
+    except RuntimeError as exc:
+        assert "完整 PostgreSQL 测试库 URL" in str(exc)
+    else:
+        raise AssertionError("file database configuration must be rejected")

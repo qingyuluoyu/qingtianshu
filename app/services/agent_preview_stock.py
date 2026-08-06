@@ -217,6 +217,31 @@ def render_stock_preview(
         market_context = evidence.get("stock_market_context") or {}
         information = evidence.get("a_share_information") or {}
         coverage_packet = evidence.get("deep_stock_coverage") or {}
+        module_statuses = evidence.get("module_statuses") or {}
+        all_selected_modules_unavailable = bool(module_statuses) and all(
+            isinstance(item, dict) and item.get("status") == "unavailable"
+            for item in module_statuses.values()
+        )
+        if (
+            evidence.get("evidence_status") == "partial"
+            and all_selected_modules_unavailable
+        ):
+            name = evidence.get("display_name") or evidence.get("symbol")
+            missing_text = "；".join(str(item) for item in missing if item)
+            return "\n\n".join(
+                [
+                    f"{name}这轮行情暂不可用，公司证据刷新也没有完成，"
+                    "因此现在不能给出可信的风险优先级。",
+                    "我不会用空值、旧数字或猜测补全价格、财务和事件，"
+                    "也不会自动修改你的正式判断。当前只能确认这次研究尚未取得足够证据。",
+                    (
+                        f"下一步仍需补充：{missing_text}。"
+                        if missing_text
+                        else "下一步仍需重新取得行情、公告、财务和反方证据。"
+                    )
+                    + "数据恢复后，再按公司事实、行业对照和反方证据判断哪项风险最应优先。",
+                ]
+            )
         coverage_query = any(
             term in question
             for term in (

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { getSession, isFormalAccount, signOut } from "../api/session";
@@ -14,9 +14,13 @@ import { NotFoundPage } from "../pages/NotFoundPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
 import "../styles/global.css";
 
+const AdvisorPage = lazy(async () => {
+  const module = await import("../features/advisor/AdvisorPage");
+  return { default: module.AdvisorPage };
+});
+
 const pages = [
   ["/market-data", "行情数据", "集中呈现指数、广度、板块与全球市场行情。"],
-  ["/advisor/:conversationId?", "金融顾问", "承载个人金融问答与可追溯研究对话。"],
   ["/research-center", "研究中心", "汇集可核验研究产出、变化和结论。"],
 ] as const;
 
@@ -70,6 +74,7 @@ function ProductApp() {
         <Route element={<StockResearchPage authenticated={formal} />} path="/stocks/:symbol" />
         <Route element={<WatchlistPage authenticated={formal} />} path="/watchlist" />
         <Route element={<ScreeningPage authenticated={formal} />} path="/screening" />
+        <Route element={<Suspense fallback={<PlaceholderPage locked={!formal} responsibility="正在加载个人研究对话。" title="金融顾问" />}><AdvisorPage authenticated={formal} /></Suspense>} path="/advisor/:conversationId?" />
         {pages.map(([path, title, responsibility]) => <Route element={<PlaceholderPage key={path} locked={!formal} responsibility={responsibility} title={title} />} key={path} path={path} />)}
         <Route element={<NotFoundPage />} path="*" />
       </Route>
