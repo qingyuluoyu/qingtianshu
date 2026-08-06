@@ -1,0 +1,54 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.badgeAvailable { color: #08795a; background: #e9f8f2; border-color: #bdebdc; }
+.badgePartial, .badgeStale { color: #9a5b00; background: #fff7e6; border-color: #fbd38d; }
+.badgeUnavailable, .badgeLoading { color: var(--ink-muted); background: var(--surface-subtle); border-color: var(--border); }
+.badgeForbidden, .badgeConflict, .badgeError { color: #b42318; background: #fff0ee; border-color: #ffc9c2; }
+
+.moduleState {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  min-height: 112px;
+  padding: 18px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  background: var(--surface-subtle);
+  color: var(--ink);
+}
+
+.moduleState p { margin: 0; color: var(--ink-muted); line-height: 1.6; }
+.moduleState button { padding: 7px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); cursor: pointer; }
+
+.timestamp { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; color: var(--ink-muted); font-size: 12px; }
+
+.chartContainer { min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+.chartContainer header { margin-bottom: 14px; }
+.chartContainer h2 { margin: 0; color: var(--ink); font-size: 17px; }
+.chartContainer header p { margin: 6px 0 0; color: var(--ink-muted); font-size: 13px; line-height: 1.5; }
+.chartRegion { min-height: 240px; min-width: 0; overflow: hidden; }
+
+.dialogBackdrop { position: fixed; z-index: 100; inset: 0; display: grid; align-items: center; justify-items: center; padding: 24px; background: rgb(23 32 51 / 42%); }
+.dialog { width: min(720px, 100%); max-height: min(760px, calc(100vh - 48px)); overflow: auto; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); box-shadow: 0 24px 64px rgb(23 32 51 / 24%); outline: none; }
+.dialog:focus-visible { box-shadow: 0 0 0 3px rgb(47 107 255 / 25%), 0 24px 64px rgb(23 32 51 / 24%); }
+.dialogHeader { position: sticky; top: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.dialogHeader h2 { margin: 0; font-size: 18px; }
+.dialogHeader button { width: 36px; height: 36px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink); cursor: pointer; }
+.dialogBody { padding: 18px; }
+
+@media (max-width: 480px) {
+  .dialogBackdrop { align-items: end; padding: 0; }
+  .dialog { width: 100%; max-height: 88vh; border-radius: 16px 16px 0 0; }
+  .chartRegion { min-height: 200px; }
+}

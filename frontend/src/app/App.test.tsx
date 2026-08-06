@@ -40,8 +40,20 @@ describe("正式前端认证入口", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "关闭登录或注册弹窗" }));
 
-    fireEvent.click(screen.getByRole("link", { name: "选股策略" }));
+    fireEvent.click(screen.getByRole("link", { name: "透明选股" }));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
     expect(window.location.pathname).toBe("/screening");
+  });
+
+  it("keeps all six formal routes reachable through the mobile navigation", async () => {
+    render(<App />);
+
+    const trigger = screen.getByRole("button", { name: "打开主导航" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(trigger);
+
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("link", { name: "研究中心" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "行情数据" })).not.toBeInTheDocument();
   });
 });

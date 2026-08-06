@@ -1,6 +1,5 @@
 import { expect, test } from "@playwright/test";
 
-const sessionExpired = { code: "session_expired", message: "会话已失效" };
 const accountSession = {
   id: "11111111-1111-1111-1111-111111111111",
   account: "frontend-user",
@@ -13,7 +12,19 @@ const accountSession = {
 };
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/session", (route) => route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify(sessionExpired) }));
+  await page.route("**/session/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: false }) }));
+  await page.route("**/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
+  await page.route("**/v1/stock-workspaces", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      contract_version: "stock_asset_list_v1",
+      status: "empty",
+      items: [],
+      summary: { total: 0, watching: 0, holding: 0, ended: 0, paused: 0, waiting_data: 0 },
+      boundary: "认证测试空态。",
+    }),
+  }));
 });
 
 for (const path of ["/today", "/screening", "/watchlist", "/stocks/000063.SZ", "/advisor", "/research-center"]) {
@@ -92,25 +103,44 @@ test("auth errors are rendered from stable backend codes", async ({ page }) => {
 });
 
 test("legacy session stays locked while a refreshed formal session restores access", async ({ page }) => {
-  await page.route("**/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...accountSession, auth_type: "legacy_anonymous", is_registered: false, account: null, masked_phone: null }) }));
+  await page.route("**/session/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, session: { ...accountSession, auth_type: "legacy_anonymous", is_registered: false, account: null, masked_phone: null } }) }));
   await page.goto("/research-center");
   await expect(page.getByRole("dialog")).toBeVisible();
 
-  await page.unroute("**/session");
-  await page.route("**/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(accountSession) }));
+  await page.unroute("**/session/status");
+  await page.route("**/session/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, session: accountSession }) }));
   await page.reload();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByText("建设中：本轮不接入业务数据。")).toBeVisible();
 });
 
 test("logout clears the authenticated view and reopens the dialog on the current URL", async ({ page }) => {
-  await page.route("**/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(accountSession) }));
+  await page.route("**/session/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, session: accountSession }) }));
   await page.route("**/session", (route) => {
-    if (route.request().method() === "DELETE") return route.fulfill({ status: 204 });
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(accountSession) });
+    return route.fulfill({ status: route.request().method() === "DELETE" ? 204 : 405 });
   });
   await page.goto("/watchlist");
   await page.getByRole("button", { name: "退出" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
   await expect(page).toHaveURL(/\/watchlist$/);
+});
+
+test("mobile shell exposes exactly six formal routes without root overflow", async ({ page }, testInfo) => {
+  await page.route("**/session/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, session: accountSession }) }));
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/advisor");
+
+  const trigger = page.getByRole("button", { name: "打开主导航" });
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+  await trigger.click();
+  await expect(page.getByRole("complementary", { name: "主导航" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "产品页面" }).getByRole("link")).toHaveCount(6);
+  await expect(page.getByRole("link", { name: "行情数据" })).toHaveCount(0);
+  await expect(page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).resolves.toBe(true);
+  await page.screenshot({ fullPage: true, path: testInfo.outputPath("mobile-shell-open.png") });
+
+  await page.getByRole("link", { name: "研究中心" }).click();
+  await expect(page).toHaveURL(/\/research-center$/);
+  await expect(page.getByRole("button", { name: "打开主导航" })).toHaveAttribute("aria-expanded", "false");
+  await page.screenshot({ fullPage: true, path: testInfo.outputPath("mobile-shell.png") });
 });

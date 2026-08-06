@@ -136,8 +136,8 @@ async function mockToday(page: Page, overrides: Record<string, Override> = {}) {
   await page.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    if (url.pathname === "/session" && request.method() === "GET") {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(accountSession) });
+    if (url.pathname === "/session/status" && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, session: accountSession }) });
       return;
     }
     if (url.pathname === "/events") {
@@ -171,27 +171,20 @@ test("simulated normal state renders real-contract modules on desktop and mobile
   await expect(page.getByRole("heading", { name: "今日观察" })).toBeVisible();
   await expect(page.getByText("今天市场发生了什么？你应该关注哪些重点信号？")).toBeVisible();
   await expect(page.getByText("沪深300")).toBeVisible();
-  await expect(page.getByText("中证500")).toBeVisible();
+  await expect(page.getByText("科创50")).toBeVisible();
+  await expect(page.getByText("中证500")).toHaveCount(0);
   await expect(page.getByText("+9.31")).toBeVisible();
-  await expect(page.getByText("涨停家数")).toBeVisible();
-  await expect(page.getByText("中科曙光")).toBeVisible();
   await expect(page.getByText("10,493.68 亿")).toBeVisible();
   await expect(page.getByText("125.62亿")).toBeVisible();
-  await expect(page.getByText("中兴通讯：算力基建加速")).toBeVisible();
-  await expect(page.getByText(/中信证券/)).toBeVisible();
   await expect(page.getByText("标普500")).toBeVisible();
   await expect(page.getByText("伦敦金（现货黄金）")).toBeVisible();
   await expect(page.getByText("美元指数")).toBeVisible();
   await expect(page.getByText("布伦特原油")).toBeVisible();
   await expect(page.getByText("美债10年收益率")).toBeVisible();
   await expect(page.getByText("4.25%")).toBeVisible();
-  await expect(page.getByText("主力净流入", { exact: true })).toBeVisible();
-  await expect(page.getByText("-128.45 亿")).toBeVisible();
-  await expect(page.getByText(/北向资金 2024-08 起港交所停披/)).toBeVisible();
   await expect(page.getByText("市场情绪")).toBeVisible();
   await expect(page.getByText("资金流数据源暂不可用。")).toBeVisible();
-  await expect(page.getByText("我的持仓")).toBeVisible();
-  await expect(page.getByText("6,400.00")).toBeVisible();
+  await expect(page.getByText("部分数据同步中")).toBeVisible();
   await expect(page.getByText("缓存 / 延迟数据")).toBeVisible();
   await expect(page.getByRole("button", { name: "刷新" })).toBeVisible();
   await expect(page.getByRole("link", { name: "核验正式披露" })).toHaveAttribute("href", "/stocks/000063.SZ");
@@ -252,9 +245,15 @@ test("simulated private 401 returns control to the existing authentication gate"
   let overviewCalls = 0;
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/session") {
+    if (url.pathname === "/session/status") {
       sessionCalls += 1;
-      await route.fulfill({ status: sessionCalls === 1 ? 200 : 401, contentType: "application/json", body: JSON.stringify(sessionCalls === 1 ? accountSession : { code: "session_expired", message: "会话已失效" }) });
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(sessionCalls === 1
+          ? { authenticated: true, session: accountSession }
+          : { authenticated: false }),
+      });
       return;
     }
     if (url.pathname === "/v1/today/overview") {
