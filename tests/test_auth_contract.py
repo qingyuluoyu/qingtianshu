@@ -136,6 +136,23 @@ def test_auth_error_contract_has_stable_code_and_message(client):
     assert malformed.json()["message"] == "请求参数校验失败"
 
 
+def test_session_status_is_anonymous_safe_and_does_not_change_session_contract(client):
+    anonymous = client.get("/session/status")
+    assert anonymous.status_code == 200
+    assert anonymous.json() == {"authenticated": False}
+    # Existing callers keep the original explicit-session contract.
+    assert client.get("/session").status_code == 401
+
+    assert _register(client, account="status-user", phone="13500135000").status_code == 201
+    authenticated = client.get("/session/status")
+    assert authenticated.status_code == 200
+    assert authenticated.json()["authenticated"] is True
+    assert set(authenticated.json()["session"]) == {
+        "id", "account", "name", "masked_phone", "auth_type", "is_registered",
+        "created_at", "session_expires_at",
+    }
+
+
 def test_auth_validation_handler_does_not_change_legacy_422_shape(client):
     response = client.post("/users", json={"name": ""})
     assert response.status_code == 422

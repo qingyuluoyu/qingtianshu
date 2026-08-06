@@ -41,6 +41,19 @@ class AuthSessionResponse(BaseModel):
     session_expires_at: str | None
 
 
+class AnonymousSessionStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    authenticated: Literal[False]
+
+
+class AuthenticatedSessionStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    authenticated: Literal[True]
+    session: AuthSessionResponse
+
+
 class AuthErrorResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

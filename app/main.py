@@ -23,6 +23,8 @@ from app.api_models import (
     ActionPlanPatch,
     ActionPlanTransition,
     AuthErrorResponse,
+    AnonymousSessionStatusResponse,
+    AuthenticatedSessionStatusResponse,
     AuthLoginRequest,
     AuthRegisterRequest,
     AuthSessionResponse,
@@ -1301,6 +1303,17 @@ def create_app(
         if user is None:
             return auth_error(401, "session_expired", "会话已失效或不存在")
         return public_user(user)
+
+    @app.get(
+        "/session/status",
+        response_model=AnonymousSessionStatusResponse | AuthenticatedSessionStatusResponse,
+    )
+    def get_session_status(request: Request) -> dict[str, Any]:
+        """Public bootstrap probe: 200 for both anonymous and authenticated visitors."""
+        user = database.get_user_by_session(request.cookies.get(SESSION_COOKIE_NAME))
+        if user is None:
+            return {"authenticated": False}
+        return {"authenticated": True, "session": public_user(user)}
 
     @app.delete("/session", status_code=204)
     def delete_session(request: Request) -> Response:
