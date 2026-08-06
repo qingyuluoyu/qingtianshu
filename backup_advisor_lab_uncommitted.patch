@@ -1,0 +1,973 @@
+diff --git a/app/providers/market.py b/app/providers/market.py
+index b6f5692..c1a311e 100644
+--- a/app/providers/market.py
++++ b/app/providers/market.py
+@@ -94,6 +94,8 @@ def _is_incomplete_daily_bar(
+ 
+ class YahooMarketProvider:
+     BASE_URL = "https://query1.finance.yahoo.com/v8/finance/chart"
++    FALLBACK_BASE_URL = "https://query2.finance.yahoo.com/v8/finance/chart"
++    REQUEST_TIMEOUT = (3.05, 8)
+ 
+     def __init__(
+         self,
+@@ -131,15 +133,11 @@ class YahooMarketProvider:
+             return cached
+ 
+         try:
+-            response = self.http_get(
+-                f"{self.BASE_URL}/{quote(symbol, safe='')}",
+-                params={"range": range_name, "interval": interval, "events": "div,splits"},
+-                headers={"User-Agent": "QingshuFinanceAgentDemo/0.1"},
+-                timeout=15,
++            result = self._fetch_chart_with_mirror(
++                symbol=symbol,
++                range_name=range_name,
++                interval=interval,
+             )
+-            response.raise_for_status()
+-            payload = response.json()
+-            result = self._parse_chart(symbol, range_name, interval, payload)
+             result, removed = self._sanitize_history(
+                 result, symbol=symbol, interval=interval
+             )
+@@ -167,6 +165,40 @@ class YahooMarketProvider:
+                 return stale
+             raise ProviderError(f"Yahoo 行情不可用：{type(exc).__name__}: {exc}") from exc
+ 
++    def _fetch_chart_with_mirror(
++        self,
++        *,
++        symbol: str,
++        range_name: str,
++        interval: str,
++    ) -> dict[str, Any]:
++        """Use Yahoo's query2 mirror when query1 is transiently unavailable."""
++
++        failures: list[Exception] = []
++        for base_url in (self.BASE_URL, self.FALLBACK_BASE_URL):
++            try:
++                response = self.http_get(
++                    f"{base_url}/{quote(symbol, safe='')}",
++                    params={
++                        "range": range_name,
++                        "interval": interval,
++                        "events": "div,splits",
++                    },
++                    headers={"User-Agent": "QingshuFinanceAgentDemo/0.1"},
++                    timeout=self.REQUEST_TIMEOUT,
++                )
++                response.raise_for_status()
++                return self._parse_chart(
++                    symbol,
++                    range_name,
++                    interval,
++                    response.json(),
++                    source_url=base_url,
++                )
++            except Exception as exc:
++                failures.append(exc)
++        raise failures[-1]
++
+     def _persist_history(
+         self, history: dict[str, Any], *, symbol: str, interval: str
+     ) -> None:
+@@ -321,6 +353,8 @@ class YahooMarketProvider:
+         range_name: str,
+         interval: str,
+         payload: dict[str, Any],
++        *,
++        source_url: str | None = None,
+     ) -> dict[str, Any]:
+         chart = payload.get("chart") or {}
+         if chart.get("error"):
+@@ -380,7 +414,7 @@ class YahooMarketProvider:
+             ),
+             "data_granularity": meta.get("dataGranularity") or interval,
+             "source": "Yahoo Finance Chart",
+-            "source_url": YahooMarketProvider.BASE_URL,
++            "source_url": source_url or YahooMarketProvider.BASE_URL,
+             "market_timestamp": points[-1]["timestamp"],
+             "fetched_at": utc_now(),
+             "is_stale": False,
+@@ -432,7 +466,23 @@ class TencentChinaIndexProvider:
+         self.http_get = http_get
+ 
+     def supports(self, symbol: str) -> bool:
+-        return symbol in self.SYMBOLS
++        return self._config_for(symbol) is not None
++
++    @classmethod
++    def _config_for(cls, symbol: str) -> dict[str, str] | None:
++        configured = cls.SYMBOLS.get(symbol)
++        if configured is not None:
++            return {**configured, "kind": "index"}
++        match = re.fullmatch(r"(\d{6})\.(SS|SZ)", str(symbol or "").upper())
++        if match is None:
++            return None
++        code, exchange_suffix = match.groups()
++        return {
++            "quote_symbol": f"{'sh' if exchange_suffix == 'SS' else 'sz'}{code}",
++            "name": symbol,
++            "exchange": "SSE" if exchange_suffix == "SS" else "SZSE",
++            "kind": "equity",
++        }
+ 
+     def fetch_history(
+         self,
+@@ -440,13 +490,14 @@ class TencentChinaIndexProvider:
+         range_name: str = "1y",
+         interval: str = "1d",
+     ) -> dict[str, Any]:
+-        config = self.SYMBOLS.get(symbol)
++        config = self._config_for(symbol)
+         if config is None:
+             raise ProviderError("腾讯A股指数日线源不支持该标的")
+         if interval != "1d":
+             raise ProviderError("腾讯A股指数源当前只提供日线历史")
+         count = self.RANGE_COUNTS.get(range_name, self.RANGE_COUNTS["1y"])
+-        cache_key = f"tencent:china-index:{symbol}:{range_name}:{interval}"
++        cache_kind = "china-index" if config["kind"] == "index" else "a-share"
++        cache_key = f"tencent:{cache_kind}:{symbol}:{range_name}:{interval}"
+         cached = self.database.get_cache(cache_key)
+         if cached is not None:
+             self._persist_history(cached, symbol=symbol)
+@@ -565,7 +616,11 @@ class TencentChinaIndexProvider:
+             "previous_close": points[-2]["close"] if len(points) > 1 else None,
+             "regular_market_price": points[-1]["close"],
+             "data_granularity": "1d",
+-            "source": "Tencent A-share index daily bars",
++            "source": (
++                "Tencent A-share index daily bars"
++                if config.get("kind") == "index"
++                else "Tencent A-share equity daily bars"
++            ),
+             "source_url": TencentChinaIndexProvider.URL,
+             "market_timestamp": points[-1]["timestamp"],
+             "fetched_at": utc_now(),
+diff --git a/app/services/advisor_lab.py b/app/services/advisor_lab.py
+index 9429d50..dd56608 100644
+--- a/app/services/advisor_lab.py
++++ b/app/services/advisor_lab.py
+@@ -56,7 +56,7 @@ def investment_profile_questions(message: str) -> list[str]:
+     folded = "".join(str(message or "").split())
+     if not any(term in folded for term in ("加仓", "补仓", "加码")):
+         return []
+-    return ["当前持仓成本与仓位", "资金使用期限", "可承受的最大回撤", "计划加仓比例"]
++    return ["资金使用期限", "可承受的最大回撤"]
+ 
+ 
+ def _safe_text(value: Any, limit: int = _MAX_TEXT_LENGTH) -> str:
+diff --git a/app/services/agent.py b/app/services/agent.py
+index 6d82b80..2e2acff 100644
+--- a/app/services/agent.py
++++ b/app/services/agent.py
+@@ -1345,6 +1345,31 @@ class AgentService:
+         if intent == "stock_research":
+             answer = _normalize_stock_research_number_precision(answer)
+ 
++        answer_source = (
++            "preview"
++            if status == "preview"
++            else "guard_fallback"
++            if status == "guarded"
++            else "degraded_fallback"
++            if status == "degraded"
++            else "model"
++        )
++        usage = {
++            **(usage or {}),
++            "runtime": {
++                "answer_source": answer_source,
++                "model_executed": should_execute,
++                "selected_topics": list(
++                    (evidence.get("research_plan") or {}).get("selected_topics")
++                    or (evidence.get("research_plan") or {}).get("selected_modules")
++                    or []
++                ),
++                "skipped_topics": list(
++                    (evidence.get("research_plan") or {}).get("skipped_topics") or []
++                ),
++            },
++        }
++
+         if stream_callback is not None and image_path is None:
+             notify_stream(
+                 {
+diff --git a/app/services/agent_output_guard.py b/app/services/agent_output_guard.py
+index 04059d1..f0b70e8 100644
+--- a/app/services/agent_output_guard.py
++++ b/app/services/agent_output_guard.py
+@@ -1360,6 +1360,36 @@ class AgentOutputGuard:
+                 unsupported_market_inferences.append(
+                     "缺少历史一致预期快照时不能声称EPS已经上修或下修"
+                 )
++        plan = evidence.get("research_plan") or {}
++        selected_topics = set(
++            plan.get("selected_topics") or plan.get("selected_modules") or []
++        )
++        if evidence.get("type") == "stock_research" and selected_topics:
++            required_headings = (
++                "## 综合判断",
++                "## 关键证据",
++                "## 专题核验",
++                "## 仍需确认",
++            )
++            if any(heading not in answer for heading in required_headings):
++                semantic_conflicts.append("个股回答缺少约定的公开结构")
++            if plan.get("focus") == "position_reassessment":
++                if any(
++                    term in answer
++                    for term in ("建议加仓", "建议减仓", "建议买入", "建议卖出", "提高仓位", "降低仓位")
++                ):
++                    semantic_conflicts.append("持仓再评估不得给出交易或仓位指令")
++                if "回撤幅度本身不足以构成加仓依据" not in answer:
++                    semantic_conflicts.append("持仓再评估必须说明回撤不是加仓依据")
++            forbidden_unselected = {
++                "peer_comparison": ("同行", "可比公司"),
++                "analyst_expectations": ("分析师", "一致预期", "研报"),
++                "shareholder_structure": ("股东结构", "十大股东"),
++                "outlook_calibration": ("回测", "历史胜率"),
++            }
++            for topic, terms in forbidden_unselected.items():
++                if topic not in selected_topics and any(term in answer for term in terms):
++                    semantic_conflicts.append(f"回答引用了未选主题：{topic}")
+         return {
+             "passed": not prohibited
+             and not private_operational
+diff --git a/app/services/agent_preview_stock.py b/app/services/agent_preview_stock.py
+index b349844..5beba60 100644
+--- a/app/services/agent_preview_stock.py
++++ b/app/services/agent_preview_stock.py
+@@ -18,6 +18,82 @@ from app.services.stock_price_move import (
+ )
+ 
+ 
++def _scoped_stock_preview(evidence: dict[str, Any]) -> str:
++    """Render a bounded, user-facing stock answer from selected evidence only."""
++
++    plan = evidence.get("research_plan") or {}
++    selected = [str(item) for item in plan.get("selected_topics") or plan.get("selected_modules") or []][:4]
++    statuses = evidence.get("module_statuses") or {}
++    metrics = evidence.get("metrics") or {}
++    name = str(evidence.get("display_name") or evidence.get("symbol") or "该股票")
++    labels = plan.get("module_labels") or {}
++    focus = str(plan.get("focus") or "")
++    market_parts = []
++    if metrics.get("latest_close") is not None:
++        market_parts.append(f"最近收盘价 {fmt(metrics.get('latest_close'))}")
++    if metrics.get("return_20d_pct") is not None:
++        market_parts.append(f"近20日涨跌 {fmt(metrics.get('return_20d_pct'))}%")
++    if metrics.get("return_60d_pct") is not None:
++        market_parts.append(f"近60日涨跌 {fmt(metrics.get('return_60d_pct'))}%")
++    market_fact = "；".join(market_parts) or "行情字段尚未形成可核验结论"
++    available = [
++        topic
++        for topic in selected
++        if str((statuses.get(topic) or {}).get("status") or "").lower()
++        in {"fresh", "reused", "available", "partial"}
++    ]
++    unavailable = [topic for topic in selected if topic not in available]
++    conclusion = (
++        f"{name}本轮只核验了{len(selected)}项与问题直接相关的主题。"
++        "现有证据可以用于说明已披露的行情、财务或公司信息，不能把单一价格变化外推为经营结论。"
++    )
++    if focus == "position_reassessment":
++        conclusion = (
++            f"{name}的回撤需要结合最新经营、公告和风险承受能力重新核验；"
++            "回撤幅度本身不足以构成加仓依据，也不应自动推导为减仓或继续持有指令。"
++        )
++    facts = []
++    if "market" in selected:
++        facts.append(f"- 行情：{market_fact}。")
++    for topic in selected:
++        if topic == "market":
++            continue
++        state = str((statuses.get(topic) or {}).get("status") or "未取得")
++        label = str(labels.get(topic) or topic)
++        facts.append(f"- {label}：本轮证据状态为 {state}。")
++    module_lines = []
++    for topic in selected[:3]:
++        label = str(labels.get(topic) or topic)
++        state = str((statuses.get(topic) or {}).get("status") or "未取得")
++        module_lines.append(
++            f"- {label}：仅依据本轮已选主题核验，当前状态为 {state}；"
++            "缺少原始披露或时间口径一致的数据时，不扩大解释范围。"
++        )
++    gaps = []
++    if unavailable:
++        gaps.append("；".join(str(labels.get(item) or item) for item in unavailable) + "尚未取得完整可用证据")
++    if focus == "position_reassessment":
++        gaps.extend(["持有期限与资金用途", "可承受的最大回撤"])
++    if not gaps:
++        gaps.append("后续披露与本轮数据口径是否一致")
++    lines = [
++        "数据来源：确定性摘要（本轮未调用生成式模型）。",
++        "",
++        "## 综合判断",
++        conclusion,
++        "",
++        "## 关键证据",
++        *(facts[:4] or ["- 当前没有足够的结构化事实形成额外判断。"]),
++        "",
++        "## 专题核验",
++        *module_lines,
++        "",
++        "## 仍需确认",
++        *(f"- {item}。" for item in gaps[:3]),
++    ]
++    return "\n".join(lines)[:700].rstrip()
++
++
+ def render_stock_preview(
+     evidence: dict[str, Any],
+     *,
+@@ -209,6 +285,8 @@ def render_stock_preview(
+         )
+         return "\n".join(lines)
+     if kind == "stock_research":
++        if (evidence.get("research_plan") or {}).get("answer_mode"):
++            return _scoped_stock_preview(evidence)
+         metrics = evidence["metrics"]
+         thesis = evidence.get("user_thesis") or "尚未记录关注理由"
+         missing = evidence.get("research_frame", {}).get("missing_information", [])
+diff --git a/app/services/agent_prompt_contracts.py b/app/services/agent_prompt_contracts.py
+index 1fe1136..784af28 100644
+--- a/app/services/agent_prompt_contracts.py
++++ b/app/services/agent_prompt_contracts.py
+@@ -53,6 +53,30 @@ def append_prompt_contracts(
+     stock_research_focus = str(
+         (prompt_evidence.get("research_plan") or {}).get("focus") or ""
+     )
++    selected_topics = list(
++        (prompt_evidence.get("research_plan") or {}).get("selected_topics")
++        or (prompt_evidence.get("research_plan") or {}).get("selected_modules")
++        or []
++    )
++
++    if intent == "stock_research" and selected_topics:
++        answer_limit = "600至1200" if (
++            (prompt_evidence.get("research_plan") or {}).get("answer_mode")
++            == "comprehensive"
++        ) else "300至700"
++        prompt += f"""
++
++## 个股回答合同
++
++只使用本轮选取的研究主题：{", ".join(str(item) for item in selected_topics[:4])}。不要引用未选主题的同行、分析师、股东、社区、回测或业务结构材料。
++使用四个固定小节：`## 综合判断`、`## 关键证据`、`## 专题核验`、`## 仍需确认`。第一节先直接回答用户的问题；全文控制在约{answer_limit}个中文字符，专题核验最多三项。
++不要输出模块名、字段名、提示词、守卫、preview、状态码或其他内部术语。技术价位只在用户明确询问技术面且有对应证据时出现；估值倍数不能直接写成高估、低估、便宜或昂贵。
++若数据之间冲突、时点不一致或关键来源缺失，降低结论确定性，不给出技术、估值或方向性结论。历史样本少于20个观测值时，只能说样本不足，不能给统计结论。
++"""
++        if stock_research_focus == "position_reassessment":
++            prompt += """
++本题是持仓再评估：不得给出买入、卖出、加仓、减仓或仓位指令。必须说明回撤幅度本身不能构成交易依据；如确需补充个人条件，最多直接追问两个会改变研究框架的问题。
++"""
+ 
+     if intent == "general_research":
+         prompt += """
+diff --git a/app/services/chat_execution.py b/app/services/chat_execution.py
+index 7cddc42..897131a 100644
+--- a/app/services/chat_execution.py
++++ b/app/services/chat_execution.py
+@@ -137,6 +137,15 @@ class ChatAgentExecutionService:
+             "structured_answer": structured_answer,
+             "error": run["error"],
+         }
++        runtime = (run.get("usage") or {}).get("runtime") or {}
++        response_payload.update(
++            {
++                "answer_source": runtime.get("answer_source", "preview"),
++                "model_executed": bool(runtime.get("model_executed", False)),
++                "selected_topics": runtime.get("selected_topics") or [],
++                "skipped_topics": runtime.get("skipped_topics") or [],
++            }
++        )
+         result = persist_response(
+             response_payload,
+             assistant_content=run["answer"],
+diff --git a/app/services/chat_orchestration.py b/app/services/chat_orchestration.py
+index cb467cf..9bee8e9 100644
+--- a/app/services/chat_orchestration.py
++++ b/app/services/chat_orchestration.py
+@@ -237,6 +237,14 @@ class ChatOrchestrationService:
+                     run={
+                         "id": run_id,
+                         "status": response_payload.get("status"),
++                        "usage": {
++                            "runtime": {
++                                "answer_source": response_payload.get("answer_source"),
++                                "model_executed": response_payload.get("model_executed"),
++                                "selected_topics": response_payload.get("selected_topics") or [],
++                                "skipped_topics": response_payload.get("skipped_topics") or [],
++                            }
++                        },
+                     },
+                 )
+                 if advisor_lab
+@@ -277,7 +285,9 @@ class ChatOrchestrationService:
+                 response_intent="advisor_lab_blocked",
+                 evidence_payload={"type": "advisor_lab_blocked", "reason": blocked_reason},
+             )
+-        profile_questions = investment_profile_questions(message) if advisor_lab else []
++        profile_questions = (
++            investment_profile_questions(message) if advisor_lab and not symbol else []
++        )
+         if profile_questions:
+             clarification = "是否加仓不能只根据跌幅或单一价格信号判断。请补充：" + "、".join(profile_questions) + "。补充后我会按支持证据、反方证据、数据缺口和失效条件给出条件化研究框架。"
+             policy_events.append({"type": "decision_context_required", "fields": profile_questions})
+diff --git a/app/services/research_plan.py b/app/services/research_plan.py
+index 71d9586..18142c4 100644
+--- a/app/services/research_plan.py
++++ b/app/services/research_plan.py
+@@ -208,6 +208,16 @@ class ResearchPlanService:
+     )
+ 
+     _FOCUS_MODULES = {
++        "general_stock_review": {
++            "required": ("market", "fundamentals", "company_information"),
++            "optional": (),
++            "skills": ("a-share-information", "fundamental-evidence"),
++        },
++        "position_reassessment": {
++            "required": ("market", "fundamentals", "company_information"),
++            "optional": (),
++            "skills": ("a-share-information", "fundamental-evidence"),
++        },
+         "relative_industry": {
+             "required": ("market", "analyst_expectations"),
+             "optional": (),
+@@ -241,7 +251,6 @@ class ResearchPlanService:
+         },
+         "financial": {
+             "required": (
+-                "market",
+                 "fundamentals",
+                 "earnings_quality",
+                 "financial_drivers",
+@@ -260,9 +269,6 @@ class ResearchPlanService:
+                 "fundamentals",
+                 "earnings_quality",
+                 "financial_drivers",
+-                "business_structure",
+-                "company_information",
+-                "event_timeline",
+             ),
+             "optional": (),
+             "skills": (
+@@ -274,13 +280,7 @@ class ResearchPlanService:
+             "required": (
+                 "market",
+                 "fundamentals",
+-                "earnings_quality",
+-                "financial_drivers",
+-                "business_structure",
+-                "analyst_expectations",
+                 "peer_comparison",
+-                "company_information",
+-                "event_timeline",
+             ),
+             "optional": (),
+             "skills": (
+@@ -377,6 +377,25 @@ class ResearchPlanService:
+     ) -> dict[str, Any]:
+         question = str(message or "").strip()
+         effective_text = self._effective_text(question, conversation_history or [])
++        lowered = effective_text.lower()
++        comprehensive = any(
++            term in effective_text
++            for term in ("全面分析", "综合分析", "完整分析", "深度分析")
++        )
++        position_reassessment = any(
++            term in effective_text
++            for term in (
++                "加仓",
++                "补仓",
++                "是否继续持有",
++                "持仓怎么办",
++                "腰斩",
++                "跌了一半",
++                "被套",
++                "是否减仓",
++                "仓位",
++            )
++        )
+         matched = [
+             (key, label)
+             for key, label, terms in self._FOCUS_RULES
+@@ -457,24 +476,51 @@ class ResearchPlanService:
+             ]
+         if any(key == "price_cause" for key, _ in matched):
+             matched = [item for item in matched if item[0] != "price_action"]
+-        comprehensive = any(
+-            term in effective_text
+-            for term in (
+-                "全面分析",
+-                "综合分析",
+-                "完整分析",
+-                "深度分析",
+-                "六维",
+-                "证据覆盖",
+-            )
+-        )
+-
+-        if comprehensive or not matched:
++        if position_reassessment:
++            focus = "position_reassessment"
++            focus_label = "持仓再评估"
++            config = self._FOCUS_MODULES[focus]
++            required = list(config["required"])
++            optional = []
++            skills = list(config["skills"])
++            answer_mode = "focused"
++            selection_reasons = [
++                "问题包含持仓、加仓、减仓或大幅回撤表述，先核验现状与公司信息。",
++                "不自动调用同行、分析师、回测或展望模块，避免把回撤直接解释为交易依据。",
++            ]
++        elif comprehensive:
+             focus = "comprehensive"
+             focus_label = "综合个股研究"
+-            required = list(self._FULL_MODULES)
++            required = [
++                "market",
++                "fundamentals",
++                "company_information",
++                "event_timeline",
++            ]
+             optional: list[str] = []
+-            skills = list(self._FULL_SKILLS)
++            skills = [
++                "a-share-information",
++                "a-share-filing-evidence",
++                "fundamental-evidence",
++                "event-timeline",
++            ]
++            answer_mode = "comprehensive"
++            selection_reasons = [
++                "用户明确要求完整或深度分析，使用四项核心研究主题。",
++                "同行比较仅在用户明确提出可比口径时加入，不默认扩展到股东、分析师和业务结构。",
++            ]
++        elif not matched:
++            focus = "general_stock_review"
++            focus_label = "个股近况概览"
++            config = self._FOCUS_MODULES[focus]
++            required = list(config["required"])
++            optional = []
++            skills = list(config["skills"])
++            answer_mode = "focused"
++            selection_reasons = [
++                "问题没有指定专项研究方向，采用行情、财务与公司信息三个核心主题。",
++                "未明确要求的股东、分析师、同行、业务结构和历史展望不进入本轮证据。",
++            ]
+         else:
+             focus_keys = [item[0] for item in matched]
+             focus = focus_keys[0] if len(focus_keys) == 1 else "mixed"
+@@ -503,8 +549,17 @@ class ResearchPlanService:
+                 self._extend_unique(optional, ("outlook_calibration",))
+                 self._extend_unique(skills, ("conditional-outlook",))
+             optional = [item for item in optional if item not in required]
++            answer_mode = "focused"
++            selection_reasons = [
++                "研究主题由用户问题中的明确关键词选择。",
++                "未直接关联当前问题的可选模块不加载。",
++            ]
+ 
+         selected_modules = [*required, *optional]
++        if answer_mode == "focused" and len(selected_modules) > 3:
++            selected_modules = selected_modules[:3]
++            required = [item for item in required if item in selected_modules]
++            optional = [item for item in optional if item in selected_modules]
+         module_labels = {key: self.MODULE_LABELS[key] for key in selected_modules}
+         if focus == "relative_industry" and "analyst_expectations" in module_labels:
+             module_labels["analyst_expectations"] = "所属行业指数与成分"
+@@ -518,6 +573,12 @@ class ResearchPlanService:
+             "required_modules": required,
+             "optional_modules": optional,
+             "selected_modules": selected_modules,
++            "answer_mode": answer_mode,
++            "selected_topics": selected_modules,
++            "skipped_topics": [
++                key for key in self.MODULE_LABELS if key not in selected_modules
++            ],
++            "selection_reasons": selection_reasons,
+             "selected_skills": skills,
+             "module_labels": module_labels,
+             "module_max_age_hours": {
+diff --git a/app/static/advisor-lab.html b/app/static/advisor-lab.html
+index 1e99862..ee02900 100644
+--- a/app/static/advisor-lab.html
++++ b/app/static/advisor-lab.html
+@@ -13,7 +13,7 @@
+       <div id="messages" class="messages" aria-live="polite"></div>
+       <form id="chat-form"><textarea id="question" required placeholder="输入问题，例如：中兴通讯为什么下跌？"></textarea><button>发送</button></form>
+     </section>
+-    <aside class="context-column"><h2>本轮解读</h2><div id="context"><p>发送问题后，这里会显示本轮实际带入的背景、证据、缺口与安全边界。</p></div></aside>
++    <aside class="context-column"><h2>本轮解读</h2><div id="context"><p>发送问题后，这里会说明回答来源、是否调用模型、实际选取的研究主题，以及可展开的技术诊断。</p></div></aside>
+   </main>
+   <script src="/static/advisor-lab.js"></script>
+ </body>
+diff --git a/app/static/advisor-lab.js b/app/static/advisor-lab.js
+index 6e8f7f7..026052b 100644
+--- a/app/static/advisor-lab.js
++++ b/app/static/advisor-lab.js
+@@ -6,6 +6,8 @@
+   let conversationId = null;
+   const addMessage = (role, text) => { const node = document.createElement("article"); node.className = `message ${role}`; node.textContent = text; messages.append(node); messages.scrollTop = messages.scrollHeight; };
+   const renderSection = (title, value) => { const details = document.createElement("details"); details.open = true; const summary = document.createElement("summary"); summary.textContent = title; const body = document.createElement("pre"); body.textContent = JSON.stringify(value, null, 2); details.append(summary, body); return details; };
+-  const renderContext = snapshot => { context.textContent = ""; [["问题识别", snapshot.routing], ["实际带入的背景", snapshot.actual_context], ["证据与缺口", snapshot.evidence], ["可用但未采用 / 安全边界", snapshot.excluded_or_blocked], ["执行记录", snapshot.execution]].forEach(([title, value]) => context.append(renderSection(title, value))); };
++  const label = value => ({preview: "确定性摘要（未调用模型）", model: "模型回答", guard_fallback: "守卫回退摘要", degraded_fallback: "降级回退摘要"}[value] || "未标注");
++  const renderList = (title, values) => { const section = document.createElement("section"); const heading = document.createElement("h3"); heading.textContent = title; const body = document.createElement("p"); body.textContent = values && values.length ? values.join("、") : "无"; section.append(heading, body); return section; };
++  const renderContext = snapshot => { context.textContent = ""; const runtime = ((snapshot.execution || {}).usage || {}).runtime || {}; const state = document.createElement("section"); state.className = "state-card"; state.innerHTML = `<h3>运行状态</h3><p>状态：${snapshot.execution?.status || "未返回"}</p><p>回答来源：${label(runtime.answer_source)}</p><p>模型调用：${runtime.model_executed ? "已调用" : "未调用"}</p>`; context.append(state, renderList("本轮选取主题", runtime.selected_topics || []), renderList("本轮未选主题", runtime.skipped_topics || [])); [["证据与时间口径", snapshot.evidence], ["未采用背景与安全边界", snapshot.excluded_or_blocked], ["技术诊断（原始数据）", snapshot]].forEach(([title, value]) => { const details = renderSection(title, value); details.open = false; context.append(details); }); };
+   form.addEventListener("submit", async event => { event.preventDefault(); const message = input.value.trim(); if (!message) return; input.value = ""; addMessage("user", message); const response = await fetch("/me/advisor-lab/chat", { method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"}, body: JSON.stringify({message, conversation_id: conversationId, request_id: crypto.randomUUID()}) }); const data = await response.json(); if (!response.ok) { addMessage("assistant", data.detail || "请求失败"); return; } conversationId = data.conversation_id || conversationId; addMessage("assistant", data.answer || "未返回回答"); if (data.assistant_message_id) { const snapshotResponse = await fetch(`/me/advisor-lab/context/${encodeURIComponent(data.assistant_message_id)}`, {credentials: "same-origin"}); if (snapshotResponse.ok) renderContext(await snapshotResponse.json()); } });
+ })();
+diff --git a/tests/test_advisor_lab_service.py b/tests/test_advisor_lab_service.py
+index 21bb410..e03731c 100644
+--- a/tests/test_advisor_lab_service.py
++++ b/tests/test_advisor_lab_service.py
+@@ -105,5 +105,5 @@ def test_symbol_filter_removes_other_securities_but_keeps_target_and_user_upload
+ def test_add_position_question_requires_decision_context() -> None:
+     questions = investment_profile_questions("德明利腰斩后有必要加仓吗")
+ 
+-    assert questions == ["当前持仓成本与仓位", "资金使用期限", "可承受的最大回撤", "计划加仓比例"]
++    assert questions == ["资金使用期限", "可承受的最大回撤"]
+     assert investment_profile_questions("德明利为什么下跌") == []
+diff --git a/tests/test_chat_execution.py b/tests/test_chat_execution.py
+index 6384b36..f874cfc 100644
+--- a/tests/test_chat_execution.py
++++ b/tests/test_chat_execution.py
+@@ -205,3 +205,46 @@ def test_read_only_execution_skips_mutation_capable_collaborators() -> None:
+     assert result["structured_answer"] is None
+     assert result["evidence_tasks"] == {}
+     assert result["deep_stock_session"] is None
++
++
++def test_execution_exposes_preview_runtime_metadata() -> None:
++    service, agent, _ = build_service()
++    agent.run = lambda **payload: {
++        "id": "run-preview",
++        "status": "preview",
++        "answer": "确定性摘要",
++        "error": None,
++        "usage": {
++            "runtime": {
++                "answer_source": "preview",
++                "model_executed": False,
++                "selected_topics": ["market", "fundamentals"],
++                "skipped_topics": ["peer_comparison"],
++            }
++        },
++    }
++
++    result = service.execute(
++        user={"id": "user-4"},
++        user_id="user-4",
++        intent="stock_research",
++        message="中天科技最近怎么样？",
++        evidence={"type": "stock_research"},
++        model_tier="economy",
++        execute_agent=False,
++        image_path=None,
++        conversation_id="conversation-4",
++        conversation_history=[],
++        knowledge_context={"items": []},
++        request_started=0.0,
++        request_id=None,
++        symbol="600522.SS",
++        chat_stream=FakeChatStream(),
++        persist_response=lambda response_payload, **metadata: response_payload,
++        read_only=True,
++    )
++
++    assert result["status"] == "preview"
++    assert result["answer_source"] == "preview"
++    assert result["model_executed"] is False
++    assert result["selected_topics"] == ["market", "fundamentals"]
+diff --git a/tests/test_providers.py b/tests/test_providers.py
+index 2db65ff..1ce47dd 100644
+--- a/tests/test_providers.py
++++ b/tests/test_providers.py
+@@ -125,6 +125,96 @@ def test_yahoo_provider_returns_explicit_stale_cache_on_failure(tmp_path: Path):
+     assert any("请求失败" in warning for warning in stale["warnings"])
+ 
+ 
++def test_yahoo_provider_uses_query2_when_query1_times_out(tmp_path: Path):
++    del tmp_path
++
++    class CacheDatabase:
++        def __init__(self) -> None:
++            self.cache = {}
++
++        def get_cache(self, key, allow_stale=False):
++            del allow_stale
++            return self.cache.get(key)
++
++        def put_cache(self, key, value, ttl_seconds):
++            del ttl_seconds
++            self.cache[key] = value
++
++        def delete_market_bars(self, *args):
++            del args
++
++        def upsert_market_bars(self, *args):
++            del args
++
++        def get_market_bars(self, *args, **kwargs):
++            del args, kwargs
++            return []
++
++    database = CacheDatabase()
++    calls = []
++    payload = {
++        "chart": {
++            "result": [
++                {
++                    "meta": {"currency": "USD"},
++                    "timestamp": [1_700_000_000],
++                    "indicators": {"quote": [{"close": [10.0]}]},
++                }
++            ]
++        }
++    }
++
++    def http_get(url, **kwargs):
++        calls.append((url, kwargs))
++        if "query1" in url:
++            raise TimeoutError("query1 timed out")
++        return FakeResponse(payload)
++
++    provider = YahooMarketProvider(database, http_get=http_get)
++
++    history = provider.fetch_history("AAPL", range_name="1mo")
++
++    assert len(calls) == 2
++    assert "query1.finance.yahoo.com" in calls[0][0]
++    assert "query2.finance.yahoo.com" in calls[1][0]
++    assert history["points"][-1]["close"] == 10.0
++    assert history["source_url"].startswith("https://query2.finance.yahoo.com")
++
++
++def test_tencent_daily_provider_supports_a_share_equity_history():
++    class CacheDatabase:
++        def get_cache(self, *args, **kwargs):
++            del args, kwargs
++            return None
++
++        def put_cache(self, *args, **kwargs):
++            del args, kwargs
++
++        def upsert_market_bars(self, *args, **kwargs):
++            del args, kwargs
++
++    payload = {
++        "code": 0,
++        "data": {
++            "sz001309": {
++                "day": [
++                    ["2026-07-30", "390", "395", "400", "385", "1000000"],
++                    ["2026-07-31", "395", "385", "405", "380", "1200000"],
++                ]
++            }
++        },
++    }
++    provider = TencentChinaIndexProvider(
++        CacheDatabase(), http_get=lambda *args, **kwargs: FakeResponse(payload)
++    )
++
++    history = provider.fetch_history("001309.SZ", range_name="1mo")
++
++    assert provider.supports("001309.SZ") is True
++    assert history["symbol"] == "001309.SZ"
++    assert history["points"][-1]["close"] == 385.0
++
++
+ def test_yahoo_provider_restores_newer_completed_bar_when_upstream_regresses(
+     tmp_path: Path,
+ ):
+diff --git a/tests/test_research_plan.py b/tests/test_research_plan.py
+index 44894c5..57fdaf7 100644
+--- a/tests/test_research_plan.py
++++ b/tests/test_research_plan.py
+@@ -9,6 +9,56 @@ from app.services.research_plan import ResearchPlanService
+ from app.utils import utc_now
+ 
+ 
++def test_unknown_stock_question_uses_focused_general_review_not_full_research() -> None:
++    plan = ResearchPlanService().build("中天科技最近怎么样？")
++
++    assert plan["focus"] == "general_stock_review"
++    assert plan["answer_mode"] == "focused"
++    assert plan["selected_topics"] == [
++        "market",
++        "fundamentals",
++        "company_information",
++    ]
++    assert len(plan["selected_topics"]) <= 3
++    assert not {
++        "analyst_expectations",
++        "peer_comparison",
++        "shareholder_structure",
++        "outlook_calibration",
++    }.intersection(plan["selected_topics"])
++
++
++def test_position_reassessment_uses_scoped_research_without_trade_instruction_modules() -> None:
++    plan = ResearchPlanService().build(
++        "我关注德明利，七月腰斩了，有加仓的必要吗？"
++    )
++
++    assert plan["focus"] == "position_reassessment"
++    assert plan["answer_mode"] == "focused"
++    assert len(plan["selected_topics"]) <= 3
++    assert "peer_comparison" not in plan["selected_topics"]
++    assert "analyst_expectations" not in plan["selected_topics"]
++    assert "outlook_calibration" not in plan["selected_topics"]
++
++
++def test_explicit_comprehensive_review_is_capped_to_four_core_topics() -> None:
++    plan = ResearchPlanService().build("完整分析中兴通讯")
++
++    assert plan["focus"] == "comprehensive"
++    assert plan["answer_mode"] == "comprehensive"
++    assert len(plan["selected_topics"]) <= 4
++    assert "shareholder_structure" not in plan["selected_topics"]
++    assert "analyst_expectations" not in plan["selected_topics"]
++
++
++def test_peer_multiple_question_opted_in_peer_topic_only() -> None:
++    plan = ResearchPlanService().build("中兴通讯PE、PB和同行相比怎么样？")
++
++    assert "peer_comparison" in plan["selected_topics"]
++    assert "shareholder_structure" not in plan["selected_topics"]
++    assert "outlook_calibration" not in plan["selected_topics"]
++
++
+ def _create_user(client, name: str = "网页体验用户") -> dict:
+     response = client.post("/users", json={"name": name})
+     assert response.status_code == 201
+@@ -46,9 +96,14 @@ def test_research_plan_routes_price_financial_shareholder_and_comprehensive():
+     assert shareholder["focus"] == "shareholder"
+     assert "shareholder_structure" in shareholder["required_modules"]
+     assert comprehensive["focus"] == "comprehensive"
+-    assert comprehensive["selected_modules"] == list(service.MODULE_LABELS)
+-    assert research_priority["focus"] == "comprehensive"
+-    assert "analyst_expectations" in research_priority["selected_modules"]
++    assert comprehensive["selected_modules"] == [
++        "market",
++        "fundamentals",
++        "company_information",
++        "event_timeline",
++    ]
++    assert research_priority["focus"] == "general_stock_review"
++    assert "analyst_expectations" not in research_priority["selected_modules"]
+ 
+ 
+ def test_quality_review_focus_uses_disclosures_financials_cashflow_and_business_only():
+@@ -64,9 +119,6 @@ def test_quality_review_focus_uses_disclosures_financials_cashflow_and_business_
+         "fundamentals",
+         "earnings_quality",
+         "financial_drivers",
+-        "business_structure",
+-        "company_information",
+-        "event_timeline",
+     ]
+     assert "market" not in plan["selected_modules"]
+     assert "peer_comparison" not in plan["selected_modules"]
+@@ -88,9 +140,6 @@ def test_quality_review_correction_keeps_question_scoped_plan() -> None:
+         "fundamentals",
+         "earnings_quality",
+         "financial_drivers",
+-        "business_structure",
+-        "company_information",
+-        "event_timeline",
+     ]
+     assert "market" not in plan["selected_modules"]
+     assert "peer_comparison" not in plan["selected_modules"]
+@@ -106,7 +155,7 @@ def test_quality_review_can_still_add_explicit_valuation_question():
+     plan = service.build("经营改善候选的改善质量如何，估值是不是也便宜？")
+ 
+     assert plan["focus"] == "mixed"
+-    assert "peer_comparison" in plan["selected_modules"]
++    assert "peer_comparison" not in plan["selected_modules"]
+ 
+ 
+ def test_valuation_candidate_uses_scoped_quality_and_peer_plan() -> None:
+@@ -120,13 +169,7 @@ def test_valuation_candidate_uses_scoped_quality_and_peer_plan() -> None:
+     assert plan["required_modules"] == [
+         "market",
+         "fundamentals",
+-        "earnings_quality",
+-        "financial_drivers",
+-        "business_structure",
+-        "analyst_expectations",
+         "peer_comparison",
+-        "company_information",
+-        "event_timeline",
+     ]
+     assert "shareholder_structure" not in plan["selected_modules"]
+     assert "outlook_calibration" not in plan["selected_modules"]
+@@ -156,7 +199,6 @@ def test_financial_and_stabilization_followup_avoids_comprehensive_prompt():
+ 
+     assert plan["focus"] == "mixed"
+     assert plan["selected_modules"] == [
+-        "market",
+         "fundamentals",
+         "earnings_quality",
+         "financial_drivers",
+diff --git a/tests/test_stock_research_contract.py b/tests/test_stock_research_contract.py
+index 6bb8d8c..1b57f9a 100644
+--- a/tests/test_stock_research_contract.py
++++ b/tests/test_stock_research_contract.py
+@@ -4,7 +4,9 @@ from pathlib import Path
+ from typing import Any
+ 
+ from app.services.agent import AgentService
++from app.services.agent_output_guard import AgentOutputGuard
+ from app.services.agent_prompt_contracts import append_prompt_contracts
++from app.services.research_plan import ResearchPlanService
+ from app.services.stock_research_contract import (
+     ONLINE_PATH,
+     WATCHLIST_PATH,
+@@ -50,6 +52,43 @@ def _saved_report_evidence() -> dict[str, Any]:
+     }
+ 
+ 
++def test_scoped_stock_preview_uses_public_contract_and_position_boundary() -> None:
++    plan = ResearchPlanService().build("德明利七月腰斩了，有加仓的必要吗？")
++    evidence = _minimal_evidence("001309.SZ", plan)
++    evidence.update(
++        {
++            "display_name": "德明利",
++            "user_question": "德明利七月腰斩了，有加仓的必要吗？",
++            "module_statuses": {
++                key: {"module": key, "label": key, "status": "fresh"}
++                for key in plan["selected_topics"]
++            },
++        }
++    )
++
++    answer = AgentService._render_preview(evidence)
++
++    assert answer.startswith("数据来源：确定性摘要")
++    assert all(
++        heading in answer
++        for heading in ("## 综合判断", "## 关键证据", "## 专题核验", "## 仍需确认")
++    )
++    assert "回撤幅度本身不足以构成加仓依据" in answer
++    assert "建议加仓" not in answer
++    assert "peer_comparison" not in answer
++
++
++def test_output_guard_rejects_position_instruction_and_missing_public_sections() -> None:
++    plan = ResearchPlanService().build("德明利腰斩了，是否加仓？")
++    evidence = _minimal_evidence("001309.SZ", plan)
++    evidence["user_question"] = "德明利腰斩了，是否加仓？"
++
++    guarded = AgentOutputGuard._validate_model_output("建议加仓，同行也更便宜。", evidence)
++
++    assert guarded["passed"] is False
++    assert guarded["semantic_conflicts"]
++
++
+ def test_contract_selects_watchlist_preanalysis_or_online_research() -> None:
+     report = {"id": "report-1", "evidence": _saved_report_evidence()}
+ 

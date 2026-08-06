@@ -1,0 +1,25 @@
+{
+  "status_code": 200,
+  "elapsed_seconds": 0.034,
+  "data": {
+    "type": "research_actions",
+    "generated_at": "2026-08-04T06:40:47+00:00",
+    "method": "deterministic_research_action_board_v1",
+    "items": [],
+    "summary": {
+      "symbols": 0,
+      "triggered": 0,
+      "pending_data": 0,
+      "watching": 0,
+      "priority_research": 0
+    },
+    "status_legend": {
+      "triggered": "已有确定性证据达到复核条件",
+      "pending_data": "当前资料仍缺少完成判断所需的证据",
+      "watching": "条件尚未触发，继续按已定义变量观察"
+    },
+    "boundary": "研究行动只决定下一步核验哪份证据；不是价格提醒、买卖信号、仓位建议、目标价或未来涨跌预测。",
+    "snapshot_id": "82fdde58-45c3-4474-aabd-3353c76e0c33",
+    "snapshot_created_at": "2026-08-04T06:40:47+00:00"
+  }
+}

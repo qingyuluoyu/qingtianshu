@@ -1,0 +1,123 @@
+{
+  "status_code": 200,
+  "elapsed_seconds": 0.509,
+  "data": {
+    "source": "Eastmoney A-share sector ranking",
+    "source_url": "https://push2.eastmoney.com/api/qt/clist/get",
+    "market_timestamp": "2026-08-04T06:36:42+00:00",
+    "fetched_at": "2026-08-04T06:36:45+00:00",
+    "is_stale": true,
+    "cache_hit": true,
+    "coverage": {
+      "returned": 10,
+      "total_available": 496,
+      "ranking_field": "pct_change"
+    },
+    "warnings": [
+      "实时上游不可用，当前返回已过期缓存。",
+      "东方财富请求失败：ProxyError"
+    ],
+    "sectors": [
+      {
+        "code": "BK1295",
+        "name": "其他数字媒体",
+        "latest": 917.47,
+        "pct_change": 7.97,
+        "main_net_inflow": 67474744.0,
+        "advancers": 2,
+        "decliners": 0,
+        "unchanged": 0
+      },
+      {
+        "code": "BK1600",
+        "name": "医疗研发外包",
+        "latest": 7321.52,
+        "pct_change": 7.6,
+        "main_net_inflow": 2613768704.0,
+        "advancers": 29,
+        "decliners": 0,
+        "unchanged": 0
+      },
+      {
+        "code": "BK1340",
+        "name": "印制电路板",
+        "latest": 9726.67,
+        "pct_change": 7.11,
+        "main_net_inflow": 13179260160.0,
+        "advancers": 48,
+        "decliners": 0,
+        "unchanged": 0
+      },
+      {
+        "code": "BK1591",
+        "name": "通信网络设备及器件",
+        "latest": 12805.82,
+        "pct_change": 7.09,
+        "main_net_inflow": 17168782848.0,
+        "advancers": 35,
+        "decliners": 2,
+        "unchanged": 0
+      },
+      {
+        "code": "BK1327",
+        "name": "分立器件",
+        "latest": 13972.39,
+        "pct_change": 7.04,
+        "main_net_inflow": 1289396288.0,
+        "advancers": 18,
+        "decliners": 0,
+        "unchanged": 0
+      },
+      {
+        "code": "BK1325",
+        "name": "半导体材料",
+        "latest": 11261.65,
+        "pct_change": 6.81,
+        "main_net_inflow": 1377887808.0,
+        "advancers": 31,
+        "decliners": 0,
+        "unchanged": 0
+      },
+      {
+        "code": "BK0459",
+        "name": "元件",
+        "latest": 48211.34,
+        "pct_change": 6.69,
+        "main_net_inflow": 14157789696.0,
+        "advancers": 67,
+        "decliners": 0,
+        "unchanged": 0
+      },
+      {
+        "code": "BK1567",
+        "name": "其他专业服务",
+        "latest": 1032.04,
+        "pct_change": 6.61,
+        "main_net_inflow": 41109041.0,
+        "advancers": 4,
+        "decliners": 0,
+        "unchanged": 0
+      },
+      {
+        "code": "BK1409",
+        "name": "激光设备",
+        "latest": 15932.61,
+        "pct_change": 6.48,
+        "main_net_inflow": 1151253984.0,
+        "advancers": 11,
+        "decliners": 0,
+        "unchanged": 0
+      },
+      {
+        "code": "BK0458",
+        "name": "电气设备",
+        "latest": 6223.69,
+        "pct_change": 6.27,
+        "main_net_inflow": 15019440896.0,
+        "advancers": 62,
+        "decliners": 0,
+        "unchanged": 0
+      }
+    ]
+  }
+}

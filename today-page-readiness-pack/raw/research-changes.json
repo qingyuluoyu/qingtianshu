@@ -1,0 +1,18 @@
+{
+  "status_code": 200,
+  "elapsed_seconds": 0.011,
+  "data": {
+    "type": "research_tracking",
+    "generated_at": "2026-08-04T06:40:47+00:00",
+    "symbol": null,
+    "items": [],
+    "events": [],
+    "coverage": {
+      "requested": 0,
+      "with_report": 0,
+      "with_change_archive": 0
+    },
+    "method": "比较连续研究报告中的行情、技术、事件、情绪、基本面、分析师一致预期、条件展望和研究覆盖变化。",
+    "boundary": "研究变化档案是长期证据记录，不是收益评分、胜率或交易指令。"
+  }
+}

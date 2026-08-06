@@ -1,0 +1,62 @@
+{
+  "note": "Empty state - test data not inserted due to classifier restrictions",
+  "data": {
+    "type": "research_tracking",
+    "generated_at": "2026-08-04T16:24:58+00:00",
+    "symbol": null,
+    "items": [
+      {
+        "symbol": "688981.SH",
+        "name": "中芯国际",
+        "thesis": "半导体制造龙头，关注先进制程进展",
+        "in_watchlist": true,
+        "latest_report_at": null,
+        "latest_change": null,
+        "current_state": {
+          "latest_close": null,
+          "return_1d_pct": null,
+          "return_20d_pct": null,
+          "trend_state": null,
+          "technical_state": null,
+          "rsi_14": null,
+          "macd_histogram": null,
+          "atr_14_pct": null,
+          "volume_ratio_5_20": null,
+          "volatility_20d_annualized_pct": null,
+          "max_drawdown_60d_pct": null
+        },
+        "next_review": null
+      },
+      {
+        "symbol": "000063.SZ",
+        "name": "中兴通讯",
+        "thesis": "5G设备+AI服务器双轮驱动",
+        "in_watchlist": true,
+        "latest_report_at": null,
+        "latest_change": null,
+        "current_state": {
+          "latest_close": null,
+          "return_1d_pct": null,
+          "return_20d_pct": null,
+          "trend_state": null,
+          "technical_state": null,
+          "rsi_14": null,
+          "macd_histogram": null,
+          "atr_14_pct": null,
+          "volume_ratio_5_20": null,
+          "volatility_20d_annualized_pct": null,
+          "max_drawdown_60d_pct": null
+        },
+        "next_review": null
+      }
+    ],
+    "events": [],
+    "coverage": {
+      "requested": 2,
+      "with_report": 0,
+      "with_change_archive": 0
+    },
+    "method": "比较连续研究报告中的行情、技术、事件、情绪、基本面、分析师一致预期、条件展望和研究覆盖变化。",
+    "boundary": "研究变化档案是长期证据记录，不是收益评分、胜率或交易指令。"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "contract_version": "global_search_v1",
+  "parameters": {
+    "q": "string, minLength=1, maxLength=120",
+    "limit": "integer, default=8, max=20, min=1"
+  },
+  "groups": [
+    {
+      "key": "stocks",
+      "label": "股票",
+      "count": 1
+    }
+  ],
+  "total": 1,
+  "boundary": "股票和行业来自本地稳定市场快照；研究、对话和复盘仅搜索当前用户空间。",
+  "sample_items": [
+    {
+      "type": "stock",
+      "id": "000001.SZ",
+      "title": "平安银行",
+      "subtitle": "000001.SZ",
+      "symbol": "000001.SZ",
+      "industry": null,
+      "url": "/stocks/000001.SZ"
+    }
+  ]
+}

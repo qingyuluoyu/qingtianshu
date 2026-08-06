@@ -1,0 +1,124 @@
+{
+  "status_code": 200,
+  "elapsed_seconds": 0.007,
+  "data": {
+    "source": "Sina Finance all A-share snapshot",
+    "source_url": "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData",
+    "market_timestamp": null,
+    "fetched_at": "2026-08-04T06:36:45+00:00",
+    "market_date": "2026-08-04",
+    "is_stale": false,
+    "cache_hit": true,
+    "status": "available",
+    "scope": "all_a_shares_including_beijing",
+    "coverage": {
+      "expected": 5535,
+      "returned": 5535,
+      "valid_change": 5535,
+      "coverage_ratio": 1.0,
+      "node": "hs_a",
+      "latest_tick_time": "14:36:42"
+    },
+    "breadth": {
+      "total": 5535,
+      "advancers": 3349,
+      "decliners": 2036,
+      "unchanged": 150,
+      "net_advancers": 1313,
+      "advance_ratio": 0.6051,
+      "decline_ratio": 0.3678,
+      "unchanged_ratio": 0.0271,
+      "state": "上涨家数占优",
+      "classification_method": "普涨/普跌要求上涨或下跌比例至少65%，且涨跌家数净差至少500；否则只描述哪一方向家数占优。"
+    },
+    "turnover": {
+      "status": "available",
+      "currency": "CNY",
+      "unit": "yuan",
+      "total_amount_cny": 2023335485672,
+      "total_amount_100m_cny": 20233.35,
+      "amount_basis": {
+        "raw_field": "amount",
+        "raw_unit": "CNY_yuan_per_security",
+        "raw_total": 2023335485672,
+        "normalized_unit": "CNY_yuan",
+        "normalized_total": 2023335485672,
+        "display_unit": "CNY_100m_yuan",
+        "display_total": 20233.35,
+        "scope": "all_a_shares_including_beijing",
+        "market_date": "2026-08-04",
+        "aggregation": "sum_unique_security_turnover_v1"
+      },
+      "coverage": {
+        "expected": 5535,
+        "valid_amount": 5535,
+        "coverage_ratio": 1.0,
+        "exchange_sum_matches": true
+      },
+      "exchanges": {
+        "shanghai": {
+          "amount_cny": 914010417053,
+          "amount_100m_cny": 9140.1,
+          "valid_amount": 2309
+        },
+        "shenzhen": {
+          "amount_cny": 1095974115627,
+          "amount_100m_cny": 10959.74,
+          "valid_amount": 2894
+        },
+        "beijing": {
+          "amount_cny": 13350952992,
+          "amount_100m_cny": 133.51,
+          "valid_amount": 332
+        }
+      },
+      "interpretation": "成交额是当日累计成交金额，不是资金净流入、机构意图或未来方向信号。",
+      "history_comparison": {
+        "status": "intraday_not_comparable",
+        "previous_market_date": null,
+        "previous_total_amount_cny": null,
+        "change_vs_previous_pct": null,
+        "previous_5d_average_amount_cny": null,
+        "change_vs_previous_5d_average_pct": null,
+        "previous_20d_average_amount_cny": null,
+        "change_vs_previous_20d_average_pct": null,
+        "available_prior_sessions": 0,
+        "stored_prior_sessions": 0,
+        "excluded_prior_sessions": [],
+        "method": "只比较本系统保存的完整收盘交易日，且市场范围、币种、单位与覆盖口径一致；盘中累计额、盘前快照、口径不一致或数量级异常时不判断放量或缩量。"
+      }
+    },
+    "distribution": {
+      "status": "available",
+      "coverage": {
+        "expected": 5535,
+        "valid_change": 5535,
+        "coverage_ratio": 1.0
+      },
+      "median_pct_change": 0.647,
+      "p25_pct_change": -0.69,
+      "p75_pct_change": 2.905,
+      "bins": {
+        "strong_advancers_ge_3": 1338,
+        "mild_advancers_gt_0_lt_3": 2011,
+        "unchanged": 150,
+        "mild_decliners_lt_0_gt_neg3": 1953,
+        "strong_decliners_le_neg3": 83
+      },
+      "bin_ratios": {
+        "strong_advancers_ge_3": 0.2417,
+        "mild_advancers_gt_0_lt_3": 0.3633,
+        "unchanged": 0.0271,
+        "mild_decliners_lt_0_gt_neg3": 0.3528,
+        "strong_decliners_le_neg3": 0.015
+      },
+      "method": "使用全体有效个股涨跌幅的中位数与四分位数；固定±3%分档只用于描述当日分布，不是预测或交易阈值。"
+    },
+    "warnings": ["每日开盘前和上游数据文件缺失A股全量涨跌数据，系统已保留最近一份完整收盘快照作为基准。"],
+    "exchange_breakdown": {
+      "shanghai": {"advancers": 0, "decliners": 0, "unchanged": 0},
+      "shenzhen": {"advancers": 0, "decliners": 0, "unchanged": 0},
+      "beijing": {"advancers": 0, "decliners": 0, "unchanged": 0}
+    }
+  }
+}

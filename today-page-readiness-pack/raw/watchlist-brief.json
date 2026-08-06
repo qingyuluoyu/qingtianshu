@@ -1,0 +1,16 @@
+{
+  "status_code": 200,
+  "elapsed_seconds": 0.205,
+  "data": {
+    "type": "watchlist_brief",
+    "generated_at": "2026-08-04T06:40:47+00:00",
+    "items": [],
+    "coverage": {
+      "requested": 0,
+      "available": 0
+    },
+    "warnings": [
+      "自选股为空。可先通过 POST /users/{id}/watchlist 添加。"
+    ]
+  }
+}

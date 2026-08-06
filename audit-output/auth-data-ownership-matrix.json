@@ -1,0 +1,399 @@
+{
+  "audit_metadata": {
+    "baseline": "d0a9b9b75200d4b89452c803a14bcc1add136481",
+    "baseline_tag": "frontend-backend-baseline-0c-20260804",
+    "audit_date": "2026-08-04",
+    "conclusion": "B. 后端只有匿名会话，需要先由 Codex 实现正式认证后端",
+    "total_users": 17,
+    "active_sessions": 15,
+    "data_isolation_rating": "已确认安全"
+  },
+  "data_isolation_matrix": [
+    {
+      "object": "用户",
+      "table": "users",
+      "has_user_id": true,
+      "fk_index": "PK on id",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "id 即 user_id"
+    },
+    {
+      "object": "会话",
+      "table": "user_sessions",
+      "has_user_id": true,
+      "fk_index": "FK→users(id) CASCADE, UNIQUE on token_hash",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "token_hash 是 SHA256(session_token)，原始 token 不存储"
+    },
+    {
+      "object": "自选股",
+      "table": "watchlist",
+      "has_user_id": true,
+      "fk_index": "PK(user_id, symbol), FK→users CASCADE",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "ON CONFLICT(user_id, symbol) DO UPDATE"
+    },
+    {
+      "object": "对话",
+      "table": "conversations",
+      "has_user_id": true,
+      "fk_index": "FK→users CASCADE, INDEX(user_id, status, updated_at)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "含 conversation_mode 字段(formal/advisor_test)"
+    },
+    {
+      "object": "对话消息",
+      "table": "conversation_messages",
+      "has_user_id": true,
+      "fk_index": "FK→conversations CASCADE, 冗余 user_id 列",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "list 时 JOIN conversations 校验归属"
+    },
+    {
+      "object": "研究运行",
+      "table": "runs",
+      "has_user_id": true,
+      "fk_index": "FK→users CASCADE, INDEX(user_id, created_at)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "含 input_json, evidence_json 等大字段"
+    },
+    {
+      "object": "个股工作区",
+      "table": "stock_workspaces",
+      "has_user_id": true,
+      "fk_index": "UNIQUE(user_id, symbol), FK→users CASCADE",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "含 relation_type, priority, tracking_status, workflow_status"
+    },
+    {
+      "object": "个股关系历史",
+      "table": "stock_relation_history",
+      "has_user_id": true,
+      "fk_index": "FK→stock_workspaces CASCADE + FK→users CASCADE",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "记录关系变化历史"
+    },
+    {
+      "object": "论点版本",
+      "table": "thesis_versions",
+      "has_user_id": true,
+      "fk_index": "FK→stock_workspaces CASCADE + 冗余 user_id, UNIQUE(workspace_id, version_no)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "含 draft/pending_confirmation/active/superseded/invalidated/rejected 状态"
+    },
+    {
+      "object": "AI 回写候选",
+      "table": "ai_writeback_candidates",
+      "has_user_id": true,
+      "fk_index": "FK→users CASCADE, UNIQUE(user_id, run_id, candidate_type)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "candidate_type: thesis/observation_task/action_plan/review_draft"
+    },
+    {
+      "object": "观察任务",
+      "table": "observation_tasks",
+      "has_user_id": true,
+      "fk_index": "FK→users CASCADE, UNIQUE(user_id, dedupe_key), INDEX(user_id, status, priority)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "_task_for_user 二次校验"
+    },
+    {
+      "object": "观察任务历史",
+      "table": "observation_task_history",
+      "has_user_id": true,
+      "fk_index": "FK→observation_tasks CASCADE + FK→users CASCADE",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "UNIQUE(task_id, version)"
+    },
+    {
+      "object": "记忆",
+      "table": "memories",
+      "has_user_id": true,
+      "fk_index": "FK→users CASCADE, INDEX(user_id, status)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "status: candidate/confirmed/rejected"
+    },
+    {
+      "object": "风险画像",
+      "table": "risk_profile_versions",
+      "has_user_id": true,
+      "fk_index": "UNIQUE(user_id, version_no), INDEX(user_id, status, version_no DESC)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "status: draft/confirmed/superseded"
+    },
+    {
+      "object": "持仓开仓",
+      "table": "position_openings",
+      "has_user_id": true,
+      "fk_index": "UNIQUE(user_id, idempotency_key), FK→stock_workspaces CASCADE",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "workspace_id 关联 stock_workspaces"
+    },
+    {
+      "object": "持仓操作",
+      "table": "position_operations",
+      "has_user_id": true,
+      "fk_index": "UNIQUE(user_id, idempotency_key), FK→stock_workspaces CASCADE",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "含 buy/add/reduce/sell 类型"
+    },
+    {
+      "object": "操作修订",
+      "table": "operation_revisions",
+      "has_user_id": true,
+      "fk_index": "UNIQUE(operation_id, revision_no) + UNIQUE(user_id, idempotency_key)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "FK→position_operations CASCADE"
+    },
+    {
+      "object": "持仓调整",
+      "table": "position_adjustments",
+      "has_user_id": true,
+      "fk_index": "UNIQUE(user_id, idempotency_key), FK→stock_workspaces CASCADE",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "adjustment_type: quantity_correction/cost_correction/corporate_action/other"
+    },
+    {
+      "object": "操作上下文快照",
+      "table": "operation_context_snapshots",
+      "has_user_id": true,
+      "fk_index": "FK→users CASCADE + FK→position_operations + FK→action_plans",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "UNIQUE(operation_id)"
+    },
+    {
+      "object": "交易复盘",
+      "table": "trade_reviews",
+      "has_user_id": true,
+      "fk_index": "UNIQUE(id, user_id, workspace_id) + UNIQUE(user_id, workspace_id, operation_id, horizon_sessions)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "status: waiting_data/ready/draft/confirmed/archived/revised"
+    },
+    {
+      "object": "复盘版本",
+      "table": "trade_review_versions",
+      "has_user_id": true,
+      "fk_index": "FK→users CASCADE + UNIQUE(review_id, version_no)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "FK→trade_reviews(user_id, workspace_id) CASCADE"
+    },
+    {
+      "object": "操作计划",
+      "table": "action_plans",
+      "has_user_id": true,
+      "fk_index": "UNIQUE(id, user_id, workspace_id) + FK(user_id, workspace_id)→stock_workspaces",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "_plan_by_id 二次校验"
+    },
+    {
+      "object": "操作计划历史",
+      "table": "action_plan_history",
+      "has_user_id": true,
+      "fk_index": "FK→users CASCADE + FK(action_plan_id, user_id, workspace_id)→action_plans",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "UNIQUE(plan_id, version)"
+    },
+    {
+      "object": "深度个股会话",
+      "table": "deep_stock_sessions",
+      "has_user_id": true,
+      "fk_index": "UNIQUE(user_id, symbol), FK→users CASCADE + FK→conversations CASCADE",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "UNIQUE(user_id, conversation_id) 复合索引"
+    },
+    {
+      "object": "用户变化链接",
+      "table": "user_change_links",
+      "has_user_id": true,
+      "fk_index": "UNIQUE(user_id, change_event_id), FK→users CASCADE + FK→change_events CASCADE",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "relevance_status: pending/relevant/irrelevant"
+    },
+    {
+      "object": "研究优先级快照",
+      "table": "research_priority_snapshots",
+      "has_user_id": true,
+      "fk_index": "UNIQUE(user_id, fingerprint), FK→users CASCADE",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "系统生成"
+    },
+    {
+      "object": "研究行动快照",
+      "table": "research_action_snapshots",
+      "has_user_id": true,
+      "fk_index": "UNIQUE(user_id, fingerprint), FK→users CASCADE",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "系统生成"
+    },
+    {
+      "object": "对话质量快照",
+      "table": "conversation_quality_snapshots",
+      "has_user_id": true,
+      "fk_index": "UNIQUE(user_id, fingerprint), FK→users CASCADE",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "系统生成"
+    },
+    {
+      "object": "补证任务",
+      "table": "evidence_tasks",
+      "has_user_id": true,
+      "fk_index": "FK→users CASCADE, INDEX(user_id, status, priority DESC)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "status: pending/collecting/resolved/pending_external/failed"
+    },
+    {
+      "object": "用户上传",
+      "table": "user_uploads",
+      "has_user_id": true,
+      "fk_index": "FK→users CASCADE, UNIQUE on workspace_path, INDEX(user_id, created_at)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "文件存储在 user workspace_path/uploads/"
+    },
+    {
+      "object": "知识资料",
+      "table": "knowledge_documents",
+      "has_user_id": true,
+      "fk_index": "owner_user_id FK→users CASCADE(可为NULL), UNIQUE(scope, owner_user_id, source_key)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "scope: common 或 user; 查询时过滤 scope='user' AND owner_user_id=?"
+    },
+    {
+      "object": "文章",
+      "table": "articles",
+      "has_user_id": true,
+      "fk_index": "FK→users CASCADE, INDEX(user_id, created_at)",
+      "query_filters_user_id": true,
+      "secondary_ownership_check": true,
+      "risk": "已确认安全",
+      "notes": "kind: market_pulse 等"
+    },
+    {
+      "object": "研究报告",
+      "table": "research_reports",
+      "has_user_id": false,
+      "fk_index": "UNIQUE(symbol, fingerprint)",
+      "query_filters_user_id": false,
+      "secondary_ownership_check": false,
+      "risk": "已确认安全(全局数据)",
+      "notes": "系统生成的全局研究报告，非用户数据"
+    },
+    {
+      "object": "变化事件",
+      "table": "change_events",
+      "has_user_id": false,
+      "fk_index": "UNIQUE dedupe_hash, INDEX(symbol, occurred_at)",
+      "query_filters_user_id": false,
+      "secondary_ownership_check": false,
+      "risk": "已确认安全(全局数据)",
+      "notes": "系统检测到的公告/新闻变化事件，通过 user_change_links 关联用户"
+    }
+  ],
+  "critical_isolation_checks": {
+    "advisor_test_vs_formal": {
+      "status": "已确认安全",
+      "mechanism": "conversation_mode 字段隔离 + API 层校验",
+      "details": "list_conversations 按 mode 过滤; get_my_conversation 校验 mode=='formal'; advisor lab 校验 mode=='advisor_test'"
+    },
+    "sse_request_id": {
+      "status": "已确认安全",
+      "mechanism": "agent_streams.open/stream 校验 state.user_id == current user_id",
+      "details": "PermissionError if mismatch"
+    },
+    "upload_ownership": {
+      "status": "已确认安全",
+      "mechanism": "get_user_upload 查询带 WHERE user_id=? AND id=?",
+      "details": "删除时同样校验 user_id"
+    },
+    "position_trade_isolation": {
+      "status": "已确认安全",
+      "mechanism": "position_ledger 和 trade_workflow 所有方法以 user_id 为首要参数",
+      "details": "_plan_by_id, _review_by_id, _operation, _task_for_user 均带 user_id 过滤"
+    },
+    "client_supplied_user_id": {
+      "status": "已确认安全",
+      "mechanism": "require_user 校验 session user_id == path/query user_id",
+      "details": "LegacySessionClaim.user_id 仅用于 claim 旧空间; /runs/{run_id} user_id 参数经 require_user 校验"
+    }
+  },
+  "database_password_audit": {
+    "password_columns_found": [],
+    "hash_columns_found": [
+      {"table": "user_sessions", "column": "token_hash", "purpose": "SHA256(session_token)", "is_user_password": false},
+      {"table": "change_events", "column": "dedupe_hash", "purpose": "事件去重哈希", "is_user_password": false},
+      {"table": "filing_documents", "column": "content_hash", "purpose": "文件内容哈希", "is_user_password": false}
+    ],
+    "auth_libraries": {
+      "argon2": false,
+      "bcrypt": false,
+      "passlib": false,
+      "pwdlib": false,
+      "phonenumbers": false
+    },
+    "usercreate_model_fields": ["name"],
+    "password_fields_in_users_table": [],
+    "has_real_password_auth": false,
+    "conclusion": "仅有匿名会话，没有真实密码认证"
+  }
+}

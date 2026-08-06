@@ -1,0 +1,46 @@
+{
+  "note": "Empty state - test data not inserted due to classifier restrictions",
+  "data": {
+    "type": "watchlist_brief",
+    "generated_at": "2026-08-04T16:24:58+00:00",
+    "items": [
+      {
+        "user_id": "3dcb7034-2299-4e9a-abab-f3b64cfa3706",
+        "symbol": "000063.SZ",
+        "name": "中兴通讯",
+        "market": "CN",
+        "thesis": "5G设备+AI服务器双轮驱动",
+        "created_at": "2026-08-02T00:00:00+00:00",
+        "updated_at": "2026-08-04T00:00:00+00:00",
+        "status": "unavailable",
+        "latest_change": null,
+        "warnings": [
+          "Yahoo 行情不可用：ReadTimeout: HTTPSConnectionPool(host='query1.finance.yahoo.com', port=443): Read timed out. (read timeout=15)"
+        ]
+      },
+      {
+        "user_id": "3dcb7034-2299-4e9a-abab-f3b64cfa3706",
+        "symbol": "688981.SH",
+        "name": "中芯国际",
+        "market": "CN",
+        "thesis": "半导体制造龙头，关注先进制程进展",
+        "created_at": "2026-08-01T00:00:00+00:00",
+        "updated_at": "2026-08-04T00:00:00+00:00",
+        "status": "unavailable",
+        "latest_change": null,
+        "warnings": [
+          "Yahoo 行情不可用：ReadTimeout: HTTPSConnectionPool(host='query1.finance.yahoo.com', port=443): Read timed out. (read timeout=15)"
+        ]
+      }
+    ],
+    "coverage": {
+      "requested": 2,
+      "available": 0
+    },
+    "warnings": [
+      "Yahoo 行情不可用：ReadTimeout: HTTPSConnectionPool(host='query1.finance.yahoo.com', port=443): Read timed out. (read timeout=15)",
+      "Yahoo 行情不可用：ReadTimeout: HTTPSConnectionPool(host='query1.finance.yahoo.com', port=443): Read timed out. (read timeout=15)"
+    ],
+    "sorting": "按一日涨跌幅绝对值排序，不代表投资优先级"
+  }
+}

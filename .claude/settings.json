@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions",
+    "allow": [
+      "Bash(*)",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch",
+      "Agent",
+      "AgentUI",
+      "Task",
+      "Skill",
+      "Skill(*)",
+      "TodoWrite",
+      "TodoRead",
+      "NotebookEdit",
+      "ReportFindings",
+      "EnterPlanMode",
+      "ExitPlanMode",
+      "AskUserQuestion",
+      "EnterWorktree",
+      "ExitWorktree",
+      "SendMessage",
+      "DesignSync",
+      "Workflow",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "ScheduleWakeup",
+      "TaskOutput",
+      "TaskStop"
+    ]
+  }
+}

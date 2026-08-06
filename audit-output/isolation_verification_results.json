@@ -1,0 +1,71 @@
+{
+  "user_a_id": "e3272360-3c26-487c-9476-4e9d9d1c3424",
+  "user_b_id": "c6cd2583-1627-4987-b2c4-6ce9fdc4b8ec",
+  "results": [
+    {
+      "scenario": "1. Session isolation",
+      "a_operation": "GET /session",
+      "b_attempt": "GET /session",
+      "actual_status": "A=200, B=200",
+      "data_leak": "NO",
+      "conclusion": "PASS"
+    },
+    {
+      "scenario": "2. Watchlist isolation",
+      "a_operation": "POST /me/watchlist (600519.SS)",
+      "b_attempt": "GET /me/watchlist",
+      "actual_status": "A=200, B=200",
+      "data_leak": "NO",
+      "conclusion": "PASS"
+    },
+    {
+      "scenario": "3. Conversation isolation",
+      "a_operation": "POST /me/conversations (id=c157ced1-3953-4a5a-9859-acbb81292d82)",
+      "b_attempt": "GET /me/conversations/c157ced1-3953-4a5a-9859-acbb81292d82",
+      "actual_status": "A=201, B=404",
+      "data_leak": "NO",
+      "conclusion": "PASS"
+    },
+    {
+      "scenario": "4. Workspace isolation",
+      "a_operation": "GET /v1/stocks/000063.SZ/workspace",
+      "b_attempt": "GET /v1/stocks/000063.SZ/workspace",
+      "actual_status": "A=200, B=200",
+      "data_leak": "NO",
+      "conclusion": "PASS"
+    },
+    {
+      "scenario": "5. Observation task isolation",
+      "a_operation": "GET /me/observation-tasks",
+      "b_attempt": "GET /me/observation-tasks",
+      "actual_status": "A=0 tasks, B=0 tasks",
+      "data_leak": "NO",
+      "conclusion": "PASS"
+    },
+    {
+      "scenario": "6. AI writeback isolation",
+      "a_operation": "POST /me/chat (create run)",
+      "b_attempt": "GET /me/writeback-candidates?run_id=...",
+      "actual_status": "run_status=200",
+      "data_leak": "NO",
+      "conclusion": "PASS"
+    },
+    {
+      "scenario": "7. advisor_test/formal mode isolation",
+      "a_operation": "POST /me/conversations (formal + advisor_test)",
+      "b_attempt": "GET /me/conversations",
+      "actual_status": "A modes={'formal'}, B count=0",
+      "data_leak": "NO",
+      "conclusion": "PASS"
+    },
+    {
+      "scenario": "8. Unauthenticated access",
+      "a_operation": "GET /me/watchlist (no cookie)",
+      "b_attempt": "N/A",
+      "actual_status": "status=401",
+      "data_leak": "NO",
+      "conclusion": "PASS"
+    }
+  ],
+  "all_passed": true
+}

@@ -1,0 +1,143 @@
+{
+  "source": "Sina Finance all A-share snapshot",
+  "source_url": "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData",
+  "market_timestamp": null,
+  "fetched_at": "2026-08-04T15:13:22+00:00",
+  "market_date": "2026-08-04",
+  "is_stale": false,
+  "cache_hit": false,
+  "status": "available",
+  "scope": "all_a_shares_including_beijing",
+  "coverage": {
+    "expected": 5535,
+    "returned": 5535,
+    "valid_change": 5535,
+    "coverage_ratio": 1,
+    "node": "hs_a",
+    "latest_tick_time": "16:24:00"
+  },
+  "breadth": {
+    "total": 5535,
+    "advancers": 3642,
+    "decliners": 1746,
+    "unchanged": 147,
+    "net_advancers": 1896,
+    "advance_ratio": 0.658,
+    "decline_ratio": 0.3154,
+    "unchanged_ratio": 0.0266,
+    "state": "普涨",
+    "classification_method": "普涨/普跌要求上涨或下跌比例至少65%，且涨跌家数净差至少500；否则只描述哪一方向家数占优。"
+  },
+  "turnover": {
+    "status": "available",
+    "currency": "CNY",
+    "unit": "yuan",
+    "total_amount_cny": 2228015019883,
+    "total_amount_100m_cny": 22280.15,
+    "amount_basis": {
+      "raw_field": "amount",
+      "raw_unit": "CNY_yuan_per_security",
+      "raw_total": 2228015019883,
+      "normalized_unit": "CNY_yuan",
+      "normalized_total": 2228015019883,
+      "display_unit": "CNY_100m_yuan",
+      "display_total": 22280.15,
+      "scope": "all_a_shares_including_beijing",
+      "market_date": "2026-08-04",
+      "aggregation": "sum_unique_security_turnover_v1"
+    },
+    "coverage": {
+      "expected": 5535,
+      "valid_amount": 5535,
+      "coverage_ratio": 1,
+      "exchange_sum_matches": true
+    },
+    "exchanges": {
+      "shanghai": {
+        "amount_cny": 1007806998637,
+        "amount_100m_cny": 10078.07,
+        "valid_amount": 2309
+      },
+      "shenzhen": {
+        "amount_cny": 1205138504982,
+        "amount_100m_cny": 12051.39,
+        "valid_amount": 2894
+      },
+      "beijing": {
+        "amount_cny": 15069516264,
+        "amount_100m_cny": 150.7,
+        "valid_amount": 332
+      }
+    },
+    "interpretation": "成交额是当日累计成交金额，不是资金净流入、机构意图或未来方向信号。",
+    "history_comparison": {
+      "status": "building_history",
+      "previous_market_date": null,
+      "previous_total_amount_cny": null,
+      "change_vs_previous_pct": null,
+      "previous_5d_average_amount_cny": null,
+      "change_vs_previous_5d_average_pct": null,
+      "previous_20d_average_amount_cny": null,
+      "change_vs_previous_20d_average_pct": null,
+      "available_prior_sessions": 0,
+      "stored_prior_sessions": 0,
+      "excluded_prior_sessions": [],
+      "method": "只比较本系统保存的完整收盘交易日，且市场范围、币种、单位与覆盖口径一致；盘中累计额、盘前快照、口径不一致或数量级异常时不判断放量或缩量。"
+    }
+  },
+  "distribution": {
+    "status": "available",
+    "coverage": {
+      "expected": 5535,
+      "valid_change": 5535,
+      "coverage_ratio": 1
+    },
+    "median_pct_change": 0.972,
+    "p25_pct_change": -0.4625,
+    "p75_pct_change": 3.312,
+    "bins": {
+      "strong_advancers_ge_3": 1506,
+      "mild_advancers_gt_0_lt_3": 2136,
+      "unchanged": 147,
+      "mild_decliners_lt_0_gt_neg3": 1672,
+      "strong_decliners_le_neg3": 74
+    },
+    "bin_ratios": {
+      "strong_advancers_ge_3": 0.2721,
+      "mild_advancers_gt_0_lt_3": 0.3859,
+      "unchanged": 0.0266,
+      "mild_decliners_lt_0_gt_neg3": 0.3021,
+      "strong_decliners_le_neg3": 0.0134
+    },
+    "method": "使用全体有效个股涨跌幅的中位数与四分位数；固定±3%分档只用于描述当日分布，不是预测或交易阈值。"
+  },
+  "exchange_breakdown": {
+    "shanghai": {
+      "total": 2309,
+      "advancers": 1369,
+      "decliners": 880,
+      "unchanged": 60,
+      "valid_amount": 2309,
+      "amount_cny": 1007806998637
+    },
+    "shenzhen": {
+      "total": 2894,
+      "advancers": 2037,
+      "decliners": 783,
+      "unchanged": 74,
+      "valid_amount": 2894,
+      "amount_cny": 1205138504982
+    },
+    "beijing": {
+      "total": 332,
+      "advancers": 236,
+      "decliners": 83,
+      "unchanged": 13,
+      "valid_amount": 332,
+      "amount_cny": 15069516264
+    }
+  },
+  "warnings": [
+    "该快照按新浪沪深京A股列表逐页汇总，包含北交所；停牌或涨跌幅字段缺失时会拒绝确认全市场广度。"
+  ]
+}

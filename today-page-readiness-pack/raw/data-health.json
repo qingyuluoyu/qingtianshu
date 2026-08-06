@@ -1,0 +1,533 @@
+{
+  "status_code": 200,
+  "elapsed_seconds": 0.107,
+  "data": {
+    "status": "degraded",
+    "user_label": "部分数据同步中",
+    "created_at": "2026-08-04T06:33:23+00:00",
+    "summary": {
+      "total": 67,
+      "healthy": 0,
+      "attention": 19,
+      "critical": 48
+    },
+    "checks": [
+      {
+        "key": "market:china",
+        "category": "market",
+        "status": "critical",
+        "label": "中国A股缺少分钟线",
+        "is_open": true,
+        "calendar_status": "verified"
+      },
+      {
+        "key": "market:japan",
+        "category": "market",
+        "status": "critical",
+        "label": "日本股市缺少分钟线",
+        "is_open": false,
+        "calendar_status": "verified"
+      },
+      {
+        "key": "market:korea",
+        "category": "market",
+        "status": "critical",
+        "label": "韩国股市缺少分钟线",
+        "is_open": false,
+        "calendar_status": "verified"
+      },
+      {
+        "key": "market:us",
+        "category": "market",
+        "status": "critical",
+        "label": "美国股市缺少分钟线",
+        "is_open": false,
+        "calendar_status": "verified"
+      },
+      {
+        "key": "market:london_gold",
+        "category": "market",
+        "status": "critical",
+        "label": "伦敦金缺少分钟线",
+        "is_open": true,
+        "calendar_status": "otc_schedule"
+      },
+      {
+        "key": "market:china_breadth",
+        "category": "market",
+        "status": "critical",
+        "label": "A股全市场涨跌家数缺失",
+        "scope": "all_a_shares_including_beijing"
+      },
+      {
+        "key": "valuation:000063.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "000063.SZ缺少估值快照",
+        "age_seconds": null,
+        "market_timestamp": null
+      },
+      {
+        "key": "financial:000063.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "000063.SZ结构化财务缺失",
+        "latest_report_date": null
+      },
+      {
+        "key": "peers:000063.SZ",
+        "category": "fundamentals",
+        "status": "attention",
+        "label": "000063.SZ同行估值覆盖 0/3",
+        "available": 0,
+        "requested": 3
+      },
+      {
+        "key": "valuation:300308.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "300308.SZ缺少估值快照",
+        "age_seconds": null,
+        "market_timestamp": null
+      },
+      {
+        "key": "financial:300308.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "300308.SZ结构化财务缺失",
+        "latest_report_date": null
+      },
+      {
+        "key": "peers:300308.SZ",
+        "category": "fundamentals",
+        "status": "attention",
+        "label": "300308.SZ同行估值覆盖 0/3",
+        "available": 0,
+        "requested": 3
+      },
+      {
+        "key": "valuation:300750.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "300750.SZ缺少估值快照",
+        "age_seconds": null,
+        "market_timestamp": null
+      },
+      {
+        "key": "financial:300750.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "300750.SZ结构化财务缺失",
+        "latest_report_date": null
+      },
+      {
+        "key": "peers:300750.SZ",
+        "category": "fundamentals",
+        "status": "attention",
+        "label": "300750.SZ同行估值覆盖 0/3",
+        "available": 0,
+        "requested": 3
+      },
+      {
+        "key": "valuation:NVDA",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "NVDA缺少估值快照",
+        "age_seconds": null,
+        "market_timestamp": null
+      },
+      {
+        "key": "financial:NVDA",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "NVDA结构化财务缺失",
+        "latest_report_date": null
+      },
+      {
+        "key": "peers:NVDA",
+        "category": "fundamentals",
+        "status": "attention",
+        "label": "NVDA同行估值覆盖 0/3",
+        "available": 0,
+        "requested": 3
+      },
+      {
+        "key": "earnings-quality:000063.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "000063.SZ缺少财报质量分析",
+        "report_date": null
+      },
+      {
+        "key": "financial-drivers:000063.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "000063.SZ缺少利润与现金流驱动分析",
+        "report_date": null
+      },
+      {
+        "key": "earnings-quality:300308.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "300308.SZ缺少财报质量分析",
+        "report_date": null
+      },
+      {
+        "key": "financial-drivers:300308.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "300308.SZ缺少利润与现金流驱动分析",
+        "report_date": null
+      },
+      {
+        "key": "earnings-quality:300750.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "300750.SZ缺少财报质量分析",
+        "report_date": null
+      },
+      {
+        "key": "financial-drivers:300750.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "300750.SZ缺少利润与现金流驱动分析",
+        "report_date": null
+      },
+      {
+        "key": "earnings-quality:NVDA",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "NVDA缺少财报质量分析",
+        "report_date": null
+      },
+      {
+        "key": "financial-drivers:NVDA",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "NVDA缺少利润与现金流驱动分析",
+        "report_date": null
+      },
+      {
+        "key": "filing:000063.SZ",
+        "category": "information",
+        "status": "critical",
+        "label": "000063.SZ缺少公告索引",
+        "source_status": "missing"
+      },
+      {
+        "key": "filing:300308.SZ",
+        "category": "information",
+        "status": "critical",
+        "label": "300308.SZ缺少公告索引",
+        "source_status": "missing"
+      },
+      {
+        "key": "filing:300750.SZ",
+        "category": "information",
+        "status": "critical",
+        "label": "300750.SZ缺少公告索引",
+        "source_status": "missing"
+      },
+      {
+        "key": "filing:NVDA",
+        "category": "information",
+        "status": "critical",
+        "label": "NVDA缺少公告索引",
+        "source_status": "missing"
+      },
+      {
+        "key": "business-structure:000063.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "000063.SZ缺少业务结构分析",
+        "report_date": null,
+        "rows": null,
+        "dimensions": null
+      },
+      {
+        "key": "shareholder:000063.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "000063.SZ缺少股东结构分析",
+        "top10_report_date": null,
+        "holder_count_as_of": null
+      },
+      {
+        "key": "business-structure:300308.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "300308.SZ缺少业务结构分析",
+        "report_date": null,
+        "rows": null,
+        "dimensions": null
+      },
+      {
+        "key": "shareholder:300308.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "300308.SZ缺少股东结构分析",
+        "top10_report_date": null,
+        "holder_count_as_of": null
+      },
+      {
+        "key": "business-structure:300750.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "300750.SZ缺少业务结构分析",
+        "report_date": null,
+        "rows": null,
+        "dimensions": null
+      },
+      {
+        "key": "shareholder:300750.SZ",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "300750.SZ缺少股东结构分析",
+        "top10_report_date": null,
+        "holder_count_as_of": null
+      },
+      {
+        "key": "business-structure:NVDA",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "NVDA缺少业务结构分析",
+        "report_date": null,
+        "rows": null,
+        "dimensions": null
+      },
+      {
+        "key": "shareholder:NVDA",
+        "category": "fundamentals",
+        "status": "critical",
+        "label": "NVDA缺少股东结构分析",
+        "top10_report_date": null,
+        "holder_count_as_of": null
+      },
+      {
+        "key": "analyst-expectations:000063.SZ",
+        "category": "information",
+        "status": "critical",
+        "label": "000063.SZ缺少分析师一致预期",
+        "rating_organizations": null,
+        "estimate_years": null
+      },
+      {
+        "key": "analyst-expectations:300308.SZ",
+        "category": "information",
+        "status": "critical",
+        "label": "300308.SZ缺少分析师一致预期",
+        "rating_organizations": null,
+        "estimate_years": null
+      },
+      {
+        "key": "analyst-expectations:300750.SZ",
+        "category": "information",
+        "status": "critical",
+        "label": "300750.SZ缺少分析师一致预期",
+        "rating_organizations": null,
+        "estimate_years": null
+      },
+      {
+        "key": "analyst-expectations:NVDA",
+        "category": "information",
+        "status": "critical",
+        "label": "NVDA缺少分析师一致预期",
+        "rating_organizations": null,
+        "estimate_years": null
+      },
+      {
+        "key": "outlook-calibration:000063.SZ",
+        "category": "information",
+        "status": "critical",
+        "label": "000063.SZ缺少条件展望校准",
+        "as_of_date": null
+      },
+      {
+        "key": "outlook-calibration:300308.SZ",
+        "category": "information",
+        "status": "critical",
+        "label": "300308.SZ缺少条件展望校准",
+        "as_of_date": null
+      },
+      {
+        "key": "outlook-calibration:300750.SZ",
+        "category": "information",
+        "status": "critical",
+        "label": "300750.SZ缺少条件展望校准",
+        "as_of_date": null
+      },
+      {
+        "key": "outlook-calibration:NVDA",
+        "category": "information",
+        "status": "critical",
+        "label": "NVDA缺少条件展望校准",
+        "as_of_date": null
+      },
+      {
+        "key": "report:000063.SZ",
+        "category": "reports",
+        "status": "critical",
+        "label": "000063.SZ缺少长期研究基线",
+        "generated_at": null
+      },
+      {
+        "key": "report:300308.SZ",
+        "category": "reports",
+        "status": "critical",
+        "label": "300308.SZ缺少长期研究基线",
+        "generated_at": null
+      },
+      {
+        "key": "report:300750.SZ",
+        "category": "reports",
+        "status": "critical",
+        "label": "300750.SZ缺少长期研究基线",
+        "generated_at": null
+      },
+      {
+        "key": "report:NVDA",
+        "category": "reports",
+        "status": "critical",
+        "label": "NVDA缺少长期研究基线",
+        "generated_at": null
+      },
+      {
+        "key": "background:market_intraday_refresh",
+        "category": "background",
+        "status": "attention",
+        "label": "市场分钟线刷新未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:market_pulse_article",
+        "category": "background",
+        "status": "attention",
+        "label": "市场脉搏文章未生成",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:a_share_information_refresh",
+        "category": "background",
+        "status": "attention",
+        "label": "A股信息刷新未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:a_share_filing_refresh",
+        "category": "background",
+        "status": "attention",
+        "label": "A股公告刷新未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:business_structure_refresh",
+        "category": "background",
+        "status": "attention",
+        "label": "业务结构刷新未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:shareholder_structure_refresh",
+        "category": "background",
+        "status": "attention",
+        "label": "股东结构刷新未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:analyst_expectations_refresh",
+        "category": "background",
+        "status": "attention",
+        "label": "分析师预期刷新未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:a_share_fundamentals_refresh",
+        "category": "background",
+        "status": "attention",
+        "label": "A股基本面刷新未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:us_equity_fundamentals_refresh",
+        "category": "background",
+        "status": "attention",
+        "label": "美股基本面刷新未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:earnings_quality_refresh",
+        "category": "background",
+        "status": "attention",
+        "label": "财报质量刷新未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:financial_driver_refresh",
+        "category": "background",
+        "status": "attention",
+        "label": "财务驱动刷新未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:peer_valuation_refresh",
+        "category": "background",
+        "status": "attention",
+        "label": "同行估值刷新未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:outlook_calibration_refresh",
+        "category": "background",
+        "status": "attention",
+        "label": "展望校准刷新未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:stock_research_reports_refresh",
+        "category": "background",
+        "status": "attention",
+        "label": "研究报告刷新未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      },
+      {
+        "key": "background:research_outcomes_backfill",
+        "category": "background",
+        "status": "attention",
+        "label": "研究产出回填未运行",
+        "finished_at": null,
+        "started_at": null,
+        "poll_age_seconds": null
+      }
+    ],
+    "method": "deterministic_data_health_audit_v1",
+    "id": "b7c3d8e2-5f1a-4e9c-a2b8-3d4e5f6a7b8c"
+  }
+}

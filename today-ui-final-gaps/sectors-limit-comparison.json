@@ -1,0 +1,207 @@
+{
+  "limit_5": {
+    "returned": 5,
+    "total_available": 49,
+    "ranking_field": "pct_change",
+    "sectors": [
+      {
+        "code": "new_stock",
+        "name": "次新股",
+        "pct_change": 6.686686,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 143
+      },
+      {
+        "code": "new_dzqj",
+        "name": "电子器件",
+        "pct_change": 5.319793,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 152
+      },
+      {
+        "code": "new_jxhy",
+        "name": "机械行业",
+        "pct_change": 4.884769,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 211
+      },
+      {
+        "code": "new_tchy",
+        "name": "陶瓷行业",
+        "pct_change": 4.321427,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 8
+      },
+      {
+        "code": "new_dzxx",
+        "name": "电子信息",
+        "pct_change": 4.213637,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 247
+      }
+    ]
+  },
+  "limit_8": {
+    "returned": 8,
+    "total_available": 49,
+    "ranking_field": "pct_change",
+    "sectors": [
+      {
+        "code": "new_stock",
+        "name": "次新股",
+        "pct_change": 6.686686,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 143
+      },
+      {
+        "code": "new_dzqj",
+        "name": "电子器件",
+        "pct_change": 5.319793,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 152
+      },
+      {
+        "code": "new_jxhy",
+        "name": "机械行业",
+        "pct_change": 4.884769,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 211
+      },
+      {
+        "code": "new_tchy",
+        "name": "陶瓷行业",
+        "pct_change": 4.321427,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 8
+      },
+      {
+        "code": "new_dzxx",
+        "name": "电子信息",
+        "pct_change": 4.213637,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 247
+      },
+      {
+        "code": "new_blhy",
+        "name": "玻璃行业",
+        "pct_change": 3.799831,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 19
+      },
+      {
+        "code": "new_ysjs",
+        "name": "有色金属",
+        "pct_change": 3.266703,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 72
+      },
+      {
+        "code": "new_hghy",
+        "name": "化工行业",
+        "pct_change": 3.140792,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 150
+      }
+    ]
+  },
+  "limit_10": {
+    "returned": 10,
+    "total_available": 49,
+    "ranking_field": "pct_change",
+    "sectors": [
+      {
+        "code": "new_stock",
+        "name": "次新股",
+        "pct_change": 6.686686,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 143
+      },
+      {
+        "code": "new_dzqj",
+        "name": "电子器件",
+        "pct_change": 5.319793,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 152
+      },
+      {
+        "code": "new_jxhy",
+        "name": "机械行业",
+        "pct_change": 4.884769,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 211
+      },
+      {
+        "code": "new_tchy",
+        "name": "陶瓷行业",
+        "pct_change": 4.321427,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 8
+      },
+      {
+        "code": "new_dzxx",
+        "name": "电子信息",
+        "pct_change": 4.213637,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 247
+      },
+      {
+        "code": "new_blhy",
+        "name": "玻璃行业",
+        "pct_change": 3.799831,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 19
+      },
+      {
+        "code": "new_ysjs",
+        "name": "有色金属",
+        "pct_change": 3.266703,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 72
+      },
+      {
+        "code": "new_hghy",
+        "name": "化工行业",
+        "pct_change": 3.140792,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 150
+      },
+      {
+        "code": "new_yqyb",
+        "name": "仪器仪表",
+        "pct_change": 2.97291,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 48
+      },
+      {
+        "code": "new_zzhy",
+        "name": "造纸行业",
+        "pct_change": 2.255109,
+        "advancers": null,
+        "decliners": null,
+        "member_count": 24
+      }
+    ]
+  }
+}

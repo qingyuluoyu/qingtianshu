@@ -1,0 +1,14 @@
+{
+  "status_code": 200,
+  "elapsed_seconds": 0.023,
+  "data": {
+    "id": "b53d4f35-8acd-489d-aaaf-cc48a759db0f",
+    "account": "raudaudit999",
+    "name": "raudaudit999",
+    "masked_phone": "+86139****9999",
+    "auth_type": "account",
+    "is_registered": true,
+    "created_at": "2026-08-04T06:40:42+00:00",
+    "session_expires_at": "2027-08-04T06:40:42+00:00"
+  }
+}

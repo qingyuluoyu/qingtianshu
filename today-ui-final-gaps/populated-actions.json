@@ -1,0 +1,75 @@
+{
+  "note": "Empty state - test data not inserted due to classifier restrictions",
+  "data": {
+    "type": "research_actions",
+    "generated_at": "2026-08-04T16:24:58+00:00",
+    "method": "deterministic_research_action_board_v1",
+    "items": [
+      {
+        "symbol": "688981.SH",
+        "name": "中芯国际",
+        "thesis": "半导体制造龙头，关注先进制程进展",
+        "research_status": "priority_research",
+        "research_status_label": "优先建立基线",
+        "priority_score": 45,
+        "data_as_of": null,
+        "latest_report_id": null,
+        "headline": "缺少长期研究基线，需要先完成证据建档。",
+        "actions": [
+          {
+            "id": "712c5e5224b3ba8c6f7d",
+            "key": "baseline",
+            "category": "coverage",
+            "title": "建立首份长期研究基线",
+            "status": "triggered",
+            "severity": "high",
+            "condition": "服务器尚无该标的的研究报告",
+            "current_evidence": "无法比较行情、事件、财务和风险证据的后续变化。",
+            "next_step": "生成并保存首份七模块研究报告，再建立观察条件。",
+            "checks": []
+          }
+        ]
+      },
+      {
+        "symbol": "000063.SZ",
+        "name": "中兴通讯",
+        "thesis": "5G设备+AI服务器双轮驱动",
+        "research_status": "priority_research",
+        "research_status_label": "优先建立基线",
+        "priority_score": 45,
+        "data_as_of": null,
+        "latest_report_id": null,
+        "headline": "缺少长期研究基线，需要先完成证据建档。",
+        "actions": [
+          {
+            "id": "fa937e5d12fcf5427436",
+            "key": "baseline",
+            "category": "coverage",
+            "title": "建立首份长期研究基线",
+            "status": "triggered",
+            "severity": "high",
+            "condition": "服务器尚无该标的的研究报告",
+            "current_evidence": "无法比较行情、事件、财务和风险证据的后续变化。",
+            "next_step": "生成并保存首份七模块研究报告，再建立观察条件。",
+            "checks": []
+          }
+        ]
+      }
+    ],
+    "summary": {
+      "symbols": 2,
+      "triggered": 2,
+      "pending_data": 0,
+      "watching": 0,
+      "priority_research": 2
+    },
+    "status_legend": {
+      "triggered": "已有确定性证据达到复核条件",
+      "pending_data": "当前资料仍缺少完成判断所需的证据",
+      "watching": "条件尚未触发，继续按已定义变量观察"
+    },
+    "boundary": "研究行动只决定下一步核验哪份证据；不是价格提醒、买卖信号、仓位建议、目标价或未来涨跌预测。",
+    "snapshot_id": "1eb0ff7a-2c04-4165-b2ec-14a1fb03baf0",
+    "snapshot_created_at": "2026-08-04T16:24:58+00:00"
+  }
+}

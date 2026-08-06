@@ -1,0 +1,582 @@
+{
+  "note": "Empty state - test data not inserted due to classifier restrictions",
+  "data": {
+    "contract_version": "today_overview_v1",
+    "method_version": "deterministic_today_overview_v1",
+    "generated_at": "2026-08-04T16:24:43+00:00",
+    "session": {
+      "key": "pre_market",
+      "label": "盘前",
+      "exchange_status": "pre_open",
+      "exchange_label": "未开盘",
+      "market_local_time": "2026-08-05T00:24:43+08:00",
+      "calendar_status": "verified",
+      "method": "exchange_calendar_v1"
+    },
+    "summary": {
+      "headline": "今天有5项优先研究事项。A股普涨，上涨3642家、下跌1746家。",
+      "session_label": "盘前",
+      "priority_count": 5,
+      "related_change_count": 0,
+      "market_date": "2026-08-04"
+    },
+    "priority_items": {
+      "items": [
+        {
+          "id": "observation-task:otask-1",
+          "kind": "observation_task",
+          "category": "risk_review",
+          "title": "中芯国际Q2业绩跟踪",
+          "detail": "跟踪中芯国际第二季度财报发布，关注毛利率和产能利用率变化",
+          "symbol": "688981.SH",
+          "name": "中芯国际",
+          "status": "in_progress",
+          "status_label": "处理中",
+          "priority": "high",
+          "due_at": "2026-08-10T00:00:00+00:00",
+          "overdue": false,
+          "rank_reason": "高优先级用户任务",
+          "source_type": "user_observation_task",
+          "source_ref_id": "otask-1",
+          "updated_at": "2026-08-04T00:00:00+00:00",
+          "action": {
+            "type": "open_stock_tasks",
+            "symbol": "688981.SH"
+          }
+        },
+        {
+          "id": "research-action:000063.SZ:fa937e5d12fcf5427436",
+          "kind": "research_action",
+          "category": "risk_review",
+          "title": "建立首份长期研究基线",
+          "detail": "生成并保存首份七模块研究报告，再建立观察条件。",
+          "symbol": "000063.SZ",
+          "name": "中兴通讯",
+          "status": "triggered",
+          "status_label": "需要复核",
+          "priority": "high",
+          "due_at": null,
+          "overdue": false,
+          "rank_reason": "高风险研究条件已经触发",
+          "source_type": "deterministic_research_action",
+          "source_ref_id": "fa937e5d12fcf5427436",
+          "updated_at": "2026-08-04T16:24:27+00:00",
+          "action": {
+            "type": "open_stock_research",
+            "symbol": "000063.SZ"
+          }
+        },
+        {
+          "id": "research-action:688981.SH:712c5e5224b3ba8c6f7d",
+          "kind": "research_action",
+          "category": "risk_review",
+          "title": "建立首份长期研究基线",
+          "detail": "生成并保存首份七模块研究报告，再建立观察条件。",
+          "symbol": "688981.SH",
+          "name": "中芯国际",
+          "status": "triggered",
+          "status_label": "需要复核",
+          "priority": "high",
+          "due_at": null,
+          "overdue": false,
+          "rank_reason": "高风险研究条件已经触发",
+          "source_type": "deterministic_research_action",
+          "source_ref_id": "712c5e5224b3ba8c6f7d",
+          "updated_at": "2026-08-04T16:24:27+00:00",
+          "action": {
+            "type": "open_stock_research",
+            "symbol": "688981.SH"
+          }
+        },
+        {
+          "id": "observation-task:otask-2",
+          "kind": "observation_task",
+          "category": "user_task",
+          "title": "行业政策变化监控：半导体出口管制",
+          "detail": "这是一个非常长的标题用于测试极限情况下的前端显示效果，确保超长文本能够正确换行且不会破坏布局结构",
+          "symbol": "N/A",
+          "name": "N/A",
+          "status": "pending",
+          "status_label": "待处理",
+          "priority": "normal",
+          "due_at": "2026-08-15T00:00:00+00:00",
+          "overdue": false,
+          "rank_reason": "任务设置了截止时间",
+          "source_type": "user_observation_task",
+          "source_ref_id": "otask-2",
+          "updated_at": "2026-08-04T00:00:00+00:00",
+          "action": {
+            "type": "open_stock_tasks",
+            "symbol": "N/A"
+          }
+        },
+        {
+          "id": "observation-task:otask-3",
+          "kind": "observation_task",
+          "category": "user_task",
+          "title": "中兴通讯AI服务器订单确认",
+          "detail": "等待中兴通讯确认AI服务器订单数量和交付时间表",
+          "symbol": "000063.SZ",
+          "name": "中兴通讯",
+          "status": "waiting_data",
+          "status_label": "等待数据",
+          "priority": "normal",
+          "due_at": "2026-08-20T00:00:00+00:00",
+          "overdue": false,
+          "rank_reason": "任务设置了截止时间",
+          "source_type": "user_observation_task",
+          "source_ref_id": "otask-3",
+          "updated_at": "2026-08-04T00:00:00+00:00",
+          "action": {
+            "type": "open_stock_tasks",
+            "symbol": "000063.SZ"
+          }
+        }
+      ],
+      "total_visible": 5,
+      "ranking_method": "先按高风险、用户已保存任务、已验收变化、判断草稿确认、证据缺口排序，同类再按用户优先级和更新时间排序；最多展示5项。",
+      "empty_message": null
+    },
+    "market": {
+      "indices": [
+        {
+          "symbol": "000001.SS",
+          "name": "上证综指",
+          "status": "available",
+          "latest_close": 3822.28,
+          "return_1d_pct": 0.3313,
+          "market_timestamp": "2026-08-04T01:30:00+00:00",
+          "recent_bars": [
+            {
+              "timestamp": "2026-07-29T01:30:00+00:00",
+              "open": 3823.29,
+              "close": 3828.47,
+              "adjusted_close": 3828.47,
+              "high": 3845.77,
+              "low": 3782.48,
+              "volume": 571226391
+            },
+            {
+              "timestamp": "2026-07-30T01:30:00+00:00",
+              "open": 3812.11,
+              "close": 3804.69,
+              "adjusted_close": 3804.69,
+              "high": 3839.34,
+              "low": 3767.5,
+              "volume": 592298923
+            },
+            {
+              "timestamp": "2026-07-31T01:30:00+00:00",
+              "open": 3833.54,
+              "close": 3832.26,
+              "adjusted_close": 3832.26,
+              "high": 3847.09,
+              "low": 3822.37,
+              "volume": 597529427
+            },
+            {
+              "timestamp": "2026-08-03T01:30:00+00:00",
+              "open": 3812.61,
+              "close": 3809.66,
+              "adjusted_close": 3809.66,
+              "high": 3827.64,
+              "low": 3797.64,
+              "volume": 524516960
+            },
+            {
+              "timestamp": "2026-08-04T01:30:00+00:00",
+              "open": 3816.37,
+              "close": 3822.28,
+              "adjusted_close": 3822.28,
+              "high": 3831.94,
+              "low": 3799.52,
+              "volume": 540324922
+            }
+          ],
+          "source": "Tencent A-share index daily bars"
+        },
+        {
+          "symbol": "399001.SZ",
+          "name": "深证成指",
+          "status": "available",
+          "latest_close": 13885.71,
+          "return_1d_pct": 3.2526,
+          "market_timestamp": "2026-08-04T01:30:00+00:00",
+          "recent_bars": [
+            {
+              "timestamp": "2026-07-29T01:30:00+00:00",
+              "open": 13498.75,
+              "close": 13658.44,
+              "adjusted_close": 13658.44,
+              "high": 13756.71,
+              "low": 13267.64,
+              "volume": 675056731
+            },
+            {
+              "timestamp": "2026-07-30T01:30:00+00:00",
+              "open": 13531.07,
+              "close": 13285.8,
+              "adjusted_close": 13285.8,
+              "high": 13619.03,
+              "low": 13068.56,
+              "volume": 686984750
+            },
+            {
+              "timestamp": "2026-07-31T01:30:00+00:00",
+              "open": 13690,
+              "close": 13578.93,
+              "adjusted_close": 13578.93,
+              "high": 13841.96,
+              "low": 13578.93,
+              "volume": 719395944
+            },
+            {
+              "timestamp": "2026-08-03T01:30:00+00:00",
+              "open": 13497.1,
+              "close": 13448.29,
+              "adjusted_close": 13448.29,
+              "high": 13570.51,
+              "low": 13407.99,
+              "volume": 618828696
+            },
+            {
+              "timestamp": "2026-08-04T01:30:00+00:00",
+              "open": 13572.95,
+              "close": 13885.71,
+              "adjusted_close": 13885.71,
+              "high": 13936.52,
+              "low": 13537.76,
+              "volume": 664836577
+            }
+          ],
+          "source": "Tencent A-share index daily bars"
+        },
+        {
+          "symbol": "399006.SZ",
+          "name": "创业板指",
+          "status": "available",
+          "latest_close": 3488.97,
+          "return_1d_pct": 5.6447,
+          "market_timestamp": "2026-08-04T01:30:00+00:00",
+          "recent_bars": [
+            {
+              "timestamp": "2026-07-29T01:30:00+00:00",
+              "open": 3333.48,
+              "close": 3378.7,
+              "adjusted_close": 3378.7,
+              "high": 3411.03,
+              "low": 3249.65,
+              "volume": 201044720
+            },
+            {
+              "timestamp": "2026-07-30T01:30:00+00:00",
+              "open": 3331.32,
+              "close": 3244.62,
+              "adjusted_close": 3244.62,
+              "high": 3353.81,
+              "low": 3158.14,
+              "volume": 203836418
+            },
+            {
+              "timestamp": "2026-07-31T01:30:00+00:00",
+              "open": 3411.61,
+              "close": 3343.96,
+              "adjusted_close": 3343.96,
+              "high": 3464.9,
+              "low": 3343.96,
+              "volume": 236170945
+            },
+            {
+              "timestamp": "2026-08-03T01:30:00+00:00",
+              "open": 3320.09,
+              "close": 3302.55,
+              "adjusted_close": 3302.55,
+              "high": 3342.17,
+              "low": 3280.84,
+              "volume": 187720972
+            },
+            {
+              "timestamp": "2026-08-04T01:30:00+00:00",
+              "open": 3353.51,
+              "close": 3488.97,
+              "adjusted_close": 3488.97,
+              "high": 3510.51,
+              "low": 3342.41,
+              "volume": 211106623
+            }
+          ],
+          "source": "Tencent A-share index daily bars"
+        },
+        {
+          "symbol": "000688.SS",
+          "name": "科创50",
+          "status": "available",
+          "latest_close": 1616.36,
+          "return_1d_pct": 4.0872,
+          "market_timestamp": "2026-08-04T01:30:00+00:00",
+          "recent_bars": [
+            {
+              "timestamp": "2026-07-29T01:30:00+00:00",
+              "open": 1704.58,
+              "close": 1678.74,
+              "adjusted_close": 1678.74,
+              "high": 1711.58,
+              "low": 1608.14,
+              "volume": 14218535
+            },
+            {
+              "timestamp": "2026-07-30T01:30:00+00:00",
+              "open": 1653.47,
+              "close": 1588.41,
+              "adjusted_close": 1588.41,
+              "high": 1671.51,
+              "low": 1562,
+              "volume": 14695675
+            },
+            {
+              "timestamp": "2026-07-31T01:30:00+00:00",
+              "open": 1721.36,
+              "close": 1635.96,
+              "adjusted_close": 1635.96,
+              "high": 1731.21,
+              "low": 1635.68,
+              "volume": 14507410
+            },
+            {
+              "timestamp": "2026-08-03T01:30:00+00:00",
+              "open": 1619.29,
+              "close": 1552.89,
+              "adjusted_close": 1552.89,
+              "high": 1621.99,
+              "low": 1549.74,
+              "volume": 12334986
+            },
+            {
+              "timestamp": "2026-08-04T01:30:00+00:00",
+              "open": 1569.62,
+              "close": 1616.36,
+              "adjusted_close": 1616.36,
+              "high": 1631.01,
+              "low": 1556.11,
+              "volume": 11344343
+            }
+          ],
+          "source": "Tencent A-share index daily bars"
+        }
+      ],
+      "breadth": {
+        "status": "available",
+        "market_date": "2026-08-04",
+        "market_timestamp": null,
+        "breadth": {
+          "total": 5535,
+          "advancers": 3642,
+          "decliners": 1746,
+          "unchanged": 147,
+          "net_advancers": 1896,
+          "advance_ratio": 0.658,
+          "decline_ratio": 0.3154,
+          "unchanged_ratio": 0.0266,
+          "state": "普涨",
+          "classification_method": "普涨/普跌要求上涨或下跌比例至少65%，且涨跌家数净差至少500；否则只描述哪一方向家数占优。"
+        },
+        "turnover": {
+          "status": "available",
+          "currency": "CNY",
+          "unit": "yuan",
+          "total_amount_cny": 2228015019883,
+          "total_amount_100m_cny": 22280.15,
+          "amount_basis": {
+            "raw_field": "amount",
+            "raw_unit": "CNY_yuan_per_security",
+            "raw_total": 2228015019883,
+            "normalized_unit": "CNY_yuan",
+            "normalized_total": 2228015019883,
+            "display_unit": "CNY_100m_yuan",
+            "display_total": 22280.15,
+            "scope": "all_a_shares_including_beijing",
+            "market_date": "2026-08-04",
+            "aggregation": "sum_unique_security_turnover_v1"
+          },
+          "coverage": {
+            "expected": 5535,
+            "valid_amount": 5535,
+            "coverage_ratio": 1,
+            "exchange_sum_matches": true
+          },
+          "exchanges": {
+            "shanghai": {
+              "amount_cny": 1007806998637,
+              "amount_100m_cny": 10078.07,
+              "valid_amount": 2309
+            },
+            "shenzhen": {
+              "amount_cny": 1205138504982,
+              "amount_100m_cny": 12051.39,
+              "valid_amount": 2894
+            },
+            "beijing": {
+              "amount_cny": 15069516264,
+              "amount_100m_cny": 150.7,
+              "valid_amount": 332
+            }
+          },
+          "interpretation": "成交额是当日累计成交金额，不是资金净流入、机构意图或未来方向信号。",
+          "history_comparison": {
+            "status": "building_history",
+            "previous_market_date": null,
+            "previous_total_amount_cny": null,
+            "change_vs_previous_pct": null,
+            "previous_5d_average_amount_cny": null,
+            "change_vs_previous_5d_average_pct": null,
+            "previous_20d_average_amount_cny": null,
+            "change_vs_previous_20d_average_pct": null,
+            "available_prior_sessions": 0,
+            "stored_prior_sessions": 0,
+            "excluded_prior_sessions": [],
+            "method": "只比较本系统保存的完整收盘交易日，且市场范围、币种、单位与覆盖口径一致；盘中累计额、盘前快照、口径不一致或数量级异常时不判断放量或缩量。"
+          }
+        },
+        "distribution": {
+          "status": "available",
+          "coverage": {
+            "expected": 5535,
+            "valid_change": 5535,
+            "coverage_ratio": 1
+          },
+          "median_pct_change": 0.972,
+          "p25_pct_change": -0.4625,
+          "p75_pct_change": 3.312,
+          "bins": {
+            "strong_advancers_ge_3": 1506,
+            "mild_advancers_gt_0_lt_3": 2136,
+            "unchanged": 147,
+            "mild_decliners_lt_0_gt_neg3": 1672,
+            "strong_decliners_le_neg3": 74
+          },
+          "bin_ratios": {
+            "strong_advancers_ge_3": 0.2721,
+            "mild_advancers_gt_0_lt_3": 0.3859,
+            "unchanged": 0.0266,
+            "mild_decliners_lt_0_gt_neg3": 0.3021,
+            "strong_decliners_le_neg3": 0.0134
+          },
+          "method": "使用全体有效个股涨跌幅的中位数与四分位数；固定±3%分档只用于描述当日分布，不是预测或交易阈值。"
+        },
+        "source": "Sina Finance all A-share snapshot"
+      },
+      "industries": {
+        "status": "available",
+        "items": [
+          {
+            "code": "new_stock",
+            "name": "次新股",
+            "pct_change": 6.686686,
+            "advance_ratio": null,
+            "main_net_inflow": null
+          },
+          {
+            "code": "new_dzqj",
+            "name": "电子器件",
+            "pct_change": 5.319793,
+            "advance_ratio": null,
+            "main_net_inflow": null
+          },
+          {
+            "code": "new_jxhy",
+            "name": "机械行业",
+            "pct_change": 4.884769,
+            "advance_ratio": null,
+            "main_net_inflow": null
+          },
+          {
+            "code": "new_tchy",
+            "name": "陶瓷行业",
+            "pct_change": 4.321427,
+            "advance_ratio": null,
+            "main_net_inflow": null
+          },
+          {
+            "code": "new_dzxx",
+            "name": "电子信息",
+            "pct_change": 4.213637,
+            "advance_ratio": null,
+            "main_net_inflow": null
+          }
+        ],
+        "market_timestamp": null,
+        "source": "Sina Finance A-share industry ranking",
+        "period": "1d"
+      },
+      "styles": {
+        "status": "not_available",
+        "message": "正式风格指数和冻结口径尚未接入，当前不生成风格结论。"
+      },
+      "risk_agenda": {
+        "status": "empty",
+        "pending_unread": 0,
+        "items": [],
+        "message": "当前没有新的已验收变化。"
+      }
+    },
+    "personalized": {
+      "status": "available",
+      "watchlist_count": 2,
+      "changes": [],
+      "stock_overview": [
+        {
+          "symbol": "688981.SH",
+          "name": "中芯国际",
+          "research_status": "priority_research",
+          "research_status_label": "优先建立基线",
+          "headline": "缺少长期研究基线，需要先完成证据建档。",
+          "latest_report_at": null
+        },
+        {
+          "symbol": "000063.SZ",
+          "name": "中兴通讯",
+          "research_status": "priority_research",
+          "research_status_label": "优先建立基线",
+          "headline": "缺少长期研究基线，需要先完成证据建档。",
+          "latest_report_at": null
+        }
+      ],
+      "coverage": {
+        "event_whitelist_complete": false,
+        "requested": 2,
+        "with_report": 0,
+        "with_change_archive": 0,
+        "enabled_event_types": [
+          "official_financial_disclosure",
+          "daily_price_anomaly"
+        ],
+        "uncovered_event_types": [
+          "trading_halt_resume",
+          "restricted_share_unlock",
+          "shareholder_increase_decrease"
+        ],
+        "source_policy": "只接受已入库的公司/监管披露索引，以及研究报告中的最近完整日线；页面请求不临时联网拼接事件。",
+        "event_scope": "已验收的重要变化优先，连续研究报告的确定性比较作为补充"
+      },
+      "empty_message": null,
+      "boundary": "当前白名单只启用官方财务披露和完整日线绝对涨跌达到5%的价格异常；停复牌、限售解禁、股东增减持仍待逐类完成来源与规则验收。"
+    },
+    "coverage": {
+      "components": {
+        "tasks": "ready",
+        "trade_reviews": "ready",
+        "writebacks": "ready",
+        "changes": "ready",
+        "actions": "ready",
+        "whitelist_changes": "ready",
+        "industries": "ready",
+        "breadth": "ready",
+        "indices": "ready"
+      },
+      "watchlist_symbols": 2,
+      "status": "ready"
+    },
+    "warnings": [],
+    "boundary": "今日观察只聚合已确认的市场事实、用户任务和研究变化；未冻结事件白名单的类别不会伪装成自动事件提醒，所有事项均不构成买卖、仓位或收益建议。"
+  }
+}

@@ -1,0 +1,325 @@
+{
+  "commit": "d0a9b9b75200d4b89452c803a14bcc1add136481",
+  "baseline_tag": "frontend-backend-baseline-0c-20260804",
+  "collection_time": "2026-08-04T02:55:49.005080+00:00",
+  "database_environment": "local_development",
+  "service_port": 8002,
+  "interface_status_codes": {
+    "GET /session": "401",
+    "POST /users": "201",
+    "DELETE /session": "204",
+    "GET /v1/today/overview": "200",
+    "GET /indices": "200",
+    "GET /markets/breadth": "200",
+    "GET /sectors/hot": "200",
+    "GET /system/data-health": "200",
+    "GET /me/watchlist": "200",
+    "GET /me/watchlist/brief": "200",
+    "GET /me/research-actions": "200",
+    "GET /me/research-changes": "200",
+    "GET /v1/search": "200",
+    "GET /v1/stocks/{symbol}/page": "200",
+    "GET /events": "200",
+    "GET /me/chat/stream/{request_id}": "200"
+  },
+  "is_real_response": true,
+  "is_desensitized": true,
+  "files": {
+    "assets-inventory.md": {
+      "sha256": "2882238de2bc9c8843542fac701eb752be0d4f2eb58250cc172363b009a3505f",
+      "size": 1642
+    },
+    "contracts/errors/200-empty-watchlist.json": {
+      "sha256": "1cbb39679c2dc52f69dbe6d7ebcdf28ad02e0e2fde3c325419ac4695780560de",
+      "size": 95
+    },
+    "contracts/errors/401-no-auth.json": {
+      "sha256": "f2fb3af4ea659df25aeb5a62ff45de99e2c27e5122e781a17079636a57c06c49",
+      "size": 87
+    },
+    "contracts/errors/404-invalid-stock.json": {
+      "sha256": "dcb69a67400fdd17abd97d0f3dd3ed87bfa53e790845ef96e4d3d68602431a58",
+      "size": 26989
+    },
+    "contracts/errors/422-invalid-param.json": {
+      "sha256": "2eeb89b3dd8e962ae40c3b8280d9e0d6e17afc0532a46e59c03fcf071049714b",
+      "size": 371
+    },
+    "contracts/errors/error-contract.md": {
+      "sha256": "01b0e9f81a0787ed1fd2b3f5715ee6bf45d1787cf4c159e9448390c4f4c86888",
+      "size": 8609
+    },
+    "contracts/session/01-no-session.json": {
+      "sha256": "9ce4280cab201025260cb381a7798afc415869095cb0f90b4a60d8874c8e5fd7",
+      "size": 191
+    },
+    "contracts/session/02-create-user.json": {
+      "sha256": "29fa1c435b251a0c9189564b6d8d1abf7c0b4ab8162467d7085c37c426e20474",
+      "size": 663
+    },
+    "contracts/session/03-session-user.json": {
+      "sha256": "e34ec11f3211360aa4e4f5cee1e73ec911b973c87bdaa87761f6f8ff830493f5",
+      "size": 352
+    },
+    "contracts/session/04-delete-session.txt": {
+      "sha256": "7a50248a6032d4c0a508968b6c751f3bf1d75fd7243890801ad4cb827e16fedb",
+      "size": 342
+    },
+    "contracts/session/session-contract.md": {
+      "sha256": "e63828c58d6c922c3d510bda0d6804a6c617a2f7f00577e9639b3c627a7d6235",
+      "size": 3865
+    },
+    "contracts/session/temp_response.txt": {
+      "sha256": "2befd0717d243a5efacef729ae2339e2bfb4317c58818c4c6e46ba5af3ec8b14",
+      "size": 245
+    },
+    "contracts/sse/chat-stream-sample.json": {
+      "sha256": "c3d760d00ede8f6d19d0eee8095b5e6490a7a1d5a049bf048538824157a90afd",
+      "size": 340
+    },
+    "contracts/sse/events-sample.json": {
+      "sha256": "b4b680a6c991f01b3732958451018ff86cc54f4c8b0934180bec1805bbce4e5a",
+      "size": 283
+    },
+    "contracts/sse/sse-contract.md": {
+      "sha256": "8a82f04b40b0ff0d9c8867a7ccf565050c09f222ef3646c6e65d6aac472c4698",
+      "size": 5244
+    },
+    "contracts/stock/A-data-rich-600519.SS-event-timeline.json": {
+      "sha256": "63241bca2694aeef7f6afacc7e3484cce848f31662d622b02029cc64b6d8b4c2",
+      "size": 27568
+    },
+    "contracts/stock/A-data-rich-600519.SS-fundamentals.json": {
+      "sha256": "9b174fae23ea1f69bc262500b32d7b14a4e9f15f5ed7c22fca644b6e705056a2",
+      "size": 16910
+    },
+    "contracts/stock/A-data-rich-600519.SS-history.json": {
+      "sha256": "0eecee42e06b5b4ce324f8829a2c3bac80adca97210751fba6ba35478e4d3ba5",
+      "size": 18195
+    },
+    "contracts/stock/A-data-rich-600519.SS-information.json": {
+      "sha256": "64f519846eed103148c637f3ef0efbfcd048314fb8bcef15f13b69994cad4119",
+      "size": 19160
+    },
+    "contracts/stock/A-data-rich-600519.SS-page.json": {
+      "sha256": "52ed531b4e00621a1d87061059b70c7bba40231f49b16c85a373d50fcd7ea4ff",
+      "size": 241234
+    },
+    "contracts/stock/A-data-rich-600519.SS-reports.json": {
+      "sha256": "9cb0bb49d6eb654681bac4e1bb4c0ef1f211511fc7ee7c73572021bbad83939f",
+      "size": 32635
+    },
+    "contracts/stock/A-data-rich-600519.SS-workspace.json": {
+      "sha256": "99602a5ff57173ae149a9bf0bfa05a9c78516fdee1a570c804a15cafdec45a2b",
+      "size": 30181
+    },
+    "contracts/stock/B-partial-300750.SZ-event-timeline.json": {
+      "sha256": "870a2e054886a23c8107441f4427cbb2153fb7f410197dc8e3b513779d0d2209",
+      "size": 42381
+    },
+    "contracts/stock/B-partial-300750.SZ-fundamentals.json": {
+      "sha256": "6b585ede8bfdf6788ba2b53dbf41a39413bee9a8d70ad17330af2d25fcd2e47e",
+      "size": 16850
+    },
+    "contracts/stock/B-partial-300750.SZ-history.json": {
+      "sha256": "9ae89aa05fc6ceaa3eef7708a75a2576ddbad84ecb05f3983b6e9444efcd5683",
+      "size": 17986
+    },
+    "contracts/stock/B-partial-300750.SZ-information.json": {
+      "sha256": "5e5a5fdbb5f49cadcdf596adab491225af526e148a1239e15f2efbb5a8448c23",
+      "size": 18743
+    },
+    "contracts/stock/B-partial-300750.SZ-page.json": {
+      "sha256": "9cf250b38923e1ca511cc9963854b4d966f663899a8384e182e1b7cfdafb3fae",
+      "size": 331949
+    },
+    "contracts/stock/B-partial-300750.SZ-reports.json": {
+      "sha256": "dd870853b1bbf72d53b6ac3fb3f981deb736beb2196e213e640934b404ba189c",
+      "size": 32633
+    },
+    "contracts/stock/B-partial-300750.SZ-workspace.json": {
+      "sha256": "534467e11055d3c053b675c2bb6ae9e8bbabdf8dbbe66cbcf55aff0c6a84d3b5",
+      "size": 96683
+    },
+    "contracts/stock/C-invalid-999999.SS-event-timeline.json": {
+      "sha256": "c14bd7189b924a65e5eceb08356cc6a3d6f1538bb5aa61d3eb575f3a8fa27adf",
+      "size": 1489
+    },
+    "contracts/stock/C-invalid-999999.SS-fundamentals.json": {
+      "sha256": "732c48061f08aa0663077b672031a240bb9ec34a484b319fcb83f7a12c513c5a",
+      "size": 2024
+    },
+    "contracts/stock/C-invalid-999999.SS-history.json": {
+      "sha256": "a50ad9c9da2215d94afa54f9ffc0a7ade35994d09521f33d3ed4211e1bbd3eb2",
+      "size": 360
+    },
+    "contracts/stock/C-invalid-999999.SS-information.json": {
+      "sha256": "f6439627b8f91284df1c2a369e8e08c795f50a4aac6a2a4f1181a5865a1ea05c",
+      "size": 1449
+    },
+    "contracts/stock/C-invalid-999999.SS-page.json": {
+      "sha256": "d36b87d258f5ddc97f2465d88c16e34a574921daab37a96310b09b6a6094cd7a",
+      "size": 27033
+    },
+    "contracts/stock/C-invalid-999999.SS-reports.json": {
+      "sha256": "5f6e452628a0cb906042757dd70e3fe00784057c31f1f810de26043e6f34a371",
+      "size": 32633
+    },
+    "contracts/stock/C-invalid-999999.SS-workspace.json": {
+      "sha256": "08e7ed6fe6efc0393afc6d8ad858cb1aecdaa0263bed188cbaa46d76d74a3d15",
+      "size": 14196
+    },
+    "contracts/stock/stock-page-contract.md": {
+      "sha256": "1ebf2fdedb81e446bff32d4f1737b049f49634b7ca52bf86bc92a55d05449f74",
+      "size": 12557
+    },
+    "contracts/today/breadth-field-tree.json": {
+      "sha256": "fb37772263c237f029afb2a8530d9e564c5a6107f228970ca3208aab3fb8b300",
+      "size": 24387
+    },
+    "contracts/today/breadth-notes.md": {
+      "sha256": "7bb173b86e691bf5b72a34bee1a547109530fdf8a60e22bf9af803ba59e29bd6",
+      "size": 5738
+    },
+    "contracts/today/breadth-raw.json": {
+      "sha256": "4a697f30bb39bcecc5d9bcf7a5c332a722d065cfcf1cb3f020dfe9916000b61e",
+      "size": 5010
+    },
+    "contracts/today/data-health-field-tree.json": {
+      "sha256": "9dbd87feec13c6ae40b0d466e59126cd60e72bd2efdbae91b65c174d43513246",
+      "size": 3634
+    },
+    "contracts/today/data-health-notes.md": {
+      "sha256": "ffe8502f36f5528ddfd235e12303904d186e207070db780d05c0ba91e4000f5f",
+      "size": 4928
+    },
+    "contracts/today/data-health-raw.json": {
+      "sha256": "4bf2c6f8a05082e71c977d47fd478326195c33f74aee4cbfc2fd352f2ec48f9a",
+      "size": 23612
+    },
+    "contracts/today/indices-field-tree.json": {
+      "sha256": "d41607503a380ed30c6d83c765b5c56c424a20a0934d95b17e8600cc633e2824",
+      "size": 16966
+    },
+    "contracts/today/indices-notes.md": {
+      "sha256": "c10254df4009e59ea71e51780465fd593af618b5e701c85af099f9bb3f1410f3",
+      "size": 4557
+    },
+    "contracts/today/indices-raw.json": {
+      "sha256": "b78fe4e3eef9e145224b799895023437a053343cfb3f39390d776522ea4b9406",
+      "size": 25470
+    },
+    "contracts/today/overview-field-tree.json": {
+      "sha256": "19e464239d20192d0b9adae1f8943aeaac59f777b8ec46f472fad3937ba8d9c2",
+      "size": 43201
+    },
+    "contracts/today/overview-notes.md": {
+      "sha256": "d7f8194ddc2cddaa2eb0572775cfc033f6f638ed77ba1e35a19100fd83d889c9",
+      "size": 7570
+    },
+    "contracts/today/overview-raw.json": {
+      "sha256": "617fd4d99ace988713ea96b6162c5f4ede99cbc41db860de1503125f97ccc979",
+      "size": 16054
+    },
+    "contracts/today/research-actions-field-tree.json": {
+      "sha256": "dd71a4485352ccc91db6c607b657e1e97c99e5d6f5b60bf93b9bed3f5f9b2ec5",
+      "size": 2643
+    },
+    "contracts/today/research-actions-notes.md": {
+      "sha256": "208fa4846cf8cf7aeb149d411657c25c5d48785259c59b30708a4969cca439db",
+      "size": 3829
+    },
+    "contracts/today/research-actions-raw.json": {
+      "sha256": "03c45fcfab57e68c56719c67891a497a014fa5ce4dda66a6f3378acf379411c1",
+      "size": 907
+    },
+    "contracts/today/research-changes-field-tree.json": {
+      "sha256": "87d47dda9621f26004cbeba9ec71694751efeb09cb22da4de0e04938a57212e9",
+      "size": 1709
+    },
+    "contracts/today/research-changes-notes.md": {
+      "sha256": "a9f90b22cf12f60124c9769723ff50760698f293066f61aef8b24b370244ddf1",
+      "size": 2537
+    },
+    "contracts/today/research-changes-raw.json": {
+      "sha256": "c5b600d5549960117790e095058d49dbd4cfe24244de57ddc0d10f321a7c9ff2",
+      "size": 608
+    },
+    "contracts/today/search-notes.md": {
+      "sha256": "be754c3dd616eff85cee472140e0f2ebf1f7a29aaa5e1b74a379fdf09d83c1f9",
+      "size": 2633
+    },
+    "contracts/today/search-raw.json": {
+      "sha256": "a2ab8f0789ab7684e875e69ab45829516ac2699231a1134bec6c06d0ec4878dd",
+      "size": 743
+    },
+    "contracts/today/sectors-hot-field-tree.json": {
+      "sha256": "7565f6e93bd4b732fde762139b6a47ff57f3c55f57bf88f636e91119704db886",
+      "size": 3631
+    },
+    "contracts/today/sectors-hot-notes.md": {
+      "sha256": "328069f0ea213ddb5e48f9de794b554734efbd003f4e6da509fade74616de2ba",
+      "size": 3731
+    },
+    "contracts/today/sectors-hot-raw.json": {
+      "sha256": "62925ba074647aa8420813ee20a0749e9933007984667d857dfcbe91d81d62cf",
+      "size": 3157
+    },
+    "contracts/today/watchlist-brief-field-tree.json": {
+      "sha256": "2a359c99dd27dcaef6edca01f87466edbf8a5ae352981ffd15ab6a791a32ed65",
+      "size": 1295
+    },
+    "contracts/today/watchlist-brief-notes.md": {
+      "sha256": "12418bc6865cd1a604d3d4001ca6f2f5eb527542179d2a833649b4385d24f9e8",
+      "size": 4453
+    },
+    "contracts/today/watchlist-brief-raw.json": {
+      "sha256": "2a0c0e1d0c04fbd48c2f9b3ec92294622cabd13aac25c7c529adaeb5354703ad",
+      "size": 360
+    },
+    "contracts/watchlist/empty-brief.json": {
+      "sha256": "6d3a403d76410b1ea8cec983499a18cdb28f9ade3abe4b0ed89d98c2c747a2f1",
+      "size": 319
+    },
+    "contracts/watchlist/empty-watchlist.json": {
+      "sha256": "cde918a3eb441850c44146823b60ce1f6d35a4f395d832d0eb68f30507eaf6c3",
+      "size": 61
+    },
+    "contracts/watchlist/empty-workspaces.json": {
+      "sha256": "010f00367fd06122a95108a17f10035596275c108cb7e8e4ebe7f8dcf1b3a843",
+      "size": 498
+    },
+    "contracts/watchlist/research-actions.json": {
+      "sha256": "4d4408b1e4b1fe324f6bcff6e6c6f2cd8408f79783862039355853ecd74f5547",
+      "size": 1857
+    },
+    "contracts/watchlist/research-changes-600519.json": {
+      "sha256": "c9bf71e089ae51ce96f4d6628cfaa1d93300ab97bb451170ecb9547b7ef62810",
+      "size": 1236
+    },
+    "contracts/watchlist/watchlist-contract.md": {
+      "sha256": "fd8298b1b75e31cc4eda9028b6bf529996532ed166692126f9d19cb283a62976",
+      "size": 6757
+    },
+    "contracts/watchlist/with-brief.json": {
+      "sha256": "a43e263786809428beb4109e9eba284b5b0fc16a369f3c68185cf743a092aab4",
+      "size": 5155
+    },
+    "contracts/watchlist/with-watchlist.json": {
+      "sha256": "3709a88edfff9cd21c706093d552c6d55494956ae7b4711ee13650bbec275e64",
+      "size": 353
+    },
+    "environment.md": {
+      "sha256": "3cccd3bcc7b8aeea3b1a8b37c0c2b041743f4371965a69b91afcec9e5bff1faf",
+      "size": 945
+    },
+    "routing-and-proxy.md": {
+      "sha256": "c8e187f764cea9ecd3f6ea94937d3bb098d07b0ace1e2528ad995948edb1685b",
+      "size": 1565
+    },
+    "summary.md": {
+      "sha256": "64bf525ccf928834e03f494b810e3702a2651dffc0f091a60db8c494d842bbeb",
+      "size": 3435
+    }
+  }
+}
