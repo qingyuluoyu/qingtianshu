@@ -2789,6 +2789,20 @@ export interface components {
              */
             relevance_status: "relevant" | "irrelevant";
         };
+        /** ChatEntryContext */
+        ChatEntryContext: {
+            /**
+             * Source Page
+             * @enum {string}
+             */
+            source_page: "today" | "screening" | "watchlist" | "stock" | "advisor" | "research_center";
+            /** Module */
+            module: string;
+            /** As Of */
+            as_of?: string | null;
+            /** Symbol */
+            symbol?: string | null;
+        };
         /** ChatRefineRequest */
         ChatRefineRequest: {
             /** Preview Run Id */
@@ -2840,6 +2854,7 @@ export interface components {
              * @enum {string}
              */
             quality_scope: "user" | "evaluation";
+            entry_context?: components["schemas"]["ChatEntryContext"] | null;
         };
         /** ConversationCreate */
         ConversationCreate: {

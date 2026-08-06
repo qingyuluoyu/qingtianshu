@@ -629,6 +629,11 @@ class ChatOrchestrationService:
             request_started=request_started,
             request_id=payload.request_id,
             symbol=symbol,
+            entry_context=(
+                payload.entry_context.model_dump()
+                if payload.entry_context is not None
+                else None
+            ),
             chat_stream=chat_stream,
             persist_response=persist_response,
             read_only=advisor_lab,

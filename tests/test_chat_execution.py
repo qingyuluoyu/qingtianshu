@@ -116,11 +116,21 @@ def test_execution_runs_agent_and_persists_complete_response() -> None:
         request_started=0.0,
         request_id="request-1",
         symbol="000063.SZ",
+        entry_context={
+            "source_page": "stock",
+            "module": "research-workspace",
+            "symbol": "000063.SZ",
+        },
         chat_stream=stream,
         persist_response=persist_response,
     )
 
     assert stream.progress_events[0][0] == "evidence_ready"
+    assert agent.calls[0]["entry_context"] == {
+        "source_page": "stock",
+        "module": "research-workspace",
+        "symbol": "000063.SZ",
+    }
     assert callable(agent.calls[0]["progress_callback"])
     assert callable(agent.calls[0]["stream_callback"])
     assert structured.calls[0]["symbol"] == "000063.SZ"

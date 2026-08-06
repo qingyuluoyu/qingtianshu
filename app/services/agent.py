@@ -369,6 +369,7 @@ class AgentService:
         pre_run_timings: dict[str, float] | None = None,
         progress_callback: Callable[[dict[str, Any]], None] | None = None,
         stream_callback: Callable[[dict[str, Any]], None] | None = None,
+        entry_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         agent_started = time.perf_counter()
         last_stream_draft = ""
@@ -429,6 +430,7 @@ class AgentService:
                 "research_evidence_contract": evidence.get(
                     "research_evidence_contract"
                 ),
+                "entry_context": entry_context,
             },
             workspace_path=workspace,
         )

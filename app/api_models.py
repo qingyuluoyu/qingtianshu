@@ -89,6 +89,22 @@ class ChangeRelevanceUpdate(BaseModel):
     relevance_status: Literal["relevant", "irrelevant"]
 
 
+class ChatEntryContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_page: Literal[
+        "today",
+        "screening",
+        "watchlist",
+        "stock",
+        "advisor",
+        "research_center",
+    ]
+    module: str = Field(min_length=1, max_length=80)
+    as_of: str | None = Field(default=None, max_length=40)
+    symbol: str | None = Field(default=None, max_length=24)
+
+
 class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     symbol: str | None = Field(default=None, max_length=24)
@@ -100,6 +116,7 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = Field(default=None, max_length=36)
     request_id: str | None = Field(default=None, min_length=8, max_length=64)
     quality_scope: Literal["user", "evaluation"] = "user"
+    entry_context: ChatEntryContext | None = None
 
 
 class AdvisorLabChatRequest(BaseModel):

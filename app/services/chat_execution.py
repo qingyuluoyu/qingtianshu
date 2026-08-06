@@ -42,6 +42,7 @@ class ChatAgentExecutionService:
         request_started: float,
         request_id: str | None,
         symbol: str | None,
+        entry_context: dict[str, Any] | None = None,
         chat_stream: Any,
         persist_response: Callable[..., dict[str, Any]],
         read_only: bool = False,
@@ -74,6 +75,7 @@ class ChatAgentExecutionService:
                 if request_id and execute_agent
                 else None
             ),
+            entry_context=entry_context,
         )
 
         structured_answer = None
