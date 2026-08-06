@@ -261,14 +261,13 @@ export function parseOverview(value: unknown): Overview {
   };
 }
 
-const INDEX_ORDER = ["000001.SS", "399001.SZ", "399006.SZ", "000300.SS", "000688.SS", "000905.SS"] as const;
+const INDEX_ORDER = ["000001.SS", "399001.SZ", "399006.SZ", "000300.SS", "000688.SS"] as const;
 const INDEX_NAMES: Record<(typeof INDEX_ORDER)[number], string> = {
   "000001.SS": "上证综指",
   "399001.SZ": "深证成指",
   "399006.SZ": "创业板指",
   "000688.SS": "科创50",
   "000300.SS": "沪深300",
-  "000905.SS": "中证500",
 };
 
 export function parseIndices(value: unknown): Indices {

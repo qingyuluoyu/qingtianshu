@@ -16,7 +16,7 @@ import {
 } from "./adapters";
 
 describe("today runtime contract adapters", () => {
-  it("keeps the six china index cards and passes percent values through unscaled", () => {
+  it("keeps the five required China index cards and passes percent values through unscaled", () => {
     const result = parseIndices({
       generated_at: "2026-08-04T02:35:07+00:00",
       indices: [
@@ -42,14 +42,12 @@ describe("today runtime contract adapters", () => {
       "399006.SZ",
       "000300.SS",
       "000688.SS",
-      "000905.SS",
     ]);
     expect(result.items[3]?.name).toBe("沪深300");
-    expect(result.items[5]?.name).toBe("中证500");
     // change_1d and return_1d_pct are already point/percentage values from the backend; the adapter must not rescale them.
     expect(result.items[0]?.change1d).toBe(9.31);
     expect(result.items[0]?.return1dPct).toBe(-0.5897);
-    expect(result.items[5]?.return1dPct).toBe(-1.0604);
+    expect(result.items).toHaveLength(5);
   });
 
   it("does not turn nullable or missing breadth values into zero", () => {

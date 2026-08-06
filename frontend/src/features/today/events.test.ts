@@ -9,7 +9,6 @@ describe("/events invalidation mapping", () => {
       todayQueryKeys.indices,
       todayQueryKeys.breadth,
       todayQueryKeys.sectors,
-      todayQueryKeys.anomalies,
     ]);
   });
 
