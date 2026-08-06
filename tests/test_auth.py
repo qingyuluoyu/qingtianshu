@@ -232,7 +232,7 @@ def test_legacy_anonymous_mode_controls_legacy_endpoints(settings):
     assert disabled.post("/sessions/claim", json={"user_id": "00000000-0000-0000-0000-000000000000"}).status_code == 403
 
 
-def test_schema_6_user_is_upgraded_to_schema_7_without_losing_anonymous_user(
+def test_schema_6_user_is_upgraded_to_schema_9_without_losing_anonymous_user(
     isolated_postgres_schema, tmp_path
 ):
     from app.db import Database
@@ -251,8 +251,33 @@ def test_schema_6_user_is_upgraded_to_schema_7_without_losing_anonymous_user(
     database.initialize()
     database.initialize()
     legacy = database.get_user("legacy-user")
-    assert database.schema_status()["schema_version"] == 7
+    assert database.schema_status()["schema_version"] == 9
     assert legacy["account"] is None
     assert legacy["phone"] is None
     assert legacy["password_hash"] is None
     assert legacy["last_login_at"] is None
+    with database.connect() as connection:
+        tables = {
+            row["table_name"]
+            for row in connection.execute(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = current_schema()
+                  AND table_name IN ('fund_disclosure_events', 'provider_call_events')
+                """
+            ).fetchall()
+        }
+        columns = {
+            row["column_name"]
+            for row in connection.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'fund_product_snapshots'
+                """
+            ).fetchall()
+        }
+    assert tables == {"fund_disclosure_events", "provider_call_events"}
+    assert "source_verification_json" in columns

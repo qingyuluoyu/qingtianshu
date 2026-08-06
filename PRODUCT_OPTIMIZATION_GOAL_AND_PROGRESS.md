@@ -1,10 +1,12 @@
 # 清数智算持续产品目标与进度
 
-更新日期：2026-07-29
+更新日期：2026-08-07
 
 权威仓库：`/Users/chr/Documents/qingtianshu`
 
-当前分支：`codex/structured-ai-writeback`
+当前集成工作树：`/Users/chr/Documents/qingtianshu-react-product`
+
+当前分支：`codex/react-product-integration`（基于 `origin/react-03@ed9a9aa`）
 
 ## 持续目标
 
@@ -230,3 +232,29 @@
 - 用户侧不再展示难懂的“失效条件”，统一改为“什么时候需要重新判断”或“什么情况会推翻当前判断”。
 - 底层 `invalidation_conditions` 数据字段保持兼容；旧模型输出会在展示前转成通俗表达，新问法也能正确触发路由、证据准备和完整性校验。
 - 相关 Guard、Prompt、路由、预览、页面与流式回归通过；全量静态门禁再次通过。本阶段随 Hermes 调用链、测试和示例配置一起交付 GitHub。
+
+## 2026-08-07 React 产品主线集成 WP1
+
+### 本阶段目标
+
+以同事 `react-03` 为产品主线，先交付“正式账户登录—今日观察真实读取—刷新恢复—退出与重新登录”的可部署底座，同时保留既有 PostgreSQL 领域能力和用户正式确认边界。
+
+### 已实现
+
+1. 将同事分支的 Schema 7 与现有 Schema 9 做安全并集：正式账户字段、匿名旧用户兼容、基金公告正文、基金来源验证和供应商调用事件均保留；迁移可重复执行。
+2. 补齐运行时已经存在但前端快照缺失的 `/session/status` OpenAPI 合同及 TypeScript 类型，匿名首访和登录态恢复使用同一公开探针。
+3. 真实 Today E2E 不再硬编码 Windows 的 `playwright.cmd`，Windows、macOS 和 Linux 均按平台解析本地 Playwright；Docker E2E 命令统一由项目锁定的 `uv` 环境执行。
+4. 修复同事分支原有的两处全量回归：数据库初始化继续保持迁移编排器职责；旧演示页与独立顾问测试页的静态资源共同接受白名单契约检查。
+
+### 验收证据
+
+- 正式账户、Schema 迁移、用户隔离和生产前端专项测试 `45/45` 通过；跨平台 E2E runner 专项测试通过。
+- React 单元/组件测试 `105/105` 通过，Vite production build 通过。
+- 真实浏览器 E2E `2/2` 通过：真实 FastAPI、隔离 PostgreSQL Schema、HttpOnly Cookie、注册、Today 读取、刷新恢复、退出、重新登录以及临时用户/Schema 清理均实际执行。
+- 后端全量测试执行至 `100%` 且无失败；Ruff、Python `compileall`、`uv lock --check`、OpenAPI 语义比较和 `git diff --check` 全部通过。
+
+### 未完成边界与下一步
+
+- 当前机器没有 Docker，尚未执行容器内生产 E2E；在有 Docker 的发布环境补跑前，不能宣称生产部署完成。
+- WP1 证明登录到 Today 的真实闭环可用，不代表六个主页面都已由 React 生产界面支撑；后续按页面逐一补真实 API、失败恢复、刷新恢复、桌面/移动浏览器和用户任务闭环。
+- 当前集成分支尚未推送；提交与远端 SHA 以本轮 Git 交付结果为准。

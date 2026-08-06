@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import secrets
 import subprocess
-import sys
 import time
 from urllib.request import urlopen
 from uuid import uuid4

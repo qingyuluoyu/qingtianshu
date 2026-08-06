@@ -14,14 +14,24 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC = ROOT / "app" / "static"
 
 
-def test_demo_loads_only_registered_local_assets() -> None:
-    html = (STATIC / "demo.html").read_text(encoding="utf-8")
-    sources = set(re.findall(r'<script src="/static/([^"]+)"', html))
-    styles = set(re.findall(r'<link rel="stylesheet" href="/static/([^"]+)"', html))
+def test_static_pages_load_only_registered_local_assets() -> None:
+    pages = [path.read_text(encoding="utf-8") for path in STATIC.glob("*.html")]
+    sources = {
+        asset
+        for html in pages
+        for asset in re.findall(r'<script src="/static/([^"]+)"', html)
+    }
+    styles = {
+        asset
+        for html in pages
+        for asset in re.findall(
+            r'<link rel="stylesheet" href="/static/([^"]+)"', html
+        )
+    }
 
     assert sources | styles == set(STATIC_ASSET_MEDIA_TYPES)
-    assert "<style>" not in html
-    assert "<script>" not in html
+    assert all("<style>" not in html for html in pages)
+    assert all("<script>" not in html for html in pages)
 
 
 def test_frontend_business_modules_stay_bounded() -> None:

@@ -25,7 +25,7 @@ class PhoneAlreadyExists(Exception):
 
 class Database:
     SYSTEM_EDITOR_ID = "system-market-editor"
-    SCHEMA_VERSION = 7
+    SCHEMA_VERSION = 9
     VALID_CONVERSATION_MODES = {"formal", "advisor_test"}
 
     def __init__(
@@ -156,6 +156,7 @@ class Database:
                 "requested_as_of_date",
                 "TEXT",
             )
+            self._ensure_fund_domain_columns(connection)
             connection.execute(
                 r"""
                 UPDATE tushare_dataset_snapshots
@@ -240,6 +241,33 @@ class Database:
         }
         if column not in columns:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    @classmethod
+    def _ensure_fund_domain_columns(cls, connection: PostgresConnection) -> None:
+        column_specs = (
+            (
+                "fund_disclosure_events",
+                "body_status",
+                "TEXT NOT NULL DEFAULT 'metadata_only'",
+            ),
+            ("fund_disclosure_events", "body_text", "TEXT"),
+            ("fund_disclosure_events", "body_page_count", "INTEGER"),
+            ("fund_disclosure_events", "body_char_count", "INTEGER"),
+            ("fund_disclosure_events", "body_fetched_at", "TEXT"),
+            ("fund_disclosure_events", "body_source_url", "TEXT"),
+            (
+                "fund_disclosure_events",
+                "body_warnings_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            ),
+            (
+                "fund_product_snapshots",
+                "source_verification_json",
+                "TEXT NOT NULL DEFAULT '{}'",
+            ),
+        )
+        for table, column, definition in column_specs:
+            cls._ensure_column(connection, table, column, definition)
 
     @staticmethod
     def _ensure_index(connection: PostgresConnection, statement: str) -> None:

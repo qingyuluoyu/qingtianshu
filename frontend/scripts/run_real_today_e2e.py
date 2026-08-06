@@ -22,6 +22,11 @@ BACKEND_PORT = 8011
 EXPECTED_DATABASE = "qingshu_auth_test"
 
 
+def playwright_executable(platform_name: str | None = None) -> Path:
+    executable = "playwright.cmd" if (platform_name or os.name) == "nt" else "playwright"
+    return FRONTEND / "node_modules" / ".bin" / executable
+
+
 def test_database_url() -> str:
     configured = os.environ.get("QINGSHU_TEST_POSTGRES_URL", "").strip()
     if not configured:
@@ -101,7 +106,7 @@ def main() -> int:
                 stderr=subprocess.STDOUT,
             )
             wait_for_backend(backend, log_path)
-            playwright = FRONTEND / "node_modules" / ".bin" / "playwright.cmd"
+            playwright = playwright_executable()
             result = subprocess.run(
                 [str(playwright), "test", "--config=playwright.real.config.ts"],
                 cwd=FRONTEND,

@@ -277,6 +277,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/session/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Status
+         * @description Public bootstrap probe: 200 for both anonymous and authenticated visitors.
+         */
+        get: operations["get_session_status_session_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/me": {
         parameters: {
             query?: never;
@@ -2646,6 +2666,14 @@ export interface components {
             /** Request Id */
             request_id?: string | null;
         };
+        /** AnonymousSessionStatusResponse */
+        AnonymousSessionStatusResponse: {
+            /**
+             * Authenticated
+             * @constant
+             */
+            authenticated: false;
+        };
         /** ArticleGenerateRequest */
         ArticleGenerateRequest: {
             /**
@@ -2722,6 +2750,15 @@ export interface components {
             msg: string;
             /** Type */
             type: string;
+        };
+        /** AuthenticatedSessionStatusResponse */
+        AuthenticatedSessionStatusResponse: {
+            /**
+             * Authenticated
+             * @constant
+             */
+            authenticated: true;
+            session: components["schemas"]["AuthSessionResponse"];
         };
         /** BackgroundJobEnqueueRequest */
         BackgroundJobEnqueueRequest: {
@@ -3833,6 +3870,26 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    get_session_status_session_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnonymousSessionStatusResponse"] | components["schemas"]["AuthenticatedSessionStatusResponse"];
+                };
             };
         };
     };

@@ -590,12 +590,37 @@ DOMAIN_SCHEMA_SQL = r"""
                     inception_date TEXT,
                     top_holdings_json TEXT NOT NULL DEFAULT '[]',
                     live_quote_json TEXT,
+                    source_verification_json TEXT NOT NULL DEFAULT '{}',
                     source TEXT NOT NULL,
                     source_url TEXT,
                     field_mapping TEXT NOT NULL,
                     warnings_json TEXT NOT NULL DEFAULT '[]',
                     fetched_at TEXT NOT NULL,
                     UNIQUE(code, source, nav_date)
+                );
+
+                CREATE TABLE IF NOT EXISTS fund_disclosure_events (
+                    id TEXT PRIMARY KEY,
+                    code TEXT NOT NULL,
+                    announcement_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    category_code TEXT,
+                    publish_date TEXT,
+                    detail_url TEXT NOT NULL,
+                    pdf_url TEXT,
+                    source TEXT NOT NULL,
+                    source_url TEXT,
+                    warnings_json TEXT NOT NULL DEFAULT '[]',
+                    fetched_at TEXT NOT NULL,
+                    body_status TEXT NOT NULL DEFAULT 'metadata_only',
+                    body_text TEXT,
+                    body_page_count INTEGER,
+                    body_char_count INTEGER,
+                    body_fetched_at TEXT,
+                    body_source_url TEXT,
+                    body_warnings_json TEXT NOT NULL DEFAULT '[]',
+                    UNIQUE(code, announcement_id)
                 );
 
                 CREATE TABLE IF NOT EXISTS market_breadth_snapshots (
@@ -650,6 +675,28 @@ DOMAIN_SCHEMA_SQL = r"""
                     payload_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS provider_call_events (
+                    id TEXT PRIMARY KEY,
+                    provider_key TEXT NOT NULL,
+                    provider_name TEXT NOT NULL,
+                    source_group TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN (
+                        'succeeded', 'degraded', 'failed'
+                    )),
+                    error_code TEXT,
+                    duration_ms REAL NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_provider_call_events_started
+                    ON provider_call_events(started_at);
+
+                CREATE INDEX IF NOT EXISTS idx_provider_call_events_provider
+                    ON provider_call_events(provider_key, started_at);
 
                 CREATE TABLE IF NOT EXISTS tushare_sync_runs (
                     id TEXT PRIMARY KEY,
@@ -1373,6 +1420,8 @@ DOMAIN_SCHEMA_SQL = r"""
                     ON fund_product_snapshots(code, fetched_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_fund_products_name
                     ON fund_product_snapshots(name, fetched_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_fund_disclosures_code_time
+                    ON fund_disclosure_events(code, publish_date DESC, fetched_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_articles_user_created
                     ON articles(user_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_market_bars_symbol_time
