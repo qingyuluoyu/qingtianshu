@@ -5,15 +5,16 @@ import { App } from "./App";
 describe("正式前端认证入口", () => {
   beforeEach(() => {
     window.history.pushState({}, "", "/watchlist");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ code: "session_expired", message: "会话已失效" }), {
-          status: 401,
-          headers: { "Content-Type": "application/json" },
-        }),
-      ),
-    );
+    class AnonymousSessionRequest {
+      status = 401;
+      responseText = '{"code":"session_expired","message":"会话已失效"}';
+      withCredentials = false;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      open() {}
+      send() { this.onload?.(); }
+    }
+    vi.stubGlobal("XMLHttpRequest", AnonymousSessionRequest);
   });
 
   afterEach(() => vi.unstubAllGlobals());
