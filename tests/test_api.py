@@ -1780,6 +1780,51 @@ def test_capital_flow_endpoint_degrades_without_provider(client):
     assert payload["warnings"]
 
 
+def test_today_market_warmup_prefills_today_page_caches(client, app):
+    result = app.state.background._warm_today_markets()
+    assert result["errors"] == []
+    for label in (
+        "indices_china",
+        "indices_us",
+        "sectors_hot",
+        "market_anomalies",
+        "capital_flow",
+    ):
+        assert label in result["warmed"]
+    for symbol in (
+        "000001.SS",
+        "399001.SZ",
+        "399006.SZ",
+        "000300.SS",
+        "000688.SS",
+        "000905.SS",
+    ):
+        assert f"index_history:{symbol}" in result["warmed"]
+    # 预热后今日观察页端点直接可用
+    indices = client.get("/indices", params={"scope": "all", "group": "china"})
+    assert indices.status_code == 200
+    history = client.get("/indices/000905.SS/history", params={"range": "1mo"})
+    assert history.status_code == 200
+    assert history.json()["points"]
+
+
+def test_today_market_warmup_tolerates_single_source_failure(client, app):
+    original = app.state.analysis.hot_sectors
+    app.state.analysis.hot_sectors = None
+
+    def broken(limit: int = 20):
+        raise ProviderError("sector source down")
+
+    app.state.analysis.hot_sectors = broken
+    try:
+        result = app.state.background._warm_today_markets()
+    finally:
+        app.state.analysis.hot_sectors = original
+    assert any(error.startswith("sectors_hot:") for error in result["errors"])
+    assert "indices_china" in result["warmed"]
+    assert "capital_flow" in result["warmed"]
+
+
 def test_stock_history_supports_diagnosis_kline_and_technical_metrics(client):
     response = client.get("/stocks/000063/history", params={"range": "3mo"})
 

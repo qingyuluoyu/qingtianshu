@@ -10,6 +10,7 @@ from typing import Any, Callable, Iterator
 from uuid import uuid4
 
 from app.config import Settings
+from app.catalog import TODAY_INDEX_HISTORY_SYMBOLS
 from app.db import Database
 from app.operational_db import ClaimedJob, OperationalDatabase
 from app.services.article import MarketPulseArticleService
@@ -357,6 +358,9 @@ class BackgroundScheduler:
             "active_worker_count": active_workers,
             "persistent_queue": queue_health,
             "market_refresh_seconds": self.settings.background_market_refresh_seconds,
+            "today_market_warmup_seconds": max(
+                60, self.settings.background_market_refresh_seconds * 6
+            ),
             "article_check_seconds": self.settings.background_article_check_seconds,
             "a_share_info_refresh_seconds": self.settings.background_info_refresh_seconds,
             "a_share_filing_refresh_seconds": self.settings.background_fundamentals_refresh_seconds,
@@ -390,6 +394,7 @@ class BackgroundScheduler:
     def _job_functions(self) -> dict[str, Callable[[], dict[str, Any]]]:
         functions: dict[str, Callable[[], dict[str, Any]]] = {
             "market_intraday_refresh": self._refresh_markets,
+            "today_market_warmup": self._warm_today_markets,
             "market_pulse_article": self._refresh_article,
             "a_share_information_refresh": self._refresh_a_share_information,
             "a_share_filing_refresh": self._refresh_a_share_filings,
@@ -426,6 +431,12 @@ class BackgroundScheduler:
                 "market_intraday_refresh",
                 max(10, self.settings.background_market_refresh_seconds),
                 100,
+                True,
+            ),
+            (
+                "today_market_warmup",
+                max(60, self.settings.background_market_refresh_seconds * 6),
+                85,
                 True,
             ),
             (
@@ -663,6 +674,44 @@ class BackgroundScheduler:
             "a_share_breadth": breadth.get("breadth") or {},
             "a_share_turnover": breadth.get("turnover") or {},
             "a_share_distribution": breadth.get("distribution") or {},
+        }
+
+    def _warm_today_markets(self) -> dict[str, Any]:
+        """提前填充今日观察页依赖的行情缓存，让用户请求只读缓存。
+
+        单个数据源失败只记入 errors，不让整个任务重试；缓存语义与
+        对应 HTTP 端点一致（同一 service 方法、同一 provider 缓存键）。
+        """
+
+        analysis = self.market_analysis
+        warmed: list[str] = []
+        errors: list[str] = []
+
+        def capture(label: str, fetch: Callable[[], dict[str, Any]]) -> None:
+            try:
+                fetch()
+            except Exception as exc:  # noqa: BLE001 - 单项失败不阻塞其他预热
+                errors.append(f"{label}: {exc}")
+            else:
+                warmed.append(label)
+
+        capture("indices_china", lambda: analysis.get_indices(scope="all", group="china"))
+        capture("indices_us", lambda: analysis.get_indices(scope="all", group="us"))
+        for symbol in TODAY_INDEX_HISTORY_SYMBOLS:
+            capture(
+                f"index_history:{symbol}",
+                lambda symbol=symbol: analysis.get_index_history(
+                    symbol, range_name="1mo"
+                ),
+            )
+        capture("sectors_hot", lambda: analysis.hot_sectors(limit=10))
+        capture("market_anomalies", lambda: analysis.market_anomalies(limit=10))
+        capture("capital_flow", analysis.capital_flow)
+        return {
+            "warmed": warmed,
+            "warmed_count": len(warmed),
+            "errors": errors,
+            "time": utc_now(),
         }
 
     def _refresh_fund_products(self) -> dict[str, Any]:

@@ -33,6 +33,7 @@ export default defineConfig({
       "/a-share": apiProxy,
       "/system": apiProxy,
       "/research-reports": apiProxy,
+      "/peer-comparisons": apiProxy,
       "/events": apiProxy,
       "/stocks": stocksProxy,
     },

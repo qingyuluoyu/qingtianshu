@@ -37,6 +37,16 @@ CORE_INDEX_SYMBOLS = [
     "^KS11",
 ]
 
+# 今日观察页头部六张指数卡的走势图（与前端 adapters.py 的 INDEX_ORDER 保持一致）
+TODAY_INDEX_HISTORY_SYMBOLS = [
+    "000001.SS",
+    "399001.SZ",
+    "399006.SZ",
+    "000300.SS",
+    "000688.SS",
+    "000905.SS",
+]
+
 LIVE_MARKET_CATALOG = [
     {
         "key": "china",

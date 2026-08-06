@@ -7,6 +7,7 @@ import { AuthModal } from "../features/auth/AuthModal";
 import { useUnauthorizedBoundary } from "../features/auth/useUnauthorizedBoundary";
 import { TodayPage } from "../features/today/TodayPage";
 import { usePublicEvents } from "../features/today/events";
+import { StockResearchPage } from "../features/stock-research/StockResearchPage";
 import { NotFoundPage } from "../pages/NotFoundPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
 import "../styles/global.css";
@@ -14,7 +15,6 @@ import "../styles/global.css";
 const pages = [
   ["/screening", "选股策略", "解释筛选条件、结果来源和证据边界。"],
   ["/watchlist", "我的关注", "管理个人关注标的、判断版本与观察事项。"],
-  ["/stocks/:symbol", "个股研究", "集中呈现单一标的的结构化研究工作区。"],
   ["/market-data", "行情数据", "集中呈现指数、广度、板块与全球市场行情。"],
   ["/advisor/:conversationId?", "金融顾问", "承载个人金融问答与可追溯研究对话。"],
   ["/research-center", "研究中心", "汇集可核验研究产出、变化和结论。"],
@@ -67,6 +67,7 @@ function ProductApp() {
       <Route element={<AppShell authTriggerRef={authTriggerRef} onOpenAuth={() => setAuthOpen(true)} onSignOut={() => void logout()} session={formal ? session.data ?? null : null} />}>
         <Route index element={<Navigate replace to="/today" />} />
         <Route element={<TodayPage authenticated={formal} eventState={eventState} />} path="/today" />
+        <Route element={<StockResearchPage authenticated={formal} />} path="/stocks/:symbol" />
         {pages.map(([path, title, responsibility]) => <Route element={<PlaceholderPage key={path} locked={!formal} responsibility={responsibility} title={title} />} key={path} path={path} />)}
         <Route element={<NotFoundPage />} path="*" />
       </Route>
