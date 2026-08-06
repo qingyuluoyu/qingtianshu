@@ -8,13 +8,13 @@ import { useUnauthorizedBoundary } from "../features/auth/useUnauthorizedBoundar
 import { TodayPage } from "../features/today/TodayPage";
 import { usePublicEvents } from "../features/today/events";
 import { StockResearchPage } from "../features/stock-research/StockResearchPage";
+import { WatchlistPage } from "../features/watchlist/WatchlistPage";
 import { NotFoundPage } from "../pages/NotFoundPage";
 import { PlaceholderPage } from "../pages/PlaceholderPage";
 import "../styles/global.css";
 
 const pages = [
   ["/screening", "选股策略", "解释筛选条件、结果来源和证据边界。"],
-  ["/watchlist", "我的关注", "管理个人关注标的、判断版本与观察事项。"],
   ["/market-data", "行情数据", "集中呈现指数、广度、板块与全球市场行情。"],
   ["/advisor/:conversationId?", "金融顾问", "承载个人金融问答与可追溯研究对话。"],
   ["/research-center", "研究中心", "汇集可核验研究产出、变化和结论。"],
@@ -68,6 +68,7 @@ function ProductApp() {
         <Route index element={<Navigate replace to="/today" />} />
         <Route element={<TodayPage authenticated={formal} eventState={eventState} />} path="/today" />
         <Route element={<StockResearchPage authenticated={formal} />} path="/stocks/:symbol" />
+        <Route element={<WatchlistPage authenticated={formal} />} path="/watchlist" />
         {pages.map(([path, title, responsibility]) => <Route element={<PlaceholderPage key={path} locked={!formal} responsibility={responsibility} title={title} />} key={path} path={path} />)}
         <Route element={<NotFoundPage />} path="*" />
       </Route>

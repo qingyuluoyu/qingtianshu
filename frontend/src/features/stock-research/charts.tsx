@@ -69,7 +69,7 @@ export function CandlestickChart({ points, width = 960, height = 420 }: Candlest
         const bodyBottom = yPrice(Math.min(point.open, point.close));
         const volume = point.volume ?? 0;
         return (
-          <g key={point.timestamp}>
+          <g key={`${point.timestamp}-${index}`}>
             <line stroke={color} strokeWidth={1} x1={cx} x2={cx} y1={yPrice(point.high)} y2={yPrice(point.low)} />
             <rect
               fill={rising ? "#ffffff" : color}

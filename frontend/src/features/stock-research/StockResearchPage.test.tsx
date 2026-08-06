@@ -73,6 +73,7 @@ describe("StockResearchPage", () => {
   });
 
   it("renders technical tab with candles, frequency and passthrough indicators", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
     renderPage(hydratedClient(), "/stocks/000063?tab=technical&range=1y");
     expect(screen.getByRole("img", { name: "日 K 蜡烛与成交量图" })).toBeInTheDocument();
     expect(screen.getAllByText(/日线截至：2026-08-05/).length).toBeGreaterThan(0);
@@ -83,6 +84,7 @@ describe("StockResearchPage", () => {
     expect(screen.getByText(/不生成买卖信号/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "近6月" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByRole("button", { name: "近1年" })).toHaveAttribute("aria-pressed", "true");
+    expect(consoleError).not.toHaveBeenCalled();
   });
 
   it("lazy-renders financials tab with periods, drivers and peer comparison", () => {
