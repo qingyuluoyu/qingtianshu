@@ -1,7 +1,8 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+import { resolveProxyTarget } from "./vite.proxy";
 
-const backend = process.env.VITE_PROXY_TARGET ?? "http://127.0.0.1:8000";
+const backend = resolveProxyTarget();
 const apiProxy = { target: backend, changeOrigin: true };
 const stocksProxy = {
   ...apiProxy,
@@ -34,6 +35,7 @@ export default defineConfig({
       "/system": apiProxy,
       "/research-reports": apiProxy,
       "/peer-comparisons": apiProxy,
+      "/stock-screener": apiProxy,
       "/events": apiProxy,
       "/stocks": stocksProxy,
     },

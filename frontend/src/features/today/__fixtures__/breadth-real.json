@@ -4,6 +4,7 @@
   "is_stale": false,
   "breadth": {"total": 5537, "advancers": 2788, "decliners": 2590, "unchanged": 159, "advance_ratio": 0.5035, "decline_ratio": 0.4678, "unchanged_ratio": 0.0287, "state": "上涨家数占优"},
   "coverage": {"coverage_ratio": 1},
+  "turnover_history": [],
   "turnover": {"status": "available", "total_amount_100m_cny": 25470.71, "history_comparison": {"status": "available", "change_vs_previous_pct": -4.941}},
   "distribution": {"median_pct_change": 0.054, "bins": {"strong_advancers_ge_3": 692, "mild_advancers_gt_0_lt_3": 2096, "unchanged": 159, "mild_decliners_lt_0_gt_neg3": 2409, "strong_decliners_le_neg3": 181}}
 }

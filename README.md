@@ -358,6 +358,33 @@ uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
 uv run qingshu-worker
 ```
 
+### React local runtime and authenticated screenshots
+
+The Vite development proxy defaults to `http://127.0.0.1:8000`, matching the
+standard FastAPI command above. If a local `.env` intentionally starts FastAPI
+on another port (for example `8001`), start Vite with the matching explicit
+target instead of relying on whichever process happens to own port 8000:
+
+```powershell
+cd frontend
+$env:VITE_PROXY_TARGET = "http://127.0.0.1:8001"
+npm run dev -- --host 127.0.0.1 --port 5173
+```
+
+After registering or logging in through `http://localhost:5173`, verify the
+same browser origin reports `{"authenticated":true}` from
+`/session/status`. The screenshot command registers a fresh test account via
+that frontend origin and refuses to write screenshots unless this preflight
+passes:
+
+```powershell
+cd frontend
+node capture_screenshots_v3.mjs
+```
+
+An anonymous result means the frontend proxy target, backend process, or
+session setup is wrong; it is not acceptable evidence of an empty Today page.
+
 生产 Worker 会写入持久化注册表。运维端可看到进程、队列、最近心跳、当前任务、
 累计领取/成功/失败数；心跳过期会标记为离线。队列指标同时提供 ready/delayed、
 重试中任务、最老待执行任务延迟、过期租约、最近 24 小时成功/失败与失败率，以及

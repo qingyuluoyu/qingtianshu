@@ -16,6 +16,10 @@ import styles from "./TodayPage.module.css";
 
 type Props = { authenticated: boolean; eventState?: EventConnectionState };
 
+export function shouldLoadDataHealth(authenticated: boolean): boolean {
+  return authenticated;
+}
+
 /** TodayPage only owns request orchestration and layout; display logic lives in TodayComponents. */
 export function TodayPage({ authenticated, eventState = "idle" }: Props) {
   const queryClient = useQueryClient();
@@ -30,7 +34,7 @@ export function TodayPage({ authenticated, eventState = "idle" }: Props) {
   // Secondary market context never competes with the first-screen data contract.
   const coreSettled = [overview, indices, breadth, sectors, watchlist, actions, changes]
     .every((query) => query.isSuccess || query.isError);
-  const dataHealth = useQuery({ ...todayQueries.dataHealth(), enabled: authenticated && coreSettled });
+  const dataHealth = useQuery({ ...todayQueries.dataHealth(), enabled: shouldLoadDataHealth(authenticated) });
   const globalIndices = useQuery({ ...todayQueries.globalIndices(), enabled: authenticated && coreSettled });
   const liveMarkets = useQuery({ ...todayQueries.liveMarkets(), enabled: authenticated && coreSettled });
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["today"] });

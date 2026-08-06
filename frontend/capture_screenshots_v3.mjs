@@ -1,33 +1,20 @@
 import { chromium } from "playwright";
-import fs from "fs";
+import {
+  createScreenshotCredentials,
+  ensureAuthenticatedScreenshotSession,
+} from "./scripts/authenticated-screenshot-session.mjs";
 
-const FRONTEND = "http://localhost:5173";
+const FRONTEND = process.env.QINGSHU_SCREENSHOT_FRONTEND ?? "http://localhost:5173";
 
 async function main() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext();
-
-  // Read cookie from file
-  const cookieContent = fs.readFileSync("C:/Users/dazhu/AppData/Local/Temp/qingshu_session.txt", "utf8");
-  const lines = cookieContent.split("\n").filter((l) => !l.startsWith("# ") && l.trim());
-  let sessionCookie = "";
-  for (const line of lines) {
-    const parts = line.split("\t");
-    if (parts.length >= 7 && parts[5] === "qingshu_session") {
-      sessionCookie = parts[6];
-      break;
-    }
-  }
-
-  console.log("Session cookie found:", !!sessionCookie, "length:", sessionCookie.length);
-
-  // Set cookie via JavaScript before navigating
-  await context.addInitScript(
-    (cookie) => {
-      document.cookie = `qingshu_session=${cookie}; path=/; domain=localhost`;
-    },
-    sessionCookie
-  );
+  try {
+    await ensureAuthenticatedScreenshotSession(context, {
+      frontend: FRONTEND,
+      ...createScreenshotCredentials(),
+    });
+    console.log("Authenticated screenshot session established through frontend origin.");
 
   // Desktop screenshot
   const page = await context.newPage();
@@ -61,7 +48,9 @@ async function main() {
   console.log("Page title:", await page.title());
   console.log("Page URL:", page.url());
 
-  await browser.close();
+  } finally {
+    await browser.close();
+  }
 }
 
 main().catch(console.error);

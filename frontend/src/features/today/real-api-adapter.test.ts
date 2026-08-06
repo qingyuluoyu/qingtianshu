@@ -4,6 +4,7 @@ import { parseBreadth, parseSectors } from "./adapters";
 
 describe("candidate real API adapter fixtures", () => {
   it("keeps the real turnover contract exact without inventing turnover_history", () => {
+    expect((breadthFixture as Record<string, unknown>).turnover_history).toEqual([]);
     const result = parseBreadth(breadthFixture);
     expect(result.turnoverStatus).toBe("available");
     expect(result.historyStatus).toBe("available");

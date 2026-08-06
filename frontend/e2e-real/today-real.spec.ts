@@ -1,4 +1,22 @@
 import { expect, test } from "@playwright/test";
+import {
+  createScreenshotCredentials,
+  ensureAuthenticatedScreenshotSession,
+} from "../scripts/authenticated-screenshot-session.mjs";
+
+test("screenshot preflight authenticates through the same frontend origin", async ({ page }) => {
+  const frontend = new URL(test.info().project.use.baseURL as string).origin;
+  await ensureAuthenticatedScreenshotSession(page.context(), {
+    frontend,
+    ...createScreenshotCredentials(),
+  });
+
+  await page.goto("/today");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const status = await page.request.get("/session/status");
+  expect(status.status()).toBe(200);
+  expect((await status.json() as { authenticated?: unknown }).authenticated).toBe(true);
+});
 
 test("real FastAPI, PostgreSQL, cookie and Today read chain", async ({ page }) => {
   await page.goto("/today");
@@ -15,6 +33,10 @@ test("real FastAPI, PostgreSQL, cookie and Today read chain", async ({ page }) =
   const overviewResponse = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return url.pathname === "/v1/today/overview" && response.request().method() === "GET";
+  });
+  const breadthResponse = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === "/markets/breadth" && response.request().method() === "GET";
   });
   await page.getByRole("button", { name: "注册并进入" }).click();
   const registration = await registerResponse;
@@ -36,15 +58,27 @@ test("real FastAPI, PostgreSQL, cookie and Today read chain", async ({ page }) =
   expect(typeof packet.summary?.headline).toBe("string");
   expect(typeof packet.summary?.market_date).toBe("string");
 
+  const breadth = await breadthResponse;
+  expect(breadth.status()).toBe(200);
+  const breadthPacket = await breadth.json() as { turnover_history?: unknown };
+  expect(Array.isArray(breadthPacket.turnover_history)).toBe(true);
+  expect((breadthPacket.turnover_history as unknown[]).every((point) => {
+    const item = point as { date?: unknown; amount_100m_cny?: unknown };
+    return typeof item.date === "string" && typeof item.amount_100m_cny === "number";
+  })).toBe(true);
+
   const marker = page.getByTestId("today-generated-at");
   await expect(marker).toHaveAttribute("data-generated-at", String(packet.generated_at));
   await expect(page.getByText(String(packet.summary?.headline), { exact: true })).toBeVisible();
   await expect(page.getByTestId("today-market-date")).toHaveText(String(packet.summary?.market_date));
   await expect(page.getByRole("region", { name: "主要指数" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "数据状态" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "数据健康状态" })).toBeVisible();
 
   const sessionResponse = await page.request.get("/session");
   expect(sessionResponse.status()).toBe(200);
+  const sessionStatusResponse = await page.request.get("/session/status");
+  expect(sessionStatusResponse.status()).toBe(200);
+  expect((await sessionStatusResponse.json() as { authenticated?: unknown }).authenticated).toBe(true);
   const session = await sessionResponse.json() as { account?: unknown; is_registered?: unknown };
   expect(session.account).toBe("真实链路用户");
   expect(session.is_registered).toBe(true);
