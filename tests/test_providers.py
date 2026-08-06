@@ -10,8 +10,10 @@ from app.catalog import INDEX_BY_SYMBOL
 from app.db import Database
 from app.providers.market import (
     CSIIndustryIndexProvider,
+    EastmoneyCapitalFlowProvider,
     EastmoneyGlobalIndexProvider,
     EastmoneySectorProvider,
+    ProviderError,
     SinaGoldProvider,
     SinaIndustrySectorProvider,
     SinaMarketBreadthProvider,
@@ -810,6 +812,14 @@ def test_sina_market_breadth_provider_fetches_complete_snapshot_and_caches(
         "advance_ratio": 0.3333,
         "decline_ratio": 0.3333,
         "unchanged_ratio": 0.3333,
+        "limit_up_count": 0,
+        "limit_down_count": 0,
+        "limit_method": (
+            "涨停近似口径：主板(sh60/sz00)涨跌幅≥9.8%、创业板(sz30)/"
+            "科创板(sh68)≥19.8%、北交所(bj)≥29.8%计为涨停，跌停对称；"
+            "阈值较交易所±10%/±20%/±30%限制留0.2个百分点余量；"
+            "ST股(±5%)无法从快照字段区分，为近似统计。"
+        ),
         "state": "涨跌均衡",
         "classification_method": (
             "普涨/普跌要求上涨或下跌比例至少65%，且涨跌家数净差至少500；"
@@ -856,6 +866,21 @@ def test_sina_market_breadth_provider_fetches_complete_snapshot_and_caches(
             "mild_decliners_lt_0_gt_neg3": 0.3333,
             "strong_decliners_le_neg3": 0.0,
         },
+        "bins_7": {
+            "le_neg7": 0,
+            "gt_neg7_le_neg3": 0,
+            "gt_neg3_lt_0": 1,
+            "unchanged": 1,
+            "gt_0_lt_3": 1,
+            "ge_3_lt_7": 0,
+            "ge_7": 0,
+        },
+        "bins_7_method": (
+            "7桶分布按涨跌幅百分数划分：≤-7、(-7,-3]、(-3,0)、=0、"
+            "(0,3)、[3,7)、≥7；下跌侧左开右闭、上涨侧左闭右开，"
+            "与既有±3%五桶边界风格一致，只描述当日分布，"
+            "不是预测或交易阈值。"
+        ),
         "method": (
             "使用全体有效个股涨跌幅的中位数与四分位数；"
             "固定±3%分档只用于描述当日分布，不是预测或交易阈值。"
@@ -869,6 +894,119 @@ def test_sina_market_breadth_provider_fetches_complete_snapshot_and_caches(
             (SinaMarketBreadthProvider.CACHE_KEY,),
         ).fetchone()["expires_at"]
     assert stored_expiry == fixed_expiry
+
+
+def test_sina_market_breadth_counts_limits_bins_7_and_anomaly_candidates(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    rows = [
+        # 主板涨停（≥9.8），且为异动候选；name 直通。
+        {
+            "symbol": "sh600000",
+            "name": "浦发银行",
+            "changepercent": 9.85,
+            "amount": 200_000_000,
+            "ticktime": "15:00:00",
+        },
+        # -9.79 未达到主板 -9.8 跌停阈值，但 |涨跌幅| ≥7 计入异动候选。
+        {
+            "symbol": "sz000001",
+            "changepercent": -9.79,
+            "amount": 100_000_000,
+            "ticktime": "15:00:00",
+        },
+        # 创业板跌停（≤-19.8）。
+        {
+            "symbol": "sz300001",
+            "changepercent": -19.85,
+            "amount": 50_000_000,
+            "ticktime": "15:00:00",
+        },
+        # 科创板 19.75 未达 19.8 涨停阈值，但 |涨跌幅| ≥7 计入异动候选。
+        {
+            "symbol": "sh688001",
+            "changepercent": 19.75,
+            "amount": 80_000_000,
+            "ticktime": "15:00:00",
+        },
+        # 北交所涨停（≥29.8）。
+        {
+            "symbol": "bj920001",
+            "changepercent": 29.85,
+            "amount": 10_000_000,
+            "ticktime": "15:00:00",
+        },
+        {
+            "symbol": "sz002001",
+            "changepercent": 0,
+            "amount": 60_000_000,
+            "ticktime": "15:00:00",
+        },
+        # 5 桶 strong_decliners_le_neg3，同时落入 7 桶 (-7,-3]。
+        {
+            "symbol": "sh601999",
+            "changepercent": -3.0,
+            "amount": 40_000_000,
+            "ticktime": "15:00:00",
+        },
+        # 7 桶 [3,7)。
+        {
+            "symbol": "sh603999",
+            "changepercent": 3.0,
+            "amount": 30_000_000,
+            "ticktime": "15:00:00",
+        },
+    ]
+
+    def http_get(url, **kwargs):
+        if url == SinaMarketBreadthProvider.COUNT_URL:
+            return FakeResponse(str(len(rows)))
+        return FakeResponse(rows)
+
+    provider = SinaMarketBreadthProvider(
+        database,
+        ttl_seconds=60,
+        http_get=http_get,
+        max_workers=2,
+    )
+    result = provider.fetch_breadth()
+
+    assert result["breadth"]["limit_up_count"] == 2
+    assert result["breadth"]["limit_down_count"] == 1
+    assert "0.2个百分点余量" in result["breadth"]["limit_method"]
+    assert result["distribution"]["bins_7"] == {
+        "le_neg7": 2,
+        "gt_neg7_le_neg3": 1,
+        "gt_neg3_lt_0": 0,
+        "unchanged": 1,
+        "gt_0_lt_3": 0,
+        "ge_3_lt_7": 1,
+        "ge_7": 3,
+    }
+    assert sum(result["distribution"]["bins_7"].values()) == len(rows)
+    assert result["distribution"]["bins_7_method"]
+    candidates = result["anomaly_candidates"]
+    assert [item["symbol"] for item in candidates] == [
+        "bj920001",
+        "sz300001",
+        "sh688001",
+        "sh600000",
+        "sz000001",
+    ]
+    assert [item["kind"] for item in candidates] == [
+        "快速拉升",
+        "快速下挫",
+        "快速拉升",
+        "快速拉升",
+        "快速下挫",
+    ]
+    assert candidates[0]["name"] is None
+    assert candidates[3]["name"] == "浦发银行"
+    assert candidates[3]["pct_change"] == 9.85
+    assert candidates[3]["amount_100m_cny"] == 2.0
+    assert candidates[3]["tick_time"] == "15:00:00"
 
 
 def test_sina_market_breadth_infers_previous_session_before_open():
@@ -1236,3 +1374,165 @@ def test_market_news_is_ranked_for_the_current_question_focus():
 
     assert volume[0]["title"].startswith("多只宽基ETF")
     assert sectors[0]["title"].startswith("半导体板块")
+
+
+def test_eastmoney_capital_flow_provider_merges_shanghai_and_shenzhen(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    payloads = {
+        "1.000001": {
+            "data": {
+                "name": "上证指数",
+                "klines": [
+                    "2026-08-06 09:31,1982208.0,9894800.0,-11677440.0,-179341568.0,-1579254608.0",
+                    "2026-08-06 09:32,-5154893728.0,2387667088.0,2774221360.0,-1579254608.0,-3575639120.0",
+                ],
+            }
+        },
+        "0.399001": {
+            "data": {
+                "name": "深证成指",
+                "klines": [
+                    "2026-08-06 09:31,-1639563264.0,1655450112.0,-15886848.0,-1137595392.0,-501971872.0",
+                    "2026-08-06 09:32,-11184897312.0,9614117280.0,1570780144.0,-6910168416.0,-4274728896.0",
+                ],
+            }
+        },
+    }
+
+    def fake_get(url, params=None, **kwargs):
+        return FakeResponse(payloads[params["secid"]])
+
+    provider = EastmoneyCapitalFlowProvider(database, http_get=fake_get)
+    result = provider.fetch_intraday()
+
+    assert result["status"] == "available"
+    assert result["is_stale"] is False
+    assert len(result["points"]) == 2
+    assert result["points"][0]["time"] == "2026-08-06T01:31:00+00:00"
+    # 09:32 沪深主力净流入合计：(−5154893728 − 11184897312) / 1e8 = −163.4 亿元
+    assert result["points"][-1]["main_net_inflow_100m_cny"] == -163.4
+    assert result["market_timestamp"] == "2026-08-06T01:32:00+00:00"
+    summary = result["summary"]
+    assert summary["main_net_inflow_100m_cny"] == -163.4
+    assert summary["shanghai_100m_cny"] == -51.55
+    assert summary["shenzhen_100m_cny"] == -111.85
+    assert summary["unit"] == "CNY_100m_yuan"
+    assert "沪深" in summary["scope"]
+    assert "亿元" in result["method"]
+    assert "北向" in result["method"]
+
+
+def test_eastmoney_capital_flow_provider_raises_without_data_or_cache(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+
+    def failing_get(*args, **kwargs):
+        raise ConnectionError("network down")
+
+    provider = EastmoneyCapitalFlowProvider(database, http_get=failing_get)
+    try:
+        provider.fetch_intraday()
+    except ProviderError as exc:
+        assert "大盘资金流数据不可用" in str(exc)
+    else:  # pragma: no cover - 不应到达
+        raise AssertionError("预期抛出 ProviderError")
+
+
+def test_eastmoney_capital_flow_provider_returns_stale_cache_on_failure(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    payloads = {
+        "1.000001": {
+            "data": {
+                "klines": [
+                    "2026-08-06 09:31,1982208.0,9894800.0,-11677440.0,-179341568.0,-1579254608.0",
+                ]
+            }
+        },
+        "0.399001": {
+            "data": {
+                "klines": [
+                    "2026-08-06 09:31,-1639563264.0,1655450112.0,-15886848.0,-1137595392.0,-501971872.0",
+                ]
+            }
+        },
+    }
+    provider = EastmoneyCapitalFlowProvider(
+        database,
+        ttl_seconds=0,
+        http_get=lambda url, params=None, **kwargs: FakeResponse(
+            payloads[params["secid"]]
+        ),
+    )
+    fresh = provider.fetch_intraday()
+    assert fresh["status"] == "available"
+
+    def failing_get(*args, **kwargs):
+        raise ConnectionError("network down")
+
+    provider.http_get = failing_get
+    stale = provider.fetch_intraday()
+    assert stale["status"] == "available"
+    assert stale["is_stale"] is True
+    assert stale["points"] == fresh["points"]
+    assert any("过期缓存" in warning for warning in stale["warnings"])
+
+
+def test_sina_gold_provider_parses_brent_minute_line(tmp_path: Path):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    payload = {
+        "minLine_1d": [
+            [
+                "2026-08-06",
+                "79.450",
+                "ice",
+                "",
+                "08:00",
+                "79.378",
+                "31",
+                "0",
+                "79.235",
+                "2026-08-06 08:00:00",
+            ],
+            ["08:00", "79.378", "31", "0", "79.235", "2026-08-06 08:00:00"],
+            ["08:01", "79.339", "83", "0", "79.336", "2026-08-06 08:01:00"],
+            ["08:05", "79.283", "12", "0", "79.334", "2026-08-06 08:05:00"],
+        ]
+    }
+    content = f"var qingshu_oil=({__import__('json').dumps(payload)});".encode(
+        "gb18030"
+    )
+
+    class OilResponse:
+        def raise_for_status(self):
+            return None
+
+        @property
+        def content(self):
+            return content
+
+    provider = SinaGoldProvider(
+        database, http_get=lambda *args, **kwargs: OilResponse()
+    )
+    result = provider.fetch_intraday("OIL")
+    assert result["symbol"] == "OIL"
+    assert result["display_name"] == "布伦特原油（ICE连续合约）"
+    assert result["previous_close"] == 79.45
+    assert result["coverage"]["interval"] == "5m"
+    assert len(result["points"]) == 2
+    assert result["points"][0]["close"] == 79.339
+    assert result["points"][-1]["close"] == 79.283
+
+
+def test_eastmoney_global_index_provider_supports_new_global_symbols():
+    assert EastmoneyGlobalIndexProvider.SYMBOLS["UDI"]["secid"] == "100.UDI"
+    assert EastmoneyGlobalIndexProvider.SYMBOLS["US10Y"]["secid"] == "171.US10Y"
+    assert EastmoneyGlobalIndexProvider.SYMBOLS["US10Y"]["currency"] == "PCT"

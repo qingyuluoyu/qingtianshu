@@ -18,6 +18,15 @@ export type PriorityItem = {
   updatedAt: string | null;
 };
 
+export type TodayTheme = {
+  key: string;
+  title: string;
+  status: string;
+  tone: string;
+  summary: string;
+  basis: string | null;
+};
+
 export type Overview = {
   generatedAt: string;
   session: {
@@ -28,14 +37,15 @@ export type Overview = {
     marketLocalTime: string;
   };
   headline: string;
-  marketDate: string;
+  marketDate: string | null;
   priorityCount: number;
   relatedChangeCount: number;
   priorityItems: PriorityItem[];
   priorityTotal: number;
-  priorityEmptyMessage: string;
+  priorityEmptyMessage: string | null;
   rankingMethod: string;
   coverageStatus: string;
+  themes: TodayTheme[];
   warnings: string[];
   boundary: string;
 };
@@ -45,6 +55,7 @@ export type IndexCard = {
   name: string;
   status: string;
   latestClose: number | null;
+  change1d: number | null;
   return1dPct: number | null;
   marketTimestamp: string | null;
   isStale: boolean | null;
@@ -64,11 +75,18 @@ export type Breadth = {
   unchanged: number | null;
   advanceRatio: number | null;
   declineRatio: number | null;
+  unchangedRatio: number | null;
   coverageRatio: number | null;
   turnoverStatus: string | null;
   turnover100mCny: number | null;
   historyStatus: string | null;
+  turnoverChangeVsPreviousPct: number | null;
   medianPctChange: number | null;
+  distributionBins: Array<{ key: string; label: string; count: number }> | null;
+  limitUpCount: number | null;
+  limitDownCount: number | null;
+  limitMethod: string | null;
+  turnoverHistory: Array<{ date: string; amount100mCny: number }>;
 };
 
 export type Sector = {
@@ -77,6 +95,7 @@ export type Sector = {
   pctChange: number | null;
   advancers: number | null;
   decliners: number | null;
+  mainNetInflow100mCny: number | null;
 };
 
 export type Sectors = {
@@ -117,6 +136,7 @@ export type ResearchChange = {
   symbol: string | null;
   summary: string;
   severity: string | null;
+  eventType: string | null;
   dataAsOf: string | null;
 };
 
@@ -212,26 +232,43 @@ export function parseOverview(value: unknown): Overview {
       marketLocalTime: requiredString(session.market_local_time, "session.market_local_time"),
     },
     headline: requiredString(summary.headline, "summary.headline"),
-    marketDate: requiredString(summary.market_date, "summary.market_date"),
+    marketDate: optionalString(summary.market_date),
     priorityCount: requiredNumber(summary.priority_count, "summary.priority_count"),
     relatedChangeCount: requiredNumber(summary.related_change_count, "summary.related_change_count"),
     priorityItems: items,
     priorityTotal: requiredNumber(priorities.total_visible, "priority_items.total_visible"),
-    priorityEmptyMessage: requiredString(priorities.empty_message, "priority_items.empty_message"),
+    priorityEmptyMessage: optionalString(priorities.empty_message),
     rankingMethod: requiredString(priorities.ranking_method, "priority_items.ranking_method"),
     coverageStatus: requiredString(coverage.status, "coverage.status"),
+    // themes 为后端固定顺序的主题卡（市场情绪/业绩披露/概念热度/资金流向），字段直通。
+    themes: list(root.themes).flatMap((raw) => {
+      const item = optionalRecord(raw);
+      const key = optionalString(item?.key);
+      const title = optionalString(item?.title);
+      const summary = optionalString(item?.summary);
+      if (!item || !key || !title || !summary) return [];
+      return [{
+        key,
+        title,
+        status: optionalString(item.status) ?? "unknown",
+        tone: optionalString(item.tone) ?? "unknown",
+        summary,
+        basis: optionalString(item.basis),
+      }];
+    }),
     warnings: strings(root.warnings),
     boundary: requiredString(root.boundary, "boundary"),
   };
 }
 
-const INDEX_ORDER = ["000001.SS", "399001.SZ", "399006.SZ", "000300.SS", "000688.SS"] as const;
+const INDEX_ORDER = ["000001.SS", "399001.SZ", "399006.SZ", "000300.SS", "000688.SS", "000905.SS"] as const;
 const INDEX_NAMES: Record<(typeof INDEX_ORDER)[number], string> = {
   "000001.SS": "上证综指",
   "399001.SZ": "深证成指",
   "399006.SZ": "创业板指",
   "000688.SS": "科创50",
   "000300.SS": "沪深300",
+  "000905.SS": "中证500",
 };
 
 export function parseIndices(value: unknown): Indices {
@@ -253,6 +290,8 @@ export function parseIndices(value: unknown): Indices {
         name: optionalString(item?.name) ?? INDEX_NAMES[symbol],
         status: optionalString(item?.status) ?? "unavailable",
         latestClose: optionalNumber(metrics?.latest_close),
+        // change_1d 与 return_1d_pct 均为后端已计算好的点位/百分数，直通不缩放。
+        change1d: optionalNumber(metrics?.change_1d),
         return1dPct: optionalNumber(metrics?.return_1d_pct),
         marketTimestamp: optionalString(item?.market_timestamp),
         isStale: optionalBoolean(item?.is_stale),
@@ -268,6 +307,27 @@ export function parseBreadth(value: unknown): Breadth {
   const turnover = optionalRecord(root.turnover);
   const history = optionalRecord(turnover?.history_comparison);
   const distribution = optionalRecord(root.distribution);
+  const bins7 = optionalRecord(distribution?.bins_7);
+  const bins = optionalRecord(distribution?.bins);
+  // 优先设计稿 7 桶口径（bins_7）；旧缓存快照没有 bins_7 时回退 5 桶。
+  const binSpec7 = [
+    ["le_neg7", "≤-7%"],
+    ["gt_neg7_le_neg3", "-7~-3%"],
+    ["gt_neg3_lt_0", "-3~0%"],
+    ["unchanged", "平盘"],
+    ["gt_0_lt_3", "0~3%"],
+    ["ge_3_lt_7", "3~7%"],
+    ["ge_7", "≥7%"],
+  ] as const;
+  const binSpec5 = [
+    ["strong_decliners_le_neg3", "≤-3%"],
+    ["mild_decliners_lt_0_gt_neg3", "-3~0%"],
+    ["unchanged", "平盘"],
+    ["mild_advancers_gt_0_lt_3", "0~3%"],
+    ["strong_advancers_ge_3", "≥3%"],
+  ] as const;
+  const activeBins = bins7 ?? bins;
+  const activeSpec = bins7 !== null ? binSpec7 : binSpec5;
   return {
     status: optionalString(root.status) ?? "unavailable",
     marketDate: optionalString(root.market_date),
@@ -280,11 +340,30 @@ export function parseBreadth(value: unknown): Breadth {
     unchanged: optionalNumber(breadth?.unchanged),
     advanceRatio: optionalNumber(breadth?.advance_ratio),
     declineRatio: optionalNumber(breadth?.decline_ratio),
+    unchangedRatio: optionalNumber(breadth?.unchanged_ratio),
     coverageRatio: optionalNumber(coverage?.coverage_ratio),
     turnoverStatus: optionalString(turnover?.status),
     turnover100mCny: optionalNumber(turnover?.total_amount_100m_cny),
     historyStatus: optionalString(history?.status),
+    // change_vs_previous_pct 后端已是百分数，直通不缩放。
+    turnoverChangeVsPreviousPct: optionalNumber(history?.change_vs_previous_pct),
     medianPctChange: optionalNumber(distribution?.median_pct_change),
+    distributionBins: activeBins === null
+      ? null
+      : activeSpec.flatMap(([key, label]) => {
+          const count = optionalNumber(activeBins[key]);
+          return count === null ? [] : [{ key, label, count }];
+        }),
+    limitUpCount: optionalNumber(breadth?.limit_up_count),
+    limitDownCount: optionalNumber(breadth?.limit_down_count),
+    limitMethod: optionalString(breadth?.limit_method),
+    turnoverHistory: list(root.turnover_history).flatMap((raw) => {
+      const item = optionalRecord(raw);
+      const date = optionalString(item?.date);
+      const amount = optionalNumber(item?.amount_100m_cny);
+      // amount_100m_cny 后端已换算为亿元，直通。
+      return item && date && amount !== null ? [{ date, amount100mCny: amount }] : [];
+    }),
   };
 }
 
@@ -301,12 +380,15 @@ export function parseSectors(value: unknown): Sectors {
       const code = optionalString(item?.code);
       const name = optionalString(item?.name);
       if (!item || !code || !name) return [];
+      // 东财 f62 原始单位为元，此处换算为亿元；新浪降级源为 null。
+      const inflowCny = optionalNumber(item.main_net_inflow);
       return [{
         code,
         name,
         pctChange: optionalNumber(item.pct_change),
         advancers: optionalNumber(item.advancers),
         decliners: optionalNumber(item.decliners),
+        mainNetInflow100mCny: inflowCny === null ? null : inflowCny / 1e8,
       }];
     }),
   };
@@ -378,6 +460,7 @@ export function parseResearchChanges(value: unknown): ResearchChanges {
         symbol: optionalString(item.symbol),
         summary,
         severity: optionalString(item.severity),
+        eventType: optionalString(item.event_type),
         dataAsOf: optionalString(item.data_as_of) ?? optionalString(item.created_at),
       }];
     }),
@@ -430,5 +513,242 @@ export function parseDataHealth(value: unknown): DataHealth {
     },
     categories: [...categoryMap.values()],
     actionableChecks: actionableChecks.slice(0, 5),
+  };
+}
+
+export type IndexHistory = {
+  closes: number[];
+  marketTimestamp: string | null;
+};
+
+export function parseIndexHistory(value: unknown): IndexHistory {
+  const root = record(value);
+  const closes = list(root.points).flatMap((raw) => {
+    const point = optionalRecord(raw);
+    const close = optionalNumber(point?.close);
+    return close === null ? [] : [close];
+  });
+  return { closes, marketTimestamp: optionalString(root.market_timestamp) };
+}
+
+export type LatestResearchReport = {
+  symbol: string | null;
+  name: string | null;
+  title: string;
+  institution: string | null;
+  researchers: string | null;
+  publishedAt: string | null;
+  rating: string | null;
+  forecastEps: number | null;
+  reportUrl: string | null;
+  summary: string | null;
+};
+
+export type LatestResearchReports = { status: string; items: LatestResearchReport[] };
+
+export function parseLatestResearchReports(value: unknown): LatestResearchReports {
+  const root = record(value);
+  return {
+    status: optionalString(root.status) ?? "empty",
+    items: list(root.items).flatMap((raw) => {
+      const item = optionalRecord(raw);
+      const title = optionalString(item?.title);
+      if (!item || !title) return [];
+      return [{
+        symbol: optionalString(item.symbol),
+        name: optionalString(item.name),
+        title,
+        institution: optionalString(item.institution),
+        researchers: optionalString(item.researchers),
+        publishedAt: optionalString(item.published_at),
+        rating: optionalString(item.rating),
+        // forecast_eps 单位元/股，直通不缩放。
+        forecastEps: optionalNumber(item.forecast_eps),
+        reportUrl: optionalString(item.report_url),
+        summary: optionalString(item.summary),
+      }];
+    }),
+  };
+}
+
+export type GlobalIndex = {
+  symbol: string;
+  name: string;
+  status: string;
+  latestClose: number | null;
+  change1d: number | null;
+  return1dPct: number | null;
+  marketTimestamp: string | null;
+  isStale: boolean | null;
+};
+
+export type GlobalIndices = { items: GlobalIndex[] };
+
+export function parseGlobalIndices(value: unknown): GlobalIndices {
+  const root = record(value);
+  return {
+    items: list(root.indices).flatMap((raw) => {
+      const item = optionalRecord(raw);
+      const symbol = optionalString(item?.symbol);
+      const name = optionalString(item?.name);
+      if (!item || !symbol || !name) return [];
+      const metrics = optionalRecord(item.metrics);
+      return [{
+        symbol,
+        name,
+        status: optionalString(item.status) ?? "unavailable",
+        latestClose: optionalNumber(metrics?.latest_close),
+        change1d: optionalNumber(metrics?.change_1d),
+        // return_1d_pct 后端已是百分数，直通不缩放。
+        return1dPct: optionalNumber(metrics?.return_1d_pct),
+        marketTimestamp: optionalString(item.market_timestamp),
+        isStale: optionalBoolean(item.is_stale),
+      }];
+    }),
+  };
+}
+
+export type LiveMarket = {
+  key: string;
+  name: string;
+  status: string;
+  latestPrice: number | null;
+  pctChange: number | null;
+  currency: string | null;
+  marketTimestamp: string | null;
+  isStale: boolean | null;
+};
+
+export type LiveMarkets = { items: LiveMarket[] };
+
+export function parseLiveMarkets(value: unknown): LiveMarkets {
+  const root = record(value);
+  return {
+    items: list(root.markets).flatMap((raw) => {
+      const item = optionalRecord(raw);
+      const key = optionalString(item?.key);
+      const name = optionalString(item?.name);
+      if (!item || !key || !name) return [];
+      return [{
+        key,
+        name,
+        status: optionalString(item.status) ?? "unavailable",
+        latestPrice: optionalNumber(item.latest_price),
+        // pct_change 后端已是百分数，直通不缩放。
+        pctChange: optionalNumber(item.pct_change),
+        currency: optionalString(item.currency),
+        marketTimestamp: optionalString(item.market_timestamp),
+        isStale: optionalBoolean(item.is_stale),
+      }];
+    }),
+  };
+}
+
+export type MarketAnomaly = {
+  symbol: string;
+  name: string | null;
+  kind: string;
+  pctChange: number | null;
+  amount100mCny: number | null;
+  tickTime: string | null;
+};
+
+export type MarketAnomalies = {
+  status: string;
+  marketTimestamp: string | null;
+  items: MarketAnomaly[];
+};
+
+export function parseMarketAnomalies(value: unknown): MarketAnomalies {
+  const root = record(value);
+  return {
+    status: optionalString(root.status) ?? "unavailable",
+    marketTimestamp: optionalString(root.market_timestamp),
+    items: list(root.items).flatMap((raw) => {
+      const item = optionalRecord(raw);
+      const symbol = optionalString(item?.symbol);
+      if (!item || !symbol) return [];
+      return [{
+        symbol,
+        name: optionalString(item.name),
+        kind: optionalString(item.kind) ?? "异动",
+        // pct_change 为百分数直通；amount_100m_cny 后端已换算为亿元。
+        pctChange: optionalNumber(item.pct_change),
+        amount100mCny: optionalNumber(item.amount_100m_cny),
+        tickTime: optionalString(item.tick_time),
+      }];
+    }),
+  };
+}
+
+export type CapitalFlowPoint = { time: string; value100mCny: number };
+
+export type CapitalFlow = {
+  status: string;
+  marketTimestamp: string | null;
+  isStale: boolean | null;
+  mainNetInflow100mCny: number | null;
+  unit: string | null;
+  points: CapitalFlowPoint[];
+  method: string | null;
+  warnings: string[];
+};
+
+export function parseCapitalFlow(value: unknown): CapitalFlow {
+  const root = record(value);
+  const summary = optionalRecord(root.summary);
+  return {
+    status: optionalString(root.status) ?? "unavailable",
+    marketTimestamp: optionalString(root.market_timestamp),
+    isStale: optionalBoolean(root.is_stale),
+    // main_net_inflow_100m_cny 后端已换算为亿元，直通不缩放。
+    mainNetInflow100mCny: optionalNumber(summary?.main_net_inflow_100m_cny),
+    unit: optionalString(summary?.unit),
+    points: list(root.points).flatMap((raw) => {
+      const point = optionalRecord(raw);
+      const time = optionalString(point?.time);
+      const amount = optionalNumber(point?.main_net_inflow_100m_cny);
+      return point && time && amount !== null ? [{ time, value100mCny: amount }] : [];
+    }),
+    method: optionalString(root.method),
+    warnings: strings(root.warnings),
+  };
+}
+
+export type PositionItem = {
+  workspaceId: string | null;
+  symbol: string;
+  name: string | null;
+  status: string | null;
+  quantity: number | null;
+  costBasis: number | null;
+  averageCost: number | null;
+};
+
+export type Positions = { status: string; items: PositionItem[] };
+
+export function parsePositions(value: unknown): Positions {
+  const root = record(value);
+  if (root.contract_version !== "position_ledger_v1") {
+    throw new ContractError("contract_version 不是 position_ledger_v1");
+  }
+  return {
+    status: optionalString(root.status) ?? "unavailable",
+    items: list(root.items).flatMap((raw) => {
+      const item = optionalRecord(raw);
+      const symbol = optionalString(item?.symbol);
+      if (!item || !symbol) return [];
+      const current = optionalRecord(item.current);
+      // quantity/cost_basis/average_cost 均为账本原值，直通；账本不含行情市值字段。
+      return [{
+        workspaceId: optionalString(item.workspace_id),
+        symbol,
+        name: optionalString(item.name),
+        status: optionalString(item.status),
+        quantity: optionalNumber(current?.quantity),
+        costBasis: optionalNumber(current?.cost_basis),
+        averageCost: optionalNumber(current?.average_cost),
+      }];
+    }),
   };
 }

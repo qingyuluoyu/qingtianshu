@@ -12,15 +12,16 @@ import { PlaceholderPage } from "../pages/PlaceholderPage";
 import "../styles/global.css";
 
 const pages = [
-  ["/screening", "透明选股", "解释筛选条件、结果来源和证据边界。"],
+  ["/screening", "选股策略", "解释筛选条件、结果来源和证据边界。"],
   ["/watchlist", "我的关注", "管理个人关注标的、判断版本与观察事项。"],
   ["/stocks/:symbol", "个股研究", "集中呈现单一标的的结构化研究工作区。"],
+  ["/market-data", "行情数据", "集中呈现指数、广度、板块与全球市场行情。"],
   ["/advisor/:conversationId?", "金融顾问", "承载个人金融问答与可追溯研究对话。"],
   ["/research-center", "研究中心", "汇集可核验研究产出、变化和结论。"],
 ] as const;
 
 function isProtectedPath(pathname: string): boolean {
-  return ["/today", "/screening", "/watchlist", "/research-center"].includes(pathname)
+  return ["/today", "/screening", "/watchlist", "/market-data", "/research-center"].includes(pathname)
     || /^\/stocks\/[^/]+$/.test(pathname)
     || /^\/advisor(?:\/[^/]+)?$/.test(pathname);
 }

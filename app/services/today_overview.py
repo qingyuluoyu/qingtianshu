@@ -59,6 +59,12 @@ class TodayOverviewService:
             "indices": lambda: self.analysis.get_indices(scope="all", group="china"),
             "breadth": self.analysis.market_breadth,
             "industries": lambda: self.analysis.hot_sectors(limit=5),
+            "capital_flow": lambda: self.analysis.capital_flow(),
+            "disclosure_events": lambda: {
+                "items": self.database.list_change_events(
+                    event_type="official_financial_disclosure", limit=60
+                )
+            },
             "tasks": lambda: self.observation_tasks.list_tasks(
                 user_id=user_id, limit=100
             ),
@@ -114,6 +120,14 @@ class TodayOverviewService:
             results.get("industries") or {},
             whitelist_changes,
         )
+        themes = self._themes_packet(
+            indices=results.get("indices") or {},
+            breadth=results.get("breadth") or {},
+            industries=results.get("industries") or {},
+            capital_flow=results.get("capital_flow") or {},
+            disclosure_events=(results.get("disclosure_events") or {}).get("items")
+            or [],
+        )
         personalized = self._personalized_packet(
             changes=results.get("changes") or {},
             whitelist_changes=whitelist_changes,
@@ -127,6 +141,8 @@ class TodayOverviewService:
                 ("indices", "指数数据暂未完整返回"),
                 ("breadth", "市场广度暂未完整返回"),
                 ("industries", "行业结构暂未完整返回"),
+                ("capital_flow", "大盘资金流向暂未完整返回"),
+                ("disclosure_events", "财报披露事件暂未完整返回"),
                 ("tasks", "个人观察任务暂未完整返回"),
                 ("actions", "研究行动暂未完整返回"),
                 ("changes", "与我相关的研究变化暂未完整返回"),
@@ -156,6 +172,7 @@ class TodayOverviewService:
                 ),
             },
             "market": market,
+            "themes": themes,
             "personalized": personalized,
             "coverage": {
                 "components": component_status,
@@ -582,6 +599,225 @@ class TodayOverviewService:
                     or "当前只展示已完成来源与规则验收的事件类型。"
                 ),
             },
+        }
+
+    @classmethod
+    def _themes_packet(
+        cls,
+        *,
+        indices: dict[str, Any],
+        breadth: dict[str, Any],
+        industries: dict[str, Any],
+        capital_flow: dict[str, Any],
+        disclosure_events: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """确定性主题卡：只聚合已确认的市场事实，不调用模型、不编造数据。"""
+        return [
+            cls._theme_market_sentiment(indices, breadth),
+            cls._theme_earnings_disclosure(disclosure_events),
+            cls._theme_concept_heat(industries),
+            cls._theme_capital_flow(capital_flow),
+        ]
+
+    @staticmethod
+    def _theme_market_sentiment(
+        indices: dict[str, Any], breadth: dict[str, Any]
+    ) -> dict[str, Any]:
+        basis = (
+            "来源：A股全市场广度快照与核心指数日线；口径：涨跌家数对比与"
+            "指数平均涨跌幅（return_1d_pct 为百分比直通值）符号投票，"
+            "两项都不可用时标注 unknown，不推测。"
+        )
+        breadth_facts = breadth.get("breadth") or {}
+        advancers = breadth_facts.get("advancers")
+        decliners = breadth_facts.get("decliners")
+        breadth_available = isinstance(advancers, (int, float)) and isinstance(
+            decliners, (int, float)
+        )
+        returns = [
+            float(metrics["return_1d_pct"])
+            for item in indices.get("indices") or []
+            if isinstance(
+                (metrics := item.get("metrics") or {}).get("return_1d_pct"),
+                (int, float),
+            )
+        ]
+        average_return = (
+            round(sum(returns) / len(returns), 2) if returns else None
+        )
+        if not breadth_available and average_return is None:
+            return {
+                "key": "market_sentiment",
+                "title": "市场情绪",
+                "status": "unavailable",
+                "tone": "unknown",
+                "summary": "市场广度与指数数据暂不可用，无法判断情绪。",
+                "basis": basis,
+            }
+        up_votes = 0
+        down_votes = 0
+        fragments = []
+        if breadth_available and advancers + decliners > 0:
+            if advancers > decliners:
+                up_votes += 1
+            elif decliners > advancers:
+                down_votes += 1
+            fragments.append(f"上涨{advancers}家、下跌{decliners}家")
+        if average_return is not None:
+            if average_return > 0:
+                up_votes += 1
+            elif average_return < 0:
+                down_votes += 1
+            fragments.append(f"主要指数平均涨跌{average_return}%")
+        tone = (
+            "positive"
+            if up_votes > down_votes
+            else "negative"
+            if down_votes > up_votes
+            else "neutral"
+        )
+        label = {"positive": "偏暖", "negative": "偏弱", "neutral": "均衡"}[tone]
+        return {
+            "key": "market_sentiment",
+            "title": "市场情绪",
+            "status": "available",
+            "tone": tone,
+            "summary": f"{'，'.join(fragments)}，情绪{label}。",
+            "basis": basis,
+        }
+
+    @classmethod
+    def _theme_earnings_disclosure(
+        cls, events: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        basis = (
+            "来源：change_events 表 official_financial_disclosure（由事件时间线"
+            "验收的官方财务披露）；口径：近45天已确认披露，只确认披露已发布，"
+            "不推断金额与影响。"
+        )
+        fresh = [event for event in events if cls._change_event_is_fresh(event)]
+        if not fresh:
+            return {
+                "key": "earnings_disclosure",
+                "title": "业绩预告/财报",
+                "status": "empty",
+                "tone": "unknown",
+                "summary": "近45天没有已确认的官方财报披露事件。",
+                "basis": basis,
+                "items": [],
+            }
+        items = [
+            {
+                "symbol": event.get("symbol"),
+                "name": (event.get("payload") or {}).get("name"),
+                "title": event.get("title"),
+                "occurred_at": event.get("occurred_at"),
+                "source_name": event.get("source_name"),
+            }
+            for event in fresh[:3]
+        ]
+        latest = items[0]
+        latest_name = latest.get("name") or latest.get("symbol")
+        return {
+            "key": "earnings_disclosure",
+            "title": "业绩预告/财报",
+            "status": "available",
+            "tone": "neutral",
+            "summary": (
+                f"近45天已确认{len(fresh)}条官方财报披露，"
+                f"最新为{latest_name}《{latest.get('title')}》。"
+            ),
+            "basis": basis,
+            "items": items,
+        }
+
+    @staticmethod
+    def _theme_concept_heat(industries: dict[str, Any]) -> dict[str, Any]:
+        basis = (
+            "来源：A股板块热度榜；口径：按 pct_change（百分比直通值）"
+            "降序取前三位，未做任何缩放或加权。"
+        )
+        sectors = [
+            sector
+            for sector in industries.get("sectors") or []
+            if sector.get("name")
+            and isinstance(sector.get("pct_change"), (int, float))
+        ]
+        sectors.sort(key=lambda sector: float(sector["pct_change"]), reverse=True)
+        top = sectors[:3]
+        if not top:
+            return {
+                "key": "concept_heat",
+                "title": "概念热度",
+                "status": "unavailable",
+                "tone": "unknown",
+                "summary": "热门板块数据暂不可用。",
+                "basis": basis,
+                "items": [],
+            }
+        average = round(
+            sum(float(sector["pct_change"]) for sector in top) / len(top), 2
+        )
+        tone = (
+            "positive" if average > 0 else "negative" if average < 0 else "neutral"
+        )
+        leaders = "、".join(
+            f"{sector['name']}{float(sector['pct_change']):+.2f}%" for sector in top
+        )
+        return {
+            "key": "concept_heat",
+            "title": "概念热度",
+            "status": "available",
+            "tone": tone,
+            "summary": f"热门板块：{leaders}。",
+            "basis": basis,
+            "items": [
+                {
+                    "code": sector.get("code"),
+                    "name": sector.get("name"),
+                    "pct_change": sector.get("pct_change"),
+                }
+                for sector in top
+            ],
+        }
+
+    @staticmethod
+    def _theme_capital_flow(capital_flow: dict[str, Any]) -> dict[str, Any]:
+        basis = (
+            "来源：东财沪深主力净流入分时累计（secid 1.000001 与 0.399001 "
+            "按分钟对齐相加）；单位：亿元人民币（提供器 /1e8 换算后直通，"
+            "本聚合不再缩放）。"
+        )
+        flow_summary = capital_flow.get("summary") or {}
+        value = flow_summary.get("main_net_inflow_100m_cny")
+        if capital_flow.get("status") != "available" or not isinstance(
+            value, (int, float)
+        ):
+            reason = next(
+                iter(capital_flow.get("warnings") or []),
+                "数据源未配置或暂不可用",
+            )
+            return {
+                "key": "capital_flow",
+                "title": "资金动向",
+                "status": "unavailable",
+                "tone": "unknown",
+                "summary": f"大盘资金流向暂不可用：{reason}",
+                "basis": basis,
+                "main_net_inflow_100m_cny": None,
+            }
+        tone = (
+            "positive" if value > 0 else "negative" if value < 0 else "neutral"
+        )
+        direction = "净流入" if value >= 0 else "净流出"
+        return {
+            "key": "capital_flow",
+            "title": "资金动向",
+            "status": "available",
+            "tone": tone,
+            "summary": f"沪深主力当日累计{direction}{abs(value)}亿元。",
+            "basis": basis,
+            "main_net_inflow_100m_cny": value,
         }
 
     @classmethod

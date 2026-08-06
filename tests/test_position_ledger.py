@@ -303,3 +303,50 @@ def test_adjustment_replays_cost_and_cross_user_access_is_hidden(app):
         },
     )
     assert forbidden.status_code == 404
+
+
+def test_position_list_requires_session_and_starts_empty(app):
+    client = TestClient(app)
+    assert client.get("/v1/positions").status_code == 401
+
+    _create_user(client, "Position List Empty")
+    payload = client.get("/v1/positions").json()
+    assert payload["contract_version"] == "position_ledger_v1"
+    assert payload["status"] == "empty"
+    assert payload["items"] == []
+    assert payload["warnings"]
+
+
+def test_position_list_matches_single_stock_snapshot_and_is_user_isolated(app):
+    owner = TestClient(app)
+    _create_user(owner, "Position List Owner")
+    _add_stock(owner)
+
+    # 仅关注未录持仓时不进入持仓列表。
+    watching = owner.get("/v1/positions").json()
+    assert watching["status"] == "empty"
+    assert watching["items"] == []
+
+    _opening(owner)
+    payload = owner.get("/v1/positions").json()
+    assert payload["status"] == "ready"
+    assert payload["warnings"] == []
+    assert "moving_weighted_average_v1" in payload["method"]
+    assert "直通不缩放" in payload["method"]
+    assert len(payload["items"]) == 1
+    item = payload["items"][0]
+    assert item["symbol"] == "000063.SZ"
+    assert item["name"] == "中兴通讯"
+    assert item["status"] == "ready"
+    single = owner.get("/v1/stocks/000063/position").json()
+    assert item["current"] == single["current"]
+    # 数量与金额（元）直通锁：与单股端点同一快照、同一文本精度。
+    assert item["current"]["quantity"] == "100.000000"
+    assert item["current"]["cost_basis"] == "1005.0000"
+    assert item["current"]["average_cost"] == "10.050000"
+
+    other = TestClient(app)
+    _create_user(other, "Position List Other")
+    other_payload = other.get("/v1/positions").json()
+    assert other_payload["status"] == "empty"
+    assert other_payload["items"] == []

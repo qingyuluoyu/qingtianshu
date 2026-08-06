@@ -81,6 +81,7 @@ from app.operations import build_operations_report
 from app.static_assets import STATIC_ASSET_MEDIA_TYPES
 from app.providers.market import (
     CSIIndustryIndexProvider,
+    EastmoneyCapitalFlowProvider,
     EastmoneySectorProvider,
     EastmoneyGlobalIndexProvider,
     ProviderError,
@@ -383,6 +384,11 @@ def create_app(
             ttl_seconds=settings.market_cache_seconds,
         )
     )
+    capital_flow_provider = (
+        None
+        if supplied_market_provider is not None
+        else EastmoneyCapitalFlowProvider(database)
+    )
     analysis = MarketAnalysisService(
         database,
         market_provider,
@@ -390,6 +396,7 @@ def create_app(
         breadth_provider=breadth_provider,
         industry_index_provider=industry_index_provider,
         china_index_provider=china_index_provider,
+        capital_flow_provider=capital_flow_provider,
     )
     agent = AgentService(database, settings)
     articles = MarketPulseArticleService(database, analysis, agent, settings)
@@ -2010,6 +2017,11 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @app.get("/v1/positions")
+    def list_my_positions(request: Request) -> dict[str, Any]:
+        user = require_session_user(request)
+        return position_ledger.list_positions(user["id"])
+
     @app.get("/v1/stocks/{symbol}/position")
     def get_my_stock_position(symbol: str, request: Request) -> dict[str, Any]:
         user = require_session_user(request)
@@ -2849,6 +2861,16 @@ def create_app(
     def market_breadth() -> dict[str, Any]:
         return analysis.market_breadth()
 
+    @app.get("/markets/anomalies")
+    def market_anomalies(
+        limit: int = Query(default=10, ge=1, le=50),
+    ) -> dict[str, Any]:
+        return analysis.market_anomalies(limit=limit)
+
+    @app.get("/markets/capital-flow")
+    def market_capital_flow() -> dict[str, Any]:
+        return analysis.capital_flow()
+
     @app.get("/api/v1/today/overview", include_in_schema=False)
     @app.get("/v1/today/overview")
     def get_today_overview(request: Request) -> dict[str, Any]:
@@ -3152,6 +3174,12 @@ def create_app(
         limit: int = Query(default=20, ge=1, le=100),
     ) -> dict[str, Any]:
         return {"items": research_reports.list_latest(limit=limit)}
+
+    @app.get("/research-reports/latest")
+    def list_latest_broker_research_reports(
+        limit: int = Query(default=20, ge=1, le=100),
+    ) -> dict[str, Any]:
+        return analyst_expectations.list_latest_reports(limit=limit)
 
     @app.get("/research-method")
     def get_research_method(

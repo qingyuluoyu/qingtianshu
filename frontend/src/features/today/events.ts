@@ -10,12 +10,18 @@ const researchKeys = [
 
 export function queryKeysForEvent(type: string): QueryKey[] {
   if (type === "market_updated") {
-    return [todayQueryKeys.overview, todayQueryKeys.indices, todayQueryKeys.breadth, todayQueryKeys.sectors];
+    return [todayQueryKeys.overview, todayQueryKeys.indices, todayQueryKeys.breadth, todayQueryKeys.sectors, todayQueryKeys.anomalies];
   }
   if (type === "data_health_updated") return [todayQueryKeys.dataHealth];
-  if (type === "evidence_tasks_updated" || type.startsWith("research-change")) return researchKeys;
-  // This page does not issue a report query, so report refreshes have no consumer to invalidate.
-  if (type === "research_reports_updated") return [];
+  // These jobs refresh change events server-side, which feed the overview priority
+  // items, research actions, and research changes consumed by this page.
+  if (
+    type === "evidence_tasks_updated" ||
+    type === "a_share_information_updated" ||
+    type === "research_reports_updated"
+  ) {
+    return researchKeys;
+  }
   return [];
 }
 
@@ -40,7 +46,7 @@ export function usePublicEvents(enabled: boolean): EventConnectionState {
         const type = (payload as { type?: unknown }).type;
         if (typeof type !== "string") return;
         const keys = queryKeysForEvent(type);
-        if (keys.length === 0 && import.meta.env.DEV && type !== "connected" && type !== "research_reports_updated") {
+        if (keys.length === 0 && import.meta.env.DEV && type !== "connected") {
           console.debug(`[events] ignored event type: ${type}`);
         }
         for (const queryKey of keys) void queryClient.invalidateQueries({ queryKey });

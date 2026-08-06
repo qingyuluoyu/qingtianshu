@@ -137,7 +137,7 @@ def test_market_health_uses_session_state_and_fresh_bars(settings):
 
     checks = service._market_checks(now)
 
-    assert len(checks) == 5
+    assert len(checks) == len(LIVE_MARKET_CATALOG)
     assert all(item["status"] == "healthy" for item in checks)
     assert (
         next(item for item in checks if item["key"] == "market:china")["session_status"]

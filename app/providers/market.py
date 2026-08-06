@@ -8,7 +8,7 @@ import json
 import math
 import re
 from statistics import median, quantiles
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -2178,6 +2178,23 @@ class SinaMarketBreadthProvider:
         return round((float(current) / float(previous) - 1) * 100, 4)
 
     @staticmethod
+    def _limit_threshold_pct(symbol: str) -> float | None:
+        """按板块返回每日涨跌停幅度（百分数）。
+
+        口径：主板(sh60/sz00) ±10%、创业板(sz30)/科创板(sh68) ±20%、
+        北交所(bj) ±30%。ST 股(±5%)无法从新浪快照字段区分，
+        按所属板块普通口径近似；无法识别板块前缀时返回 None，
+        不计入涨跌停统计。
+        """
+        if symbol.startswith(("sh60", "sz00")):
+            return 10.0
+        if symbol.startswith(("sz30", "sh68")):
+            return 20.0
+        if symbol.startswith("bj"):
+            return 30.0
+        return None
+
+    @staticmethod
     def _parse(
         rows: list[dict[str, Any]], *, total_expected: int
     ) -> dict[str, Any]:
@@ -2202,6 +2219,9 @@ class SinaMarketBreadthProvider:
         valid_amount = 0
         total_amount = 0.0
         changes: list[float] = []
+        limit_up_count = 0
+        limit_down_count = 0
+        anomaly_candidates: list[dict[str, Any]] = []
         for symbol, row in unique_rows.items():
             change = _number(row.get("changepercent"))
             if change is None:
@@ -2212,6 +2232,14 @@ class SinaMarketBreadthProvider:
                 "advancers" if change > 0 else "decliners" if change < 0 else "unchanged"
             )
             counts[direction] += 1
+            # 涨跌停近似判定：阈值较交易所限制留 0.2 个百分点余量
+            # （如主板 ≥9.8 计涨停、≤-9.8 计跌停），避免浮点/四舍五入边界漏计。
+            limit_threshold = SinaMarketBreadthProvider._limit_threshold_pct(symbol)
+            if limit_threshold is not None:
+                if change >= limit_threshold - 0.2:
+                    limit_up_count += 1
+                elif change <= -(limit_threshold - 0.2):
+                    limit_down_count += 1
             exchange = (
                 "shanghai"
                 if symbol.startswith("sh")
@@ -2234,6 +2262,29 @@ class SinaMarketBreadthProvider:
             tick_time = str(row.get("ticktime") or "").strip()
             if tick_time and (latest_tick_time is None or tick_time > latest_tick_time):
                 latest_tick_time = tick_time
+            # 异动候选：|涨跌幅| ≥ 7% 的个股，供 /markets/anomalies 派生；
+            # pct_change 为百分数直通，amount 换算为亿元。新浪快照通常带 name
+            # 字段，缺失时保留 None，不硬造名称。
+            if abs(float(change)) >= 7:
+                raw_name = row.get("name")
+                anomaly_candidates.append(
+                    {
+                        "symbol": symbol,
+                        "name": (
+                            str(raw_name).strip() or None
+                            if raw_name is not None
+                            else None
+                        ),
+                        "kind": "快速拉升" if change >= 7 else "快速下挫",
+                        "pct_change": float(change),
+                        "amount_100m_cny": (
+                            round(float(amount) / 100_000_000, 2)
+                            if amount is not None and amount >= 0
+                            else None
+                        ),
+                        "tick_time": tick_time or None,
+                    }
+                )
 
         if valid != total_expected:
             raise ProviderError(
@@ -2254,6 +2305,23 @@ class SinaMarketBreadthProvider:
             key: round(value / valid, 4)
             for key, value in distribution_bins.items()
         }
+        # 7 桶分布边界与既有 5 桶风格一致：下跌侧左开右闭（(-7,-3]、(-3,0)），
+        # 上涨侧左闭右开（(0,3)、[3,7)），两端 ≤-7 / ≥7 闭口，0 单独一桶
+        # 复用 unchanged 计数；7 桶合计等于 valid。
+        distribution_bins_7 = {
+            "le_neg7": sum(value <= -7 for value in changes),
+            "gt_neg7_le_neg3": sum(-7 < value <= -3 for value in changes),
+            "gt_neg3_lt_0": sum(-3 < value < 0 for value in changes),
+            "unchanged": counts["unchanged"],
+            "gt_0_lt_3": sum(0 < value < 3 for value in changes),
+            "ge_3_lt_7": sum(3 <= value < 7 for value in changes),
+            "ge_7": sum(value >= 7 for value in changes),
+        }
+        # 异动榜候选按 |涨跌幅| 降序，最多保留 50 条供接口切片。
+        anomaly_candidates.sort(
+            key=lambda item: abs(item["pct_change"]), reverse=True
+        )
+        anomaly_candidates = anomaly_candidates[:50]
         net_advancers = counts["advancers"] - counts["decliners"]
         if advance_ratio >= 0.65 and net_advancers >= 500:
             breadth_state = "普涨"
@@ -2301,6 +2369,14 @@ class SinaMarketBreadthProvider:
                 "advance_ratio": round(advance_ratio, 4),
                 "decline_ratio": round(decline_ratio, 4),
                 "unchanged_ratio": round(unchanged_ratio, 4),
+                "limit_up_count": limit_up_count,
+                "limit_down_count": limit_down_count,
+                "limit_method": (
+                    "涨停近似口径：主板(sh60/sz00)涨跌幅≥9.8%、创业板(sz30)/"
+                    "科创板(sh68)≥19.8%、北交所(bj)≥29.8%计为涨停，跌停对称；"
+                    "阈值较交易所±10%/±20%/±30%限制留0.2个百分点余量；"
+                    "ST股(±5%)无法从快照字段区分，为近似统计。"
+                ),
                 "state": breadth_state,
                 "classification_method": (
                     "普涨/普跌要求上涨或下跌比例至少65%，且涨跌家数净差至少500；"
@@ -2358,12 +2434,20 @@ class SinaMarketBreadthProvider:
                 "p75_pct_change": round(float(quartile_values[2]), 4),
                 "bins": distribution_bins,
                 "bin_ratios": distribution_bin_ratios,
+                "bins_7": distribution_bins_7,
+                "bins_7_method": (
+                    "7桶分布按涨跌幅百分数划分：≤-7、(-7,-3]、(-3,0)、=0、"
+                    "(0,3)、[3,7)、≥7；下跌侧左开右闭、上涨侧左闭右开，"
+                    "与既有±3%五桶边界风格一致，只描述当日分布，"
+                    "不是预测或交易阈值。"
+                ),
                 "method": (
                     "使用全体有效个股涨跌幅的中位数与四分位数；"
                     "固定±3%分档只用于描述当日分布，不是预测或交易阈值。"
                 ),
             },
             "exchange_breakdown": exchanges,
+            "anomaly_candidates": anomaly_candidates,
             "warnings": [
                 "该快照按新浪沪深京A股列表逐页汇总，包含北交所；"
                 "停牌或涨跌幅字段缺失时会拒绝确认全市场广度。"
@@ -2396,6 +2480,23 @@ class EastmoneyGlobalIndexProvider:
             "currency": "KRW",
             "exchange": "KRX",
             "timezone": "Asia/Seoul",
+        },
+        # 美元指数：东财全球指数 secid 100.UDI，trends 时间戳为北京时间标签。
+        "UDI": {
+            "secid": "100.UDI",
+            "name": "美元指数",
+            "currency": "USD",
+            "exchange": "ICE",
+            "timezone": "America/New_York",
+        },
+        # 美国10年期国债收益率：东财全球债券 secid 171.US10Y，数值为年化收益率
+        # 百分数（如 4.6208 表示 4.6208%），currency 记为 PCT 表示百分比口径。
+        "US10Y": {
+            "secid": "171.US10Y",
+            "name": "美国10年期国债收益率",
+            "currency": "PCT",
+            "exchange": "US Treasury",
+            "timezone": "America/New_York",
         },
     }
 
@@ -2515,10 +2616,28 @@ class EastmoneyGlobalIndexProvider:
 
 
 class SinaGoldProvider:
-    MINUTE_URL = (
-        "https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20qingshu_xau=/"
+    """新浪全球期货分钟线（伦敦金 XAU、布伦特原油 OIL 等），5分钟OHLC聚合。"""
+
+    MINUTE_URL: ClassVar[str] = (
+        "https://stock2.finance.sina.com.cn/futures/api/jsonp.php/var%20{var_name}=/"
         "GlobalFuturesService.getGlobalFuturesMinLine"
     )
+    SYMBOLS: ClassVar[dict[str, dict[str, str]]] = {
+        "XAU": {
+            "display_name": "伦敦金（现货黄金）",
+            "currency": "USD",
+            "exchange": "LIFFE reference",
+            "timezone": "Europe/London",
+        },
+        # 布伦特原油：新浪全球期货 symbol=OIL（ICE 连续合约），spike 验证
+        # getGlobalFuturesMinLine?symbol=OIL 返回当日分钟序列。
+        "OIL": {
+            "display_name": "布伦特原油（ICE连续合约）",
+            "currency": "USD",
+            "exchange": "ICE reference",
+            "timezone": "Europe/London",
+        },
+    }
 
     def __init__(
         self,
@@ -2530,15 +2649,19 @@ class SinaGoldProvider:
         self.ttl_seconds = ttl_seconds
         self.http_get = http_get
 
-    def fetch_intraday(self) -> dict[str, Any]:
-        cache_key = "sina:xau:intraday:5m"
+    def fetch_intraday(self, symbol: str = "XAU") -> dict[str, Any]:
+        config = self.SYMBOLS.get(symbol)
+        if config is None:
+            raise ProviderError("新浪全球期货分钟源不支持该标的")
+        var_name = f"qingshu_{symbol.lower()}"
+        cache_key = f"sina:{symbol.lower()}:intraday:5m"
         cached = self.database.get_cache(cache_key)
         if cached is not None:
             return cached
         try:
             response = self.http_get(
-                self.MINUTE_URL,
-                params={"symbol": "XAU"},
+                self.MINUTE_URL.format(var_name=var_name),
+                params={"symbol": symbol},
                 headers={
                     "User-Agent": "Mozilla/5.0 QingshuFinanceAgentDemo/0.1",
                     "Referer": "https://finance.sina.com.cn/",
@@ -2547,25 +2670,32 @@ class SinaGoldProvider:
             )
             response.raise_for_status()
             content = response.content.decode("gb18030", errors="replace")
-            result = self._parse(content)
+            result = self._parse(content, symbol)
             self.database.put_cache(cache_key, result, self.ttl_seconds)
             return result
         except Exception as exc:
             stale = self.database.get_cache(cache_key, allow_stale=True)
             if stale is not None:
-                stale.setdefault("warnings", []).append(f"新浪伦敦金请求失败：{type(exc).__name__}")
+                stale.setdefault("warnings", []).append(f"新浪{config['display_name']}请求失败：{type(exc).__name__}")
                 return stale
-            raise ProviderError(f"新浪伦敦金分钟数据不可用：{type(exc).__name__}: {exc}") from exc
+            raise ProviderError(f"新浪{config['display_name']}分钟数据不可用：{type(exc).__name__}: {exc}") from exc
 
     @staticmethod
-    def _parse(content: str) -> dict[str, Any]:
-        match = re.search(r"var\s+qingshu_xau=\((\{.*\})\)\s*;?", content, flags=re.DOTALL)
+    def _parse(content: str, symbol: str = "XAU") -> dict[str, Any]:
+        config = SinaGoldProvider.SYMBOLS.get(symbol)
+        if config is None:
+            raise ProviderError("新浪全球期货分钟源不支持该标的")
+        match = re.search(
+            rf"var\s+qingshu_{re.escape(symbol.lower())}=\((\{{.*\}})\)\s*;?",
+            content,
+            flags=re.DOTALL,
+        )
         if not match:
-            raise ProviderError("新浪伦敦金分钟数据格式无法识别")
+            raise ProviderError(f"新浪{config['display_name']}分钟数据格式无法识别")
         payload = json.loads(match.group(1))
         rows = payload.get("minLine_1d") or []
         if not rows:
-            raise ProviderError("新浪伦敦金未返回分钟记录")
+            raise ProviderError(f"新浪{config['display_name']}未返回分钟记录")
 
         previous_close = None
         if rows and rows[0] and re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(rows[0][0])):
@@ -2590,7 +2720,7 @@ class SinaGoldProvider:
                 continue
             raw_points.append((timestamp, price))
         if not raw_points:
-            raise ProviderError("新浪伦敦金分钟记录无法解析")
+            raise ProviderError(f"新浪{config['display_name']}分钟记录无法解析")
 
         latest_date = max(timestamp.date() for timestamp, _ in raw_points)
         current_day = [(timestamp, price) for timestamp, price in raw_points if timestamp.date() == latest_date]
@@ -2613,16 +2743,18 @@ class SinaGoldProvider:
         ]
         fetched_at = utc_now()
         return {
-            "symbol": "XAU",
-            "display_name": "伦敦金（现货黄金）",
-            "currency": "USD",
-            "exchange": "LIFFE reference",
-            "timezone": "Europe/London",
+            "symbol": symbol,
+            "display_name": config["display_name"],
+            "currency": config["currency"],
+            "exchange": config["exchange"],
+            "timezone": config["timezone"],
             "previous_close": previous_close,
             "regular_market_price": points[-1]["close"],
             "data_granularity": "5m",
-            "source": "Sina Global Futures XAU",
-            "source_url": SinaGoldProvider.MINUTE_URL,
+            "source": f"Sina Global Futures {symbol}",
+            "source_url": SinaGoldProvider.MINUTE_URL.format(
+                var_name=f"qingshu_{symbol.lower()}"
+            ),
             "market_timestamp": points[-1]["timestamp"],
             "fetched_at": fetched_at,
             "is_stale": False,
@@ -2634,8 +2766,158 @@ class SinaGoldProvider:
                 "first_timestamp": points[0]["timestamp"],
                 "last_timestamp": points[-1]["timestamp"],
             },
-            "warnings": ["分钟线由新浪 XAU 一分钟价格聚合为五分钟 OHLC。"],
+            "warnings": [f"分钟线由新浪 {symbol} 一分钟价格聚合为五分钟 OHLC。"],
             "points": points,
+        }
+
+
+class EastmoneyCapitalFlowProvider:
+    """东方财富大盘主力资金流：沪深分时累计主力净流入，统一换算为亿元。
+
+    接口与字段口径（spike 验证于 push2.eastmoney.com/api/qt/stock/fflow/kline/get，
+    klt=1，lmt=0，fields2=f51..f56）：
+    f51 分钟时间（北京时间标签）、f52 主力净流入当日累计（单位元）、
+    f53 小单、f54 中单、f55 大单、f56 超大单净流入累计（单位元）；
+    主力 = 大单 + 超大单（已用真实响应数值校验一致）。
+    沪深分列 secid 1.000001（上证指数）与 0.399001（深证成指），
+    按分钟时间戳对齐相加后 /1e8 换算为亿元；points 为当日累计序列。
+    注意：同一接口在 push2his 域名下大盘分时返回空，必须用 push2 域名。
+    """
+
+    URL: ClassVar[str] = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
+    SCOPES: ClassVar[dict[str, dict[str, str]]] = {
+        "shanghai": {"secid": "1.000001", "name": "沪市（上证指数 1.000001）"},
+        "shenzhen": {"secid": "0.399001", "name": "深市（深证成指 0.399001）"},
+    }
+    METHOD: ClassVar[str] = (
+        "数据源为东方财富 push2 fflow/kline/get（klt=1，lmt=0，fields2=f51..f56）；"
+        "f52 为主力净流入当日累计（单位元，主力=大单f55+超大单f56）；"
+        "沪深两条 secid（1.000001、0.399001）按分钟时间戳对齐相加，"
+        "/1e8 换算为亿元；points 为当日累计序列，summary 取最后一分钟；"
+        "金额为亿元、非百分数。"
+        "北向资金：港交所自2024-08起停止披露实时及日度北向成交净买额，"
+        "东财 kamt 接口 hk2sh/hk2sz 已连续返回0，本端点不提供北向口径。"
+    )
+
+    def __init__(
+        self,
+        database: Database,
+        ttl_seconds: int = 45,
+        http_get: Callable[..., Any] = requests.get,
+    ):
+        self.database = database
+        self.ttl_seconds = ttl_seconds
+        self.http_get = http_get
+
+    def fetch_intraday(self) -> dict[str, Any]:
+        cache_key = "eastmoney:capital-flow:intraday:1m"
+        cached = self.database.get_cache(cache_key)
+        if cached is not None:
+            return cached
+        try:
+            series = {
+                key: self._fetch_scope(config)
+                for key, config in self.SCOPES.items()
+            }
+            result = self._merge(series)
+            self.database.put_cache(cache_key, result, self.ttl_seconds)
+            return result
+        except Exception as exc:
+            stale = self.database.get_cache(cache_key, allow_stale=True)
+            if stale is not None:
+                stale["is_stale"] = True
+                stale.setdefault("warnings", []).append(
+                    f"大盘资金流请求失败，返回过期缓存：{type(exc).__name__}"
+                )
+                return stale
+            raise ProviderError(
+                f"大盘资金流数据不可用：{type(exc).__name__}: {exc}"
+            ) from exc
+
+    def _fetch_scope(self, config: dict[str, str]) -> dict[str, float]:
+        params = {
+            "secid": config["secid"],
+            "fields1": "f1,f2,f3,f7",
+            "fields2": "f51,f52,f53,f54,f55,f56",
+            "klt": "1",
+            "lmt": "0",
+        }
+        response = self.http_get(
+            self.URL,
+            params=params,
+            headers={
+                "User-Agent": "Mozilla/5.0 QingshuFinanceAgentDemo/0.1",
+                "Referer": "https://quote.eastmoney.com/center/gridlist.html",
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json().get("data") or {}
+        rows = data.get("klines") or []
+        if not rows:
+            raise ProviderError(f"大盘资金流源未返回{config['name']}分时记录")
+        shanghai = ZoneInfo("Asia/Shanghai")
+        points: dict[str, float] = {}
+        for raw in rows:
+            fields = str(raw).split(",")
+            if len(fields) < 2:
+                continue
+            try:
+                local_time = datetime.strptime(fields[0], "%Y-%m-%d %H:%M").replace(
+                    tzinfo=shanghai
+                )
+            except ValueError:
+                continue
+            # f52：主力净流入当日累计，单位元。
+            main_net = _number(fields[1])
+            if main_net is None:
+                continue
+            timestamp = local_time.astimezone(ZoneInfo("UTC")).isoformat(
+                timespec="seconds"
+            )
+            points[timestamp] = main_net
+        if not points:
+            raise ProviderError(f"大盘资金流{config['name']}分时记录无法解析")
+        return points
+
+    @staticmethod
+    def _merge(series: dict[str, dict[str, float]]) -> dict[str, Any]:
+        shanghai = series["shanghai"]
+        shenzhen = series["shenzhen"]
+        common = sorted(set(shanghai) & set(shenzhen))
+        if not common:
+            raise ProviderError("沪深大盘资金流分时记录无法按分钟对齐")
+        points = [
+            {
+                "time": timestamp,
+                "main_net_inflow_100m_cny": round(
+                    (shanghai[timestamp] + shenzhen[timestamp]) / 100_000_000, 2
+                ),
+            }
+            for timestamp in common
+        ]
+        last = common[-1]
+        return {
+            "status": "available",
+            "market_timestamp": points[-1]["time"],
+            "fetched_at": utc_now(),
+            "is_stale": False,
+            "cache_hit": False,
+            "source": "Eastmoney market-wide capital flow minute",
+            "source_url": EastmoneyCapitalFlowProvider.URL,
+            "summary": {
+                "main_net_inflow_100m_cny": points[-1]["main_net_inflow_100m_cny"],
+                "shanghai_100m_cny": round(shanghai[last] / 100_000_000, 2),
+                "shenzhen_100m_cny": round(shenzhen[last] / 100_000_000, 2),
+                "unit": "CNY_100m_yuan",
+                "scope": (
+                    "沪深A股合计：东财 secid 1.000001（沪市）与 0.399001（深市）"
+                    "主力净流入当日累计按分钟对齐相加"
+                ),
+            },
+            "points": points,
+            "method": EastmoneyCapitalFlowProvider.METHOD,
+            "warnings": [],
         }
 
 

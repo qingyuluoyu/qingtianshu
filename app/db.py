@@ -4969,13 +4969,20 @@ class Database:
         return self._change_event_row(row)
 
     def list_change_events(
-        self, *, symbol: str | None = None, limit: int = 100
+        self,
+        *,
+        symbol: str | None = None,
+        event_type: str | None = None,
+        limit: int = 100
     ) -> list[dict[str, Any]]:
         clauses: list[str] = []
         parameters: list[Any] = []
         if symbol:
             clauses.append("symbol = ?")
             parameters.append(symbol)
+        if event_type:
+            clauses.append("event_type = ?")
+            parameters.append(event_type)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         parameters.append(max(1, min(limit, 500)))
         with self.connect() as connection:
@@ -5180,6 +5187,31 @@ class Database:
                 LIMIT ?
                 """,
                 (symbol, max(1, min(limit, 100))),
+            ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["payload"] = json.loads(item.pop("payload_json") or "{}")
+            items.append(item)
+        return items
+
+    def list_latest_analyst_expectation_snapshots(
+        self, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM analyst_expectation_snapshots AS snapshots
+                WHERE id = (
+                    SELECT inner_snapshots.id
+                    FROM analyst_expectation_snapshots AS inner_snapshots
+                    WHERE inner_snapshots.symbol = snapshots.symbol
+                    ORDER BY inner_snapshots.created_at DESC, inner_snapshots.rowid DESC
+                    LIMIT 1
+                )
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (max(1, min(limit, 100)),),
             ).fetchall()
         items = []
         for row in rows:

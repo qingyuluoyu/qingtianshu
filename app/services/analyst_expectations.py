@@ -94,6 +94,72 @@ class AnalystExpectationsService:
             return self._latest_with_revision(canonical)
         return self._unavailable(canonical)
 
+    def list_latest_reports(self, limit: int = 20) -> dict[str, Any]:
+        """市场级券商研报列表：跨个股聚合已入库一致预期快照中的研报记录。"""
+        bounded_limit = max(1, min(int(limit), 100))
+        snapshots = self.database.list_latest_analyst_expectation_snapshots(
+            limit=bounded_limit
+        )
+        items = []
+        for snapshot in snapshots:
+            payload = snapshot.get("payload") or {}
+            symbol = str(payload.get("symbol") or snapshot.get("symbol") or "")
+            name = (
+                (RESEARCH_TARGETS.get(symbol) or {}).get("name")
+                or payload.get("name")
+                or snapshot.get("name")
+                or symbol
+            )
+            for report in payload.get("latest_reports") or []:
+                forecast_eps = [
+                    {"year": item.get("year"), "value": item.get("value")}
+                    for item in (report.get("forecast_eps") or [])
+                    if item.get("year") is not None and item.get("value") is not None
+                ]
+                items.append(
+                    {
+                        "symbol": symbol,
+                        "name": name,
+                        "title": report.get("title"),
+                        "institution": report.get("institution"),
+                        "researchers": report.get("researchers"),
+                        "published_at": report.get("published_at"),
+                        "rating": report.get("rating"),
+                        "previous_rating": report.get("previous_rating"),
+                        "forecast_eps": forecast_eps,
+                        "report_url": report.get("report_url"),
+                        "summary": _report_view_summary(
+                            institution=report.get("institution"),
+                            rating=report.get("rating"),
+                            previous_rating=report.get("previous_rating"),
+                            forecast_eps=forecast_eps,
+                        ),
+                    }
+                )
+        items.sort(
+            key=lambda item: str(item.get("published_at") or ""), reverse=True
+        )
+        items = items[:bounded_limit]
+        return {
+            "status": "ready" if items else "empty",
+            "items": items,
+            "method": (
+                "deterministic_broker_report_list_v1：取每只入库个股最新一条"
+                "分析师一致预期快照，汇总其中的券商研报记录并按发布时间倒序；"
+                "EPS预测值为元/股直通不缩放；只聚合已入库快照，不实时抓取。"
+            ),
+            "warnings": (
+                []
+                if items
+                else [
+                    (
+                        "当前没有已入库的券商研报快照；"
+                        "等待后台刷新或单股分析师一致预期请求落库后自动出现。"
+                    )
+                ]
+            ),
+        }
+
     def _build_packet(self, fetched: dict[str, Any]) -> dict[str, Any]:
         reports = [
             item for item in fetched.get("reports") or [] if item.get("title")
@@ -355,6 +421,37 @@ def _forecast_statement(forecasts: list[dict[str, Any]]) -> str:
         f"每股收益汇总为：{values}。A 表示历史实际值，E 表示券商预测均值；"
         "预测值不是公司正式指引或已实现业绩。"
     )
+
+
+def _report_view_summary(
+    *,
+    institution: Any,
+    rating: Any,
+    previous_rating: Any,
+    forecast_eps: list[dict[str, Any]],
+) -> str | None:
+    institution_text = str(institution or "").strip()
+    rating_text = str(rating or "").strip()
+    if not institution_text and not rating_text and not forecast_eps:
+        return None
+    parts = []
+    if institution_text and rating_text:
+        previous = str(previous_rating or "").strip()
+        if previous and previous != rating_text:
+            parts.append(
+                f"{institution_text}将评级由「{previous}」调整为「{rating_text}」"
+            )
+        else:
+            parts.append(f"{institution_text}给予「{rating_text}」评级")
+    elif rating_text:
+        parts.append(f"最新评级为「{rating_text}」")
+    if forecast_eps:
+        values = "，".join(
+            f"{item.get('year')}E {item.get('value')}元"
+            for item in forecast_eps[:2]
+        )
+        parts.append(f"预测每股收益（元/股直通值）：{values}")
+    return "；".join(parts) + "。" if parts else None
 
 
 def _difference(current: Any, previous: Any) -> int | None:

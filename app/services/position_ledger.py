@@ -6,7 +6,7 @@ import json
 from typing import Any
 from uuid import uuid4
 
-from app.catalog import INDEX_CATALOG, normalize_symbol
+from app.catalog import INDEX_CATALOG, RESEARCH_TARGETS, normalize_symbol
 from app.db import Database
 from app.utils import json_dumps, utc_now
 
@@ -90,6 +90,79 @@ class PositionLedgerService:
             adjustments=[dict(row) for row in adjustments],
             snapshots=[dict(row) for row in snapshots],
         )
+
+    def list_positions(self, user_id: str) -> dict[str, Any]:
+        """列出当前用户全部持仓：与单股端点同一移动加权平均快照口径。"""
+        with self.database.connect() as connection:
+            workspaces = connection.execute(
+                """
+                SELECT * FROM stock_workspaces
+                WHERE user_id = ? AND relation_type = 'holding'
+                      AND ended_at IS NULL
+                ORDER BY updated_at DESC, rowid DESC
+                """,
+                (user_id,),
+            ).fetchall()
+            items = []
+            for workspace in workspaces:
+                snapshot = connection.execute(
+                    """
+                    SELECT * FROM position_snapshots
+                    WHERE user_id = ? AND workspace_id = ?
+                    ORDER BY created_at DESC, rowid DESC LIMIT 1
+                    """,
+                    (user_id, workspace["id"]),
+                ).fetchone()
+                public_snapshot = (
+                    self._snapshot(dict(snapshot)) if snapshot is not None else None
+                )
+                symbol = str(workspace["symbol"])
+                items.append(
+                    {
+                        "workspace_id": workspace["id"],
+                        "symbol": symbol,
+                        "name": self._display_name(
+                            symbol, workspace["name"]
+                        ),
+                        "status": (
+                            "ready"
+                            if public_snapshot
+                            and public_snapshot["data_status"] == "complete"
+                            else "partial"
+                        ),
+                        "current": public_snapshot,
+                    }
+                )
+        return {
+            "contract_version": self.CONTRACT_VERSION,
+            "status": "ready" if items else "empty",
+            "items": items,
+            "method": (
+                "持仓列表按用户隔离读取 relation_type='holding' 的股票空间与"
+                "最新派生快照；数量、成本、均价与单股持仓端点同一移动加权平均"
+                "口径（moving_weighted_average_v1），金额单位为元、直通不缩放；"
+                "市值需要行情源参与，持仓账本不保存行情，因此不返回市值。"
+            ),
+            "warnings": (
+                []
+                if items
+                else ["当前没有持仓记录；录入期初持仓后会自动出现在这里。"]
+            ),
+            "boundary": (
+                "持仓由期初、操作、修正和非交易调整流水派生；"
+                "费用缺失时不展示伪精确净收益。持仓列表不构成买卖建议。"
+            ),
+        }
+
+    @staticmethod
+    def _display_name(symbol: str, workspace_name: Any) -> str:
+        configured = str(
+            (RESEARCH_TARGETS.get(symbol) or {}).get("name") or ""
+        ).strip()
+        if configured:
+            return configured
+        fallback = " ".join(str(workspace_name or "").split()).strip()
+        return fallback or symbol
 
     def create_opening(
         self,

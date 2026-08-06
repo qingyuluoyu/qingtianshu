@@ -125,11 +125,13 @@ class FakeSectorProvider:
 
 
 class FakeGoldProvider:
-    def fetch_intraday(self) -> dict[str, Any]:
+    def fetch_intraday(self, symbol: str = "XAU") -> dict[str, Any]:
         history = FakeMarketProvider().fetch_history(
-            "XAU", range_name="1d", interval="5m"
+            symbol, range_name="1d", interval="5m"
         )
-        history["display_name"] = "伦敦金（测试）"
+        history["display_name"] = (
+            "伦敦金（测试）" if symbol == "XAU" else f"{symbol}（测试）"
+        )
         history["source"] = "Fake gold provider"
         history["previous_close"] = 100.0
         history["coverage"]["interval"] = "5m"

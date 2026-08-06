@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -1560,6 +1561,137 @@ def test_today_overview_requires_session_and_returns_independent_components(clie
     assert "不构成买卖" in payload["boundary"]
 
 
+def test_today_overview_themes_are_deterministic_and_degrade_cleanly(client):
+    create_user(client, "Themes Alice")
+
+    response = client.get("/v1/today/overview")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["contract_version"] == "today_overview_v1"
+    themes = payload["themes"]
+    assert [card["key"] for card in themes] == [
+        "market_sentiment",
+        "earnings_disclosure",
+        "concept_heat",
+        "capital_flow",
+    ]
+    by_key = {card["key"]: card for card in themes}
+    sentiment = by_key["market_sentiment"]
+    assert sentiment["status"] == "available"
+    assert sentiment["tone"] == "positive"
+    assert "主要指数平均涨跌" in sentiment["summary"]
+    assert "直通" in sentiment["basis"]
+    disclosure = by_key["earnings_disclosure"]
+    assert disclosure["status"] == "empty"
+    assert disclosure["tone"] == "unknown"
+    assert disclosure["items"] == []
+    concept = by_key["concept_heat"]
+    assert concept["status"] == "available"
+    assert concept["tone"] == "positive"
+    # pct_change 直通锁：板块涨跌幅为百分比原值，不缩放。
+    assert concept["items"][0] == {
+        "code": "BK0000",
+        "name": "算力",
+        "pct_change": 3.5,
+    }
+    assert "算力+3.50%" in concept["summary"]
+    flow = by_key["capital_flow"]
+    assert flow["status"] == "unavailable"
+    assert flow["tone"] == "unknown"
+    assert flow["main_net_inflow_100m_cny"] is None
+    assert "亿元" in flow["basis"]
+    assert "暂不可用" in flow["summary"]
+
+    second = client.get("/v1/today/overview").json()
+    assert second["themes"] == themes
+
+
+def test_today_overview_themes_with_breadth_flow_and_disclosures(app):
+    client = TestClient(app)
+    create_user(client, "Themes Bob")
+
+    class _BreadthProvider:
+        def fetch_breadth(self):
+            return {
+                "source": "Fake breadth",
+                "market_timestamp": "2026-07-20T07:00:00+00:00",
+                "market_date": "2026-07-20",
+                "fetched_at": "2026-07-20T07:00:01+00:00",
+                "is_stale": False,
+                "coverage": {
+                    "expected": 5000,
+                    "returned": 5000,
+                    "valid_change": 5000,
+                    "coverage_ratio": 1.0,
+                },
+                "warnings": [],
+                "breadth": {
+                    "state": "普跌",
+                    "advancers": 800,
+                    "decliners": 4200,
+                },
+                "exchange_breakdown": {},
+                "status": "available",
+                "scope": "all_a_shares_including_beijing",
+            }
+
+    class _CapitalFlowProvider:
+        def fetch_intraday(self):
+            return {
+                "status": "available",
+                "market_timestamp": "2026-07-20T07:00:00+00:00",
+                "is_stale": False,
+                "summary": {
+                    "main_net_inflow_100m_cny": -36.2,
+                    "unit": "CNY_100m_yuan",
+                    "scope": "fake",
+                },
+                "points": [],
+                "method": "fake capital flow（亿元）",
+                "warnings": [],
+            }
+
+    app.state.analysis.breadth_provider = _BreadthProvider()
+    app.state.analysis.capital_flow_provider = _CapitalFlowProvider()
+
+    occurred = datetime.now(UTC).isoformat(timespec="seconds")
+    app.state.database.upsert_change_event(
+        symbol="000063.SZ",
+        event_type="official_financial_disclosure",
+        title="2026年半年度业绩预告",
+        fact_summary="中兴通讯于今日发布《2026年半年度业绩预告》。",
+        occurred_at=occurred,
+        detected_at=occurred,
+        source_name="公司公告",
+        source_url=None,
+        data_status="confirmed_disclosure",
+        rule_version="official_financial_disclosure_v1",
+        dedupe_hash="test-themes-disclosure-000063",
+        payload={"name": "中兴通讯"},
+    )
+
+    payload = client.get("/v1/today/overview").json()
+    by_key = {card["key"]: card for card in payload["themes"]}
+    sentiment = by_key["market_sentiment"]
+    assert sentiment["status"] == "available"
+    assert "上涨800家、下跌4200家" in sentiment["summary"]
+    # 广度看跌、指数看涨各一票，情绪判定为均衡。
+    assert sentiment["tone"] == "neutral"
+    flow = by_key["capital_flow"]
+    assert flow["status"] == "available"
+    assert flow["tone"] == "negative"
+    # 亿元直通锁：提供器换算后的值原样透出，聚合不再缩放。
+    assert flow["main_net_inflow_100m_cny"] == -36.2
+    assert "净流出36.2亿元" in flow["summary"]
+    disclosure = by_key["earnings_disclosure"]
+    assert disclosure["status"] == "available"
+    assert disclosure["tone"] == "neutral"
+    assert "近45天已确认1条" in disclosure["summary"]
+    assert disclosure["items"][0]["title"] == "2026年半年度业绩预告"
+    assert disclosure["items"][0]["name"] == "中兴通讯"
+
+
 def test_conversation_quality_endpoint_is_user_isolated(app):
     alice_client = TestClient(app)
     bob_client = TestClient(app)
@@ -1588,18 +1720,21 @@ def test_conversation_quality_endpoint_is_user_isolated(app):
     assert bob_quality.json()["summary"]["messages"] == 0
 
 
-def test_live_markets_include_five_regions_and_persist_intraday_bars(client, app):
+def test_live_markets_include_eight_instruments_and_persist_intraday_bars(client, app):
     response = client.get("/markets/live")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["coverage"]["requested"] == 5
-    assert payload["coverage"]["available"] == 5
+    assert payload["coverage"]["requested"] == 8
+    assert payload["coverage"]["available"] == 8
     assert {item["key"] for item in payload["markets"]} == {
         "china",
         "japan",
         "korea",
         "us",
         "london_gold",
+        "dollar_index",
+        "brent_crude",
+        "us10y_yield",
     }
     for item in payload["markets"]:
         assert item["points"]
@@ -1619,12 +1754,30 @@ def test_live_markets_include_five_regions_and_persist_intraday_bars(client, app
             "holiday",
         }
         assert item["source"]
-    stocks = [item for item in payload["markets"] if item["key"] != "london_gold"]
+    stocks = [
+        item
+        for item in payload["markets"]
+        if item["key"] in {"china", "japan", "korea", "us"}
+    ]
     assert all(item["calendar_status"] == "verified" for item in stocks)
     assert "交易所日历" in payload["session_method"]
     stored = app.state.database.get_market_bars("000001.SS", "1m", limit=200)
     assert len(stored) == 100
     assert stored[-1]["close"] is not None
+
+
+def test_capital_flow_endpoint_degrades_without_provider(client):
+    response = client.get("/markets/capital-flow")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "unavailable"
+    assert payload["market_timestamp"] is None
+    assert payload["points"] == []
+    assert payload["summary"]["main_net_inflow_100m_cny"] is None
+    assert payload["summary"]["unit"] == "CNY_100m_yuan"
+    assert "亿元" in payload["method"]
+    assert "北向" in payload["method"]
+    assert payload["warnings"]
 
 
 def test_stock_history_supports_diagnosis_kline_and_technical_metrics(client):
@@ -1860,6 +2013,48 @@ def test_demo_user_is_seeded_with_three_research_targets_and_clickable_report(cl
     assert "4.96 万亿美元" in nvda_body
     assert "固定同行估值样本" in nvda_body
     assert "超威半导体、博通、台积电" in nvda_body
+
+
+def test_broker_research_report_market_list_aggregates_ingested_snapshots(
+    client, app
+):
+    empty = client.get("/research-reports/latest")
+    assert empty.status_code == 200
+    empty_payload = empty.json()
+    assert empty_payload["status"] == "empty"
+    assert empty_payload["items"] == []
+    assert empty_payload["warnings"]
+
+    app.state.analyst_expectations.refresh_symbol("000063.SZ")
+    app.state.analyst_expectations.refresh_symbol("300308.SZ")
+
+    response = client.get("/research-reports/latest", params={"limit": 10})
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["warnings"] == []
+    assert "直通不缩放" in payload["method"]
+    items = payload["items"]
+    assert len(items) == 2
+    assert {item["symbol"] for item in items} == {"000063.SZ", "300308.SZ"}
+    assert {item["name"] for item in items} == {"中兴通讯", "中际旭创"}
+    first = items[0]
+    assert first["title"] == "算力业务打开新空间"
+    assert first["institution"] == "测试证券"
+    assert first["researchers"] == "测试分析师"
+    assert first["published_at"] == "2026-07-18"
+    assert first["rating"] == "买入"
+    assert first["previous_rating"] == "增持"
+    # EPS 直通锁：券商预测值（元/股）原样透出，不做任何缩放。
+    assert first["forecast_eps"] == [
+        {"year": 2026, "value": 1.4},
+        {"year": 2027, "value": 1.65},
+    ]
+    assert "买入" in first["summary"]
+    assert "1.4元" in first["summary"]
+
+    limited = client.get("/research-reports/latest", params={"limit": 1}).json()
+    assert len(limited["items"]) == 1
 
 
 def test_chat_understands_default_company_names_and_price_move_questions(client, app):
@@ -2263,6 +2458,202 @@ def test_market_sector_answer_uses_complete_a_share_breadth(client, app):
     assert "个股涨跌幅分布：中位数 0.72%" in payload["answer"]
     assert "当前仍缺少指数成分贡献度" in payload["answer"]
     assert "不能确认的部分" in payload["answer"]
+
+
+def test_market_breadth_exposes_derived_limits_bins_7_and_turnover_history(
+    client, app
+):
+    class FakeBreadthProvider:
+        @staticmethod
+        def fetch_breadth():
+            return {
+                "source": "Fake A-share breadth",
+                "fetched_at": "2026-08-05T07:00:00+00:00",
+                "market_timestamp": None,
+                "market_date": "2026-08-05",
+                "is_stale": False,
+                "status": "available",
+                "scope": "all_a_shares_including_beijing",
+                "coverage": {
+                    "expected": 5528,
+                    "returned": 5528,
+                    "valid_change": 5528,
+                    "coverage_ratio": 1.0,
+                    "latest_tick_time": "15:00:00",
+                },
+                "breadth": {
+                    "total": 5528,
+                    "advancers": 3107,
+                    "decliners": 2300,
+                    "unchanged": 121,
+                    "limit_up_count": 42,
+                    "limit_down_count": 7,
+                    "limit_method": "涨停近似口径（±10%/±20%/±30%留0.2pp余量）",
+                },
+                "turnover": {
+                    "status": "available",
+                    "total_amount_cny": 1_200_000_000_000,
+                },
+                "distribution": {
+                    "status": "available",
+                    "bins_7": {
+                        "le_neg7": 100,
+                        "gt_neg7_le_neg3": 400,
+                        "gt_neg3_lt_0": 1800,
+                        "unchanged": 121,
+                        "gt_0_lt_3": 1907,
+                        "ge_3_lt_7": 1100,
+                        "ge_7": 100,
+                    },
+                    "bins_7_method": "7桶分布边界说明",
+                },
+                "exchange_breakdown": {},
+                "anomaly_candidates": [],
+                "warnings": [],
+            }
+
+    app.state.analysis.breadth_provider = FakeBreadthProvider()
+    database = app.state.database
+    database.upsert_market_breadth_snapshot(
+        {
+            "market_date": "2026-08-04",
+            "turnover": {"status": "available", "total_amount_cny": 1_100_000_000_000},
+        }
+    )
+    database.upsert_market_breadth_snapshot(
+        {
+            "market_date": "2026-08-03",
+            "turnover": {"status": "available", "total_amount_cny": 950_000_000_000},
+        }
+    )
+    database.upsert_market_breadth_snapshot(
+        {"market_date": "2026-08-01", "turnover": {"status": "incomplete"}}
+    )
+
+    response = client.get("/markets/breadth")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["breadth"]["limit_up_count"] == 42
+    assert payload["breadth"]["limit_down_count"] == 7
+    assert payload["breadth"]["limit_method"]
+    assert payload["distribution"]["bins_7"]["ge_7"] == 100
+    assert payload["distribution"]["bins_7_method"]
+    # 按日期升序、金额换算为亿元；缺少成交额的快照日期跳过。
+    assert payload["turnover_history"] == [
+        {"date": "2026-08-03", "amount_100m_cny": 9500.0},
+        {"date": "2026-08-04", "amount_100m_cny": 11000.0},
+    ]
+    assert "turnover_history_method" in payload
+
+
+def test_market_breadth_turnover_history_degrades_to_empty_list(client, app):
+    app.state.analysis.breadth_provider = None
+
+    response = client.get("/markets/breadth")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "unavailable"
+    assert payload["turnover_history"] == []
+    assert "turnover_history_method" in payload
+
+
+def test_market_anomalies_returns_ranked_items(client, app):
+    class FakeBreadthProvider:
+        @staticmethod
+        def fetch_breadth():
+            return {
+                "source": "Fake A-share breadth",
+                "fetched_at": "2026-08-05T07:00:00+00:00",
+                "market_timestamp": None,
+                "market_date": "2026-08-05",
+                "is_stale": False,
+                "status": "available",
+                "anomaly_candidates": [
+                    {
+                        "symbol": "bj920001",
+                        "name": None,
+                        "kind": "快速拉升",
+                        "pct_change": 29.85,
+                        "amount_100m_cny": 3.5,
+                        "tick_time": "15:00:00",
+                    },
+                    {
+                        "symbol": "sz300001",
+                        "name": "测试股",
+                        "kind": "快速下挫",
+                        "pct_change": -19.85,
+                        "amount_100m_cny": 12.3,
+                        "tick_time": "14:59:00",
+                    },
+                ],
+                "warnings": [],
+            }
+
+    app.state.analysis.breadth_provider = FakeBreadthProvider()
+
+    response = client.get("/markets/anomalies")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "available"
+    assert payload["market_date"] == "2026-08-05"
+    assert payload["is_stale"] is False
+    assert [item["symbol"] for item in payload["items"]] == [
+        "bj920001",
+        "sz300001",
+    ]
+    assert payload["items"][0]["name"] is None
+    assert payload["items"][1]["kind"] == "快速下挫"
+    assert payload["items"][1]["pct_change"] == -19.85
+    assert payload["items"][1]["amount_100m_cny"] == 12.3
+    assert payload["items"][1]["tick_time"] == "14:59:00"
+    assert "≥7%" in payload["method"]
+
+    limited = client.get("/markets/anomalies", params={"limit": 1})
+    assert limited.status_code == 200
+    assert len(limited.json()["items"]) == 1
+    assert client.get("/markets/anomalies", params={"limit": 0}).status_code == 422
+    assert client.get("/markets/anomalies", params={"limit": 51}).status_code == 422
+
+
+def test_market_anomalies_degrades_without_raising_500(client, app):
+    app.state.analysis.breadth_provider = None
+
+    response = client.get("/markets/anomalies")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "unavailable"
+    assert payload["items"] == []
+    assert payload["warnings"]
+    assert payload["method"]
+
+    class FailingBreadthProvider:
+        @staticmethod
+        def fetch_breadth():
+            raise ProviderError("新浪A股全市场广度不可用")
+
+    app.state.analysis.breadth_provider = FailingBreadthProvider()
+    failed = client.get("/markets/anomalies")
+    assert failed.status_code == 200
+    assert failed.json()["status"] == "unavailable"
+    assert failed.json()["items"] == []
+
+
+def test_indices_metrics_include_change_1d(client):
+    response = client.get("/indices")
+
+    assert response.status_code == 200
+    payload = response.json()
+    available = [item for item in payload["indices"] if item["status"] == "available"]
+    assert available
+    for item in available:
+        assert "change_1d" in item["metrics"]
+    shanghai = next(item for item in available if item["symbol"] == "000001.SS")
+    # Fake 数据源相邻两日收盘差：0.35 + 0.16 - 0.08 = 0.43，与 return_1d_pct 同基准。
+    assert shanghai["metrics"]["change_1d"] == 0.43
 
 
 def test_market_structure_question_takes_priority_over_turnover_keyword(client, app):

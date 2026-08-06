@@ -9,6 +9,7 @@ describe("/events invalidation mapping", () => {
       todayQueryKeys.indices,
       todayQueryKeys.breadth,
       todayQueryKeys.sectors,
+      todayQueryKeys.anomalies,
     ]);
   });
 
@@ -19,12 +20,16 @@ describe("/events invalidation mapping", () => {
       todayQueryKeys.researchActions,
       todayQueryKeys.researchChanges,
     ]);
-    expect(queryKeysForEvent("research-change:000063.SZ")).toEqual([
+    expect(queryKeysForEvent("a_share_information_updated")).toEqual([
       todayQueryKeys.overview,
       todayQueryKeys.researchActions,
       todayQueryKeys.researchChanges,
     ]);
-    expect(queryKeysForEvent("research_reports_updated")).toEqual([]);
+    expect(queryKeysForEvent("research_reports_updated")).toEqual([
+      todayQueryKeys.overview,
+      todayQueryKeys.researchActions,
+      todayQueryKeys.researchChanges,
+    ]);
     expect(queryKeysForEvent("unknown_event")).toEqual([]);
   });
 });

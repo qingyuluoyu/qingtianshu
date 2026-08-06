@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.providers.market import ProviderError
 from app.services.analysis import (
     _current_quote_snapshot,
     _validated_index_metrics,
@@ -374,6 +375,16 @@ def test_current_quote_snapshot_does_not_call_post_close_quote_intraday():
     assert quote["is_intraday"] is False
 
 
+def test_analyze_history_exposes_change_1d_with_same_base_as_return_1d():
+    history = {"points": [{"close": 100.0}, {"close": 102.5}, {"close": 101.0}]}
+
+    metrics = analyze_history(history)
+
+    assert metrics["change_1d"] == -1.5
+    assert metrics["return_1d_pct"] == period_return([100.0, 102.5, 101.0], 1)
+    assert analyze_history({"points": [{"close": 100.0}]})["change_1d"] is None
+
+
 def test_index_one_day_return_is_withheld_when_previous_session_is_missing():
     history = {
         "timezone": "Asia/Shanghai",
@@ -386,6 +397,7 @@ def test_index_one_day_return_is_withheld_when_previous_session_is_missing():
     metrics = _validated_index_metrics(history, "000300.SS")
 
     assert metrics["return_1d_pct"] is None
+    assert metrics["change_1d"] is None
     assert metrics["return_1d_status"] == "missing_previous_session"
     assert metrics["return_1d_expected_previous_market_date"] == "2026-07-21"
 
@@ -638,3 +650,51 @@ def test_optional_industry_gap_does_not_override_ready_core_evidence():
     assert board["readiness"]["status"] == "ready"
     assert board["readiness"]["optional_gaps"] == ["行业供需与一致预期尚未接入"]
     assert "直接回答" in board["readiness"]["response_policy"]
+
+
+
+def test_capital_flow_service_passthrough_and_degradation():
+    class FakeCapitalFlowProvider:
+        def fetch_intraday(self):
+            return {
+                "status": "available",
+                "market_timestamp": "2026-08-06T01:32:00+00:00",
+                "is_stale": False,
+                "summary": {
+                    "main_net_inflow_100m_cny": -163.4,
+                    "unit": "CNY_100m_yuan",
+                    "scope": "沪深A股合计",
+                },
+                "points": [
+                    {
+                        "time": "2026-08-06T01:32:00+00:00",
+                        "main_net_inflow_100m_cny": -163.4,
+                    }
+                ],
+                "method": "fake method",
+                "warnings": [],
+            }
+
+    available = MarketAnalysisService(
+        None, None, None, capital_flow_provider=FakeCapitalFlowProvider()
+    ).capital_flow()
+    assert available["status"] == "available"
+    assert available["summary"]["main_net_inflow_100m_cny"] == -163.4
+
+    class BrokenCapitalFlowProvider:
+        def fetch_intraday(self):
+            raise ProviderError("大盘资金流数据不可用：ConnectionError")
+
+    degraded = MarketAnalysisService(
+        None, None, None, capital_flow_provider=BrokenCapitalFlowProvider()
+    ).capital_flow()
+    assert degraded["status"] == "unavailable"
+    assert degraded["points"] == []
+    assert degraded["summary"]["main_net_inflow_100m_cny"] is None
+    assert degraded["summary"]["unit"] == "CNY_100m_yuan"
+    assert "北向" in degraded["method"]
+    assert degraded["warnings"] == ["大盘资金流数据不可用：ConnectionError"]
+
+    missing = MarketAnalysisService(None, None, None).capital_flow()
+    assert missing["status"] == "unavailable"
+    assert missing["warnings"] == ["当前运行环境没有配置大盘资金流提供器。"]

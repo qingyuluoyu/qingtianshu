@@ -14,6 +14,11 @@ class FakeDatabase:
             {"symbol": "NVDA", "name": "英伟达"},
         ]
 
+    def list_change_events(
+        self, *, event_type: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        return []
+
 
 class FakeAnalysis:
     def get_indices(self, *, scope: str, group: str) -> dict[str, Any]:
@@ -70,6 +75,21 @@ class FakeAnalysis:
                     "main_net_inflow": 5.0,
                 }
             ],
+        }
+
+    def capital_flow(self) -> dict[str, Any]:
+        return {
+            "status": "available",
+            "market_timestamp": "2026-07-22T07:00:00+00:00",
+            "is_stale": False,
+            "summary": {
+                "main_net_inflow_100m_cny": -128.5,
+                "unit": "CNY_100m_yuan",
+                "scope": "fake capital flow scope",
+            },
+            "points": [],
+            "method": "fake capital flow（亿元）",
+            "warnings": [],
         }
 
 

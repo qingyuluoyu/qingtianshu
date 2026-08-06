@@ -17,6 +17,7 @@ from app.catalog import (
 from app.db import Database
 from app.providers.market import (
     CSIIndustryIndexProvider,
+    EastmoneyCapitalFlowProvider,
     EastmoneySectorProvider,
     ProviderError,
     YahooMarketProvider,
@@ -37,6 +38,11 @@ def analyze_history(history: dict[str, Any]) -> dict[str, Any]:
 
     metrics = {
         "latest_close": _round(closes[-1]),
+        # change_1d 与 return_1d_pct 使用同一基准（前一交易日收盘 closes[-2]），
+        # 单位是指数点/元，保留 2 位小数；不足两个收盘点时为 None。
+        "change_1d": (
+            _round(closes[-1] - closes[-2], 2) if len(closes) >= 2 else None
+        ),
         "return_1d_pct": period_return(closes, 1),
         "return_5d_pct": period_return(closes, 5),
         "return_20d_pct": period_return(closes, 20),
@@ -407,6 +413,8 @@ def _validated_index_metrics(history: dict[str, Any], symbol: str) -> dict[str, 
     expected_previous = previous_market_session_date(market_key, latest_date)
     if expected_previous and previous_date != expected_previous:
         metrics["return_1d_pct"] = None
+        # change_1d 与 return_1d_pct 同基准，前一交易日缺失时一并置空。
+        metrics["change_1d"] = None
         metrics["return_1d_status"] = "missing_previous_session"
         metrics["return_1d_previous_market_date"] = previous_date
         metrics["return_1d_expected_previous_market_date"] = expected_previous
@@ -1199,6 +1207,7 @@ class MarketAnalysisService:
         breadth_provider: Any | None = None,
         industry_index_provider: CSIIndustryIndexProvider | None = None,
         china_index_provider: Any | None = None,
+        capital_flow_provider: Any | None = None,
     ):
         self.database = database
         self.market_provider = market_provider
@@ -1206,6 +1215,7 @@ class MarketAnalysisService:
         self.breadth_provider = breadth_provider
         self.industry_index_provider = industry_index_provider
         self.china_index_provider = china_index_provider
+        self.capital_flow_provider = capital_flow_provider
 
     def get_index_history(self, symbol: str, range_name: str = "1y") -> dict[str, Any]:
         history = self._fetch_index_history(symbol, range_name=range_name)
@@ -1283,7 +1293,7 @@ class MarketAnalysisService:
 
     def market_breadth(self) -> dict[str, Any]:
         if self.breadth_provider is None:
-            return {
+            payload = {
                 "source": "A-share breadth provider not configured",
                 "market_timestamp": None,
                 "fetched_at": utc_now(),
@@ -1300,26 +1310,135 @@ class MarketAnalysisService:
                 "status": "unavailable",
                 "scope": "all_a_shares_including_beijing",
             }
+        else:
+            try:
+                payload = self.breadth_provider.fetch_breadth()
+            except ProviderError as exc:
+                payload = {
+                    "source": "Sina Finance all A-share snapshot",
+                    "market_timestamp": None,
+                    "fetched_at": utc_now(),
+                    "is_stale": False,
+                    "coverage": {
+                        "expected": None,
+                        "returned": 0,
+                        "valid_change": 0,
+                        "coverage_ratio": 0.0,
+                    },
+                    "warnings": [str(exc)],
+                    "breadth": {},
+                    "exchange_breakdown": {},
+                    "status": "unavailable",
+                    "scope": "all_a_shares_including_beijing",
+                }
+        # turnover_history 由本系统保存的广度快照派生，与实时源是否可用无关；
+        # 没有可用快照时返回空数组，不影响响应其余结构。
+        payload["turnover_history"] = self._turnover_history()
+        payload["turnover_history_method"] = (
+            "近21个已保存广度快照的全市场成交额序列，按市场日期升序，"
+            "金额为亿元人民币（快照存元，/1e8换算）；盘中快照为当日累计值，"
+            "缺少成交额或日期的快照跳过，无数据时返回空数组。"
+        )
+        return payload
+
+    def _turnover_history(self, limit: int = 21) -> list[dict[str, Any]]:
+        items = []
         try:
-            return self.breadth_provider.fetch_breadth()
+            snapshots = self.database.list_market_breadth_snapshots(limit=limit)
+        except Exception:  # noqa: BLE001 - 快照库不可用时降级为空数组，不影响主响应
+            return []
+        for snapshot in snapshots:
+            market_date = str(snapshot.get("market_date") or "").strip()
+            total_amount = (snapshot.get("turnover") or {}).get("total_amount_cny")
+            if not market_date or not isinstance(total_amount, (int, float)):
+                continue
+            items.append(
+                {
+                    "date": market_date,
+                    "amount_100m_cny": round(float(total_amount) / 100_000_000, 2),
+                }
+            )
+        items.sort(key=lambda item: item["date"])
+        return items
+
+    def market_anomalies(self, limit: int = 10) -> dict[str, Any]:
+        """全市场异动榜：从新浪全市场快照派生，复用广度接口的同一份缓存。
+
+        派生规则（确定性）：取快照中 |涨跌幅| ≥ 7% 的个股，按 |涨跌幅|
+        降序取前 limit 条；涨跌幅 ≥7 映射为“快速拉升”，≤-7 为“快速下挫”。
+        """
+        method = (
+            "从新浪全市场A股快照筛选|涨跌幅|≥7%的个股，按|涨跌幅|降序取前N条；"
+            "涨跌幅≥7%为“快速拉升”，≤-7%为“快速下挫”；pct_change为百分数直通，"
+            "amount_100m_cny为成交额（元/1e8）；与/markets/breadth共享同一份缓存快照。"
+        )
+        unavailable = {
+            "status": "unavailable",
+            "market_timestamp": None,
+            "market_date": None,
+            "is_stale": False,
+            "items": [],
+            "method": method,
+            "warnings": [],
+        }
+        if self.breadth_provider is None:
+            unavailable["warnings"] = ["当前运行环境没有配置A股全市场广度提供器。"]
+            return unavailable
+        try:
+            payload = self.breadth_provider.fetch_breadth()
         except ProviderError as exc:
-            return {
-                "source": "Sina Finance all A-share snapshot",
-                "market_timestamp": None,
-                "fetched_at": utc_now(),
-                "is_stale": False,
-                "coverage": {
-                    "expected": None,
-                    "returned": 0,
-                    "valid_change": 0,
-                    "coverage_ratio": 0.0,
-                },
-                "warnings": [str(exc)],
-                "breadth": {},
-                "exchange_breakdown": {},
-                "status": "unavailable",
-                "scope": "all_a_shares_including_beijing",
-            }
+            unavailable["warnings"] = [str(exc)]
+            return unavailable
+        if payload.get("status") != "available":
+            unavailable["market_date"] = payload.get("market_date")
+            unavailable["is_stale"] = bool(payload.get("is_stale"))
+            unavailable["warnings"] = [
+                "全市场快照不可用，无法派生异动榜。",
+                *(payload.get("warnings") or []),
+            ]
+            return unavailable
+        candidates = payload.get("anomaly_candidates")
+        warnings = list(payload.get("warnings") or [])
+        if not isinstance(candidates, list):
+            # 旧缓存快照不含异动候选字段，下次刷新后自动恢复。
+            candidates = []
+            warnings.append("当前快照未包含异动候选数据，等待下次快照刷新。")
+        return {
+            "status": "available",
+            "market_timestamp": payload.get("market_timestamp"),
+            "market_date": payload.get("market_date"),
+            "is_stale": bool(payload.get("is_stale")),
+            "items": candidates[: max(1, min(int(limit), 50))],
+            "method": method,
+            "warnings": warnings,
+        }
+
+    def capital_flow(self) -> dict[str, Any]:
+        """大盘资金流向：东财沪深主力净流入分时累计（亿元），降级不抛500。"""
+        unavailable = {
+            "status": "unavailable",
+            "market_timestamp": None,
+            "is_stale": False,
+            "summary": {
+                "main_net_inflow_100m_cny": None,
+                "unit": "CNY_100m_yuan",
+                "scope": (
+                    "沪深A股合计：东财 secid 1.000001（沪市）与 0.399001（深市）"
+                    "主力净流入当日累计按分钟对齐相加"
+                ),
+            },
+            "points": [],
+            "method": EastmoneyCapitalFlowProvider.METHOD,
+            "warnings": [],
+        }
+        if self.capital_flow_provider is None:
+            unavailable["warnings"] = ["当前运行环境没有配置大盘资金流提供器。"]
+            return unavailable
+        try:
+            return self.capital_flow_provider.fetch_intraday()
+        except ProviderError as exc:
+            unavailable["warnings"] = [str(exc)]
+            return unavailable
 
     def market_brief(self, market_key: str | None = None) -> dict[str, Any]:
         catalog = [INDEX_BY_SYMBOL[symbol] for symbol in CORE_INDEX_SYMBOLS]

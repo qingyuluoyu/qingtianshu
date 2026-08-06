@@ -98,6 +98,40 @@ LIVE_MARKET_CATALOG = [
         "daily_break_timezone": "America/New_York",
         "daily_breaks": [("17:00", "18:00")],
     },
+    {
+        "key": "dollar_index",
+        "name": "美元指数",
+        "instrument": "美元指数 UDI",
+        "symbol": "UDI",
+        "timezone": "America/New_York",
+        "currency": "USD",
+        "provider": "eastmoney_global_index",
+        "sessions": [("00:00", "23:00")],
+        "weekdays": [0, 1, 2, 3, 4],
+    },
+    {
+        "key": "brent_crude",
+        "name": "布伦特原油",
+        "instrument": "布伦特原油 OIL",
+        "symbol": "OIL",
+        "timezone": "Europe/London",
+        "currency": "USD",
+        "provider": "sina_global_futures",
+        "sessions": [("00:00", "23:00")],
+        "weekdays": [0, 1, 2, 3, 4],
+    },
+    {
+        # 收益率为百分数口径（如 4.6208 表示 4.6208%），currency 记为 PCT。
+        "key": "us10y_yield",
+        "name": "美债十年期",
+        "instrument": "美国10年期国债收益率",
+        "symbol": "US10Y",
+        "timezone": "America/New_York",
+        "currency": "PCT",
+        "provider": "eastmoney_global_index",
+        "sessions": [("00:00", "23:00")],
+        "weekdays": [0, 1, 2, 3, 4],
+    },
 ]
 
 RESEARCH_TARGETS = {

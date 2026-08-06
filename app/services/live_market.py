@@ -64,20 +64,23 @@ class LiveMarketService:
 
         order = {item["key"]: index for index, item in enumerate(LIVE_MARKET_CATALOG)}
         markets.sort(key=lambda item: (not item.get("is_open", False), order[item["key"]]))
+        calendar_keys = {
+            item["key"] for item in LIVE_MARKET_CATALOG if item.get("calendar")
+        }
         stock_calendars_verified = all(
             item.get("calendar_status") == "verified"
             for item in markets
-            if item.get("key") != "london_gold"
+            if item.get("key") in calendar_keys
         )
         return {
             "generated_at": utc_now(),
             "refresh_after_seconds": 30,
             "session_method": (
                 "股票市场按交易所日历判断，包含节假日、午间休市和提前收盘；"
-                "伦敦金按工作日近24小时规则判断"
+                "伦敦金、美元指数、布伦特原油、美债收益率等OTC品种按工作日近24小时规则判断"
                 if stock_calendars_verified
                 else "交易所日历暂未完整覆盖，部分市场已安全降级到常规时段；"
-                "伦敦金按工作日近24小时规则判断"
+                "伦敦金、美元指数、布伦特原油、美债收益率等OTC品种按工作日近24小时规则判断"
             ),
             "coverage": {
                 "requested": len(markets),
@@ -89,7 +92,7 @@ class LiveMarketService:
 
     def _fetch_one(self, item: dict[str, Any], now: datetime) -> dict[str, Any]:
         if item.get("provider") == "sina_global_futures":
-            history = self.gold_provider.fetch_intraday()
+            history = self.gold_provider.fetch_intraday(item.get("symbol", "XAU"))
         elif (
             item.get("provider") == "eastmoney_global_index"
             and self.global_index_provider is not None

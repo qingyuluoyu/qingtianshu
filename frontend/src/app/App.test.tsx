@@ -39,7 +39,7 @@ describe("正式前端认证入口", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "关闭登录或注册弹窗" }));
 
-    fireEvent.click(screen.getByRole("link", { name: "透明选股" }));
+    fireEvent.click(screen.getByRole("link", { name: "选股策略" }));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
     expect(window.location.pathname).toBe("/screening");
   });
