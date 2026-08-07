@@ -1,7 +1,7 @@
 # 个股研究（/stocks/:symbol）组件设计记录
 
 执行合同：FRONTEND_EXECUTION_CONTRACT_V1（§5.4 个股研究蓝图、§6 数据/时间/金融口径、§7 互动与写入边界、§8 禁止约定）。
-本切片为只读：所有写操作仅提供路由入口（/advisor），页面不出现无后端能力的写按钮。
+本页读取并展示研究数据，以及用户此前明确保存的筛选入口。页面不会把研究线索自动升级为正式判断、观察任务、关注关系或交易动作；正式写入仍需用户在对应流程中确认。
 
 ## 数据契约总表
 
@@ -14,7 +14,7 @@
 | 观察任务 | `GET /v1/stocks/{symbol}/observation-tasks` | `items`、`summary`、`boundary` | — |
 | 判断版本 | `GET /v1/stocks/{symbol}/theses`（404=研究空间不存在） | `items[{status,summary,version,updated_at}]` | — |
 | 持仓 | `GET /v1/stocks/{symbol}/position`（404=无持仓） | `quantity/cost_basis/average_cost` 账本原值 | — |
-| 深度研究 | `GET /me/deep-stock/{symbol}`（404=会话未建立） | `status/current_stage` | — |
+| 深度研究 | `GET /me/deep-stock/{symbol}`（404=会话未建立） | `status/current_stage/research_entry` | `research_entry.as_of_date` = BarDate |
 
 金融口径（adapters 直通锁覆盖）：
 - 所有 `*_pct` 字段后端已是百分数，UI 直通加 `%`，不缩放；`change_pp` 为百分点直通。
@@ -25,6 +25,13 @@
 四态区分（§6.3）：`0` 是有效数值（正常显示）；空字符串/缺字段显示 `--` 或「待确认」；空列表显示「暂无…」；接口失败显示模块级错误卡 + 重试；`thesis.status="empty"` 显示「尚未保存当前判断」，与接口失败严格分开。
 
 ---
+
+### ResearchEntryCard（本次研究入口）
+- 页面与用户问题：我为什么从筛选页进入这只股票，先应该核验什么？
+- 真实数据：`workspace.research_entry` 中的来源、筛选数据日、候选状态、研究重点、优先核验项、命中理由和缺失证据。
+- 状态：没有已保存入口时不渲染；有入口时明确标注这些是用户选择带入的研究线索，不是正式结论。
+- 写入边界：本卡只读，不自动创建判断、任务、关注关系或交易动作。
+- 测试：adapter 与 Page 测试覆盖完整字段、缺字段和无入口兼容；真实 E2E 覆盖筛选保存后回读。
 
 ### StockHeader（页头行情区）
 - 页面与用户问题：这只股票现在怎样？数据是什么时间的？
@@ -45,7 +52,7 @@
 - 可见条件：workspace 模块可用；`thesis.status="empty"` 显示「尚未保存当前判断」+ 创建/问顾问入口（Link 到 `/advisor?symbol=…&source=stock-research`）；`stage_progress.status="not_started"` 显示「尚未开启」，不伪造 0/7 进度（仅后端返回非 not_started 进度时才显示真实 completed/total）。
 - 状态：模块 error=错误卡；空态=「尚未保存当前判断」。
 - 互动事件：入口 Link 仅改变路由，携带 symbol 与 sourcePage 上下文。
-- 写入边界：本切片只读，创建判断在顾问页完成；本页不出现写按钮。
+- 写入边界：创建判断在顾问页完成；本页不因存在筛选入口而自动创建正式记录。
 - 响应式：指标栅格 4→3→2 列。
 - 可访问性：入口为语义链接。
 - 测试：Page 测试空态文案与入口链接；thesis empty 不显示假进度。
@@ -110,11 +117,12 @@
 - 页面与用户问题：我的判断、任务、持仓、深度研究分别是什么状态？
 - 真实数据：见数据契约总表；404（theses/position/deep-stock）按业务空态处理：「尚未保存当前判断」「暂无该股票的持仓记录」「深度研究会话尚未建立」，均不当作接口失败。
 - 可见条件：未登录显示登录引导，不发请求（enabled=authenticated）。
-- 互动事件：创建判断/问顾问/开启深度研究均为路由入口（/advisor 带 symbol 与 intent 参数）；本切片不做写操作。
+- 互动事件：创建判断/问顾问等动作进入 `/advisor` 并携带 symbol 与 intent；已有深度研究会话和入口上下文从真实接口回读。
 - 状态：每卡独立 loading/error/空态；判断版本、任务、持仓、深度研究互不影响。
 - 测试：Page 测试未登录引导、空态三件套、404 空态；e2e 覆盖。
 
 ## 验收记录
 
-- `npx vitest run` / `npx tsc --noEmit` / `npx playwright test`：结果见交付汇报（本文随后更新）。
-- 真实会话截图：`today-runtime-trace/screenshots/stock-research-desktop.png`（1440×900）、`stock-research-mobile.png`（390×844），两视口无横向溢出。
+- `npm test`：全量 121/121 通过，其中 StockResearch Page 9/9、adapters 13/13。
+- `npm run build` 与 `npm run test:e2e` 通过，页面合同 32/32。
+- 真实链路 1/1 通过：筛选候选入口保存并在个股页回读，随后进入顾问提问并核验 Run 上下文；桌面个股页与 390px 顾问页无横向溢出。行情历史模块真实失败时仅局部降级，研究入口和其他模块仍保持可读。

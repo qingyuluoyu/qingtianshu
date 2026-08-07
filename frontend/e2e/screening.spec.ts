@@ -20,6 +20,7 @@ const accountSession = {
 
 async function mockScreening(page: Page) {
   const screenBodies: unknown[] = [];
+  const deepStockBodies: unknown[] = [];
   await page.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -41,6 +42,15 @@ async function mockScreening(page: Page) {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(screenPayload()) });
       return;
     }
+    if (path === "/me/deep-stock" && request.method() === "POST") {
+      deepStockBodies.push(request.postDataJSON());
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({ symbol: "600549.SS", conversation_id: "conversation-screening-1" }),
+      });
+      return;
+    }
     if (path === "/v1/stock-strategies/li-zong/candidates") {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(liZongCandidatesPayload()) });
       return;
@@ -55,11 +65,11 @@ async function mockScreening(page: Page) {
     }
     await route.continue();
   });
-  return { screenBodies };
+  return { deepStockBodies, screenBodies };
 }
 
 test("screen mode: filters, three-state table, URL state and no pseudo pagination", async ({ page }) => {
-  const { screenBodies } = await mockScreening(page);
+  const { deepStockBodies, screenBodies } = await mockScreening(page);
   await page.goto("/screening");
   await expect(page.getByRole("heading", { name: "透明选股" })).toBeVisible();
   // 初始 POST 载荷：档案默认 + force_refresh=false（不触发数据重建）。
@@ -78,8 +88,20 @@ test("screen mode: filters, three-state table, URL state and no pseudo paginatio
   // §5.2：无服务端分页，页面不出现分页控件，只标注真实命中数与展示上限。
   await expect(page.getByText("命中候选（真实总数）")).toBeVisible();
   await expect(page.getByText(/不提供伪分页/)).toBeVisible();
-  // 详情与个股研究链接。
-  await expect(page.getByRole("link", { name: "进入个股研究" })).toHaveAttribute("href", "/stocks/600549.SH");
+  // 用户明确点击后先保存完整候选上下文，再进入个股研究。
+  await page.getByRole("button", { name: "保存线索并进入个股研究" }).click();
+  await expect.poll(() => deepStockBodies.length).toBe(1);
+  expect(deepStockBodies[0]).toMatchObject({
+    symbol: "600549.SS",
+    quality_scope: "user",
+    entry_context: {
+      source_kind: "stock_screen",
+      profile_key: "quality",
+      as_of_date: "2026-08-05",
+      research_focus: "营收同比 86.99%、净利润同比 189.14% 同时为正。",
+    },
+  });
+  await expect(page).toHaveURL(/\/stocks\/600549\.SS/);
 });
 
 test("mutually exclusive modes switch via URL and li-zong shows three states", async ({ page }) => {

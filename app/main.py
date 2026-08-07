@@ -333,6 +333,14 @@ def create_app(
         settings.database_url,
     )
     database.initialize()
+    market_snapshot_database_url = (
+        settings.market_snapshot_database_url or settings.database_url
+    )
+    market_snapshot_database = (
+        database
+        if market_snapshot_database_url == settings.database_url
+        else Database(settings.workspace_root, market_snapshot_database_url)
+    )
     security_master = SecurityMasterService(database)
     knowledge = KnowledgeService(
         database, PROJECT_ROOT / "app" / "knowledge" / "common"
@@ -531,7 +539,7 @@ def create_app(
             resolved_tushare_client = None
     stock_screener = StockScreenerService(
         resolved_tushare_client,
-        database=database,
+        database=market_snapshot_database,
         snapshot_ttl_seconds=settings.market_cache_seconds,
     )
     tushare_snapshots = TushareSnapshotService(database, resolved_tushare_client)
@@ -683,6 +691,8 @@ def create_app(
             background.stop()
             event_broker.close()
             background.job_store.close()
+            if market_snapshot_database is not database:
+                market_snapshot_database.close()
             database.close()
 
     app = FastAPI(
@@ -701,6 +711,7 @@ def create_app(
     )
     app.state.auth_rate_limiter = auth_rate_limiter
     app.state.database = database
+    app.state.market_snapshot_database = market_snapshot_database
     app.state.security_master = security_master
     app.state.analysis = analysis
     app.state.agent = agent

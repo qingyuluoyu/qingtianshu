@@ -306,6 +306,39 @@ describe("stock-research adapters", () => {
     expect(workspace.observationTasksSummary.total).toBe(0);
   });
 
+  it("preserves a user-selected screening entry as research context", () => {
+    const workspace = parseWorkspace({
+      ...workspacePayload,
+      research_entry: {
+        source_kind: "stock_screen",
+        source_label: "经营指标开始改善",
+        display_name: "中兴通讯",
+        industry: "通信设备",
+        profile_key: "quality",
+        as_of_date: "2026-08-05",
+        candidate_status: "ready",
+        matched_reasons: ["营收与利润同比改善"],
+        research_focus: "先核验改善是否得到现金流支持。",
+        attention_flags: ["净利润增速仍需核对一次性因素"],
+        missing_fields: ["经营现金流"],
+      },
+    });
+
+    expect(workspace.researchEntry).toEqual({
+      sourceKind: "stock_screen",
+      sourceLabel: "经营指标开始改善",
+      displayName: "中兴通讯",
+      industry: "通信设备",
+      profileKey: "quality",
+      asOfDate: "2026-08-05",
+      candidateStatus: "ready",
+      matchedReasons: ["营收与利润同比改善"],
+      researchFocus: "先核验改善是否得到现金流支持。",
+      attentionFlags: ["净利润增速仍需核对一次性因素"],
+      missingFields: ["经营现金流"],
+    });
+  });
+
   it("passes shareholder percents and raw share counts through", () => {
     const shareholders = parseShareholders(stockPagePayload().modules.shareholders.data);
     expect(shareholders.holderCount).toBe(637909);

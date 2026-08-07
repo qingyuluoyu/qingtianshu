@@ -135,6 +135,7 @@ class Settings:
     background_run_failed_retention_hours: int = 2160
     data_health_retention_hours: int = 720
     frontend_dist_dir: Path = PROJECT_ROOT / "frontend" / "dist"
+    market_snapshot_database_url: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -145,6 +146,15 @@ class Settings:
         ):
             raise ValueError(
                 "QINGSHU_DATABASE_URL is required and must use PostgreSQL"
+            )
+        market_snapshot_database_url = os.getenv(
+            "QINGSHU_MARKET_SNAPSHOT_DATABASE_URL", ""
+        ).strip()
+        if market_snapshot_database_url and not market_snapshot_database_url.startswith(
+            ("postgresql://", "postgres://", "postgresql+psycopg://")
+        ):
+            raise ValueError(
+                "QINGSHU_MARKET_SNAPSHOT_DATABASE_URL must use PostgreSQL"
             )
         worker_mode = os.getenv("BACKGROUND_WORKER_MODE", "embedded").strip().lower()
         if worker_mode not in {"embedded", "external", "disabled"}:
@@ -326,6 +336,7 @@ class Settings:
             frontend_dist_dir=_path_from_env(
                 "QINGSHU_FRONTEND_DIST_DIR", PROJECT_ROOT / "frontend" / "dist"
             ),
+            market_snapshot_database_url=market_snapshot_database_url,
         )
 
     @property

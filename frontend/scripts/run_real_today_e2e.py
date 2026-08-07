@@ -21,6 +21,7 @@ FRONTEND = Path(__file__).resolve().parents[1]
 REPOSITORY = FRONTEND.parent
 BACKEND_PORT = 8011
 EXPECTED_DATABASE = "qingshu_auth_test"
+DEFAULT_MARKET_SNAPSHOT_DATABASE = "qingshu_prod"
 
 
 def playwright_executable(platform_name: str | None = None) -> Path:
@@ -51,6 +52,57 @@ def schema_url(base_url: str, schema: str) -> str:
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     query["options"] = f"-csearch_path={schema}"
     return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, urlencode(query, quote_via=quote), parsed.fragment))
+
+
+def market_snapshot_database_url(base_url: str) -> str:
+    configured = os.environ.get("QINGSHU_E2E_MARKET_SNAPSHOT_URL", "").strip()
+    if configured:
+        configured = configured.replace("postgresql+psycopg://", "postgresql://")
+    else:
+        parsed = urlsplit(base_url)
+        configured = urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                f"/{DEFAULT_MARKET_SNAPSHOT_DATABASE}",
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+    parsed = urlsplit(configured)
+    if parsed.scheme not in {"postgresql", "postgres"} or not parsed.netloc:
+        raise RuntimeError("真实 E2E 市场快照源必须使用完整 PostgreSQL URL")
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    read_only_option = "-cdefault_transaction_read_only=on"
+    existing_options = query.get("options", "").strip()
+    query["options"] = (
+        existing_options
+        if "default_transaction_read_only=on" in existing_options
+        else f"{existing_options} {read_only_option}".strip()
+    )
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query, quote_via=quote),
+            parsed.fragment,
+        )
+    )
+
+
+def validate_market_snapshot_database(url: str) -> None:
+    with psycopg.connect(url) as connection:
+        row = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM tushare_dataset_snapshots
+            WHERE data_status = 'stable'
+              AND dataset IN ('a_share_universe', 'stock_basic', 'daily', 'daily_basic')
+            """
+        ).fetchone()
+    if row is None or int(row[0]) == 0:
+        raise RuntimeError("真实 E2E 市场快照源没有可用的稳定 A 股数据")
 
 
 def wait_for_backend(process: subprocess.Popen[bytes], log_path: Path) -> None:
@@ -87,6 +139,8 @@ def main() -> int:
     )
     args = parser.parse_args()
     base_url = test_database_url()
+    market_snapshot_url = market_snapshot_database_url(base_url)
+    validate_market_snapshot_database(market_snapshot_url)
     schema = f"e2e_today_{uuid4().hex}"
     runtime_dir = Path(tempfile.mkdtemp(prefix="qingshu-today-real-e2e-"))
     log_path = runtime_dir / "fastapi.log"
@@ -99,6 +153,7 @@ def main() -> int:
         env = os.environ.copy()
         env.update({
             "QINGSHU_DATABASE_URL": schema_url(base_url, schema),
+            "QINGSHU_MARKET_SNAPSHOT_DATABASE_URL": market_snapshot_url,
             "QINGSHU_APP_FACTORY_ONLY": "0",
             "QINGSHU_DATA_DIR": str(runtime_dir / "data"),
             "QINGSHU_WORKSPACE_ROOT": str(runtime_dir / "workspaces"),
@@ -108,7 +163,10 @@ def main() -> int:
             "HERMES_ENABLED": "false",
             "VITE_PROXY_TARGET": f"http://127.0.0.1:{BACKEND_PORT}",
         })
-        print(f"[real-e2e] database={EXPECTED_DATABASE}; isolated_schema={schema}")
+        print(
+            f"[real-e2e] database={EXPECTED_DATABASE}; isolated_schema={schema}; "
+            f"market_snapshot_database={urlsplit(market_snapshot_url).path.lstrip('/')}"
+        )
         with log_path.open("wb") as backend_log:
             backend = subprocess.Popen(
                 [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(BACKEND_PORT), "--log-level", "warning"],

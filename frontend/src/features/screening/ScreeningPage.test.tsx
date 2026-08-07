@@ -8,6 +8,7 @@ import {
   getLiZongRunLatest,
   getScreenerProfiles,
   runStockScreen,
+  startDeepStockResearch,
 } from "./api";
 import { parseStockScreen } from "./adapters";
 import {
@@ -29,6 +30,7 @@ vi.mock("./api", async (importOriginal) => {
     getLiZongCandidates: vi.fn(),
     getLiZongRunLatest: vi.fn(),
     getLiZongBacktest: vi.fn(),
+    startDeepStockResearch: vi.fn(),
   };
 });
 
@@ -37,6 +39,7 @@ const mockScreen = vi.mocked(runStockScreen);
 const mockCandidates = vi.mocked(getLiZongCandidates);
 const mockRunLatest = vi.mocked(getLiZongRunLatest);
 const mockBacktest = vi.mocked(getLiZongBacktest);
+const mockStartResearch = vi.mocked(startDeepStockResearch);
 
 function renderPage(entry = "/screening", authenticated = true) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
@@ -45,6 +48,7 @@ function renderPage(entry = "/screening", authenticated = true) {
       <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route element={<ScreeningPage authenticated={authenticated} />} path="/screening" />
+          <Route element={<div>个股研究落地页</div>} path="/stocks/:symbol" />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -57,6 +61,7 @@ beforeEach(() => {
   mockCandidates.mockResolvedValue(parsedLiZongCandidates());
   mockRunLatest.mockResolvedValue(parsedLiZongRunLatest());
   mockBacktest.mockResolvedValue(parsedLiZongBacktest());
+  mockStartResearch.mockImplementation(async (symbol) => ({ symbol, conversationId: "conversation-1" }));
 });
 
 afterEach(() => {
@@ -87,7 +92,7 @@ describe("ScreeningPage 通用筛选模式", () => {
     expect(screen.getAllByText("数据不足").length).toBeGreaterThan(0);
     // 默认选中首行详情 + 缺失字段展示。
     expect(screen.getByText(/候选详情/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "进入个股研究" })).toHaveAttribute("href", "/stocks/600549.SH");
+    expect(screen.getByRole("button", { name: "保存线索并进入个股研究" })).toBeInTheDocument();
     // 解释面板：真实规则与漏斗计数，非行业分布编造。
     expect(screen.getByText("规则与漏斗解释")).toBeInTheDocument();
     expect(screen.getByText("筛选漏斗（服务端真实计数）")).toBeInTheDocument();
@@ -131,6 +136,27 @@ describe("ScreeningPage 通用筛选模式", () => {
     expect(await screen.findByText(/当前条件下没有命中候选/)).toBeInTheDocument();
     expect(screen.getByText(/不用示例数据填充/)).toBeInTheDocument();
   });
+
+  it("persists the selected candidate context before opening stock research", async () => {
+    renderPage();
+    await screen.findByText("600549.SH");
+
+    fireEvent.click(screen.getByRole("button", { name: "保存线索并进入个股研究" }));
+
+    await waitFor(() => expect(mockStartResearch).toHaveBeenCalledWith(
+      "600549.SS",
+      expect.objectContaining({
+        source_kind: "stock_screen",
+        display_name: "厦门钨业",
+        industry: "小金属",
+        profile_key: "quality",
+        as_of_date: "2026-08-05",
+        matched_reasons: ["营收同比 86.99%、净利润同比 189.14% 同时为正", "ROE 6.24% 达到下限"],
+        research_focus: "营收同比 86.99%、净利润同比 189.14% 同时为正。",
+      }),
+    ));
+    expect(await screen.findByText("个股研究落地页")).toBeInTheDocument();
+  });
 });
 
 describe("ScreeningPage 李总模式", () => {
@@ -160,7 +186,16 @@ describe("ScreeningPage 李总模式", () => {
     // 规则核验清单（默认选中首行）。
     expect(screen.getAllByText(/规则核验/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/总市值严格大于150亿元/).length).toBeGreaterThan(0);
-    expect(screen.getByRole("link", { name: "进入个股研究" })).toHaveAttribute("href", "/stocks/600519.SH");
+    fireEvent.click(screen.getByRole("button", { name: "保存线索并进入个股研究" }));
+    await waitFor(() => expect(mockStartResearch).toHaveBeenCalledWith(
+      "600519.SS",
+      expect.objectContaining({
+        source_kind: "li_zong_strategy",
+        display_name: "贵州茅台",
+        candidate_status: "qualified",
+      }),
+    ));
+    expect(await screen.findByText("个股研究落地页")).toBeInTheDocument();
   });
 
   it("filters candidates server-side via status chips", async () => {

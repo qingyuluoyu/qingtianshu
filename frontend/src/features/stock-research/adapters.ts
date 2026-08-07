@@ -865,6 +865,20 @@ export type WorkspaceChange = {
   nextReviewFocus: string | null;
 };
 
+export type WorkspaceResearchEntry = {
+  sourceKind: string | null;
+  sourceLabel: string | null;
+  displayName: string | null;
+  industry: string | null;
+  profileKey: string | null;
+  asOfDate: string | null;
+  candidateStatus: string | null;
+  matchedReasons: string[];
+  researchFocus: string | null;
+  attentionFlags: string[];
+  missingFields: string[];
+};
+
 export type Workspace = {
   contractVersion: string | null;
   name: string | null;
@@ -887,6 +901,7 @@ export type Workspace = {
   quote: WorkspaceQuote | null;
   dataStatus: string | null;
   latestChange: WorkspaceChange | null;
+  researchEntry: WorkspaceResearchEntry | null;
   importantChanges: WorkspaceChange[];
   nextEvidence: Array<{ status: string | null; description: string; source: string | null }>;
   pendingActionCount: number;
@@ -942,6 +957,7 @@ export function parseWorkspace(value: unknown): Workspace {
   const stageProgress = optionalRecord(stage?.progress);
   const overview = optionalRecord(root.overview);
   const quote = optionalRecord(overview?.quote);
+  const researchEntry = optionalRecord(root.research_entry);
   const tasks = optionalRecord(root.observation_tasks);
   const tasksSummary = optionalRecord(tasks?.summary);
   const position = optionalRecord(root.position_snapshot);
@@ -993,6 +1009,19 @@ export function parseWorkspace(value: unknown): Workspace {
     },
     dataStatus: optionalString(overview?.data_status),
     latestChange: overview?.latest_change ? parseWorkspaceChange(overview.latest_change, 0) : null,
+    researchEntry: researchEntry === null ? null : {
+      sourceKind: optionalString(researchEntry.source_kind),
+      sourceLabel: optionalString(researchEntry.source_label),
+      displayName: optionalString(researchEntry.display_name),
+      industry: optionalString(researchEntry.industry),
+      profileKey: optionalString(researchEntry.profile_key),
+      asOfDate: optionalString(researchEntry.as_of_date),
+      candidateStatus: optionalString(researchEntry.candidate_status),
+      matchedReasons: strings(researchEntry.matched_reasons),
+      researchFocus: optionalString(researchEntry.research_focus),
+      attentionFlags: strings(researchEntry.attention_flags),
+      missingFields: strings(researchEntry.missing_fields),
+    },
     importantChanges: list(root.important_changes).flatMap((raw, index) => {
       const change = parseWorkspaceChange(raw, index);
       return change ? [change] : [];

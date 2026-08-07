@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router-dom";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import type {
   LiZongCandidate,
   LiZongCandidates,
@@ -9,7 +9,13 @@ import type {
   ScreenerProfile,
   StockScreen,
 } from "./adapters";
-import type { BacktestPeriod, LiZongStatusFilter, ScreenParams } from "./api";
+import {
+  startDeepStockResearch,
+  type BacktestPeriod,
+  type DeepStockEntryContext,
+  type LiZongStatusFilter,
+  type ScreenParams,
+} from "./api";
 import { screeningQueries } from "./queries";
 import styles from "./ScreeningPage.module.css";
 
@@ -116,6 +122,68 @@ function ruleStatusTone(status: string | null): string {
   if (status === "passed") return styles.badgeReady;
   if (status === "data_incomplete") return styles.badgePartial;
   return styles.badgeUnavailable;
+}
+
+function screenFieldLabel(field: string): string {
+  return ({
+    revenue_yoy: "营收同比",
+    net_profit_yoy: "净利润同比",
+    roe: "ROE",
+    gross_margin: "毛利率",
+    net_margin: "净利率",
+    debt_to_assets: "资产负债率",
+    pe_ttm: "PE TTM",
+    pb: "PB",
+    ps_ttm: "PS TTM",
+    volume_ratio: "量比",
+    turnover_rate_pct: "换手率",
+  } as Record<string, string>)[field] ?? field;
+}
+
+function screenResearchFocus(screen: StockScreen, item: ScreenItem): string {
+  if (item.researchFocus) return item.researchFocus;
+  if (item.matchedReasons.length > 0) {
+    return `先核验“${item.matchedReasons[0]}”，再检查财务、公告、行业对照和反方证据。`;
+  }
+  return `逐条核验${item.name ?? item.symbol}命中当前筛选条件的证据、反方事实和数据缺口。`;
+}
+
+function screenEntryContext(screen: StockScreen, item: ScreenItem): DeepStockEntryContext {
+  return {
+    source_kind: "stock_screen",
+    source_label: screen.profile.label ?? "透明选股",
+    display_name: item.name,
+    industry: item.industry,
+    profile_key: screen.profile.key || null,
+    as_of_date: item.evidenceTimes.marketDate ?? screen.dataContract.marketDate,
+    candidate_status: screen.status,
+    matched_reasons: item.matchedReasons,
+    research_focus: screenResearchFocus(screen, item),
+    attention_flags: item.attentionFlags.slice(0, 4),
+    missing_fields: item.missingFields.map(screenFieldLabel).slice(0, 8),
+  };
+}
+
+function liZongEntryContext(data: LiZongCandidates, candidate: LiZongCandidate): DeepStockEntryContext {
+  const ruleLabels = new Map(data.rules.map((rule) => [rule.ruleId, rule.label]));
+  const missingRules = candidate.ruleResults
+    .filter((rule) => rule.status !== "passed" && rule.ruleId)
+    .map((rule) => ruleLabels.get(rule.ruleId ?? "") ?? rule.ruleId ?? "规则待核验");
+  const missingFields = [...new Set([...missingRules, ...candidate.limitations])].slice(0, 8);
+  const name = candidate.name ?? candidate.symbol;
+  return {
+    source_kind: "li_zong_strategy",
+    source_label: data.strategyName ?? "李总策略规则快照",
+    display_name: candidate.name,
+    industry: candidate.industry,
+    profile_key: "li_zong",
+    as_of_date: candidate.asOfDate ?? data.dataMeta.latestAsOfDate,
+    candidate_status: candidate.status,
+    matched_reasons: candidate.matchedReasons,
+    research_focus: `逐条核验${name}当前“${candidateStatusLabel(candidate.status)}”结果的基本面、股性、量价和触发规则，并检查反方证据。`,
+    attention_flags: candidate.triggeredRuleIds.slice(0, 4).map((rule) => `触发规则 ${rule} 需要人工复核`),
+    missing_fields: missingFields,
+  };
 }
 
 // ---------- 通用卡片 ----------
@@ -426,7 +494,12 @@ function coverageLabel(status: string | null): string {
   return statusLabel(status);
 }
 
-function ScreenCandidateDetail({ item }: { item: ScreenItem }) {
+function ScreenCandidateDetail({ item, onResearch, researchError, researchPending }: {
+  item: ScreenItem;
+  onResearch: (item: ScreenItem) => void;
+  researchError: string | null;
+  researchPending: boolean;
+}) {
   const status = screenItemStatus(item);
   return (
     <ModuleCard
@@ -475,8 +548,11 @@ function ScreenCandidateDetail({ item }: { item: ScreenItem }) {
         覆盖状态：财务 {coverageLabel(item.coverageStatus.financialQuality)} · 估值 {coverageLabel(item.coverageStatus.valuation)} · 行情 {coverageLabel(item.coverageStatus.marketAndTrend)}
       </p>
       <div className={styles.actionRow}>
-        <Link className={styles.actionLink} to={`/stocks/${encodeURIComponent(item.symbol)}`}>进入个股研究</Link>
+        <button className={styles.actionLink} disabled={researchPending} onClick={() => onResearch(item)} type="button">
+          {researchPending ? "正在保存研究线索…" : "保存线索并进入个股研究"}
+        </button>
       </div>
+      {researchError ? <p className={styles.actionError} role="alert">{researchError}</p> : null}
     </ModuleCard>
   );
 }
@@ -659,7 +735,13 @@ function LiZongCandidateTable({ data, selectedSymbol, onSelect }: {
   );
 }
 
-function LiZongCandidateDetail({ data, candidate }: { data: LiZongCandidates; candidate: LiZongCandidate }) {
+function LiZongCandidateDetail({ data, candidate, onResearch, researchError, researchPending }: {
+  data: LiZongCandidates;
+  candidate: LiZongCandidate;
+  onResearch: (candidate: LiZongCandidate) => void;
+  researchError: string | null;
+  researchPending: boolean;
+}) {
   const ruleLabels = new Map(data.rules.map((rule) => [rule.ruleId, rule.label]));
   const orderedResults = [...candidate.ruleResults].sort((a, b) => (a.ruleId ?? "").localeCompare(b.ruleId ?? ""));
   return (
@@ -696,8 +778,11 @@ function LiZongCandidateDetail({ data, candidate }: { data: LiZongCandidates; ca
       ) : null}
       {candidate.limitations.map((limitation) => <p className={styles.helper} key={limitation}>限制：{limitation}</p>)}
       <div className={styles.actionRow}>
-        <Link className={styles.actionLink} to={`/stocks/${encodeURIComponent(candidate.symbol)}`}>进入个股研究</Link>
+        <button className={styles.actionLink} disabled={researchPending} onClick={() => onResearch(candidate)} type="button">
+          {researchPending ? "正在保存研究线索…" : "保存线索并进入个股研究"}
+        </button>
       </div>
+      {researchError ? <p className={styles.actionError} role="alert">{researchError}</p> : null}
     </ModuleCard>
   );
 }
@@ -893,6 +978,7 @@ function parseLiZongStatus(value: string | null): LiZongStatusFilter {
 }
 
 export function ScreeningPage({ authenticated }: Props) {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const mode = parseMode(searchParams.get("mode"));
   const period = parsePeriod(searchParams.get("period"));
@@ -947,6 +1033,17 @@ export function ScreeningPage({ authenticated }: Props) {
   const selectedLiZongItem = liZongData?.items.find((item) => item.symbol === symbolParam)
     ?? liZongData?.items[0]
     ?? null;
+  const researchMutation = useMutation({
+    mutationFn: ({ entryContext, symbol }: { entryContext: DeepStockEntryContext; symbol: string }) => (
+      startDeepStockResearch(symbol, entryContext)
+    ),
+    onSuccess: (session) => navigate(`/stocks/${encodeURIComponent(session.symbol)}`),
+  });
+  const researchError = researchMutation.isError
+    ? (researchMutation.error instanceof Error ? researchMutation.error.message : "保存研究线索失败，请稍后重试。")
+    : null;
+  const researchPendingFor = (symbol: string) => researchMutation.isPending && researchMutation.variables?.symbol === symbol;
+  const researchErrorFor = (symbol: string) => researchMutation.variables?.symbol === symbol ? researchError : null;
 
   if (!authenticated) {
     return (
@@ -1058,7 +1155,17 @@ export function ScreeningPage({ authenticated }: Props) {
                     </ModuleCard>
                   </div>
                   <div className={styles.mainColumn}>
-                    {selectedScreenItem ? <ScreenCandidateDetail item={selectedScreenItem} /> : null}
+                    {selectedScreenItem ? (
+                      <ScreenCandidateDetail
+                        item={selectedScreenItem}
+                        onResearch={(item) => researchMutation.mutate({
+                          entryContext: screenEntryContext(screen, item),
+                          symbol: item.internalSymbol ?? item.symbol,
+                        })}
+                        researchError={researchErrorFor(selectedScreenItem.internalSymbol ?? selectedScreenItem.symbol)}
+                        researchPending={researchPendingFor(selectedScreenItem.internalSymbol ?? selectedScreenItem.symbol)}
+                      />
+                    ) : null}
                     <ScreenExplainPanel screen={screen} />
                   </div>
                 </div>
@@ -1132,7 +1239,18 @@ export function ScreeningPage({ authenticated }: Props) {
                     <LiZongFunnelCard data={liZongData} />
                   </div>
                   <div className={styles.mainColumn}>
-                    {selectedLiZongItem ? <LiZongCandidateDetail candidate={selectedLiZongItem} data={liZongData} /> : null}
+                    {selectedLiZongItem ? (
+                      <LiZongCandidateDetail
+                        candidate={selectedLiZongItem}
+                        data={liZongData}
+                        onResearch={(candidate) => researchMutation.mutate({
+                          entryContext: liZongEntryContext(liZongData, candidate),
+                          symbol: candidate.internalSymbol ?? candidate.symbol,
+                        })}
+                        researchError={researchErrorFor(selectedLiZongItem.internalSymbol ?? selectedLiZongItem.symbol)}
+                        researchPending={researchPendingFor(selectedLiZongItem.internalSymbol ?? selectedLiZongItem.symbol)}
+                      />
+                    ) : null}
                   </div>
                 </div>
               )}
@@ -1146,7 +1264,7 @@ export function ScreeningPage({ authenticated }: Props) {
       ) : null}
 
       <footer className={styles.footer}>
-        红绿仅表示事实涨跌方向，不构成买卖建议；候选、规则核验与回测指标均为服务端口径直通，本页不触发新筛选或回测任务。
+        红绿仅表示事实涨跌方向，不构成买卖建议；候选、规则核验与回测指标均为服务端口径直通。只有你明确点击进入研究时才保存候选线索，系统不会自动形成正式判断。
       </footer>
     </div>
   );

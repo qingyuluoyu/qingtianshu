@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { StockResearchPage } from "./StockResearchPage";
 import { stockResearchQueryKeys } from "./queries";
-import { parsedHistory, parsedPeers, parsedStockPage, parsedTasks } from "./testFixtures";
+import { parsedHistory, parsedPeers, parsedStockPage, parsedTasks, workspaceFixture } from "./testFixtures";
 
 function hydratedClient() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -70,6 +70,41 @@ describe("StockResearchPage", () => {
     expect(screen.getByText("股东结构")).toBeInTheDocument();
     expect(screen.getAllByText("当前不可用").length).toBeGreaterThan(0);
     expect(screen.getAllByText("数据完整").length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("shows the screening context that the user explicitly carried into research", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(stockResearchQueryKeys.page("000063", "1y"), parsedStockPage({
+      modules: {
+        workspace: {
+          status: "available",
+          data: {
+            ...workspaceFixture(),
+            research_entry: {
+              source_kind: "stock_screen",
+              source_label: "经营指标开始改善",
+              display_name: "中兴通讯",
+              industry: "通信设备",
+              profile_key: "quality",
+              as_of_date: "2026-08-05",
+              candidate_status: "ready",
+              matched_reasons: ["营收与利润同比改善"],
+              research_focus: "先核验改善是否得到现金流支持。",
+              attention_flags: ["净利润增速仍需核对一次性因素"],
+              missing_fields: ["经营现金流"],
+            },
+          },
+        },
+      },
+    }));
+
+    renderPage(client);
+    expect(screen.getByText("本次研究入口")).toBeInTheDocument();
+    expect(screen.getByText("经营指标开始改善")).toBeInTheDocument();
+    expect(screen.getByText("先核验改善是否得到现金流支持。")).toBeInTheDocument();
+    expect(screen.getByText("净利润增速仍需核对一次性因素")).toBeInTheDocument();
+    expect(screen.getByText(/已保存的候选理由：营收与利润同比改善/)).toBeInTheDocument();
+    expect(screen.getByText(/仍需补齐：经营现金流/)).toBeInTheDocument();
   });
 
   it("renders technical tab with candles, frequency and passthrough indicators", () => {

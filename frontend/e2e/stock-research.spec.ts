@@ -96,6 +96,19 @@ const workspace = {
     quote: { price: 34.69, pct_change: -0.14, daily_close: 34.74, daily_return_1d_pct: 1.0765, market_timestamp: "2026-08-06T14:50:06+08:00", label: "盘中最新报价", currency: "CNY" },
     latest_change: { id: "c-1", summary: "核心研究判断暂未出现实质变化。", severity: "stable", event_type: "evidence_change", created_at: "2026-08-06T06:50:12+00:00", data_as_of: "2026-08-05T01:30:00+00:00", next_review: { focus: "确认短期价格结构与信息增量" } },
   },
+  research_entry: {
+    source_kind: "stock_screen",
+    source_label: "经营指标开始改善",
+    display_name: "中兴通讯",
+    industry: "通信设备",
+    profile_key: "quality",
+    as_of_date: "2026-08-05",
+    candidate_status: "ready",
+    matched_reasons: ["营收与利润同比改善"],
+    research_focus: "先核验改善是否得到现金流支持。",
+    attention_flags: ["净利润增速仍需核对一次性因素"],
+    missing_fields: ["经营现金流"],
+  },
   important_changes: [{ id: "c-1", summary: "核心研究判断暂未出现实质变化。", severity: "stable", event_type: "evidence_change", created_at: "2026-08-06T06:50:12+00:00", data_as_of: "2026-08-05T01:30:00+00:00", next_review: { focus: "确认短期价格结构与信息增量" } }],
   next_evidence: [{ status: "watching", source: "tracking_plan", description: "收盘与 MA20 36.3445 的相对位置是否变化" }],
   pending_actions: [],
@@ -205,6 +218,9 @@ test("simulated overview renders header, research status and module states; tabs
   await expect(page.getByText("+1.08%").first()).toBeVisible();
   await expect(page.getByText(/日线截至：2026-08-05/).first()).toBeVisible();
   await expect(page.getByText(/尚未保存当前判断/).first()).toBeVisible();
+  await expect(page.getByText("本次研究入口")).toBeVisible();
+  await expect(page.getByText("先核验改善是否得到现金流支持。")).toBeVisible();
+  await expect(page.getByText(/仍需补齐：经营现金流/)).toBeVisible();
   await expect(page.getByRole("link", { name: "创建当前判断" }).first()).toBeVisible();
   await expect(page.getByText("模块数据状态")).toBeVisible();
   await expect(page.getByText("可用 9/9")).toBeVisible();

@@ -86,8 +86,10 @@
 .itemList p { margin: 5px 0 0; color: #475467; font-size: 12px; line-height: 1.6; }
 .itemList small { display: block; margin-top: 4px; color: #98a2b3; font-size: 10px; }
 .actionRow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-.actionLink { padding: 8px 14px; border: 1px solid var(--brand); border-radius: 8px; color: var(--brand); background: var(--brand-soft); font-size: 12px; font-weight: 700; text-decoration: none; }
+.actionLink { padding: 8px 14px; border: 1px solid var(--brand); border-radius: 8px; color: var(--brand); background: var(--brand-soft); font: inherit; font-size: 12px; font-weight: 700; text-decoration: none; cursor: pointer; }
 .actionLink:hover { background: #dbe9ff; }
+.actionLink:disabled { cursor: wait; opacity: .65; }
+.actionError { margin: 8px 0 0; color: var(--danger); font-size: 12px; line-height: 1.55; }
 .footer { padding: 3px 6px 16px; color: #667085; font-size: 11px; line-height: 1.6; text-align: center; }
 @media (max-width: 1279px) { .layout { grid-template-columns: minmax(0, 1fr); } .modeGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 620px) { .modeGrid { grid-template-columns: minmax(0, 1fr); } .header { padding: 18px; } .filterGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -280,6 +280,44 @@ function ResearchStatus({ workspace, symbol }: { workspace: Workspace | null; sy
   );
 }
 
+function ResearchEntryCard({ workspace }: { workspace: Workspace | null }) {
+  const entry = workspace?.researchEntry ?? null;
+  if (entry === null) return null;
+  const candidateLabel = ({
+    ready: "筛选结果",
+    qualified: "通过",
+    triggered: "已触发",
+    not_qualified: "未通过",
+    data_incomplete: "数据不足",
+  } as Record<string, string>)[entry.candidateStatus ?? ""] ?? entry.candidateStatus;
+  return (
+    <ModuleCard
+      meta={entry.asOfDate ? `筛选数据日：${formatDate(entry.asOfDate)}` : undefined}
+      title="本次研究入口"
+    >
+      <div className={styles.chipRow}>
+        <span className={styles.tag}>{entry.sourceLabel ?? "研究候选筛选"}</span>
+        {candidateLabel ? <span className={styles.tag}>{candidateLabel}</span> : null}
+      </div>
+      <p className={styles.statement} style={{ marginTop: 12 }}>
+        {entry.researchFocus ?? "逐条核验候选命中理由、反方证据和数据缺口，再决定是否形成正式判断。"}
+      </p>
+      {entry.attentionFlags.length > 0 ? (
+        <div className={styles.itemList}>
+          {entry.attentionFlags.map((flag) => <article key={flag}><strong>优先核验</strong><p>{flag}</p></article>)}
+        </div>
+      ) : null}
+      {entry.matchedReasons.length > 0 ? (
+        <p className={styles.helper}>已保存的候选理由：{entry.matchedReasons.slice(0, 4).join("；")}</p>
+      ) : null}
+      {entry.missingFields.length > 0 ? (
+        <p className={styles.helper}>仍需补齐：{entry.missingFields.join("；")}</p>
+      ) : null}
+      <p className={styles.boundaryNote}>这些内容只记录你从筛选页带入的研究线索；不会自动成为关注结论、任务或交易判断。</p>
+    </ModuleCard>
+  );
+}
+
 function KeyChanges({ workspace }: { workspace: Workspace | null }) {
   if (workspace === null) return <ModuleCard error title="关键变化">{null}</ModuleCard>;
   const changes = workspace.importantChanges.slice(0, 4);
@@ -373,6 +411,7 @@ function OverviewTab({ page }: { page: StockPage }) {
   const symbol = page.symbol;
   return (
     <>
+      <ResearchEntryCard workspace={workspace} />
       <div className={styles.twoColumns}>
         <MarketSnapshot fundamentals={fundamentals} history={history} />
         <ResearchStatus symbol={symbol} workspace={workspace} />

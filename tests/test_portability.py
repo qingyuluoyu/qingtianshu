@@ -56,6 +56,25 @@ def test_default_configuration_uses_writable_user_data_directory(monkeypatch):
     assert PROJECT_ROOT not in settings.data_dir.parents
 
 
+def test_optional_market_snapshot_database_uses_postgres(monkeypatch):
+    url = "postgresql://reader@localhost/qingshu_market"
+    monkeypatch.setenv("QINGSHU_MARKET_SNAPSHOT_DATABASE_URL", url)
+
+    settings = Settings.from_env()
+
+    assert settings.market_snapshot_database_url == url
+
+
+def test_optional_market_snapshot_database_rejects_file_url(monkeypatch):
+    monkeypatch.setenv(
+        "QINGSHU_MARKET_SNAPSHOT_DATABASE_URL",
+        "sqlite:////tmp/qingshu-market.sqlite3",
+    )
+
+    with pytest.raises(ValueError, match="must use PostgreSQL"):
+        Settings.from_env()
+
+
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="macOS launcher uses zsh")
 def test_macos_launcher_has_valid_shell_syntax():
     result = subprocess.run(

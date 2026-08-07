@@ -1,8 +1,7 @@
 # 透明选股（/screening）组件设计记录
 
 执行合同：FRONTEND_EXECUTION_CONTRACT_V1（§5.2 透明选股蓝图、§6 数据/时间/金融口径、§7 互动与写入边界、§8 禁止约定）。
-本切片为**只读**：`POST /me/stock-screener` 是契约定义的筛选查询入口（`force_refresh` 固定 `false`，不触发数据重建）；
-李总策略与回测全部是 GET 快照读取，不触发新筛选 run / 回测任务，页面上没有任何写操作按钮。
+筛选、李总策略与回测仍是只读查询，不触发数据重建、新筛选 run 或回测任务。只有用户明确点击候选的「保存线索并进入个股研究」后，页面才调用 `POST /me/deep-stock` 保存本次研究入口；该动作只建立研究会话，不创建正式判断、观察任务、关注关系或交易动作。
 
 ## 数据契约总表
 
@@ -10,6 +9,7 @@
 | --- | --- | --- | --- |
 | 筛选档案 | `GET /stock-screener/profiles` | `items[*].{key,label,description,sort_rule,default_filters}`、`boundary` | — |
 | 通用筛选结果 | `POST /me/stock-screener`（`type="stock_screen"` 直通锁） | `status`、`profile.sort_rule`、`rules[*].{field,operator,value,unit,reason}`、`effective_filters`、`universe.{listed_input,after_common_rules,after_market_rules,valuation_coverage,financial_candidate_pool,matched,represents_full_market}`、`data_contract.{as_of,representation}`、`items[*].{ts_code,metrics,financials,coverage_status,matched_reasons,missing_fields,limitations,evidence_times}`、`warnings`、`boundary` | BarDate = `data_contract.as_of.market_date`；GeneratedAt = `as_of.generated_at`；ReportPeriod = `financial_report_periods` / `evidence_times.financial_report_period` |
+| 保存研究入口 | `POST /me/deep-stock` | `symbol`、`quality_scope="user"`、`entry_context.{source_kind,source_label,profile_key,as_of_date,candidate_status,matched_reasons,research_focus,attention_flags,missing_fields}` | BarDate = `entry_context.as_of_date` |
 | 李总候选快照 | `GET /v1/stock-strategies/li-zong/candidates?status=&limit=200`（`strategy_id="li_zong"` 直通锁） | `status`、`counts.{qualified,triggered,not_qualified,data_incomplete,invalidated,total}`、`funnel.{starting_count,steps,final_candidate_count}`、`data_meta.{latest_as_of_date,universe_count,coverage_ratio,full_market_coverage}`、`strategy.version.rules`、`items[*].{evaluation_status,rule_results,matched_reasons,limitations,summary,triggered_rule_ids,as_of_date}` | BarDate = `as_of_date` / `data_meta.latest_as_of_date` |
 | 最近 run | `GET /v1/stock-strategies/li-zong/runs/latest` | `run.{status,as_of_date,universe_count,coverage_ratio,qualified_count,warnings,error,finished_at}`、`coverage.{full_market_coverage,remaining_symbols}` | BarDate = `run.as_of_date`；GeneratedAt = `run.finished_at` |
 | 回测 | `GET /v1/stock-strategies/li-zong/backtest?period=` | `status`、`progress.{status,phase,market_data_ratio}`、`assumptions.{benchmark,weighting,rebalance,price_basis,cash_policy}`、`result.{status,period_return_pct,annualized_return_pct,max_drawdown_pct,benchmark_return_pct,excess_return_pct,data_coverage_ratio,points[*].{trade_date,nav,benchmark_nav},generated_at,boundary}` | GeneratedAt = `result.generated_at`；区间 = `start_date~end_date` |
@@ -54,7 +54,8 @@
 - 页面与用户问题：这轮筛选命中了什么？数字的口径与时间是什么？
 - 真实数据：`universe.matched` 真实总数、`represents_full_market=false` → 「不代表全市场」徽章、`data_contract.as_of` 时间、warnings 直通。
 - 候选表三态：通用筛选只返回命中项——完整命中 =「通过」，带 `missing_fields` =「数据不足」（后端字段直通，不自行推断）；未通过项不进入本表（接口只返回命中）。
-- 互动事件：行选择只更新详情与 URL `symbol`；「进入个股研究」链接 `/stocks/:symbol`。
+- 互动事件：行选择只更新详情与 URL `symbol`；用户点击「保存线索并进入个股研究」后先持久化完整 `entry_context`，成功后使用后端规范化证券代码进入 `/stocks/:symbol`；保存失败留在当前页并显示可理解错误。
+- 写入边界：只保存用户明确选择的研究入口，不自动形成正式事实、判断、任务、关注关系或交易动作。
 - 响应式：表格容器自身横向滚动，页面根不溢出。
 - 测试：Page 测试直通百分数、三态徽章、空态（matched=0 真实空态）、无分页控件。
 
@@ -74,9 +75,10 @@
 
 ## 验收记录
 
-- `npx vitest run src/features/screening`：24/24 通过（adapters 13 + Page 11）；全量 `npx vitest run` 105/105 通过。
-- `npx tsc --noEmit`：通过。
-- `npx playwright test e2e/screening.spec.ts`：4/4 通过（通用筛选主链路 + POST 载荷断言、互斥模式 URL 切换 + 李总三态、回测指标/净值图 + period 切换、390px 无横向溢出）。
+- `npm test`：全量 121/121 通过，其中 Screening Page 12/12、adapters 13/13。
+- `npm run build`：TypeScript 与 Vite production build 通过。
+- `npm run test:e2e`：全量页面合同 32/32 通过；筛选合同覆盖保存 `entry_context` 后再导航。
+- 真实浏览器链路 1/1 通过：隔离测试账户 Schema + 只读 `qingshu_prod` 行情快照，完成真实候选筛选、`POST /me/deep-stock`、个股页入口回读、顾问提问与 Run 上下文回读；桌面与 390px 截图人工检查通过，临时用户和 Schema 已清理。
 - 真实会话截图（acceptance01，数据全部来自 8010 真实后端，domcontentloaded + 固定等待 15s，截图 spec 内置横向溢出断言 ≤1px 四张全过）：`today-runtime-trace/screenshots/screening-screen-desktop.png`、`screening-lizong-desktop.png`、`screening-backtest-desktop.png`（1440×900）、`screening-mobile.png`（390×844）。截图覆盖：通用筛选真实档案/条件面板/命中摘要（数据日期 2026-08-06、不代表全市场徽章）、李总最近 run（partial + 未覆盖全市场 + warnings 直通）与三态候选表/规则核验/漏斗、回测 ready 指标卡（+28.10% / -32.76% / 覆盖率 0.8315 原值）与净值曲线。
 - 联调修复：vite dev 代理缺少 `/stock-screener` 前缀导致 profiles 请求回落 index.html（ContractError 正确拦截），已在 `vite.config.ts` 补 `"/stock-screener": apiProxy` 一行。
-- 遗留缺口：通用筛选无服务端分页参数（页面按 §5.2 不展示伪分页，query key 已预留 page 槽位）；`observation-pool`、`history`、`candidates/{symbol}` 详情、`triggers` 端点本切片未接入（页面蓝图未要求，留待后续切片评审）。
+- 遗留缺口：通用筛选无服务端分页参数（页面按 §5.2 不展示伪分页，query key 已预留 page 槽位）；`observation-pool`、`history`、`candidates/{symbol}` 详情、`triggers` 端点本切片未接入。真实行情快照目前通过独立只读数据库连接提供，部署环境需显式保证该数据源的更新与可用性。

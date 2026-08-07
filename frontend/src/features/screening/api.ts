@@ -44,6 +44,27 @@ export type ScreenParams = {
 
 type ScreenRequestBody = components["schemas"]["StockScreenRequest"];
 type ScreenFiltersBody = components["schemas"]["StockScreenFilters"];
+type DeepStockStartBody = components["schemas"]["DeepStockStart"];
+export type DeepStockEntryContext = components["schemas"]["DeepStockEntryContext"];
+
+export type StartedResearchSession = {
+  symbol: string;
+  conversationId: string | null;
+};
+
+function parseStartedResearchSession(value: unknown): StartedResearchSession {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ScreeningApiError(500, "研究空间返回格式不正确");
+  }
+  const root = value as Record<string, unknown>;
+  if (typeof root.symbol !== "string" || root.symbol.length === 0) {
+    throw new ScreeningApiError(500, "研究空间缺少证券代码");
+  }
+  return {
+    symbol: root.symbol,
+    conversationId: typeof root.conversation_id === "string" ? root.conversation_id : null,
+  };
+}
 
 export async function getScreenerProfiles(): Promise<ScreenerProfiles> {
   const { data, error, response } = await api.GET("/stock-screener/profiles");
@@ -64,6 +85,20 @@ export async function runStockScreen(params: ScreenParams): Promise<StockScreen>
   };
   const { data, error, response } = await api.POST("/me/stock-screener", { body });
   return unwrap(response, data, error, parseStockScreen);
+}
+
+/** 用户明确进入候选研究时才保存筛选入口；不会创建或确认正式判断。 */
+export async function startDeepStockResearch(
+  symbol: string,
+  entryContext: DeepStockEntryContext,
+): Promise<StartedResearchSession> {
+  const body: DeepStockStartBody = {
+    symbol,
+    entry_context: entryContext,
+    quality_scope: "user",
+  };
+  const { data, error, response } = await api.POST("/me/deep-stock", { body });
+  return unwrap(response, data, error, parseStartedResearchSession);
 }
 
 // ---------- 李总策略（全部只读 GET） ----------
