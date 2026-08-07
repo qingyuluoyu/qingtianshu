@@ -91,6 +91,7 @@ from app.providers.market import (
     SinaGoldProvider,
     SinaIndustrySectorProvider,
     SinaMarketBreadthProvider,
+    TencentChinaIndexQuoteProvider,
     TencentChinaIndexProvider,
     YahooMarketProvider,
 )
@@ -386,6 +387,14 @@ def create_app(
             ttl_seconds=settings.market_cache_seconds,
         )
     )
+    china_index_quote_provider = (
+        None
+        if supplied_market_provider is not None
+        else TencentChinaIndexQuoteProvider(
+            database,
+            ttl_seconds=settings.intraday_cache_seconds,
+        )
+    )
     capital_flow_provider = (
         None
         if supplied_market_provider is not None
@@ -398,6 +407,7 @@ def create_app(
         breadth_provider=breadth_provider,
         industry_index_provider=industry_index_provider,
         china_index_provider=china_index_provider,
+        china_index_quote_provider=china_index_quote_provider,
         capital_flow_provider=capital_flow_provider,
     )
     agent = AgentService(database, settings)

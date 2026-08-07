@@ -50,6 +50,26 @@ describe("today runtime contract adapters", () => {
     expect(result.items).toHaveLength(5);
   });
 
+  it("keeps a daily close explicitly separate from a realtime index quote", () => {
+    const result = parseIndices({
+      indices: [{
+        symbol: "000001.SS",
+        name: "上证综指",
+        status: "available",
+        metrics: { latest_close: 3348.37, change_1d: 9.31, return_1d_pct: 0.28 },
+        market_timestamp: "2026-08-07T14:30:05+08:00",
+        daily_market_timestamp: "2026-08-06T01:30:00+00:00",
+        data_granularity: "realtime_quote",
+        is_stale: false,
+      }],
+    });
+
+    expect(result.items[0]).toMatchObject({
+      dataGranularity: "realtime_quote",
+      dailyMarketTimestamp: "2026-08-06T01:30:00+00:00",
+    });
+  });
+
   it("does not turn nullable or missing breadth values into zero", () => {
     const result = parseBreadth({
       status: "available",

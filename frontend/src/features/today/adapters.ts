@@ -58,6 +58,8 @@ export type IndexCard = {
   change1d: number | null;
   return1dPct: number | null;
   marketTimestamp: string | null;
+  dailyMarketTimestamp: string | null;
+  dataGranularity: "realtime_quote" | "daily_close" | "unknown";
   isStale: boolean | null;
 };
 
@@ -293,6 +295,12 @@ export function parseIndices(value: unknown): Indices {
         change1d: optionalNumber(metrics?.change_1d),
         return1dPct: optionalNumber(metrics?.return_1d_pct),
         marketTimestamp: optionalString(item?.market_timestamp),
+        dailyMarketTimestamp: optionalString(item?.daily_market_timestamp),
+        dataGranularity: optionalString(item?.data_granularity) === "realtime_quote"
+          ? "realtime_quote"
+          : optionalString(item?.data_granularity) === "daily_close"
+            ? "daily_close"
+            : "unknown",
         isStale: optionalBoolean(item?.is_stale),
       };
     }),

@@ -17,6 +17,7 @@ from app.providers.market import (
     SinaGoldProvider,
     SinaIndustrySectorProvider,
     SinaMarketBreadthProvider,
+    TencentChinaIndexQuoteProvider,
     TencentChinaIndexProvider,
     YahooMarketProvider,
 )
@@ -42,6 +43,22 @@ def test_star_50_is_a_first_class_china_index():
         "name": "科创50",
         "exchange": "SSE",
     }
+
+
+def test_tencent_china_index_quote_parser_keeps_realtime_fields_separate_from_daily_bars():
+    parsed = TencentChinaIndexQuoteProvider._parse(
+        "v_sh000001=\"1~上证指数~000001~3348.37~3339.06~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~20260807143005~9.31~0.28\";\n"
+        "v_sz399001=\"51~深证成指~399001~10197.46~10230.54~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~20260807143005~-33.08~-0.32\";\n",
+        ["000001.SS", "399001.SZ"],
+    )
+
+    assert parsed["000001.SS"]["price"] == 3348.37
+    assert parsed["000001.SS"]["previous_close"] == 3339.06
+    assert parsed["000001.SS"]["change"] == 9.31
+    assert parsed["000001.SS"]["pct_change"] == 0.28
+    assert parsed["000001.SS"]["data_granularity"] == "realtime_quote"
+    assert parsed["000001.SS"]["market_timestamp"] == "2026-08-07T14:30:05+08:00"
+    assert parsed["399001.SZ"]["pct_change"] == -0.32
 
 
 def test_yahoo_provider_parses_and_caches(tmp_path: Path):

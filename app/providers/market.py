@@ -585,6 +585,123 @@ class TencentChinaIndexProvider:
         }
 
 
+class TencentChinaIndexQuoteProvider:
+    """Batch realtime quotes for the formal A-share index cards.
+
+    The daily-bar provider deliberately omits the unfinished daily bar.  This
+    provider supplies a separate, timestamped quote snapshot; consumers must
+    never turn it into a historical daily bar.
+    """
+
+    URL = "https://qt.gtimg.cn/q={quote_symbols}"
+    SYMBOLS = TencentChinaIndexProvider.SYMBOLS
+
+    def __init__(
+        self,
+        database: Database,
+        ttl_seconds: int = 30,
+        http_get: Callable[..., Any] = requests.get,
+    ):
+        self.database = database
+        self.ttl_seconds = ttl_seconds
+        self.http_get = http_get
+
+    def fetch_quotes(self, symbols: list[str]) -> dict[str, dict[str, Any]]:
+        requested = [symbol for symbol in symbols if symbol in self.SYMBOLS]
+        if not requested:
+            return {}
+        quote_symbols = [str(self.SYMBOLS[symbol]["quote_symbol"]) for symbol in requested]
+        cache_key = f"tencent:china-index:quotes:{','.join(quote_symbols)}"
+        cached = self.database.get_cache(cache_key)
+        if cached is not None:
+            return dict(cached.get("quotes") or {})
+        try:
+            url = self.URL.format(quote_symbols=",".join(quote_symbols))
+            response = self.http_get(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 QingshuFinanceAgentDemo/0.1",
+                    "Referer": "https://gu.qq.com/",
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            content = response.content.decode("gb18030", errors="replace")
+            quotes = self._parse(content, requested)
+            if not quotes:
+                raise ProviderError("腾讯指数实时快照未返回可用报价")
+            payload = {
+                "quotes": quotes,
+                "source": "Tencent Finance realtime index quotes",
+                "fetched_at": utc_now(),
+                "is_stale": False,
+                "cache_hit": False,
+            }
+            self.database.put_cache(cache_key, payload, self.ttl_seconds)
+            return quotes
+        except Exception as exc:
+            stale = self.database.get_cache(cache_key, allow_stale=True)
+            if stale is not None:
+                return dict(stale.get("quotes") or {})
+            if isinstance(exc, ProviderError):
+                raise
+            raise ProviderError(
+                f"腾讯指数实时快照不可用：{type(exc).__name__}: {exc}"
+            ) from exc
+
+    @classmethod
+    def _parse(
+        cls, content: str, symbols: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        by_quote_symbol = {
+            str(config["quote_symbol"]): (symbol, config)
+            for symbol, config in cls.SYMBOLS.items()
+            if symbol in symbols
+        }
+        quotes: dict[str, dict[str, Any]] = {}
+        for quote_symbol, raw in re.findall(r'v_([^=]+)="([^"]*)";?', content):
+            resolved = by_quote_symbol.get(quote_symbol)
+            if resolved is None:
+                continue
+            symbol, config = resolved
+            fields = raw.split("~")
+            if len(fields) <= 32:
+                continue
+            code = str(fields[2] or "")
+            if code != str(config["quote_symbol"])[2:]:
+                continue
+            timestamp = str(fields[30] or "")
+            if not re.fullmatch(r"\d{14}", timestamp):
+                continue
+            price = _number(fields[3])
+            previous_close = _number(fields[4])
+            change = _number(fields[31])
+            pct_change = _number(fields[32])
+            if price is None or previous_close is None or change is None or pct_change is None:
+                continue
+            market_timestamp = datetime.strptime(timestamp, "%Y%m%d%H%M%S").replace(
+                tzinfo=ZoneInfo("Asia/Shanghai")
+            ).isoformat(timespec="seconds")
+            quotes[symbol] = {
+                "symbol": symbol,
+                "display_name": str(fields[1] or config["name"]),
+                "currency": "CNY",
+                "exchange": config["exchange"],
+                "price": price,
+                "previous_close": previous_close,
+                "change": change,
+                "pct_change": pct_change,
+                "market_timestamp": market_timestamp,
+                "data_granularity": "realtime_quote",
+                "source": "Tencent Finance realtime index quotes",
+                "source_url": cls.URL.format(quote_symbols=str(config["quote_symbol"])),
+                "fetched_at": utc_now(),
+                "is_stale": False,
+                "cache_hit": False,
+            }
+        return quotes
+
+
 class EastmoneySectorProvider:
     URL = "https://push2.eastmoney.com/api/qt/clist/get"
 

@@ -1207,6 +1207,7 @@ class MarketAnalysisService:
         breadth_provider: Any | None = None,
         industry_index_provider: CSIIndustryIndexProvider | None = None,
         china_index_provider: Any | None = None,
+        china_index_quote_provider: Any | None = None,
         capital_flow_provider: Any | None = None,
     ):
         self.database = database
@@ -1215,6 +1216,7 @@ class MarketAnalysisService:
         self.breadth_provider = breadth_provider
         self.industry_index_provider = industry_index_provider
         self.china_index_provider = china_index_provider
+        self.china_index_quote_provider = china_index_quote_provider
         self.capital_flow_provider = capital_flow_provider
 
     def get_index_history(self, symbol: str, range_name: str = "1y") -> dict[str, Any]:
@@ -1840,6 +1842,17 @@ class MarketAnalysisService:
     def _fetch_index_items(
         self, catalog: list[dict[str, str]], range_name: str
     ) -> list[dict[str, Any]]:
+        quotes: dict[str, dict[str, Any]] = {}
+        quote_warning: str | None = None
+        if self.china_index_quote_provider is not None:
+            try:
+                quotes = self.china_index_quote_provider.fetch_quotes(
+                    [item["symbol"] for item in catalog if item.get("group") == "china"]
+                )
+            except (ProviderError, ValueError) as exc:
+                # A quote outage must not discard the last confirmed daily bar.
+                quote_warning = f"实时指数快照不可用，已保留最近完整日线：{exc}"
+
         def fetch(item: dict[str, str]) -> dict[str, Any]:
             try:
                 history = self._fetch_index_history(
@@ -1849,14 +1862,32 @@ class MarketAnalysisService:
                 warnings = list(history.get("warnings", []))
                 if metrics.get("return_1d_status") == "missing_previous_session":
                     warnings.append("最近两个日线点不是相邻交易日，未计算一日涨跌幅。")
+                quote = quotes.get(item["symbol"])
+                if quote is not None:
+                    metrics = dict(metrics)
+                    metrics.update(
+                        {
+                            "latest_close": quote["price"],
+                            "previous_close": quote["previous_close"],
+                            "change_1d": quote["change"],
+                            "return_1d_pct": quote["pct_change"],
+                            "quote_basis": "realtime_quote",
+                        }
+                    )
+                elif item.get("group") == "china":
+                    warnings.append("当前展示最近完整日线收盘，不是盘中实时指数报价。")
+                if quote_warning and item.get("group") == "china":
+                    warnings.append(quote_warning)
                 return {
                     **item,
                     "status": "available",
                     "metrics": metrics,
                     "latest_bar": history["points"][-1],
                     "recent_bars": history["points"][-5:],
-                    "source": history["source"],
-                    "market_timestamp": history["market_timestamp"],
+                    "source": quote["source"] if quote is not None else history["source"],
+                    "market_timestamp": quote["market_timestamp"] if quote is not None else history["market_timestamp"],
+                    "daily_market_timestamp": history["market_timestamp"],
+                    "data_granularity": quote["data_granularity"] if quote is not None else "daily_close",
                     "fetched_at": history["fetched_at"],
                     "is_stale": history.get("is_stale", False),
                     "coverage": history["coverage"],

@@ -262,6 +262,55 @@ def test_index_history_prefers_fresher_china_fallback():
     assert history["metrics"]["latest_close"] == 4739.23
 
 
+def test_indices_use_a_timestamped_realtime_quote_without_rewriting_daily_history():
+    class DailyProvider:
+        def fetch_history(self, symbol: str, range_name: str = "1y"):
+            return {
+                "symbol": symbol,
+                "points": [
+                    {"timestamp": "2026-08-05T01:30:00+00:00", "close": 3300.0},
+                    {"timestamp": "2026-08-06T01:30:00+00:00", "close": 3339.06},
+                ],
+                "source": "daily bars",
+                "market_timestamp": "2026-08-06T01:30:00+00:00",
+                "fetched_at": "2026-08-07T06:00:00+00:00",
+                "coverage": {"points": 2},
+                "warnings": [],
+                "is_stale": False,
+            }
+
+    class QuoteProvider:
+        def fetch_quotes(self, symbols: list[str]):
+            assert "000001.SS" in symbols
+            return {
+                "000001.SS": {
+                    "price": 3348.37,
+                    "previous_close": 3339.06,
+                    "change": 9.31,
+                    "pct_change": 0.28,
+                    "market_timestamp": "2026-08-07T14:30:05+08:00",
+                    "data_granularity": "realtime_quote",
+                    "source": "Tencent Finance realtime index quotes",
+                }
+            }
+
+    service = MarketAnalysisService(
+        None,
+        DailyProvider(),
+        _NextDaySectorProvider(),
+        china_index_quote_provider=QuoteProvider(),
+    )
+
+    item = next(item for item in service.get_indices(scope="core", group="china")["indices"] if item["symbol"] == "000001.SS")
+
+    assert item["metrics"]["latest_close"] == 3348.37
+    assert item["metrics"]["return_1d_pct"] == 0.28
+    assert item["market_timestamp"] == "2026-08-07T14:30:05+08:00"
+    assert item["daily_market_timestamp"] == "2026-08-06T01:30:00+00:00"
+    assert item["latest_bar"]["close"] == 3339.06
+    assert item["data_granularity"] == "realtime_quote"
+
+
 def test_index_history_prefers_complete_same_day_history_over_one_point_quote():
     class OnePointProvider:
         def fetch_history(self, symbol: str, range_name: str = "1y"):
