@@ -834,13 +834,15 @@ export function ResearchCenterPage({ authenticated }: Props) {
       }
       throw new Error("复盘写入参数不完整");
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: async (_data, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.tradeReviews() }),
+        queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.actions() }),
+        queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.changes() }),
+        queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.outcomes() }),
+      ]);
       setEditingReviewId(null);
       setNotice({ kind: "success", text: variables.action === "saveDraft" ? "草稿已保存，确认前仍可继续编辑。" : "后续研究事项已创建。" });
-      void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.tradeReviews() });
-      void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.actions() });
-      void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.changes() });
-      void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.outcomes() });
     },
     onError: (error) => {
       if (error instanceof ResearchCenterApiError && error.status === 409) {
