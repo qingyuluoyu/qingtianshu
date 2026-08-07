@@ -64,7 +64,7 @@ describe("research center write API", () => {
       planDeviation: null,
       biasTags: [],
       improvementText: null,
-    })).rejects.toMatchObject<Partial<ResearchCenterApiError>>({ status: 409 });
+    })).rejects.toMatchObject({ status: 409 });
   });
 
   it("requests only pending writebacks", async () => {

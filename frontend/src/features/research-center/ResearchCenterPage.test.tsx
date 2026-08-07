@@ -10,7 +10,11 @@ import {
   getResearchOutcomes,
   getResearchReport,
   getTradeReviewCenter,
+  getPendingWritebacks,
   getWorkspaceTimeline,
+  generateTradeReviewDraft,
+  confirmWriteback,
+  rejectWriteback,
   ResearchCenterApiError,
 } from "./api";
 import {
@@ -37,8 +41,12 @@ vi.mock("./api", async (importOriginal) => {
     getTradeReviewCenter: vi.fn(),
     getWorkspaceTimeline: vi.fn(),
     getResearchReport: vi.fn(),
+    getPendingWritebacks: vi.fn(),
     confirmTradeReview: vi.fn(),
     archiveTradeReview: vi.fn(),
+    generateTradeReviewDraft: vi.fn(),
+    confirmWriteback: vi.fn(),
+    rejectWriteback: vi.fn(),
   };
 });
 
@@ -48,8 +56,12 @@ const mockGetActions = vi.mocked(getResearchActions);
 const mockGetTradeReviews = vi.mocked(getTradeReviewCenter);
 const mockGetTimeline = vi.mocked(getWorkspaceTimeline);
 const mockGetReport = vi.mocked(getResearchReport);
+const mockGetPendingWritebacks = vi.mocked(getPendingWritebacks);
 const mockConfirm = vi.mocked(confirmTradeReview);
 const mockArchive = vi.mocked(archiveTradeReview);
+const mockGenerateDraft = vi.mocked(generateTradeReviewDraft);
+const mockConfirmWriteback = vi.mocked(confirmWriteback);
+const mockRejectWriteback = vi.mocked(rejectWriteback);
 
 function renderPage(entry = "/research-center", authenticated = true) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -71,8 +83,12 @@ beforeEach(() => {
   mockGetTradeReviews.mockResolvedValue(parsedTradeReviewCenter());
   mockGetTimeline.mockResolvedValue(parsedTimeline());
   mockGetReport.mockResolvedValue(parsedReport());
+  mockGetPendingWritebacks.mockResolvedValue({ items: [] });
   mockConfirm.mockResolvedValue({});
   mockArchive.mockResolvedValue({});
+  mockGenerateDraft.mockResolvedValue({});
+  mockConfirmWriteback.mockResolvedValue({});
+  mockRejectWriteback.mockResolvedValue({});
 });
 
 afterEach(() => {
@@ -169,6 +185,61 @@ describe("ResearchCenterPage", () => {
     expect(await screen.findByText(/还没有研究跟踪记录/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "前往我的关注" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "前往透明选股" })).toBeInTheDocument();
+  });
+
+  it("does not generate a candidate until the user explicitly selects a tier", async () => {
+    const readyCenter = parsedTradeReviewCenter();
+    readyCenter.items[0] = {
+      ...readyCenter.items[0]!,
+      status: "ready",
+      canConfirm: false,
+      canGenerateDraft: true,
+      currentVersion: null,
+    };
+    mockGetTradeReviews.mockResolvedValue(readyCenter);
+    renderPage();
+
+    expect(mockGenerateDraft).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "生成复盘候选" }));
+    expect(mockGenerateDraft).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "以经济档生成" }));
+    await waitFor(() => expect(mockGenerateDraft).toHaveBeenCalledWith("review-1", 0, "economy"));
+  });
+
+  it("confirms or rejects a pending review candidate only after an explicit click", async () => {
+    mockGetPendingWritebacks.mockResolvedValue({
+      items: [{
+        id: "candidate-1",
+        reviewId: "review-1",
+        symbol: "000063.SZ",
+        logicResult: "需要复核订单兑现。",
+        planDeviation: null,
+        improvementText: null,
+        biasTags: ["锚定"],
+        createdAt: "2026-08-07T08:00:00+00:00",
+      }],
+    });
+    renderPage();
+
+    expect(mockConfirmWriteback).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "确认候选并生成草稿" }));
+    await waitFor(() => expect(mockConfirmWriteback).toHaveBeenCalledWith("candidate-1"));
+    expect(mockGetTradeReviews.mock.calls.length).toBeGreaterThan(1);
+    fireEvent.click(screen.getByRole("button", { name: "拒绝候选" }));
+    await waitFor(() => expect(mockRejectWriteback).toHaveBeenCalledWith("candidate-1"));
+  });
+
+  it("refreshes server state instead of replaying after a candidate 409", async () => {
+    mockGetPendingWritebacks.mockResolvedValue({
+      items: [{ id: "candidate-1", reviewId: "review-1", symbol: "000063.SZ", logicResult: "需要复核订单兑现。", planDeviation: null, improvementText: null, biasTags: [], createdAt: null }],
+    });
+    mockConfirmWriteback.mockRejectedValue(new ResearchCenterApiError(409, "版本已更新"));
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "确认候选并生成草稿" }));
+    expect(await screen.findByText("版本已更新")).toBeInTheDocument();
+    expect(mockGetTradeReviews.mock.calls.length).toBeGreaterThan(1);
+    expect(mockConfirmWriteback).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the research workspace scaffold when the user has no tracked stocks", async () => {

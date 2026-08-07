@@ -4,6 +4,7 @@ import {
   getResearchChanges,
   getResearchOutcomes,
   getResearchReport,
+  getPendingWritebacks,
   getTradeReviewCenter,
   getWorkspaceTimeline,
   ResearchCenterApiError,
@@ -19,6 +20,7 @@ export const researchCenterQueryKeys = {
   outcomes: () => ["research-center", "outcomes"] as const,
   actions: () => ["research-center", "actions"] as const,
   tradeReviews: () => ["research-center", "trade-reviews"] as const,
+  pendingWritebacks: () => ["research-center", "pending-writebacks"] as const,
   timeline: (symbol: string) => ["research-center", symbol] as const,
   report: (symbol: string) => ["research-center", symbol, "report"] as const,
 };
@@ -52,6 +54,12 @@ export const researchCenterQueries = {
   tradeReviews: () => queryOptions({
     queryKey: researchCenterQueryKeys.tradeReviews(),
     queryFn: () => getTradeReviewCenter(),
+    ...stableErrorPolicy,
+    staleTime: 30_000,
+  }),
+  pendingWritebacks: () => queryOptions({
+    queryKey: researchCenterQueryKeys.pendingWritebacks(),
+    queryFn: () => getPendingWritebacks(),
     ...stableErrorPolicy,
     staleTime: 30_000,
   }),

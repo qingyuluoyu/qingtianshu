@@ -11,7 +11,14 @@ import type {
   TradeReviewCenter,
   WorkspaceTimeline,
 } from "./adapters";
-import { archiveTradeReview, confirmTradeReview, ResearchCenterApiError } from "./api";
+import {
+  archiveTradeReview,
+  confirmTradeReview,
+  confirmWriteback,
+  generateTradeReviewDraft,
+  rejectWriteback,
+  ResearchCenterApiError,
+} from "./api";
 import { researchCenterQueries, researchCenterQueryKeys } from "./queries";
 import styles from "./ResearchCenterPage.module.css";
 
@@ -486,9 +493,25 @@ function OutcomeCard({ anchor, name }: { anchor: OutcomeAnchor; name: string | n
 
 type MutationNotice = { kind: "success" | "conflict" | "failed"; text: string } | null;
 
-function TradeReviewCenterSection({ center, pendingId, onTransition }: {
+function TradeReviewCenterSection({
+  center,
+  pendingId,
+  pendingCandidates,
+  generationReviewId,
+  candidatePendingId,
+  onStartGeneration,
+  onGenerate,
+  onCandidateAction,
+  onTransition,
+}: {
   center: TradeReviewCenter;
   pendingId: string | null;
+  pendingCandidates: Array<{ id: string; reviewId: string; logicResult: string | null; planDeviation: string | null; improvementText: string | null; biasTags: string[] }>;
+  generationReviewId: string | null;
+  candidatePendingId: string | null;
+  onStartGeneration: (reviewId: string | null) => void;
+  onGenerate: (review: TradeReview, tier: "economy" | "deep") => void;
+  onCandidateAction: (candidateId: string, action: "confirm" | "reject") => void;
   onTransition: (review: TradeReview, action: "confirm" | "archive") => void;
 }) {
   if (center.items.length === 0) {
@@ -509,6 +532,9 @@ function TradeReviewCenterSection({ center, pendingId, onTransition }: {
         const rowPending = pendingId === review.id;
         const canConfirm = review.status === "draft" && review.canConfirm === true && versionNo !== null;
         const canArchive = review.status === "confirmed" && versionNo !== null;
+        const candidate = pendingCandidates.find((item) => item.reviewId === review.id) ?? null;
+        const canGenerate = review.status === "ready" && review.canGenerateDraft === true && candidate === null;
+        const candidatePending = candidate !== null && candidatePendingId === candidate.id;
         return (
           <article key={review.id}>
             <div className={styles.itemHead}>
@@ -532,6 +558,53 @@ function TradeReviewCenterSection({ center, pendingId, onTransition }: {
               {review.confirmedAt ? ` · 确认：${formatDateTime(review.confirmedAt)}` : ""}
               {review.archivedAt ? ` · 归档：${formatDateTime(review.archivedAt)}` : ""}
             </small>
+            {candidate ? (
+              <div className={styles.notice}>
+                <strong>待确认 AI 复盘候选</strong>
+                {candidate.logicResult ? <p>{candidate.logicResult}</p> : null}
+                {candidate.planDeviation ? <p>计划偏离：{candidate.planDeviation}</p> : null}
+                {candidate.improvementText ? <p>改进建议：{candidate.improvementText}</p> : null}
+                {candidate.biasTags.length > 0 ? <p>偏差标签：{candidate.biasTags.join("、")}</p> : null}
+                <div className={styles.actionRow}>
+                  <button
+                    className={styles.writeButton}
+                    disabled={candidatePending}
+                    onClick={() => onCandidateAction(candidate.id, "confirm")}
+                    type="button"
+                  >
+                    {candidatePending ? "处理中…" : "确认候选并生成草稿"}
+                  </button>
+                  <button
+                    className={`${styles.writeButton} ${styles.writeButtonSecondary}`}
+                    disabled={candidatePending}
+                    onClick={() => onCandidateAction(candidate.id, "reject")}
+                    type="button"
+                  >
+                    拒绝候选
+                  </button>
+                </div>
+              </div>
+            ) : null}
+            {canGenerate ? (
+              generationReviewId === review.id ? (
+                <div className={styles.notice}>
+                  <p>生成结果先作为待确认候选，不会自动写入正式复盘。</p>
+                  <div className={styles.actionRow}>
+                    <button className={styles.writeButton} disabled={pendingId === review.id} onClick={() => onGenerate(review, "economy")} type="button">
+                      {pendingId === review.id ? "生成中…" : "以经济档生成"}
+                    </button>
+                    <button className={`${styles.writeButton} ${styles.writeButtonSecondary}`} disabled={pendingId === review.id} onClick={() => onGenerate(review, "deep")} type="button">
+                      以深度档生成
+                    </button>
+                    <button className={styles.writeButtonSecondary} disabled={pendingId === review.id} onClick={() => onStartGeneration(null)} type="button">取消</button>
+                  </div>
+                </div>
+              ) : (
+                <div className={styles.actionRow}>
+                  <button className={styles.writeButtonSecondary} disabled={pendingId === review.id} onClick={() => onStartGeneration(review.id)} type="button">生成复盘候选</button>
+                </div>
+              )
+            ) : null}
             {canConfirm || canArchive ? (
               <div className={styles.actionRow}>
                 {canConfirm ? (
@@ -575,13 +648,16 @@ export function ResearchCenterPage({ authenticated }: Props) {
   const outcomesQuery = useQuery({ ...researchCenterQueries.outcomes(), enabled: authenticated });
   const actionsQuery = useQuery({ ...researchCenterQueries.actions(), enabled: authenticated });
   const tradeReviewsQuery = useQuery({ ...researchCenterQueries.tradeReviews(), enabled: authenticated });
+  const pendingWritebacksQuery = useQuery({ ...researchCenterQueries.pendingWritebacks(), enabled: authenticated });
 
   const changes = changesQuery.data ?? null;
   const outcomes = outcomesQuery.data ?? null;
   const actions = actionsQuery.data ?? null;
   const tradeReviews = tradeReviewsQuery.data ?? null;
+  const pendingCandidates = pendingWritebacksQuery.data?.items ?? [];
 
   const [notice, setNotice] = useState<MutationNotice>(null);
+  const [generationReviewId, setGenerationReviewId] = useState<string | null>(null);
 
   const mutation = useMutation({
     mutationFn: ({ reviewId, baseVersion, action }: { reviewId: string; baseVersion: number; action: "confirm" | "archive" }) =>
@@ -604,6 +680,53 @@ export function ResearchCenterPage({ authenticated }: Props) {
         return;
       }
       setNotice({ kind: "failed", text: `写入失败：${error instanceof Error ? error.message : "数据暂时不可用"}。未做任何本地改动，请重试。` });
+    },
+  });
+
+  const candidateMutation = useMutation({
+    mutationFn: ({
+      action,
+      candidateId,
+      review,
+      tier,
+    }: {
+      action: "generate" | "confirm" | "reject";
+      candidateId?: string;
+      review?: TradeReview;
+      tier?: "economy" | "deep";
+    }) => {
+      if (action === "generate" && review && tier) {
+        return generateTradeReviewDraft(review.id, review.currentVersion?.versionNo ?? 0, tier);
+      }
+      if (action === "confirm" && candidateId) return confirmWriteback(candidateId);
+      if (action === "reject" && candidateId) return rejectWriteback(candidateId);
+      throw new Error("复盘候选操作参数不完整");
+    },
+    onSuccess: (_data, variables) => {
+      setGenerationReviewId(null);
+      setNotice({
+        kind: "success",
+        text: variables.action === "generate"
+          ? "AI 复盘候选已生成，请核对后再确认写入。"
+          : variables.action === "confirm"
+            ? "候选已确认并写入复盘草稿。"
+            : "候选已拒绝，未写入正式复盘。",
+      });
+      void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.tradeReviews() });
+      void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.pendingWritebacks() });
+      void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.actions() });
+      void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.changes() });
+      void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.outcomes() });
+    },
+    onError: (error) => {
+      if (error instanceof ResearchCenterApiError && error.status === 409) {
+        setGenerationReviewId(null);
+        setNotice({ kind: "conflict", text: error.message });
+        void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.tradeReviews() });
+        void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.pendingWritebacks() });
+        return;
+      }
+      setNotice({ kind: "failed", text: `候选操作失败：${error instanceof Error ? error.message : "数据暂时不可用"}。未写入本地变更，请重试。` });
     },
   });
 
@@ -680,6 +803,16 @@ export function ResearchCenterPage({ authenticated }: Props) {
       return;
     }
     mutation.mutate({ reviewId: review.id, baseVersion, action });
+  };
+
+  const handleGenerate = (review: TradeReview, tier: "economy" | "deep") => {
+    setNotice(null);
+    candidateMutation.mutate({ action: "generate", review, tier });
+  };
+
+  const handleCandidateAction = (candidateId: string, action: "confirm" | "reject") => {
+    setNotice(null);
+    candidateMutation.mutate({ action, candidateId });
   };
 
   if (!authenticated) {
@@ -841,8 +974,18 @@ export function ResearchCenterPage({ authenticated }: Props) {
               {tradeReviews ? (
                 <TradeReviewCenterSection
                   center={tradeReviews}
+                  candidatePendingId={candidateMutation.isPending && candidateMutation.variables?.candidateId ? candidateMutation.variables.candidateId : null}
+                  generationReviewId={generationReviewId}
+                  onCandidateAction={handleCandidateAction}
+                  onGenerate={handleGenerate}
+                  onStartGeneration={setGenerationReviewId}
                   onTransition={handleTransition}
-                  pendingId={mutation.isPending ? mutation.variables?.reviewId ?? null : null}
+                  pendingCandidates={pendingCandidates}
+                  pendingId={mutation.isPending
+                    ? mutation.variables?.reviewId ?? null
+                    : candidateMutation.isPending && candidateMutation.variables?.action === "generate"
+                      ? candidateMutation.variables.review?.id ?? null
+                      : null}
                 />
               ) : null}
             </ModuleCard>

@@ -634,7 +634,7 @@ export function parsePendingWritebacks(value: unknown): PendingWritebacks {
       const payload = optionalRecord(item?.payload);
       const id = optionalString(item?.id);
       const reviewId = optionalString(payload?.review_id);
-      if (!item || item.candidate_type !== "review_draft" || item.status !== "pending_confirmation" || !id || !reviewId) return [];
+      if (!item || !payload || item.candidate_type !== "review_draft" || item.status !== "pending_confirmation" || !id || !reviewId) return [];
       return [{
         id,
         reviewId,
