@@ -45,6 +45,19 @@ describe("正式前端认证入口", () => {
     expect(window.location.pathname).toBe("/screening");
   });
 
+  it("opens the auth dialog when the session endpoint explicitly reports an anonymous visitor", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ authenticated: false }),
+    }));
+    window.history.pushState({}, "", "/research-center");
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByRole("dialog", { name: "登录或注册" })).toBeInTheDocument());
+    expect(screen.getByRole("heading", { name: "研究中心" })).toBeInTheDocument();
+  });
+
   it("exposes exactly the six formal product routes and a semantic route title", async () => {
     render(<App />);
     await screen.findByRole("dialog");

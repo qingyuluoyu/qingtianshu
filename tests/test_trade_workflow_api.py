@@ -305,6 +305,19 @@ def test_review_flow_uses_frozen_context_hermes_draft_and_version_conflicts(
     candidate = generated.json()
     assert candidate["candidate_type"] == "review_draft"
     assert candidate["status"] == "pending_confirmation"
+    other = TestClient(app)
+    _create_user(other, "Review Other")
+    assert other.post(
+        f"/v1/trade-reviews/{review['id']}/generate-draft",
+        json={"base_version": 0, "model_tier": "economy"},
+    ).status_code == 404
+    for path in (
+        f"/v1/ai-writebacks/{candidate['id']}",
+        f"/v1/ai-writebacks/{candidate['id']}/confirm",
+        f"/v1/ai-writebacks/{candidate['id']}/reject",
+    ):
+        response = other.get(path) if path.endswith(candidate["id"]) else other.post(path)
+        assert response.status_code == 404
     assert client.get(f"/v1/trade-reviews/{review['id']}").json()[
         "current_version"
     ] is None
@@ -339,6 +352,21 @@ def test_review_flow_uses_frozen_context_hermes_draft_and_version_conflicts(
     assert edited.status_code == 200
     assert edited.json()["current_version"]["version_no"] == 2
     assert edited.json()["current_version"]["created_source"] == "user"
+    assert other.patch(
+        f"/v1/trade-reviews/{review['id']}/draft",
+        json={
+            "base_version": 2,
+            "price_result": "Other user's price result",
+            "logic_result": "Other user must not edit this review",
+            "bias_tags": [],
+        },
+    ).status_code == 404
+    assert other.post(
+        f"/v1/trade-reviews/{review['id']}/confirm", json={"base_version": 2}
+    ).status_code == 404
+    assert other.post(
+        f"/v1/trade-reviews/{review['id']}/archive", json={"base_version": 2}
+    ).status_code == 404
 
     stale_edit = client.patch(
         f"/v1/trade-reviews/{review['id']}/draft",
@@ -424,8 +452,6 @@ def test_review_flow_uses_frozen_context_hermes_draft_and_version_conflicts(
     assert archived_center["summary"]["archived"] == 1
     assert archived_center["items"][0]["id"] == review["id"]
 
-    other = TestClient(app)
-    _create_user(other, "Review Other")
     assert other.get("/v1/trade-reviews").json()["items"] == []
     assert other.get(f"/v1/trade-reviews/{review['id']}").status_code == 404
     assert other.post(
