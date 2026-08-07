@@ -8,6 +8,9 @@ describe("getSession", () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ authenticated: false }), { status: 200 }));
     vi.stubGlobal("fetch", fetch);
     await expect(getSession()).resolves.toBeNull();
-    expect(fetch).toHaveBeenCalledWith("/session/status", { credentials: "same-origin" });
+    expect(fetch).toHaveBeenCalledWith("/session/status", expect.objectContaining({
+      credentials: "same-origin",
+      signal: expect.any(AbortSignal),
+    }));
   });
 });

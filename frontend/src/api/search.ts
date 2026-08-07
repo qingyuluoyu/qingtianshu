@@ -34,9 +34,10 @@ function rewriteUrl(groupKey: string, url: string | null): string | null {
   return null;
 }
 
-export async function getGlobalSearch(query: string): Promise<GlobalSearchGroup[]> {
+export async function getGlobalSearch(query: string, signal?: AbortSignal): Promise<GlobalSearchGroup[]> {
   const { data, error, response } = await api.GET("/v1/search", {
     params: { query: { q: query, limit: 8 } },
+    signal,
   });
   if (!response.ok || error || data === undefined) return [];
   const root = asRecord(data);

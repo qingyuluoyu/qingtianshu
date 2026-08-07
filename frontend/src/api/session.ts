@@ -1,5 +1,5 @@
 import type { components } from "./openapi.generated";
-import { api } from "./client";
+import { api, fetchWithTimeout } from "./client";
 
 export type AuthSession = components["schemas"]["AuthSessionResponse"];
 export type AuthError = components["schemas"]["AuthErrorResponse"];
@@ -8,8 +8,11 @@ export function isFormalAccount(session: AuthSession | null): boolean {
   return Boolean(session?.is_registered && session.auth_type === "account");
 }
 
-export async function getSession(): Promise<AuthSession | null> {
-  const response = await fetch("/session/status", { credentials: "same-origin" });
+export async function getSession(signal?: AbortSignal): Promise<AuthSession | null> {
+  const response = await fetchWithTimeout("/session/status", {
+    credentials: "same-origin",
+    signal,
+  });
   if (!response.ok) throw new Error("无法读取当前会话");
   const payload = await response.json() as { authenticated?: unknown; session?: AuthSession };
   if (payload.authenticated === false) return null;

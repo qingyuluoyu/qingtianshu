@@ -29,7 +29,7 @@ function isProtectedPath(pathname: string): boolean {
 function ProductApp() {
   const queryClient = useQueryClient();
   const location = useLocation();
-  const session = useQuery({ queryKey: ["session"], queryFn: getSession, retry: false });
+  const session = useQuery({ queryKey: ["session"], queryFn: ({ signal }) => getSession(signal), retry: false });
   const [authOpen, setAuthOpen] = useState(false);
   const promptedLocationRef = useRef<string | null>(null);
   const authTriggerRef = useRef<HTMLButtonElement>(null);

@@ -29,7 +29,7 @@ export function GlobalSearch() {
 
   const search = useQuery({
     queryKey: ["global-search", debounced],
-    queryFn: () => getGlobalSearch(debounced),
+    queryFn: ({ signal }) => getGlobalSearch(debounced, signal),
     enabled: debounced.length > 0,
     staleTime: 15_000,
     retry: false,
