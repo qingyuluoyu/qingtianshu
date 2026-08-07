@@ -250,7 +250,7 @@ function AssetTable({ items, selectedSymbol, pendingSymbol, onSelect, onAction }
 }) {
   return (
     <div className={styles.tableWrap}>
-      <table className={styles.table}>
+      <table aria-label="关注资产表" className={styles.table}>
         <thead>
           <tr>
             <th>代码</th>
@@ -680,19 +680,7 @@ export function WatchlistPage({ authenticated }: Props) {
 
       {assetsQuery.isPending ? <div className={styles.skeleton} aria-live="polite">正在读取关注列表…</div> : null}
 
-      {assets && assets.items.length === 0 ? (
-        <div className={styles.card}>
-          <div className={styles.empty}>
-            <span>还没有关注任何股票。使用页面顶部的全局搜索查找股票，或从透明选股开始形成研究候选。</span>
-            <div className={styles.actionRow}>
-              <Link className={styles.actionLink} to="/screening">前往透明选股</Link>
-            </div>
-          </div>
-          {assets.boundary ? <p className={styles.boundaryNote}>{assets.boundary}</p> : null}
-        </div>
-      ) : null}
-
-      {assets && assets.items.length > 0 ? (
+      {assets ? (
         <>
           <WatchlistSummaryCards
             active={filter}
@@ -700,7 +688,7 @@ export function WatchlistPage({ authenticated }: Props) {
             onSelect={(next) => updateParams({ filter: next === "all" ? null : next })}
           />
           <div className={styles.layout}>
-            <div className={styles.mainColumn}>
+            <div className={styles.mainColumn} role="region" aria-label="研究资产列表">
               <ModuleCard
                 meta={`${filtered.length} / ${assets.items.length} 项`}
                 title="研究资产"
@@ -718,26 +706,34 @@ export function WatchlistPage({ authenticated }: Props) {
                   </label>
                   <span className={styles.meta}>筛选与排序在已聚合的列表数据上进行，不触发额外单股请求。</span>
                 </div>
-                {filtered.length === 0 ? (
+                <AssetTable
+                  items={filtered}
+                  onAction={handleAction}
+                  onSelect={(symbol) => updateParams({ symbol })}
+                  pendingSymbol={mutation.isPending ? mutation.variables?.symbol ?? null : null}
+                  selectedSymbol={selectedSymbol}
+                />
+                {assets.items.length === 0 ? (
+                  <div className={styles.empty}>
+                    <span>还没有关注任何股票。使用页面顶部的全局搜索查找股票，或从透明选股开始形成研究候选。</span>
+                    <div className={styles.actionRow}>
+                      <Link className={styles.actionLink} to="/screening">前往透明选股</Link>
+                    </div>
+                  </div>
+                ) : filtered.length === 0 ? (
                   <div className={styles.empty}>当前筛选下没有资产，切换上方概览卡查看其他分组。</div>
-                ) : (
-                  <AssetTable
-                    items={filtered}
-                    onAction={handleAction}
-                    onSelect={(symbol) => updateParams({ symbol })}
-                    pendingSymbol={mutation.isPending ? mutation.variables?.symbol ?? null : null}
-                    selectedSymbol={selectedSymbol}
-                  />
-                )}
+                ) : null}
                 {assets.boundary ? <p className={styles.boundaryNote}>{assets.boundary}</p> : null}
               </ModuleCard>
               <RecentSection items={assets.items} />
             </div>
-            <div className={styles.mainColumn}>
+            <aside className={styles.mainColumn} aria-label="股票快速预览">
               {selectedAsset ? <StockQuickPreview asset={selectedAsset} /> : (
-                <div className={styles.card}><div className={styles.empty}>选择左侧一行查看快速预览。</div></div>
+                <ModuleCard title="快速预览">
+                  <div className={styles.empty}>选择左侧一行查看快速预览。</div>
+                </ModuleCard>
               )}
-            </div>
+            </aside>
           </div>
         </>
       ) : null}

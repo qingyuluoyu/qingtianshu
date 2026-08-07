@@ -193,6 +193,21 @@ describe("WatchlistPage", () => {
     expect(screen.getByRole("link", { name: "前往透明选股" })).toHaveAttribute("href", "/screening");
   });
 
+  it("keeps the asset list and preview scaffold when the watchlist is empty", async () => {
+    mockGetAssets.mockResolvedValueOnce((await import("./adapters")).parseWatchlistAssets({
+      contract_version: "stock_asset_list_v1",
+      status: "empty",
+      items: [],
+      summary: { total: 0, watching: 0, holding: 0, ended: 0, paused: 0, waiting_data: 0 },
+      boundary: "该列表组织用户的长期股票研究资产。",
+    }));
+    renderPage();
+
+    const listRegion = await screen.findByRole("region", { name: "研究资产列表" });
+    expect(within(listRegion).getByRole("table", { name: "关注资产表" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "股票快速预览" })).toBeInTheDocument();
+  });
+
   it("shows a page-level error with retry when the list request fails", async () => {
     mockGetAssets.mockRejectedValue(new WatchlistApiError(503, "数据暂时不可用"));
     renderPage();

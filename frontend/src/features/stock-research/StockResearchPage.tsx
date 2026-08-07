@@ -1018,11 +1018,13 @@ export function StockResearchPage({ authenticated }: Props) {
         ))}
       </nav>
 
-      {pageData && tab === "overview" ? <OverviewTab page={pageData} /> : null}
-      {tab === "technical" ? <TechnicalTab range={range} symbol={symbol} /> : null}
-      {pageData && tab === "financials" ? <FinancialsTab onRetryPage={retryPage} page={pageData} symbol={symbol} /> : null}
-      {pageData && tab === "events" ? <EventsTab onRetryPage={retryPage} page={pageData} /> : null}
-      {tab === "research" ? <ResearchTab authenticated={authenticated} page={pageData} symbol={symbol} /> : null}
+      <section aria-label="个股研究工作区">
+        {pageData && tab === "overview" ? <OverviewTab page={pageData} /> : null}
+        {tab === "technical" ? <TechnicalTab range={range} symbol={symbol} /> : null}
+        {pageData && tab === "financials" ? <FinancialsTab onRetryPage={retryPage} page={pageData} symbol={symbol} /> : null}
+        {pageData && tab === "events" ? <EventsTab onRetryPage={retryPage} page={pageData} /> : null}
+        {tab === "research" ? <ResearchTab authenticated={authenticated} page={pageData} symbol={symbol} /> : null}
+      </section>
 
       <footer className={styles.footer}>
         {pageData?.modules.workspace.data?.boundary ?? "页面只呈现已确认事实、证据与个人研究状态，不生成买卖、目标价或收益建议。"}

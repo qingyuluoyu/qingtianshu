@@ -1,10 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { StockResearchPage } from "./StockResearchPage";
 import { stockResearchQueryKeys } from "./queries";
-import { parsedHistory, parsedPeers, parsedStockPage, parsedTasks } from "./testFixtures";
+import { parsedHistory, parsedPeers, parsedStockPage, parsedTasks, workspaceFixture } from "./testFixtures";
 
 function hydratedClient() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -70,6 +70,25 @@ describe("StockResearchPage", () => {
     expect(screen.getByText("股东结构")).toBeInTheDocument();
     expect(screen.getAllByText("当前不可用").length).toBeGreaterThan(0);
     expect(screen.getAllByText("数据完整").length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("keeps the research workspace when quote data is unavailable", () => {
+    const workspace = workspaceFixture();
+    workspace.quote = { ...workspace.quote, price: null, pct_change: null };
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(stockResearchQueryKeys.page("000063", "1y"), parsedStockPage({
+      modules: {
+        history: { status: "unavailable", reason: "行情供应商超时", data: null },
+        workspace: { status: "available", data: workspace },
+      },
+      summary: { available: 8, failed: 1, total: 9, required_failed: ["history"] },
+    }));
+    renderPage(client);
+
+    expect(screen.getByText("行情暂不可用")).toBeInTheDocument();
+    const workspaceRegion = screen.getByRole("region", { name: "个股研究工作区" });
+    expect(within(workspaceRegion).getByText("研究状态")).toBeInTheDocument();
+    expect(within(workspaceRegion).getByText("关键变化")).toBeInTheDocument();
   });
 
   it("renders technical tab with candles, frequency and passthrough indicators", () => {
