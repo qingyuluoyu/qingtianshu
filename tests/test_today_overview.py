@@ -305,6 +305,22 @@ def build_service(analysis: Any | None = None) -> TodayOverviewService:
     )
 
 
+def test_capital_flow_theme_does_not_expose_provider_exception_details() -> None:
+    theme = TodayOverviewService._theme_capital_flow(
+        {
+            "status": "unavailable",
+            "warnings": [
+                "大盘资金流数据不可用：ConnectionError: RemoteDisconnected('connection closed')"
+            ],
+            "summary": {"main_net_inflow_100m_cny": None},
+        }
+    )
+
+    assert theme["status"] == "unavailable"
+    assert theme["summary"] == "大盘资金流向暂不可用，请稍后重试。"
+    assert "ConnectionError" not in theme["summary"]
+
+
 def test_today_overview_prioritizes_risk_and_keeps_traceable_boundaries():
     packet = build_service().get_overview("user-1")
 

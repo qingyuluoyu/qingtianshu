@@ -793,16 +793,12 @@ class TodayOverviewService:
         if capital_flow.get("status") != "available" or not isinstance(
             value, (int, float)
         ):
-            reason = next(
-                iter(capital_flow.get("warnings") or []),
-                "数据源未配置或暂不可用",
-            )
             return {
                 "key": "capital_flow",
                 "title": "资金动向",
                 "status": "unavailable",
                 "tone": "unknown",
-                "summary": f"大盘资金流向暂不可用：{reason}",
+                "summary": "大盘资金流向暂不可用，请稍后重试。",
                 "basis": basis,
                 "main_net_inflow_100m_cny": None,
             }
