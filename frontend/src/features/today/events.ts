@@ -10,7 +10,7 @@ const researchKeys = [
 
 export function queryKeysForEvent(type: string): QueryKey[] {
   if (type === "market_updated") {
-    return [todayQueryKeys.overview, todayQueryKeys.indices, todayQueryKeys.breadth, todayQueryKeys.sectors];
+    return [todayQueryKeys.overview, todayQueryKeys.indices, todayQueryKeys.breadth, todayQueryKeys.sectors, todayQueryKeys.anomalies];
   }
   if (type === "data_health_updated") return [todayQueryKeys.dataHealth];
   // These jobs refresh change events server-side, which feed the overview priority

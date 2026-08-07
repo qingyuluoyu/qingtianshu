@@ -1,23 +1,31 @@
 import { api } from "../../api/client";
 import {
   parseBreadth,
+  parseCapitalFlow,
   parseDataHealth,
   parseGlobalIndices,
   parseIndexHistory,
   parseIndices,
+  parseLatestResearchReports,
   parseLiveMarkets,
+  parseMarketAnomalies,
   parseOverview,
+  parsePositions,
   parseResearchActions,
   parseResearchChanges,
   parseSectors,
   parseWatchlistBrief,
   type Breadth,
+  type CapitalFlow,
   type DataHealth,
   type GlobalIndices,
   type IndexHistory,
   type Indices,
+  type LatestResearchReports,
   type LiveMarkets,
+  type MarketAnomalies,
   type Overview,
+  type Positions,
   type ResearchActions,
   type ResearchChanges,
   type Sectors,
@@ -88,6 +96,26 @@ export async function getIndexHistory(symbol: string): Promise<IndexHistory> {
     params: { path: { symbol }, query: { range: "1mo" } },
   });
   return unwrap(response, data, error, parseIndexHistory);
+}
+
+export async function getLatestResearchReports(): Promise<LatestResearchReports> {
+  const { data, error, response } = await api.GET("/research-reports/latest", { params: { query: { limit: 20 } } });
+  return unwrap(response, data, error, parseLatestResearchReports);
+}
+
+export async function getCapitalFlow(): Promise<CapitalFlow> {
+  const { data, error, response } = await api.GET("/markets/capital-flow");
+  return unwrap(response, data, error, parseCapitalFlow);
+}
+
+export async function getPositions(): Promise<Positions> {
+  const { data, error, response } = await api.GET("/v1/positions");
+  return unwrap(response, data, error, parsePositions);
+}
+
+export async function getMarketAnomalies(): Promise<MarketAnomalies> {
+  const { data, error, response } = await api.GET("/markets/anomalies", { params: { query: { limit: 10 } } });
+  return unwrap(response, data, error, parseMarketAnomalies);
 }
 
 export async function getGlobalIndices(): Promise<GlobalIndices> {

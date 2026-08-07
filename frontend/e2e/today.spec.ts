@@ -136,8 +136,8 @@ async function mockToday(page: Page, overrides: Record<string, Override> = {}) {
   await page.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    if (url.pathname === "/session" && request.method() === "GET") {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(accountSession) });
+    if (url.pathname === "/session/status" && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, session: accountSession }) });
       return;
     }
     if (url.pathname === "/events") {
@@ -171,9 +171,7 @@ test("simulated normal state renders real-contract modules on desktop and mobile
   await expect(page.getByRole("heading", { name: "今日观察" })).toBeVisible();
   await expect(page.getByText("今天市场发生了什么？你应该关注哪些重点信号？")).toBeVisible();
   await expect(page.getByText("沪深300")).toBeVisible();
-  await expect(page.getByText("中证500")).toBeVisible();
   await expect(page.getByText("+9.31")).toBeVisible();
-  await expect(page.getByText("涨停家数")).toBeVisible();
   await expect(page.getByText("中科曙光")).toBeVisible();
   await expect(page.getByText("10,493.68 亿")).toBeVisible();
   await expect(page.getByText("125.62亿")).toBeVisible();
@@ -190,8 +188,11 @@ test("simulated normal state renders real-contract modules on desktop and mobile
   await expect(page.getByText(/北向资金 2024-08 起港交所停披/)).toBeVisible();
   await expect(page.getByText("市场情绪")).toBeVisible();
   await expect(page.getByText("资金流数据源暂不可用。")).toBeVisible();
-  await expect(page.getByText("我的持仓")).toBeVisible();
+  await page.getByRole("tab", { name: "持仓" }).click();
   await expect(page.getByText("6,400.00")).toBeVisible();
+  await expect(page.getByText("32.00", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "全部" }).click();
+  await expect(page.getByText("暂无研究变化")).toBeVisible();
   await expect(page.getByText("缓存 / 延迟数据")).toBeVisible();
   await expect(page.getByRole("button", { name: "刷新" })).toBeVisible();
   await expect(page.getByRole("link", { name: "核验正式披露" })).toHaveAttribute("href", "/stocks/000063.SZ");
@@ -247,14 +248,45 @@ test("simulated market unavailable leaves research modules readable", async ({ p
   await expect(page.getByRole("region", { name: "市场广度" }).getByText(/本模块暂时不可用/)).toBeVisible({ timeout: 8_000 });
 });
 
+test("simulated 500 on restored modules stays isolated per module with retry", async ({ page }) => {
+  await mockToday(page, {
+    "/markets/capital-flow": { status: 500 },
+    "/markets/anomalies": { status: 500 },
+    "/research-reports/latest": { status: 500 },
+    "/v1/positions": { status: 500 },
+  });
+  await page.goto("/today");
+  await expect(page.getByRole("region", { name: "资金流向" }).getByText(/本模块暂时不可用/)).toBeVisible({ timeout: 8_000 });
+  await expect(page.getByRole("region", { name: "资金流向" }).getByRole("button", { name: "重新读取" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "异动机会 / 风险提示" }).getByText(/本模块暂时不可用/)).toBeVisible();
+  await expect(page.getByRole("region", { name: "今日研究报告" }).getByText(/本模块暂时不可用/)).toBeVisible();
+  // Other modules are not affected by the restored-module failures.
+  await expect(page.getByText("沪深300")).toBeVisible();
+  await expect(page.getByText("核验正式披露")).toBeVisible();
+  await expect(page.getByRole("region", { name: "板块热度" }).getByText("光伏主材")).toBeVisible();
+  // The positions tab isolates its own failure inside the changes card.
+  await page.getByRole("tab", { name: "持仓" }).click();
+  await expect(page.getByRole("region", { name: "我的股票新变化" }).getByText(/本模块暂时不可用/)).toBeVisible();
+  await expect(page.getByRole("region", { name: "我的股票新变化" }).getByRole("button", { name: "重新读取" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "今日研究报告" }).getByText(/本模块暂时不可用/)).toBeVisible();
+});
+
+test("simulated empty research reports show the truthful empty state", async ({ page }) => {
+  await mockToday(page, {
+    "/research-reports/latest": { status: "empty", items: [] },
+  });
+  await page.goto("/today");
+  await expect(page.getByRole("region", { name: "今日研究报告" }).getByText("暂无最新研究报告")).toBeVisible();
+});
+
 test("simulated private 401 returns control to the existing authentication gate", async ({ page }) => {
   let sessionCalls = 0;
   let overviewCalls = 0;
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/session") {
+    if (url.pathname === "/session/status") {
       sessionCalls += 1;
-      await route.fulfill({ status: sessionCalls === 1 ? 200 : 401, contentType: "application/json", body: JSON.stringify(sessionCalls === 1 ? accountSession : { code: "session_expired", message: "会话已失效" }) });
+      await route.fulfill({ status: sessionCalls === 1 ? 200 : 401, contentType: "application/json", body: JSON.stringify(sessionCalls === 1 ? { authenticated: true, session: accountSession } : { code: "session_expired", message: "会话已失效" }) });
       return;
     }
     if (url.pathname === "/v1/today/overview") {

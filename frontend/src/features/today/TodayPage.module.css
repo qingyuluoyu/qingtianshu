@@ -14,6 +14,11 @@
 .cardHeader { display: flex; min-height: 30px; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .cardHeader h2 { margin: 0; font-size: 17px; letter-spacing: -.01em; }
 .meta { color: var(--ink-muted); font-size: 12px; }
+.tabs { display: flex; gap: 4px; }
+.tab, .tabActive { padding: 4px 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; cursor: pointer; font-size: 12px; }
+.tab { color: var(--ink-muted); }
+.tab:hover { color: var(--brand); }
+.tabActive { border-color: var(--border); color: var(--ink); background: #f2f4f7; font-weight: 600; }
 .skeleton { min-height: 96px; display: grid; place-items: center; border-radius: 8px; color: #98a2b3; background: linear-gradient(90deg, #f5f7fa 25%, #edf1f5 38%, #f5f7fa 63%); background-size: 400% 100%; animation: shimmer 1.3s infinite; }
 @keyframes shimmer { from { background-position: 100%; } to { background-position: 0 0; } }
 .moduleError { min-height: 96px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; color: var(--ink-muted); text-align: center; }
