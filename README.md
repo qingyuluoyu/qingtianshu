@@ -399,6 +399,21 @@ npm run test:e2e:production-local
 这项检查证明生产构建和同源 FastAPI 托管链路，但不能替代
 `npm run test:e2e:docker` 的容器镜像、Linux 路径和运行时依赖验收。
 
+真实模型验收必须显式指定 Hermes 路由，避免把 preview 当成模型回答：
+
+```bash
+cd frontend
+export QINGSHU_TEST_POSTGRES_URL='postgresql://user:***@db-host:5432/qingshu_auth_test'
+export HERMES_ECONOMY_PROVIDER='deepseek'
+export HERMES_ECONOMY_MODEL='deepseek-v4-flash'
+npm run test:e2e:hermes-production
+```
+
+该命令只执行一次隔离 evaluation 对话；真实密钥继续由 Hermes 自己的环境配置读取，
+不会写入清数智算仓库或测试输出。验收启动后会从只读市场快照库复制目标股票及固定同行的
+公开行情、财务、公告和研究快照到临时 Schema，保留原始时间与来源；用户、对话、正式判断、
+候选写回、任务和工作区不会被复制。测试结束后整个临时 Schema 与临时账户一并删除。
+
 生产 Worker 会写入持久化注册表。运维端可看到进程、队列、最近心跳、当前任务、
 累计领取/成功/失败数；心跳过期会标记为离线。队列指标同时提供 ready/delayed、
 重试中任务、最老待执行任务延迟、过期租约、最近 24 小时成功/失败与失败率，以及

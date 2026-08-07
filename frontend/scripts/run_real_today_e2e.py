@@ -22,6 +22,14 @@ REPOSITORY = FRONTEND.parent
 BACKEND_PORT = 8011
 EXPECTED_DATABASE = "qingshu_auth_test"
 DEFAULT_MARKET_SNAPSHOT_DATABASE = "qingshu_prod"
+HERMES_ACCEPTANCE_SYMBOL = "000063.SZ"
+HERMES_ACCEPTANCE_PEERS = ("600498.SS", "000938.SZ", "301165.SZ")
+REQUIRED_HERMES_EVIDENCE_TABLES = {
+    "market_bars",
+    "valuation_snapshots",
+    "financial_periods",
+    "financial_statement_details",
+}
 
 
 def playwright_executable(platform_name: str | None = None) -> Path:
@@ -43,6 +51,17 @@ def playwright_command(*, production_dist: bool, spec: str | None = None) -> lis
     if spec:
         command.append(spec)
     return command
+
+
+def require_hermes_route() -> tuple[str, str]:
+    provider = os.environ.get("HERMES_ECONOMY_PROVIDER", "").strip()
+    model = os.environ.get("HERMES_ECONOMY_MODEL", "").strip()
+    if not provider or not model:
+        raise RuntimeError(
+            "--hermes requires explicit HERMES_ECONOMY_PROVIDER and "
+            "HERMES_ECONOMY_MODEL"
+        )
+    return provider, model
 
 
 def test_database_url() -> str:
@@ -121,6 +140,103 @@ def validate_market_snapshot_database(url: str) -> None:
         raise RuntimeError("真实 E2E 市场快照源没有可用的稳定 A 股数据")
 
 
+def public_research_evidence_seed_specs(
+    symbol: str = HERMES_ACCEPTANCE_SYMBOL,
+) -> tuple[tuple[str, str, tuple[object, ...]], ...]:
+    research_symbols = [symbol, *HERMES_ACCEPTANCE_PEERS]
+    return (
+        ("market_cache", "cache_key LIKE %s", (f"yahoo:{symbol}:%",)),
+        ("market_bars", "symbol = %s", (symbol,)),
+        (
+            "valuation_snapshots",
+            "symbol = ANY(%s)",
+            (research_symbols,),
+        ),
+        (
+            "financial_periods",
+            "symbol = ANY(%s)",
+            (research_symbols,),
+        ),
+        (
+            "financial_statement_details",
+            "symbol = ANY(%s)",
+            (research_symbols,),
+        ),
+        ("filing_documents", "symbol = %s", (symbol,)),
+        ("filing_evidence_snapshots", "symbol = %s", (symbol,)),
+        (
+            "business_segment_rows",
+            "symbol = ANY(%s)",
+            (research_symbols,),
+        ),
+        (
+            "business_structure_snapshots",
+            "symbol = ANY(%s)",
+            (research_symbols,),
+        ),
+        ("shareholder_structure_snapshots", "symbol = %s", (symbol,)),
+        ("analyst_expectation_snapshots", "symbol = %s", (symbol,)),
+        ("event_timeline_snapshots", "symbol = %s", (symbol,)),
+        (
+            "news_items",
+            "symbol = %s ORDER BY COALESCE(published_at, fetched_at) DESC LIMIT 320",
+            (symbol,),
+        ),
+        (
+            "sentiment_snapshots",
+            "symbol = %s ORDER BY created_at DESC LIMIT 1",
+            (symbol,),
+        ),
+        ("peer_operating_snapshots", "symbol = %s", (symbol,)),
+        ("outlook_calibrations", "symbol = %s", (symbol,)),
+    )
+
+
+def seed_public_research_evidence(
+    source_url: str,
+    target_url: str,
+    *,
+    symbol: str = HERMES_ACCEPTANCE_SYMBOL,
+) -> dict[str, int]:
+    """Copy public, symbol-scoped evidence into the isolated acceptance schema.
+
+    Authentication, conversations, formal judgments, drafts, tasks, and user
+    workspaces deliberately remain absent. The source connection is read-only;
+    the copied evidence preserves its original timestamps and provenance.
+    """
+
+    copied: dict[str, int] = {}
+    with psycopg.connect(source_url) as source, psycopg.connect(target_url) as target:
+        for table, where_clause, parameters in public_research_evidence_seed_specs(
+            symbol
+        ):
+            select_query = sql.SQL("SELECT * FROM {} WHERE ").format(
+                sql.Identifier(table)
+            ) + sql.SQL(where_clause)
+            cursor = source.execute(select_query, parameters)
+            rows = cursor.fetchall()
+            columns = [column.name for column in cursor.description or ()]
+            if rows and columns:
+                insert_query = sql.SQL(
+                    "INSERT INTO {} ({}) VALUES ({}) ON CONFLICT DO NOTHING"
+                ).format(
+                    sql.Identifier(table),
+                    sql.SQL(", ").join(map(sql.Identifier, columns)),
+                    sql.SQL(", ").join(sql.Placeholder() for _ in columns),
+                )
+                target.cursor().executemany(insert_query, rows)
+            copied[table] = len(rows)
+
+    missing = sorted(
+        table for table in REQUIRED_HERMES_EVIDENCE_TABLES if copied.get(table, 0) == 0
+    )
+    if missing:
+        raise RuntimeError(
+            "真实 Hermes 验收缺少必要的公开研究证据：" + ", ".join(missing)
+        )
+    return copied
+
+
 def wait_for_backend(process: subprocess.Popen[bytes], log_path: Path) -> None:
     deadline = time.monotonic() + 75
     while time.monotonic() < deadline:
@@ -158,7 +274,13 @@ def main() -> int:
         action="store_true",
         help="Build the React production bundle and test it through FastAPI instead of Vite.",
     )
+    parser.add_argument(
+        "--hermes",
+        action="store_true",
+        help="Enable a real Hermes model call using an explicitly configured economy route.",
+    )
     args = parser.parse_args()
+    hermes_route = require_hermes_route() if args.hermes else None
     base_url = test_database_url()
     market_snapshot_url = market_snapshot_database_url(base_url)
     validate_market_snapshot_database(market_snapshot_url)
@@ -190,9 +312,11 @@ def main() -> int:
             "QINGSHU_LEGACY_ANONYMOUS_MODE": "false",
             "BACKGROUND_JOBS_ENABLED": "false",
             "BACKGROUND_WORKER_MODE": "disabled",
-            "HERMES_ENABLED": "false",
+            "HERMES_ENABLED": "true" if args.hermes else "false",
             "VITE_PROXY_TARGET": f"http://127.0.0.1:{BACKEND_PORT}",
         })
+        if args.hermes:
+            env.setdefault("HERMES_TIMEOUT_SECONDS", "180")
         if args.production_dist:
             env.update({
                 "QINGSHU_FRONTEND_DIST_DIR": str(FRONTEND / "dist"),
@@ -201,11 +325,13 @@ def main() -> int:
                 "QINGSHU_PRODUCTION_E2E_ACCOUNT": f"local-production-{uuid4().hex[:10]}",
                 "QINGSHU_PRODUCTION_E2E_PHONE": "13900000001",
                 "QINGSHU_PRODUCTION_E2E_PASSWORD": f"Local-Production-{uuid4().hex}",
+                "QINGSHU_PRODUCTION_E2E_HERMES": "true" if args.hermes else "false",
             })
         print(
             f"[real-e2e] database={EXPECTED_DATABASE}; isolated_schema={schema}; "
             f"market_snapshot_database={urlsplit(market_snapshot_url).path.lstrip('/')}; "
-            f"frontend_mode={'production-dist' if args.production_dist else 'vite'}"
+            f"frontend_mode={'production-dist' if args.production_dist else 'vite'}; "
+            f"hermes_route={hermes_route[0] + '/' + hermes_route[1] if hermes_route else 'disabled'}"
         )
         with log_path.open("wb") as backend_log:
             backend = subprocess.Popen(
@@ -216,6 +342,19 @@ def main() -> int:
                 stderr=subprocess.STDOUT,
             )
             wait_for_backend(backend, log_path)
+            if args.hermes:
+                copied = seed_public_research_evidence(
+                    market_snapshot_url,
+                    schema_url(base_url, schema),
+                )
+                print(
+                    "[real-e2e] public_research_evidence_seeded="
+                    + ",".join(
+                        f"{table}:{count}"
+                        for table, count in copied.items()
+                        if count
+                    )
+                )
             result = subprocess.run(
                 playwright_command(
                     production_dist=args.production_dist,

@@ -43,6 +43,48 @@ def test_runner_selects_vite_or_production_playwright_config():
     )[-1] == "e2e-production/production.spec.ts"
 
 
+def test_real_hermes_mode_requires_an_explicit_route(monkeypatch):
+    runner = _load_runner()
+    monkeypatch.delenv("HERMES_ECONOMY_PROVIDER", raising=False)
+    monkeypatch.delenv("HERMES_ECONOMY_MODEL", raising=False)
+
+    with pytest.raises(RuntimeError, match="explicit HERMES_ECONOMY_PROVIDER"):
+        runner.require_hermes_route()
+
+    monkeypatch.setenv("HERMES_ECONOMY_PROVIDER", "deepseek")
+    monkeypatch.setenv("HERMES_ECONOMY_MODEL", "deepseek-v4-flash")
+    assert runner.require_hermes_route() == ("deepseek", "deepseek-v4-flash")
+
+
+def test_real_hermes_seed_is_public_and_symbol_scoped():
+    runner = _load_runner()
+
+    specs = runner.public_research_evidence_seed_specs("000063.SZ")
+    by_table = {table: (where, parameters) for table, where, parameters in specs}
+
+    assert runner.REQUIRED_HERMES_EVIDENCE_TABLES <= set(by_table)
+    assert by_table["market_bars"] == ("symbol = %s", ("000063.SZ",))
+    assert by_table["news_items"][1] == ("000063.SZ",)
+    assert by_table["valuation_snapshots"][1][0] == [
+        "000063.SZ",
+        "600498.SS",
+        "000938.SZ",
+        "301165.SZ",
+    ]
+    assert not set(by_table).intersection(
+        {
+            "users",
+            "conversations",
+            "runs",
+            "memories",
+            "watchlist",
+            "thesis_versions",
+            "observation_tasks",
+            "ai_writeback_candidates",
+        }
+    )
+
+
 def test_real_e2e_rejects_file_database_configuration(monkeypatch):
     runner = _load_runner()
     monkeypatch.setenv("QINGSHU_TEST_POSTGRES_URL", "/tmp/qingshu_auth_test")

@@ -328,6 +328,27 @@ button:disabled {
   gap: 10px;
 }
 
+.evidenceControls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  color: #667085;
+  font-size: 12px;
+}
+
+.evidenceControls button {
+  flex: 0 0 auto;
+  border: 0;
+  padding: 4px 0;
+  color: #2f6bff;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .evidenceCard,
 .writebackCard {
   min-width: 0;
@@ -339,9 +360,18 @@ button:disabled {
 
 .evidenceHeader {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
+}
+
+.evidenceHeader strong,
+.evidenceHeader span {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .evidenceHeader span,

@@ -2,9 +2,9 @@
 
 更新日期：2026-08-07
 
-权威仓库：`/Users/chr/Documents/qingtianshu`
+当前权威工作树：`/Users/chr/Documents/qingtianshu-react-product`
 
-当前集成工作树：`/Users/chr/Documents/qingtianshu-react-product`
+后端历史基线：`/Users/chr/Documents/qingtianshu`
 
 当前分支：`codex/react-product-integration`（基于 `origin/react-03@ed9a9aa`）
 
@@ -366,3 +366,31 @@
 - 生产 E2E 脚本已补齐六页桌面路由与 390px 根级溢出检查；当前机器没有 `docker` 命令，因此这项容器内验收仍待具备 Docker 的发布环境执行。
 - 新增 `npm run test:e2e:production-local`：先构建当前 React production bundle，再由真实 FastAPI 同源托管，并使用隔离 PostgreSQL Schema、只读 `qingshu_prod` 行情库和 Chromium 执行生产 E2E。当前实跑 `1/1` 通过，覆盖注册、Today、SSE、六页桌面与 390px、刷新恢复、静态资源安全响应和 legacy 兼容；临时账户与 Schema 已清理。该证据高于 Vite 开发服务器验收，但仍不替代 Docker 镜像门禁。
 - 同一 production-dist 验收现已真实发送一次顾问问题，验证 `POST /me/chat`、私有 SSE、`entry_context`、回答持久化、会话路由与刷新恢复；`HERMES_ENABLED=false` 时结果保持 preview，不被研究中心冒充为正式 Run。
+
+## 2026-08-07 React 产品主线集成 WP7：真实 Hermes 证据与移动阅读
+
+### 真实问题
+
+- 首次 production Hermes 验收虽然模型、私有 SSE、持久化和刷新恢复都成功，但隔离用户 Schema 没有公开研究证据，回答只能说明“数据没有取得”并给出通用核验框架，不能证明产品已经支撑高质量金融分析。
+- 根因不是生产库缺数据：只读 `qingshu_prod` 已有中兴通讯截至 `2026-08-06` 的 1,865 条日线、最新估值、8 个结构化财务报告期和财务明细；问题是此前这套共享库只接给透明选股，顾问验收仍从空 Schema 取证。
+- 真实长回答带回 28 条证据后，390px 页面出现 20px 横向溢出，并一次性铺满全部证据卡，移动阅读成本过高。
+
+### 已实现
+
+1. `npm run test:e2e:hermes-production` 现在必须显式指定 Hermes provider/model，并在模型调用前把目标股票及固定同行的公开行情、财务、公告和研究快照从只读共享库复制到临时 Schema。用户、对话、正式判断、候选写回、任务和工作区不会被复制；原始证据时间与来源保持不变，测试结束后临时 Schema 整体删除。
+2. 真实模型门禁不再把“模型返回了 180 字”视为通过：必须确认 `fundamentals` 为 fresh、最新报告期和现金流字段存在、回答引用报告年份，并至少出现两句带数字的经营或财务证据；无证据通用话术会直接失败。
+3. 证据卡的长英文类型名允许安全断行；证据区默认优先展示前 10 条并显示总数，用户可展开全部或收起，桌面和 390px 均不再横向溢出。
+4. Hermes 专用 spec 只有在显式 Hermes 模式下才校验付费配置，普通 production E2E 会稳定跳过它，不再被模块加载阶段误伤。
+
+### 真实模型与浏览器证据
+
+- 最终 Run `883cc31c-34a4-4d68-aead-651779bb6401`：`stock_research / completed / deepseek-v4-flash / api_calls=1`，模型执行 `8.328s`，请求总耗时 `25.348s`，首 Token `2.881s`，首可见正文 `3.867s`。
+- 回答直接给出中兴通讯两项优先经营风险：2026 一季报营收同比 `+6.13%` 但归母净利润同比 `-46.58%`，以及经营现金流由上年同期 `+18.51亿元` 转为 `-19.79亿元`；同时说明毛利率、业务结构、财务费用和减值的已确认事实，以及毛利率具体业务原因和现金流季节性仍需后续验证。回答没有自动修改正式判断。
+- Run 证据状态为 `ready`，`fundamentals_status=fresh`；模型为 `deepseek-v4-flash`。真实 production 浏览器验收 `1/1` 通过，覆盖注册、公开证据装载、私有 SSE、回答持久化、桌面与 390px 刷新恢复、证据折叠和根级无横向溢出；临时账户与 Schema 已清理。
+- 普通 production-dist E2E 同期为 `1 passed / 1 skipped`，证明六页与非付费链路没有被 Hermes 专项破坏。React 单元/组件测试更新为 `131/131`，runner 专项 `8/8`，Vite production build 与产品范围 Ruff 通过。
+
+### 当前边界与下一步
+
+- 本轮证明同事 React 前端已经能承载真实账户、真实后端、真实证据和真实 Hermes 回答；它仍不是完整生产发布。当前机器没有 Docker，容器镜像、Linux 运行时和依赖门禁尚未执行；商业数据 SLA、备份恢复和长期队列故障演练仍未完成。
+- 本轮真实 Prompt 为 `119,392` 字符、输入 `45,236` tokens。回答质量已可用，但证据包仍偏大；下一轮应优先做面向问题的证据压缩和局部去重，降低成本与延迟，不继续增加全局 Guard 或固定回答模板。
+- GitHub 推送仍依赖本机恢复 `gh auth login -h github.com`；在认证恢复前先完成本地显式暂存、敏感项检查和提交，不把 `.env`、数据库、日志、缓存、`test-results/` 或截图纳入版本控制。
