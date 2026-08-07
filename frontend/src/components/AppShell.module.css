@@ -1,21 +1,41 @@
 .shell { min-height: 100vh; display: grid; grid-template-columns: 224px minmax(0, 1fr); background: var(--surface-subtle); }
-.sidebar { padding: 28px 16px; background: var(--surface); border-right: 1px solid var(--border); }
-.brand { font-weight: 700; font-size: 20px; margin: 0 12px 28px; color: var(--ink); }
-.navItem { display: block; padding: 11px 12px; border-radius: 8px; color: var(--ink-muted); text-decoration: none; margin: 4px 0; }
+.sidebar { position: relative; z-index: 50; padding: 28px 16px; border-right: 1px solid var(--border); background: var(--surface); }
+.brand { margin: 0 12px 28px; color: var(--ink); font-size: 20px; font-weight: 700; }
+.navItem { display: block; margin: 4px 0; padding: 11px 12px; border-radius: 8px; color: var(--ink-muted); text-decoration: none; }
 .navItem:hover, .active { color: var(--brand); background: var(--brand-soft); }
 .main { min-width: 0; }
-.header { height: 64px; padding: 0 28px; border-bottom: 1px solid var(--border); background: var(--surface); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.route { color: var(--ink-muted); font-size: 13px; white-space: nowrap; }
-.account { display: flex; gap: 12px; align-items: center; white-space: nowrap; }
-.header button { border: 1px solid var(--border); background: var(--surface); padding: 8px 12px; border-radius: 7px; cursor: pointer; }
-.searchWrap { position: relative; flex: 1; max-width: 440px; }
+.header { height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 28px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.routeArea { display: flex; min-width: 110px; align-items: center; gap: 10px; }
+.route { color: var(--ink); font-size: 14px; font-weight: 700; white-space: nowrap; }
+.menuButton { display: none; }
+.navBackdrop { display: none; }
+.account { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
+.header button { padding: 8px 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); cursor: pointer; }
+.searchWrap { position: relative; max-width: 440px; flex: 1; }
 .searchInput { width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-subtle); font-size: 13px; }
 .searchInput:focus { border-color: #84adff; outline: none; }
-.searchPanel { position: absolute; z-index: 30; top: 42px; right: 0; left: 0; max-height: 340px; overflow: auto; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 8px 24px rgb(16 24 40 / 12%); }
+.searchPanel { position: absolute; z-index: 60; top: 42px; right: 0; left: 0; max-height: 340px; overflow: auto; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 8px 24px rgb(16 24 40 / 12%); }
 .searchGroupLabel { padding: 6px 8px; color: var(--ink-muted); font-size: 11px; }
 .searchPanel .searchItem { display: flex; width: 100%; flex-direction: column; gap: 2px; padding: 8px; border: none; border-radius: 7px; background: none; text-align: left; }
 .searchPanel .searchItem:hover { background: var(--brand-soft); }
 .searchPanel .searchItem span { color: var(--ink-muted); font-size: 11px; }
 .searchHint { padding: 12px; color: var(--ink-muted); font-size: 12px; text-align: center; }
-.content { padding: 28px; }
-@media (max-width: 680px) { .shell { grid-template-columns: 1fr; } .sidebar { display: none; } .header { padding: 0 16px; } .route { display: none; } .content { padding: 16px; } }
+.content { min-width: 0; padding: 28px; }
+
+@media (max-width: 819px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .sidebar { position: fixed; inset: 0 auto 0 0; width: min(82vw, 300px); transform: translateX(-105%); border-right: 1px solid var(--border); box-shadow: 12px 0 32px rgb(16 24 40 / 16%); transition: transform 160ms ease; }
+  .sidebarOpen { transform: translateX(0); }
+  .navBackdrop { position: fixed; z-index: 40; inset: 0; display: block; width: 100%; padding: 0; border: 0; border-radius: 0; background: rgb(16 24 40 / 38%); }
+  .header { height: auto; min-height: 64px; flex-wrap: wrap; padding: 10px 16px; }
+  .routeArea { min-width: 0; }
+  .menuButton { display: inline-grid; width: 38px; height: 38px; place-items: center; padding: 0 !important; font-size: 18px; }
+  .searchWrap { order: 3; max-width: none; flex-basis: 100%; }
+  .content { padding: 16px; }
+}
+
+@media (max-width: 420px) {
+  .account span { display: none; }
+  .header { gap: 10px; }
+  .route { font-size: 13px; }
+}

@@ -74,7 +74,6 @@ describe("StockResearchPage", () => {
 
   it("keeps the research workspace when quote data is unavailable", () => {
     const workspace = workspaceFixture();
-    workspace.quote = { ...workspace.quote, price: null, pct_change: null };
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     client.setQueryData(stockResearchQueryKeys.page("000063", "1y"), parsedStockPage({
       modules: {

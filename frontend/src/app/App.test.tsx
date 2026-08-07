@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 
@@ -40,8 +40,44 @@ describe("正式前端认证入口", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "关闭登录或注册弹窗" }));
 
-    fireEvent.click(screen.getByRole("link", { name: "选股策略" }));
+    fireEvent.click(screen.getByRole("link", { name: "透明选股" }));
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
     expect(window.location.pathname).toBe("/screening");
+  });
+
+  it("exposes exactly the six formal product routes and a semantic route title", async () => {
+    render(<App />);
+    await screen.findByRole("dialog");
+
+    const navigation = screen.getByRole("navigation", { name: "主导航" });
+    expect(within(navigation).getAllByRole("link").map((link) => link.textContent)).toEqual([
+      "今日观察",
+      "透明选股",
+      "我的关注",
+      "个股研究",
+      "金融顾问",
+      "研究中心",
+    ]);
+    expect(within(navigation).queryByText("行情数据")).not.toBeInTheDocument();
+    expect(screen.getByTestId("route-title")).toHaveTextContent("我的关注");
+  });
+
+  it("opens and closes the single mobile navigation tree with Escape and restores focus", async () => {
+    render(<App />);
+    await screen.findByRole("dialog");
+    fireEvent.click(screen.getByRole("button", { name: "关闭登录或注册弹窗" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const menuButton = screen.getByRole("button", { name: "打开主导航" });
+
+    fireEvent.click(menuButton);
+    expect(menuButton).toHaveAttribute("aria-expanded", "true");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(menuButton).toHaveAttribute("aria-expanded", "false");
+    expect(menuButton).toHaveFocus();
+
+    fireEvent.click(menuButton);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "主导航" })).getByRole("link", { name: "透明选股" }));
+    await waitFor(() => expect(window.location.pathname).toBe("/screening"));
+    expect(menuButton).toHaveAttribute("aria-expanded", "false");
   });
 });
