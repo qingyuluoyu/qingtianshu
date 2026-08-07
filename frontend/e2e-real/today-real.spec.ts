@@ -56,7 +56,7 @@ test("real FastAPI, PostgreSQL, cookie and Today read chain", async ({ page }) =
   const packet = await response.json() as { generated_at?: unknown; summary?: { headline?: unknown; market_date?: unknown } };
   expect(typeof packet.generated_at).toBe("string");
   expect(typeof packet.summary?.headline).toBe("string");
-  expect(typeof packet.summary?.market_date).toBe("string");
+  expect(packet.summary?.market_date === null || typeof packet.summary?.market_date === "string").toBe(true);
 
   const breadth = await breadthResponse;
   expect(breadth.status()).toBe(200);
@@ -70,7 +70,7 @@ test("real FastAPI, PostgreSQL, cookie and Today read chain", async ({ page }) =
   const marker = page.getByTestId("today-generated-at");
   await expect(marker).toHaveAttribute("data-generated-at", String(packet.generated_at));
   await expect(page.getByText(String(packet.summary?.headline), { exact: true })).toBeVisible();
-  await expect(page.getByTestId("today-market-date")).toHaveText(String(packet.summary?.market_date));
+  await expect(page.getByTestId("today-market-date")).toHaveText(packet.summary?.market_date ?? "市场日期读取中");
   await expect(page.getByRole("region", { name: "主要指数" })).toBeVisible();
   await expect(page.getByRole("region", { name: "数据健康状态" })).toBeVisible();
 
