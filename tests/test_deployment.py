@@ -44,3 +44,14 @@ def test_deployment_uses_matching_postgres_17_client_and_isolated_staging():
     assert "QINGSHU_HTTP_PORT=18000" in staging
     assert "HERMES_ENABLED=false" in staging
     assert "TUSHARE_ENABLED=false" in staging
+
+
+def test_docker_declares_a_hermes_free_target_for_isolated_frontend_acceptance():
+    dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    runner = (
+        PROJECT_ROOT / "frontend" / "scripts" / "run_docker_production_e2e.py"
+    ).read_text(encoding="utf-8")
+
+    assert "AS e2e-runtime" in dockerfile
+    assert '"--target", "e2e-runtime"' in runner
+    assert "COPY --from=hermes-runtime /opt/hermes /opt/hermes" in dockerfile

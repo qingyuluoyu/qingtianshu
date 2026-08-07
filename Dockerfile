@@ -29,7 +29,7 @@ RUN apt-get update \
     && /opt/hermes/bin/hermes --version
 
 
-FROM python:3.11-slim-bookworm
+FROM python:3.11-slim-bookworm AS app-runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -43,9 +43,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HERMES_ENABLED=false
 
 WORKDIR /app
-
-COPY --from=hermes-runtime /opt/hermes /opt/hermes
-COPY --from=hermes-runtime /opt/hermes-agent /opt/hermes-agent
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl \
@@ -71,3 +68,15 @@ COPY scripts ./scripts
 EXPOSE 8000
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+
+# The isolated browser acceptance environment always runs with HERMES_ENABLED=false.
+# Keep a production-equivalent FastAPI + React image available without building the
+# optional Hermes runtime, while preserving the default production image below.
+FROM app-runtime AS e2e-runtime
+
+
+FROM app-runtime AS production
+
+COPY --from=hermes-runtime /opt/hermes /opt/hermes
+COPY --from=hermes-runtime /opt/hermes-agent /opt/hermes-agent

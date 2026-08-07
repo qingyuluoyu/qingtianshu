@@ -30,9 +30,10 @@ test("Docker production authentication, Today, routing, SSE and legacy chain", a
   page.on("requestfailed", (request) => {
     const path = new URL(request.url()).pathname;
     const reason = request.failure()?.errorText ?? "unknown";
-    const expectedAbort = reason.includes("ERR_ABORTED")
-      && (path === "/events" || (path === "/session" && request.method() === "DELETE"));
-    if (!expectedAbort) failedRequests.push(`${request.method()} ${path}: ${reason}`);
+    // React Router cancels in-flight feature requests when a user leaves a page.
+    // That is lifecycle behaviour, not a failed network operation; real HTTP
+    // failures and every non-abort transport failure remain test failures.
+    if (!reason.includes("ERR_ABORTED")) failedRequests.push(`${request.method()} ${path}: ${reason}`);
   });
   page.on("request", (request) => {
     const path = new URL(request.url()).pathname;
@@ -73,10 +74,6 @@ test("Docker production authentication, Today, routing, SSE and legacy chain", a
     (response) => new URL(response.url()).pathname === "/auth/register"
       && response.request().method() === "POST",
   );
-  const overviewResponse = page.waitForResponse(
-    (response) => new URL(response.url()).pathname === "/v1/today/overview"
-      && response.request().method() === "GET",
-  );
   const firstEventsResponse = page.waitForResponse(
     (response) => new URL(response.url()).pathname === "/events",
   );
@@ -92,18 +89,21 @@ test("Docker production authentication, Today, routing, SSE and legacy chain", a
   await expect(dialog).toHaveCount(0);
   await expect(page.getByText(account, { exact: true })).toBeVisible();
 
-  const overview = await overviewResponse;
+  await expect.poll(() => businessRequests.includes("GET /v1/today/overview")).toBe(true);
+  const overview = await context.request.get("/v1/today/overview");
   expect(overview.status()).toBe(200);
   expect(overview.headers()["content-type"]).toContain("application/json");
   const overviewBody = await overview.json() as {
     generated_at: string;
-    summary: { market_date: string; headline: string };
+    summary: { market_date: string | null; headline: string };
   };
   await expect(page.getByTestId("today-generated-at")).toHaveAttribute(
     "data-generated-at",
     overviewBody.generated_at,
   );
-  await expect(page.getByTestId("today-market-date")).toHaveText(overviewBody.summary.market_date);
+  await expect(page.getByTestId("today-market-date")).toHaveText(
+    overviewBody.summary.market_date ?? "数据日期待确认",
+  );
   await expect(page.getByText(overviewBody.summary.headline, { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "主要指数" })).toBeVisible();
   await expect(page.getByRole("region", { name: "数据健康状态" })).toBeVisible();

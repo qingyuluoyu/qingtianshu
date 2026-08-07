@@ -128,7 +128,7 @@ def main() -> int:
         build_command = ["docker", "build"]
         if os.environ.get("QINGSHU_DOCKER_E2E_NO_CACHE", "1") != "0":
             build_command.append("--no-cache")
-        run(*build_command, "-t", image, ".")
+        run(*build_command, "--target", "e2e-runtime", "-t", image, ".")
         image_created = True
         run(
             "docker", "network", "create",
@@ -193,6 +193,12 @@ def main() -> int:
                 "QINGSHU_PRODUCTION_E2E_ACCOUNT": account,
                 "QINGSHU_PRODUCTION_E2E_PHONE": "13900000001",
                 "QINGSHU_PRODUCTION_E2E_PASSWORD": password,
+                # Non-sensitive runtime identity used only for test diagnostics.
+                # Database credentials, session cookies, and provider credentials
+                # deliberately stay inside this isolated run.
+                "QINGSHU_PRODUCTION_E2E_RUN_ID": suffix,
+                "QINGSHU_PRODUCTION_E2E_IMAGE": image,
+                "QINGSHU_PRODUCTION_E2E_MODE": "docker-production",
             }
         )
         playwright = FRONTEND / "node_modules" / ".bin" / (
