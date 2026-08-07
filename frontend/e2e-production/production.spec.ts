@@ -18,6 +18,9 @@ test("Docker production authentication, Today, routing, SSE and legacy chain", a
   const missingAssets: string[] = [];
   const businessRequests: string[] = [];
   let eventsResponses = 0;
+  let privateStreamRequests = 0;
+  let privateStreamResponses = 0;
+  let closedPrivateStreams = 0;
 
   page.on("console", (message) => {
     if (message.type() !== "error") return;
@@ -30,12 +33,17 @@ test("Docker production authentication, Today, routing, SSE and legacy chain", a
   page.on("requestfailed", (request) => {
     const path = new URL(request.url()).pathname;
     const reason = request.failure()?.errorText ?? "unknown";
+    if (reason.includes("ERR_ABORTED") && path.startsWith("/me/chat/stream/")) {
+      closedPrivateStreams += 1;
+      return;
+    }
     const expectedAbort = reason.includes("ERR_ABORTED")
       && (path === "/events" || (path === "/session" && request.method() === "DELETE"));
     if (!expectedAbort) failedRequests.push(`${request.method()} ${path}: ${reason}`);
   });
   page.on("request", (request) => {
     const path = new URL(request.url()).pathname;
+    if (path.startsWith("/me/chat/stream/")) privateStreamRequests += 1;
     if (/^\/(?:v1|me|indices|markets|sectors|system)(?:\/|$)/.test(path)) {
       businessRequests.push(`${request.method()} ${path}`);
     }
@@ -43,6 +51,7 @@ test("Docker production authentication, Today, routing, SSE and legacy chain", a
   page.on("response", (response) => {
     const path = new URL(response.url()).pathname;
     if (path === "/events") eventsResponses += 1;
+    if (path.startsWith("/me/chat/stream/")) privateStreamResponses += 1;
     if (response.status() === 404 && /\.(?:js|css|png|svg|woff2?)$/i.test(path)) {
       missingAssets.push(path);
     }
@@ -149,6 +158,52 @@ test("Docker production authentication, Today, routing, SSE and legacy chain", a
     await expect(page.getByRole("heading", { name: heading, exact: true }), path).toBeVisible();
   }
 
+  await page.goto("/advisor?symbol=000063.SZ&source=stock-research");
+  await expect(page.getByRole("heading", { name: "金融顾问", exact: true })).toBeVisible();
+  const privateStreamResponse = page.waitForResponse((response) => (
+    new URL(response.url()).pathname.startsWith("/me/chat/stream/")
+    && response.request().method() === "GET"
+  ));
+  const chatRequest = page.waitForRequest((request) => (
+    new URL(request.url()).pathname === "/me/chat" && request.method() === "POST"
+  ));
+  const chatResponse = page.waitForResponse((response) => (
+    new URL(response.url()).pathname === "/me/chat"
+    && response.request().method() === "POST"
+  ));
+  await page.getByLabel("向金融顾问提问").fill("我的研究行动是什么？只整理已有状态，不要自动形成正式判断。");
+  await page.getByRole("button", { name: "发送" }).click();
+
+  const requestPayload = (await chatRequest).postDataJSON() as {
+    entry_context?: unknown;
+  };
+  expect(requestPayload.entry_context).toEqual({
+    source_page: "stock",
+    module: "stock-research",
+    symbol: "000063.SZ",
+  });
+  const stream = await privateStreamResponse;
+  expect(stream.status()).toBe(200);
+  expect(stream.headers()["content-type"]).toContain("text/event-stream");
+  const chat = await chatResponse;
+  expect(chat.status()).toBe(200);
+  const chatPayload = await chat.json() as {
+    answer?: unknown;
+    conversation_id?: unknown;
+    status?: unknown;
+  };
+  expect(typeof chatPayload.answer).toBe("string");
+  expect(typeof chatPayload.conversation_id).toBe("string");
+  expect(chatPayload.status).toBe("preview");
+  await expect(page.getByText(String(chatPayload.answer), { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/advisor/${String(chatPayload.conversation_id)}`));
+
+  await page.reload();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByText(String(chatPayload.answer), { exact: true })).toBeVisible();
+  expect(privateStreamRequests).toBe(1);
+  expect(privateStreamResponses).toBe(1);
+
   await page.setViewportSize({ width: 390, height: 844 });
   for (const [path, heading] of [
     ["/today", "今日观察"],
@@ -245,6 +300,7 @@ test("Docker production authentication, Today, routing, SSE and legacy chain", a
 
   expect(consoleErrors).toEqual([]);
   expect(pageErrors).toEqual([]);
+  expect(closedPrivateStreams).toBeLessThanOrEqual(1);
   expect(failedRequests).toEqual([]);
   expect(missingAssets).toEqual([]);
   await context.close();

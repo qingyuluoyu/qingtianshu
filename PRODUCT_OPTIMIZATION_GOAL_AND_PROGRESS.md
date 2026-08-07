@@ -365,3 +365,4 @@
 - 六个正式 React 页面至此都已具备真实产品实现，但仍不能等同于生产发布完成：Docker 生产 E2E、商业数据 SLA、备份恢复、长期队列和真实 Hermes 质量仍是发布门槛。
 - 生产 E2E 脚本已补齐六页桌面路由与 390px 根级溢出检查；当前机器没有 `docker` 命令，因此这项容器内验收仍待具备 Docker 的发布环境执行。
 - 新增 `npm run test:e2e:production-local`：先构建当前 React production bundle，再由真实 FastAPI 同源托管，并使用隔离 PostgreSQL Schema、只读 `qingshu_prod` 行情库和 Chromium 执行生产 E2E。当前实跑 `1/1` 通过，覆盖注册、Today、SSE、六页桌面与 390px、刷新恢复、静态资源安全响应和 legacy 兼容；临时账户与 Schema 已清理。该证据高于 Vite 开发服务器验收，但仍不替代 Docker 镜像门禁。
+- 同一 production-dist 验收现已真实发送一次顾问问题，验证 `POST /me/chat`、私有 SSE、`entry_context`、回答持久化、会话路由与刷新恢复；`HERMES_ENABLED=false` 时结果保持 preview，不被研究中心冒充为正式 Run。
