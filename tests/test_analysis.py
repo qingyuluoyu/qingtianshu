@@ -177,6 +177,23 @@ class _FreshChinaIndexHistoryProvider:
         }
 
 
+class _StaleRealtimeQuoteProvider:
+    def fetch_quotes(self, symbols: list[str]):
+        return {
+            "000300.SS": {
+                "price": 4750.0,
+                "previous_close": 4700.0,
+                "change": 50.0,
+                "pct_change": 1.0638,
+                "source": "test realtime quote",
+                "market_timestamp": "2026-07-22T14:30:00+08:00",
+                "fetched_at": "2026-07-22T14:30:01+08:00",
+                "data_granularity": "realtime_quote",
+                "is_stale": True,
+            }
+        }
+
+
 def test_deterministic_metrics():
     closes = [100.0, 102.0, 101.0, 105.0, 103.0]
     assert period_return(closes, 1) == pytest.approx(-1.9048)
@@ -260,6 +277,29 @@ def test_index_history_prefers_fresher_china_fallback():
     assert history["source"] == "fresh fallback"
     assert history["market_timestamp"] == "2026-07-21T01:30:00+00:00"
     assert history["metrics"]["latest_close"] == 4739.23
+
+
+def test_realtime_quote_metadata_marks_index_card_stale_without_relabeling_daily_history():
+    service = MarketAnalysisService(
+        None,
+        _StaleIndexHistoryProvider(),
+        _NextDaySectorProvider(),
+        china_index_provider=_FreshChinaIndexHistoryProvider(),
+        china_index_quote_provider=_StaleRealtimeQuoteProvider(),
+    )
+
+    item = next(
+        item
+        for item in service.get_indices(scope="all", group="china")["indices"]
+        if item["symbol"] == "000300.SS"
+    )
+
+    assert item["source"] == "test realtime quote"
+    assert item["market_timestamp"] == "2026-07-22T14:30:00+08:00"
+    assert item["daily_market_timestamp"] == "2026-07-21T01:30:00+00:00"
+    assert item["data_granularity"] == "realtime_quote"
+    assert item["is_stale"] is True
+    assert item["data_freshness"]["status"] == "stale"
 
 
 def test_indices_use_a_timestamped_realtime_quote_without_rewriting_daily_history():

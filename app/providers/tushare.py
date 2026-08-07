@@ -1,23 +1,24 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pandas as pd
+import requests
 
 from app.config import Settings
-
-try:
-    import tushare as ts
-except ImportError:  # pragma: no cover - exercised only before dependency install
-    ts = None
 
 
 class TushareProviderError(RuntimeError):
     """Raised when the configured Tushare-compatible service cannot be used."""
 
 
+class TushareProviderTimeout(TushareProviderError):
+    """The licensed provider did not respond within the configured bound."""
+
+
 class TushareClient:
-    """Small, secret-safe wrapper around the Tushare Pro SDK."""
+    """Secret-safe client for the TeaJoin Tushare-compatible HTTPS protocol."""
 
     def __init__(
         self,
@@ -25,24 +26,15 @@ class TushareClient:
         *,
         api_url: str = "https://teajoin.com",
         timeout_seconds: int = 20,
+        http_post: Any = requests.post,
     ) -> None:
-        if ts is None:
-            raise TushareProviderError("未安装 tushare 依赖")
         if not token.strip():
             raise TushareProviderError("未配置 TUSHARE_TOKEN")
 
         self.api_url = api_url.rstrip("/")
-        self.timeout_seconds = timeout_seconds
-        try:
-            ts.set_token(token)
-            self.pro = ts.pro_api(token)
-            # teajoin.com exposes the Tushare Pro protocol at its root URL.
-            self.pro._DataApi_token = token
-            self.pro._DataApi__http_url = self.api_url
-        except Exception as exc:
-            raise TushareProviderError(
-                f"Tushare 客户端初始化失败：{type(exc).__name__}"
-            ) from exc
+        self.timeout_seconds = max(1, int(timeout_seconds))
+        self._token = token.strip()
+        self._http_post = http_post
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "TushareClient":
@@ -54,24 +46,52 @@ class TushareClient:
 
     def query(self, api_name: str, **params: Any) -> pd.DataFrame:
         """Call one Tushare endpoint without ever including the token in errors."""
-        endpoint = getattr(self.pro, api_name, None)
-        if endpoint is None or not callable(endpoint):
-            raise TushareProviderError(f"Tushare 不支持接口：{api_name}")
+        request_params = dict(params)
+        fields = str(request_params.pop("fields", ""))
+        request_params.setdefault("ts_type_name", self.api_url)
+        request = {
+            "api_name": api_name,
+            "token": self._token,
+            "params": request_params,
+            "fields": fields,
+        }
         try:
-            result = endpoint(**params)
-        except Exception as exc:
-            raise TushareProviderError(
-                f"Tushare 接口 {api_name} 调用失败：{type(exc).__name__}"
+            response = self._http_post(
+                f"{self.api_url}/{api_name}",
+                json=request,
+                timeout=self.timeout_seconds,
+            )
+            response.raise_for_status()
+        except requests.Timeout as exc:
+            raise TushareProviderTimeout(
+                f"Tushare 接口 {api_name} 在 {self.timeout_seconds}s 内未响应"
             ) from exc
-        if isinstance(result, pd.DataFrame):
-            return result
-        if result is None:
-            return pd.DataFrame()
+        except requests.RequestException as exc:
+            raise TushareProviderError(
+                f"Tushare 接口 {api_name} 请求失败：{type(exc).__name__}"
+            ) from exc
         try:
-            return pd.DataFrame(result)
+            payload = response.json()
+        except (AttributeError, ValueError, json.JSONDecodeError) as exc:
+            raise TushareProviderError(
+                f"Tushare 接口 {api_name} 返回了无法解析的响应"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise TushareProviderError(f"Tushare 接口 {api_name} 返回格式无效")
+        if payload.get("code") != 0:
+            raise TushareProviderError(
+                f"Tushare 接口 {api_name} 返回业务错误 code={payload.get('code')}"
+            )
+        data = payload.get("data") or {}
+        fields_value = data.get("fields") if isinstance(data, dict) else None
+        items = data.get("items") if isinstance(data, dict) else None
+        if not isinstance(fields_value, list) or not isinstance(items, list):
+            raise TushareProviderError(f"Tushare 接口 {api_name} 返回数据格式无效")
+        try:
+            return pd.DataFrame(items, columns=fields_value)
         except Exception as exc:
             raise TushareProviderError(
-                f"Tushare 接口 {api_name} 返回格式无法解析：{type(exc).__name__}"
+                f"Tushare 接口 {api_name} 返回数据无法解析：{type(exc).__name__}"
             ) from exc
 
     @staticmethod

@@ -22,6 +22,7 @@ from app.providers.market import (
     ProviderError,
     YahooMarketProvider,
 )
+from app.data_freshness import attach_data_freshness
 from app.services.live_market import (
     market_quote_semantics,
     previous_market_session_date,
@@ -1878,7 +1879,7 @@ class MarketAnalysisService:
                     warnings.append("当前展示最近完整日线收盘，不是盘中实时指数报价。")
                 if quote_warning and item.get("group") == "china":
                     warnings.append(quote_warning)
-                return {
+                return attach_data_freshness({
                     **item,
                     "status": "available",
                     "metrics": metrics,
@@ -1888,11 +1889,11 @@ class MarketAnalysisService:
                     "market_timestamp": quote["market_timestamp"] if quote is not None else history["market_timestamp"],
                     "daily_market_timestamp": history["market_timestamp"],
                     "data_granularity": quote["data_granularity"] if quote is not None else "daily_close",
-                    "fetched_at": history["fetched_at"],
-                    "is_stale": history.get("is_stale", False),
+                    "fetched_at": quote.get("fetched_at") if quote is not None else history["fetched_at"],
+                    "is_stale": quote.get("is_stale", False) if quote is not None else history.get("is_stale", False),
                     "coverage": history["coverage"],
                     "warnings": warnings,
-                }
+                }, default_granularity="daily_close")
             except (ProviderError, ValueError) as exc:
                 return {**item, "status": "unavailable", "warnings": [str(exc)]}
 

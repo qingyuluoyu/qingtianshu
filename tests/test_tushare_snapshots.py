@@ -3,9 +3,32 @@ from __future__ import annotations
 from collections import defaultdict
 
 import pandas as pd
+import pytest
+import requests
 
-from app.providers.tushare import TushareClient
+from app.providers.tushare import TushareClient, TushareProviderTimeout
 from app.services.tushare_snapshots import TushareSnapshotService
+
+
+def test_tushare_client_applies_configured_timeout_and_keeps_token_out_of_error():
+    calls: list[dict[str, object]] = []
+
+    def timeout_post(*_args, **kwargs):
+        calls.append(kwargs)
+        raise requests.Timeout("upstream timed out")
+
+    client = TushareClient(
+        "secret-token-must-not-leak",
+        api_url="https://teajoin.example",
+        timeout_seconds=7,
+        http_post=timeout_post,
+    )
+
+    with pytest.raises(TushareProviderTimeout) as raised:
+        client.trade_cal(exchange="SSE", start_date="20260806", end_date="20260807")
+
+    assert calls[0]["timeout"] == 7
+    assert "secret-token-must-not-leak" not in str(raised.value)
 
 
 class FakeSnapshotTushareClient:
