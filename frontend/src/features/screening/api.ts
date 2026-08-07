@@ -3,11 +3,14 @@ import type { components } from "../../api/openapi.generated";
 import {
   parseLiZongBacktest,
   parseLiZongCandidates,
+  parseLiZongObservationPool,
   parseLiZongRunLatest,
   parseScreenerProfiles,
   parseStockScreen,
   type LiZongBacktest,
   type LiZongCandidates,
+  type LiZongObservationBand,
+  type LiZongObservationPool,
   type LiZongRunLatest,
   type ScreenerProfiles,
   type StockScreen,
@@ -110,6 +113,15 @@ export async function getLiZongCandidates(status: LiZongStatusFilter): Promise<L
     params: { query: { status: status ?? undefined, limit: 200 } },
   });
   return unwrap(response, data, error, parseLiZongCandidates);
+}
+
+export async function getLiZongObservationPool(
+  band: LiZongObservationBand | null = null,
+): Promise<LiZongObservationPool> {
+  const { data, error, response } = await api.GET("/v1/stock-strategies/li-zong/observation-pool", {
+    params: { query: { band: band ?? undefined, limit: 20 } },
+  });
+  return unwrap(response, data, error, parseLiZongObservationPool);
 }
 
 export async function getLiZongRunLatest(): Promise<LiZongRunLatest> {

@@ -3658,28 +3658,31 @@ class Database:
         with self.connect() as connection:
             rows = connection.execute(
                 f"""
+                WITH current_candidates AS (
+                    SELECT DISTINCT ON (candidates.symbol) candidates.*
+                    FROM strategy_candidate_snapshots AS candidates
+                    JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
+                    WHERE candidates.strategy_id = ?
+                        AND candidates.strategy_version = ?
+                        AND candidates.parameter_version = ?
+                        AND runs.status <> 'failed'
+                    ORDER BY candidates.symbol ASC,
+                        candidates.created_at DESC,
+                        candidates.rowid DESC
+                )
                 SELECT candidates.*
-                FROM strategy_candidate_snapshots AS candidates
-                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
-                WHERE candidates.strategy_id = ?
-                    AND candidates.strategy_version = ?
-                    AND candidates.parameter_version = ?
-                    AND runs.status <> 'failed'
-                    {status_clause}
-                    AND candidates.id = (
-                        SELECT current.id
-                        FROM strategy_candidate_snapshots AS current
-                        JOIN strategy_screen_runs AS current_runs
-                            ON current_runs.id = current.run_id
-                        WHERE current.strategy_id = candidates.strategy_id
-                            AND current.strategy_version = candidates.strategy_version
-                            AND current.parameter_version = candidates.parameter_version
-                            AND current.symbol = candidates.symbol
-                            AND current_runs.status <> 'failed'
-                        ORDER BY current.created_at DESC, current.rowid DESC
-                        LIMIT 1
-                    )
-                ORDER BY candidates.as_of_date DESC, candidates.symbol ASC
+                FROM current_candidates AS candidates
+                WHERE 1 = 1 {status_clause}
+                ORDER BY
+                    CASE candidates.status
+                        WHEN 'triggered' THEN 0
+                        WHEN 'qualified' THEN 1
+                        WHEN 'data_incomplete' THEN 2
+                        WHEN 'not_qualified' THEN 3
+                        ELSE 4
+                    END ASC,
+                    candidates.as_of_date DESC,
+                    candidates.symbol ASC
                 LIMIT ?
                 """,
                 params,
@@ -3710,27 +3713,26 @@ class Database:
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT candidates.symbol, candidates.as_of_date, candidates.status,
-                       candidates.result_json
-                FROM strategy_candidate_snapshots AS candidates
-                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
-                WHERE candidates.strategy_id = ?
-                    AND candidates.strategy_version = ?
-                    AND candidates.parameter_version = ?
-                    AND runs.status <> 'failed'
-                    AND candidates.id = (
-                        SELECT current.id
-                        FROM strategy_candidate_snapshots AS current
-                        JOIN strategy_screen_runs AS current_runs
-                            ON current_runs.id = current.run_id
-                        WHERE current.strategy_id = candidates.strategy_id
-                            AND current.strategy_version = candidates.strategy_version
-                            AND current.parameter_version = candidates.parameter_version
-                            AND current.symbol = candidates.symbol
-                            AND current_runs.status <> 'failed'
-                        ORDER BY current.created_at DESC, current.rowid DESC
-                        LIMIT 1
-                    )
+                WITH current_candidates AS (
+                    SELECT DISTINCT ON (candidates.symbol)
+                        candidates.symbol,
+                        candidates.as_of_date,
+                        candidates.status,
+                        candidates.result_json,
+                        candidates.created_at,
+                        candidates.rowid
+                    FROM strategy_candidate_snapshots AS candidates
+                    JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
+                    WHERE candidates.strategy_id = ?
+                        AND candidates.strategy_version = ?
+                        AND candidates.parameter_version = ?
+                        AND runs.status <> 'failed'
+                    ORDER BY candidates.symbol ASC,
+                        candidates.created_at DESC,
+                        candidates.rowid DESC
+                )
+                SELECT symbol, as_of_date, status, result_json
+                FROM current_candidates
                 """,
                 (strategy_id, strategy_version, parameter_version),
             ).fetchall()

@@ -3,6 +3,7 @@ import {
   ContractError,
   parseLiZongBacktest,
   parseLiZongCandidates,
+  parseLiZongObservationPool,
   parseLiZongRunLatest,
   parseScreenerProfiles,
   parseStockScreen,
@@ -10,6 +11,7 @@ import {
 import {
   liZongBacktestPayload,
   liZongCandidatesPayload,
+  liZongObservationPoolPayload,
   liZongRunLatestPayload,
   profilesPayload,
   screenPayload,
@@ -119,6 +121,19 @@ describe("parseLiZongRunLatest", () => {
     const parsed = parseLiZongRunLatest({ strategy_id: "li_zong", run: null, coverage: null });
     expect(parsed.run).toBeNull();
     expect(parsed.coverage).toBeNull();
+  });
+});
+
+describe("parseLiZongObservationPool", () => {
+  it("parses near-match counts and keeps observations outside the strict candidate pool", () => {
+    expect(() => parseLiZongObservationPool({ strategy: { strategy_id: "other" } })).toThrow(/li_zong/);
+    const parsed = parseLiZongObservationPool(liZongObservationPoolPayload());
+    expect(parsed.counts.near8Of9).toBe(1);
+    expect(parsed.counts.watch6To7Of9).toBe(159);
+    expect(parsed.completeRuleStates).toBe(1208);
+    expect(parsed.items[0]!.candidateRulePassCount).toBe(8);
+    expect(parsed.items[0]!.failedCandidateRuleIds).toEqual(["LZ-F-02"]);
+    expect(parsed.items[0]!.isStrictCandidate).toBe(false);
   });
 });
 

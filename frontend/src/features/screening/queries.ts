@@ -2,6 +2,7 @@ import { queryOptions } from "@tanstack/react-query";
 import {
   getLiZongBacktest,
   getLiZongCandidates,
+  getLiZongObservationPool,
   getLiZongRunLatest,
   getScreenerProfiles,
   runStockScreen,
@@ -19,6 +20,7 @@ export const screeningQueryKeys = {
   profiles: () => ["screener-profiles"] as const,
   screen: (params: ScreenParams) => ["screener", params.profile, { market: params.market, maxResults: params.maxResults, filters: params.filters }, null] as const,
   liZongCandidates: (status: LiZongStatusFilter) => ["li-zong-candidates", status ?? "all"] as const,
+  liZongObservationPool: () => ["li-zong-observation-pool", "all"] as const,
   liZongRunLatest: () => ["li-zong-run-latest"] as const,
   liZongBacktest: (period: BacktestPeriod) => ["li-zong-backtest", period] as const,
 };
@@ -49,6 +51,12 @@ export const screeningQueries = {
     queryKey: screeningQueryKeys.liZongCandidates(status),
     queryFn: () => getLiZongCandidates(status),
     placeholderData: (previous) => previous,
+    ...stableErrorPolicy,
+    staleTime: 60_000,
+  }),
+  liZongObservationPool: () => queryOptions({
+    queryKey: screeningQueryKeys.liZongObservationPool(),
+    queryFn: () => getLiZongObservationPool(),
     ...stableErrorPolicy,
     staleTime: 60_000,
   }),

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getLiZongBacktest,
   getLiZongCandidates,
+  getLiZongObservationPool,
   getLiZongRunLatest,
   getScreenerProfiles,
   runStockScreen,
@@ -14,6 +15,7 @@ import { parseStockScreen } from "./adapters";
 import {
   parsedLiZongBacktest,
   parsedLiZongCandidates,
+  parsedLiZongObservationPool,
   parsedLiZongRunLatest,
   parsedProfiles,
   parsedScreen,
@@ -28,6 +30,7 @@ vi.mock("./api", async (importOriginal) => {
     getScreenerProfiles: vi.fn(),
     runStockScreen: vi.fn(),
     getLiZongCandidates: vi.fn(),
+    getLiZongObservationPool: vi.fn(),
     getLiZongRunLatest: vi.fn(),
     getLiZongBacktest: vi.fn(),
     startDeepStockResearch: vi.fn(),
@@ -37,6 +40,7 @@ vi.mock("./api", async (importOriginal) => {
 const mockProfiles = vi.mocked(getScreenerProfiles);
 const mockScreen = vi.mocked(runStockScreen);
 const mockCandidates = vi.mocked(getLiZongCandidates);
+const mockObservationPool = vi.mocked(getLiZongObservationPool);
 const mockRunLatest = vi.mocked(getLiZongRunLatest);
 const mockBacktest = vi.mocked(getLiZongBacktest);
 const mockStartResearch = vi.mocked(startDeepStockResearch);
@@ -59,6 +63,7 @@ beforeEach(() => {
   mockProfiles.mockResolvedValue(parsedProfiles());
   mockScreen.mockResolvedValue(parsedScreen());
   mockCandidates.mockResolvedValue(parsedLiZongCandidates());
+  mockObservationPool.mockResolvedValue(parsedLiZongObservationPool());
   mockRunLatest.mockResolvedValue(parsedLiZongRunLatest());
   mockBacktest.mockResolvedValue(parsedLiZongBacktest());
   mockStartResearch.mockImplementation(async (symbol) => ({ symbol, conversationId: "conversation-1" }));
@@ -165,7 +170,8 @@ describe("ScreeningPage 李总模式", () => {
     await screen.findByText("600549.SH");
     fireEvent.click(screen.getByRole("group", { name: "选股模式" }).querySelectorAll("button")[1]!);
     // 最近 run 摘要（状态 partial → 部分数据可用，警告直通）。
-    expect(await screen.findByText("最近筛选 Run")).toBeInTheDocument();
+    expect(await screen.findByText("李总策略全市场快照")).toBeInTheDocument();
+    expect(await screen.findByText("最近增量筛选 Run")).toBeInTheDocument();
     expect(await screen.findByText("部分数据可用")).toBeInTheDocument();
     expect(screen.getByText(/等待补齐数据/)).toBeInTheDocument();
     // 状态筛选 chips 带真实计数。
@@ -183,6 +189,9 @@ describe("ScreeningPage 李总模式", () => {
     expect(screen.getAllByText("LZ-F-02").length).toBeGreaterThan(0);
     // 规则漏斗（真实分布数据）。
     expect(screen.getByText("规则漏斗分布")).toBeInTheDocument();
+    expect(screen.getByText("接近满足研究观察池（非候选）")).toBeInTheDocument();
+    expect(screen.getByText(/8 \/ 9 接近满足 1/)).toBeInTheDocument();
+    expect(screen.getByText(/6–7 \/ 9 研究观察 159/)).toBeInTheDocument();
     // 规则核验清单（默认选中首行）。
     expect(screen.getAllByText(/规则核验/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/总市值严格大于150亿元/).length).toBeGreaterThan(0);
@@ -254,6 +263,7 @@ describe("ScreeningPage 通用行为", () => {
     expect(mockProfiles).not.toHaveBeenCalled();
     expect(mockScreen).not.toHaveBeenCalled();
     expect(mockCandidates).not.toHaveBeenCalled();
+    expect(mockObservationPool).not.toHaveBeenCalled();
   });
 
   it("shows a module-level error with retry when the screen request fails", async () => {

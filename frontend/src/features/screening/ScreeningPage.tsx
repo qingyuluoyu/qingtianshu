@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import type {
   LiZongCandidate,
   LiZongCandidates,
+  LiZongObservationPool,
   LiZongRunLatest,
   ScreenItem,
   ScreenerProfile,
@@ -45,6 +46,11 @@ function formatDate(value: string | null | undefined): string {
 function formatNumber(value: number | null, digits = 2): string {
   if (value === null) return "--";
   return new Intl.NumberFormat("zh-CN", { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value);
+}
+
+function formatCount(value: number | null): string {
+  if (value === null) return "--";
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(value);
 }
 
 /** 后端已是百分数的字段直通加 %，不缩放。 */
@@ -218,7 +224,7 @@ function ModuleCard({ title, meta, pending, error, onRetry, children }: {
 
 const MODES = [
   { key: "screen", label: "通用筛选", hint: "透明规则条件 + 命中候选，解释每条规则与漏斗口径。" },
-  { key: "lizong", label: "李总指标筛选", hint: "李总策略快照候选：通过 / 未通过 / 数据不足 + 命中理由与缺失字段。" },
+  { key: "lizong", label: "李总指标筛选", hint: "全市场快照、严格候选、数据缺口与接近满足观察池。" },
   { key: "backtest", label: "历史复盘 / 回测", hint: "仅展示服务端已完成的回测结果，未完成时显示真实进度与空态。" },
 ] as const;
 
@@ -606,7 +612,42 @@ function ScreenExplainPanel({ screen }: { screen: StockScreen }) {
   );
 }
 
-// ---------- 李总模式：run 摘要 ----------
+// ---------- 李总模式：全市场快照与增量 run ----------
+
+function LiZongSnapshotSummaryCard({ data }: { data: LiZongCandidates }) {
+  const strictCandidates = data.counts.qualified !== null && data.counts.triggered !== null
+    ? data.counts.qualified + data.counts.triggered
+    : null;
+  return (
+    <ModuleCard
+      meta={`数据日期：${formatDate(data.dataMeta.latestAsOfDate)}`}
+      title="李总策略全市场快照"
+    >
+      <div className={styles.chipRow}>
+        <span className={`${styles.badge} ${statusTone(data.dataMeta.universeStatus ?? data.status)}`}>
+          {statusLabel(data.dataMeta.universeStatus ?? data.status)}
+        </span>
+        <span className={`${styles.badge} ${data.dataMeta.deepCheckComplete ? styles.badgeReady : styles.badgePartial}`}>
+          {data.dataMeta.deepCheckComplete ? "深度核验完成" : "深度核验未完成"}
+        </span>
+      </div>
+      <div className={styles.metricGrid} style={{ marginTop: 12 }}>
+        <div className={styles.metric}><span>全市场快照</span><strong>{formatCount(data.dataMeta.universeCount)}</strong><small>已评估 {formatCount(data.dataMeta.evaluatedSymbols)} 只</small></div>
+        <div className={styles.metric}><span>严格候选 / 触发</span><strong>{formatCount(strictCandidates)}</strong><small>通过 {formatCount(data.counts.qualified)} · 触发 {formatCount(data.counts.triggered)}</small></div>
+        <div className={styles.metric}><span>明确未通过</span><strong>{formatCount(data.counts.notQualified)}</strong><small>确定性状态 {ratio(data.dataMeta.decisiveCoverageRatio)}</small></div>
+        <div className={styles.metric}><span>数据不足</span><strong>{formatCount(data.counts.dataIncomplete)}</strong><small>缺市值 {formatCount(data.dataMeta.missingMarketCapCount)} 只</small></div>
+        <div className={styles.metric}><span>深度规则核验</span><strong>{formatCount(data.dataMeta.deepProcessedSymbols)} / {formatCount(data.dataMeta.deepCheckEligibleCount)}</strong><small>剩余 {formatCount(data.dataMeta.deepRemainingSymbols)} 只</small></div>
+        <div className={styles.metric}><span>名单覆盖率</span><strong>{ratio(data.dataMeta.coverageRatio)}</strong><small>名单覆盖不等于深度规则完成率</small></div>
+      </div>
+      {strictCandidates === 0 ? (
+        <p className={styles.helper}>当前严格 9 条候选规则的交集为 0，这是本期真实结果；下方观察池展示接近满足项，但不会冒充正式候选。</p>
+      ) : null}
+      <p className={styles.helper}>
+        市值预筛通过 {formatCount(data.dataMeta.marketCapEligibleCount)} 只；上市历史明确不足 {formatCount(data.dataMeta.historyInsufficientCount)} 只；深度规则已处理比例 {ratio(data.dataMeta.deepProcessingRatio)}。
+      </p>
+    </ModuleCard>
+  );
+}
 
 function LiZongRunSummaryCard({ data, pending, error, onRetry }: {
   data: LiZongRunLatest | null;
@@ -621,7 +662,7 @@ function LiZongRunSummaryCard({ data, pending, error, onRetry }: {
       meta={run ? `数据日期：${formatDate(run.asOfDate)} · 完成：${formatDateTime(run.finishedAt)}` : undefined}
       onRetry={onRetry}
       pending={pending}
-      title="最近筛选 Run"
+      title="最近增量筛选 Run"
     >
       {run ? (
         <>
@@ -632,14 +673,65 @@ function LiZongRunSummaryCard({ data, pending, error, onRetry }: {
             ) : null}
           </div>
           <div className={styles.metricGrid} style={{ marginTop: 12 }}>
-            <div className={styles.metric}><span>评估范围</span><strong>{run.universeCount ?? "--"}</strong><small>预筛后 {run.prefilteredCount ?? "--"} 只</small></div>
-            <div className={styles.metric}><span>覆盖率（原始比例直通）</span><strong>{ratio(run.coverageRatio)}</strong><small>待补齐 {data?.coverage?.remainingSymbols ?? "--"} 只</small></div>
-            <div className={styles.metric}><span>通过 / 触发</span><strong>{run.qualifiedCount ?? "--"} / {run.triggeredCount ?? "--"}</strong><small>数据不足 {run.incompleteCount ?? "--"} 只</small></div>
+            <div className={styles.metric}><span>本批处理</span><strong>{formatCount(run.processedCount)} / {formatCount(run.requestedCount)}</strong><small>{run.runScope ?? "批次类型待确认"}</small></div>
+            <div className={styles.metric}><span>本批通过 / 触发</span><strong>{formatCount(run.qualifiedCount)} / {formatCount(run.triggeredCount)}</strong><small>仅表示本次增量批次</small></div>
+            <div className={styles.metric}><span>本批数据不足</span><strong>{formatCount(run.incompleteCount)}</strong><small>全市场总数见上方快照</small></div>
           </div>
+          <p className={styles.helper}>该 Run 只记录最近一次增量处理，不代表全市场候选总数或全部数据缺口。</p>
           {run.warnings.map((warning) => <p className={styles.helper} key={warning}>注意：{warning}</p>)}
           {run.error ? <p className={styles.helper}>错误：{run.error}</p> : null}
         </>
       ) : <div className={styles.empty}>暂无可用的筛选 Run；本页只读取后台已发布快照，不触发新任务。</div>}
+    </ModuleCard>
+  );
+}
+
+function LiZongObservationPoolCard({ data, pending, error, onRetry }: {
+  data: LiZongObservationPool | null;
+  pending: boolean;
+  error: boolean;
+  onRetry: () => void;
+}) {
+  const total = data?.counts.near8Of9 !== null && data?.counts.near8Of9 !== undefined
+    && data?.counts.watch6To7Of9 !== null && data?.counts.watch6To7Of9 !== undefined
+    ? data.counts.near8Of9 + data.counts.watch6To7Of9
+    : null;
+  const visible = data?.items.slice(0, 20) ?? [];
+  return (
+    <ModuleCard
+      error={error}
+      meta={data ? `数据日期：${formatDate(data.asOfDate)} · 共 ${formatCount(total)} 只` : undefined}
+      onRetry={onRetry}
+      pending={pending}
+      title="接近满足研究观察池（非候选）"
+    >
+      {data && visible.length > 0 ? (
+        <>
+          <div className={styles.chipRow}>
+            <span className={`${styles.badge} ${styles.badgePartial}`}>8 / 9 接近满足 {formatCount(data.counts.near8Of9)}</span>
+            <span className={`${styles.badge} ${styles.badgeUnavailable}`}>6–7 / 9 研究观察 {formatCount(data.counts.watch6To7Of9)}</span>
+            <span className={styles.meta}>完整核验状态 {formatCount(data.completeRuleStates)} 只</span>
+          </div>
+          <div className={styles.tableWrap} style={{ marginTop: 12 }}>
+            <table className={styles.table}>
+              <thead><tr><th>代码</th><th>名称</th><th>观察层级</th><th>通过规则</th><th>未通过规则</th></tr></thead>
+              <tbody>
+                {visible.map((item) => (
+                  <tr key={item.symbol}>
+                    <td className={styles.symbolCell}><strong>{item.symbol}</strong><small>{item.market ?? "市场待确认"}</small></td>
+                    <td className={styles.symbolCell}><strong>{item.name ?? item.symbol}</strong><small>{item.industry ?? "行业待确认"}</small></td>
+                    <td><span className={`${styles.badge} ${item.observationBand === "near_8_of_9" ? styles.badgePartial : styles.badgeUnavailable}`}>{item.observationBand === "near_8_of_9" ? "接近满足" : "研究观察"}</span></td>
+                    <td>{formatCount(item.candidateRulePassCount)} / {formatCount(item.candidateRuleTotal)}</td>
+                    <td>{item.failedCandidateRuleIds.length > 0 ? item.failedCandidateRuleIds.join("、") : "--"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className={styles.helper}>按通过规则数排序展示前 {visible.length} 只；这些股票没有通过严格 9 条交集，不属于候选或触发池。</p>
+          {data.boundary ? <p className={styles.boundaryNote}>{data.boundary}</p> : null}
+        </>
+      ) : <div className={styles.empty}>当前没有完成全部规则核验的接近满足项。</div>}
     </ModuleCard>
   );
 }
@@ -1022,6 +1114,7 @@ export function ScreeningPage({ authenticated }: Props) {
 
   // ----- 李总模式 -----
   const liZongCandidatesQuery = useQuery({ ...screeningQueries.liZongCandidates(liZongStatus), enabled: authenticated && mode === "lizong" });
+  const liZongObservationQuery = useQuery({ ...screeningQueries.liZongObservationPool(), enabled: authenticated && mode === "lizong" });
   const liZongRunQuery = useQuery({ ...screeningQueries.liZongRunLatest(), enabled: authenticated && mode === "lizong" });
   const liZongData = liZongCandidatesQuery.data ?? null;
 
@@ -1178,6 +1271,7 @@ export function ScreeningPage({ authenticated }: Props) {
 
       {mode === "lizong" ? (
         <>
+          {liZongData ? <LiZongSnapshotSummaryCard data={liZongData} /> : null}
           <LiZongRunSummaryCard
             data={liZongRunQuery.data ?? null}
             error={liZongRunQuery.isError}
@@ -1217,7 +1311,7 @@ export function ScreeningPage({ authenticated }: Props) {
                 <div className={styles.card}>
                   <div className={styles.empty}>
                     <span>该状态下当前没有候选记录。</span>
-                    <span>计数来自服务端快照统计，为空是真实状态，不用示例数据填充。</span>
+                    <span>计数来自服务端快照统计，为空是真实状态；可继续查看下方非候选观察池。</span>
                   </div>
                   {liZongData.boundary ? <p className={styles.boundaryNote}>{liZongData.boundary}</p> : null}
                 </div>
@@ -1232,7 +1326,7 @@ export function ScreeningPage({ authenticated }: Props) {
                       />
                       <p className={styles.helper}>
                         快照覆盖 {liZongData.dataMeta.universeCount ?? "--"} 只（覆盖率 {ratio(liZongData.dataMeta.coverageRatio)}）；
-                        列表为服务端 status 过滤结果（上限 200 条），不做前端逐股补全。
+                        列表为服务端 status 过滤结果（上限 200 条）；“全部”优先显示触发、通过和数据不足项，再显示未通过项。
                       </p>
                       {liZongData.boundary ? <p className={styles.boundaryNote}>{liZongData.boundary}</p> : null}
                     </ModuleCard>
@@ -1256,6 +1350,12 @@ export function ScreeningPage({ authenticated }: Props) {
               )}
             </>
           ) : null}
+          <LiZongObservationPoolCard
+            data={liZongObservationQuery.data ?? null}
+            error={liZongObservationQuery.isError}
+            onRetry={() => void liZongObservationQuery.refetch()}
+            pending={liZongObservationQuery.isPending}
+          />
         </>
       ) : null}
 

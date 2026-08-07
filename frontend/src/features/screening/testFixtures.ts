@@ -1,11 +1,13 @@
 import {
   parseLiZongBacktest,
   parseLiZongCandidates,
+  parseLiZongObservationPool,
   parseLiZongRunLatest,
   parseScreenerProfiles,
   parseStockScreen,
   type LiZongBacktest,
   type LiZongCandidates,
+  type LiZongObservationPool,
   type LiZongRunLatest,
   type ScreenerProfiles,
   type StockScreen,
@@ -213,10 +215,26 @@ export function liZongCandidatesPayload() {
       ],
     },
     data_meta: {
+      universe_status: "stable",
       latest_as_of_date: "2026-08-05",
+      evaluated_symbols: 5374,
       universe_count: 5537,
+      market_cap_eligible_count: 1265,
+      market_cap_rejected_count: 4267,
+      missing_market_cap_count: 5,
+      deep_check_eligible_count: 1102,
+      history_insufficient_count: 48,
+      history_unknown_count: 150,
+      deep_processed_symbols: 937,
+      deep_remaining_symbols: 165,
+      deep_processing_ratio: 0.850272,
+      deep_decisive_symbols: 930,
+      deep_data_incomplete_symbols: 7,
+      decisive_status_count: 5197,
+      decisive_coverage_ratio: 0.938595,
       coverage_ratio: 0.970562,
       full_market_coverage: false,
+      deep_check_complete: false,
       remaining_symbols: 163,
     },
     items: [
@@ -308,6 +326,48 @@ export function liZongCandidatesPayload() {
   };
 }
 
+export function liZongObservationPoolPayload() {
+  const candidates = liZongCandidatesPayload().items;
+  return {
+    strategy: { strategy_id: "li_zong", name: "李总策略" },
+    status: "ready",
+    items: [
+      {
+        ...candidates[0],
+        symbol: "603268.SH",
+        internal_symbol: "603268.SS",
+        name: "松发股份",
+        industry: "陶瓷",
+        observation_band: "near_8_of_9",
+        candidate_rule_pass_count: 8,
+        candidate_rule_total: 9,
+        passed_candidate_rule_ids: ["LZ-F-01", "LZ-C-01"],
+        failed_candidate_rule_ids: ["LZ-F-02"],
+        is_strict_candidate: false,
+      },
+      {
+        ...candidates[1],
+        symbol: "000603.SZ",
+        internal_symbol: "000603.SZ",
+        name: "盛达资源",
+        industry: "小金属",
+        observation_band: "watch_6_7_of_9",
+        candidate_rule_pass_count: 7,
+        candidate_rule_total: 9,
+        passed_candidate_rule_ids: ["LZ-F-01"],
+        failed_candidate_rule_ids: ["LZ-F-02", "LZ-C-01"],
+        is_strict_candidate: false,
+      },
+    ],
+    observation_counts: { near_8_of_9: 1, watch_6_7_of_9: 159 },
+    data_meta: {
+      latest_as_of_date: "2026-08-05",
+      complete_observation_rule_states: 1208,
+    },
+    boundary: "观察池不是候选，严格9条候选规则没有放宽。",
+  };
+}
+
 export function liZongRunLatestPayload() {
   return {
     strategy_id: "li_zong",
@@ -319,6 +379,7 @@ export function liZongRunLatestPayload() {
       universe_count: 5537,
       prefiltered_count: 1265,
       coverage_ratio: 0.970562,
+      requested_count: 10,
       processed_count: 10,
       qualified_count: 0,
       triggered_count: 0,
@@ -411,5 +472,6 @@ export function liZongBacktestPayload() {
 export const parsedProfiles = (): ScreenerProfiles => parseScreenerProfiles(profilesPayload());
 export const parsedScreen = (): StockScreen => parseStockScreen(screenPayload());
 export const parsedLiZongCandidates = (): LiZongCandidates => parseLiZongCandidates(liZongCandidatesPayload());
+export const parsedLiZongObservationPool = (): LiZongObservationPool => parseLiZongObservationPool(liZongObservationPoolPayload());
 export const parsedLiZongRunLatest = (): LiZongRunLatest => parseLiZongRunLatest(liZongRunLatestPayload());
 export const parsedLiZongBacktest = (): LiZongBacktest => parseLiZongBacktest(liZongBacktestPayload());

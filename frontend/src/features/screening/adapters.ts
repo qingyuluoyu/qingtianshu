@@ -402,10 +402,26 @@ export type LiZongCandidates = {
     steps: LiZongFunnelStep[];
   } | null;
   dataMeta: {
+    universeStatus: string | null;
     latestAsOfDate: string | null;
+    evaluatedSymbols: number | null;
     universeCount: number | null;
+    marketCapEligibleCount: number | null;
+    marketCapRejectedCount: number | null;
+    missingMarketCapCount: number | null;
+    deepCheckEligibleCount: number | null;
+    historyInsufficientCount: number | null;
+    historyUnknownCount: number | null;
+    deepProcessedSymbols: number | null;
+    deepRemainingSymbols: number | null;
+    deepProcessingRatio: number | null;
+    deepDecisiveSymbols: number | null;
+    deepDataIncompleteSymbols: number | null;
+    decisiveStatusCount: number | null;
+    decisiveCoverageRatio: number | null;
     coverageRatio: number | null;
     fullMarketCoverage: boolean | null;
+    deepCheckComplete: boolean | null;
     remainingSymbols: number | null;
   };
   items: LiZongCandidate[];
@@ -500,15 +516,97 @@ export function parseLiZongCandidates(value: unknown): LiZongCandidates {
       }),
     },
     dataMeta: {
+      universeStatus: optionalString(dataMeta?.universe_status),
       latestAsOfDate: optionalString(dataMeta?.latest_as_of_date),
+      evaluatedSymbols: optionalNumber(dataMeta?.evaluated_symbols),
       universeCount: optionalNumber(dataMeta?.universe_count),
+      marketCapEligibleCount: optionalNumber(dataMeta?.market_cap_eligible_count),
+      marketCapRejectedCount: optionalNumber(dataMeta?.market_cap_rejected_count),
+      missingMarketCapCount: optionalNumber(dataMeta?.missing_market_cap_count),
+      deepCheckEligibleCount: optionalNumber(dataMeta?.deep_check_eligible_count),
+      historyInsufficientCount: optionalNumber(dataMeta?.history_insufficient_count),
+      historyUnknownCount: optionalNumber(dataMeta?.history_unknown_count),
+      deepProcessedSymbols: optionalNumber(dataMeta?.deep_processed_symbols),
+      deepRemainingSymbols: optionalNumber(dataMeta?.deep_remaining_symbols),
+      deepProcessingRatio: optionalNumber(dataMeta?.deep_processing_ratio),
+      deepDecisiveSymbols: optionalNumber(dataMeta?.deep_decisive_symbols),
+      deepDataIncompleteSymbols: optionalNumber(dataMeta?.deep_data_incomplete_symbols),
+      decisiveStatusCount: optionalNumber(dataMeta?.decisive_status_count),
+      decisiveCoverageRatio: optionalNumber(dataMeta?.decisive_coverage_ratio),
       coverageRatio: optionalNumber(dataMeta?.coverage_ratio),
       fullMarketCoverage: optionalBoolean(dataMeta?.full_market_coverage),
+      deepCheckComplete: optionalBoolean(dataMeta?.deep_check_complete),
       remainingSymbols: optionalNumber(dataMeta?.remaining_symbols),
     },
     items: list(root.items).flatMap((raw) => {
       const item = parseLiZongCandidate(raw);
       return item ? [item] : [];
+    }),
+    boundary: optionalString(root.boundary),
+  };
+}
+
+// ---------- 李总策略观察池（GET /v1/stock-strategies/li-zong/observation-pool） ----------
+
+export type LiZongObservationBand = "near_8_of_9" | "watch_6_7_of_9";
+
+export type LiZongObservation = LiZongCandidate & {
+  observationBand: LiZongObservationBand | null;
+  candidateRulePassCount: number | null;
+  candidateRuleTotal: number | null;
+  passedCandidateRuleIds: string[];
+  failedCandidateRuleIds: string[];
+  isStrictCandidate: boolean | null;
+};
+
+export type LiZongObservationPool = {
+  status: string;
+  asOfDate: string | null;
+  band: LiZongObservationBand | null;
+  counts: {
+    near8Of9: number | null;
+    watch6To7Of9: number | null;
+  };
+  completeRuleStates: number | null;
+  items: LiZongObservation[];
+  boundary: string | null;
+};
+
+export function parseLiZongObservationPool(value: unknown): LiZongObservationPool {
+  const root = record(value);
+  const strategy = record(root.strategy, "strategy");
+  if (strategy.strategy_id !== "li_zong") {
+    throw new ContractError("strategy_id 不是 li_zong");
+  }
+  const counts = optionalRecord(root.observation_counts) ?? optionalRecord(root.counts);
+  const dataMeta = optionalRecord(root.data_meta);
+  const rawBand = optionalString(root.band);
+  const band = rawBand === "near_8_of_9" || rawBand === "watch_6_7_of_9" ? rawBand : null;
+  return {
+    status: optionalString(root.status) ?? "unavailable",
+    asOfDate: optionalString(dataMeta?.latest_as_of_date)
+      ?? optionalString(root.as_of_date),
+    band,
+    counts: {
+      near8Of9: optionalNumber(counts?.near_8_of_9),
+      watch6To7Of9: optionalNumber(counts?.watch_6_7_of_9),
+    },
+    completeRuleStates: optionalNumber(dataMeta?.complete_observation_rule_states)
+      ?? optionalNumber(root.complete_rule_states),
+    items: list(root.items).flatMap((raw) => {
+      const itemRoot = optionalRecord(raw);
+      const candidate = parseLiZongCandidate(raw);
+      if (!itemRoot || !candidate) return [];
+      const itemBand = optionalString(itemRoot.observation_band);
+      return [{
+        ...candidate,
+        observationBand: itemBand === "near_8_of_9" || itemBand === "watch_6_7_of_9" ? itemBand : null,
+        candidateRulePassCount: optionalNumber(itemRoot.candidate_rule_pass_count),
+        candidateRuleTotal: optionalNumber(itemRoot.candidate_rule_total),
+        passedCandidateRuleIds: strings(itemRoot.passed_candidate_rule_ids),
+        failedCandidateRuleIds: strings(itemRoot.failed_candidate_rule_ids),
+        isStrictCandidate: optionalBoolean(itemRoot.is_strict_candidate),
+      }];
     }),
     boundary: optionalString(root.boundary),
   };
@@ -525,6 +623,7 @@ export type LiZongRunLatest = {
     universeCount: number | null;
     prefilteredCount: number | null;
     coverageRatio: number | null;
+    requestedCount: number | null;
     processedCount: number | null;
     qualifiedCount: number | null;
     triggeredCount: number | null;
@@ -562,6 +661,7 @@ export function parseLiZongRunLatest(value: unknown): LiZongRunLatest {
       universeCount: optionalNumber(run.universe_count),
       prefilteredCount: optionalNumber(run.prefiltered_count),
       coverageRatio: optionalNumber(run.coverage_ratio),
+      requestedCount: optionalNumber(run.requested_count),
       processedCount: optionalNumber(run.processed_count),
       qualifiedCount: optionalNumber(run.qualified_count),
       triggeredCount: optionalNumber(run.triggered_count),
