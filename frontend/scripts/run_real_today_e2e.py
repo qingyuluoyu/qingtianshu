@@ -29,6 +29,22 @@ def playwright_executable(platform_name: str | None = None) -> Path:
     return FRONTEND / "node_modules" / ".bin" / executable
 
 
+def npm_executable(platform_name: str | None = None) -> str:
+    return "npm.cmd" if (platform_name or os.name) == "nt" else "npm"
+
+
+def playwright_command(*, production_dist: bool, spec: str | None = None) -> list[str]:
+    config = (
+        "playwright.production.config.ts"
+        if production_dist
+        else "playwright.real.config.ts"
+    )
+    command = [str(playwright_executable()), "test", f"--config={config}"]
+    if spec:
+        command.append(spec)
+    return command
+
+
 def test_database_url() -> str:
     configured = os.environ.get("QINGSHU_TEST_POSTGRES_URL", "").strip()
     if not configured:
@@ -137,10 +153,24 @@ def main() -> int:
         "--spec",
         help="Optional Playwright spec path, for example e2e-real/advisor-real.spec.ts",
     )
+    parser.add_argument(
+        "--production-dist",
+        action="store_true",
+        help="Build the React production bundle and test it through FastAPI instead of Vite.",
+    )
     args = parser.parse_args()
     base_url = test_database_url()
     market_snapshot_url = market_snapshot_database_url(base_url)
     validate_market_snapshot_database(market_snapshot_url)
+    if args.production_dist:
+        subprocess.run(
+            [npm_executable(), "run", "build"],
+            cwd=FRONTEND,
+            env=os.environ.copy(),
+            check=True,
+        )
+        if not (FRONTEND / "dist" / "index.html").is_file():
+            raise RuntimeError("React production build did not produce frontend/dist/index.html")
     schema = f"e2e_today_{uuid4().hex}"
     runtime_dir = Path(tempfile.mkdtemp(prefix="qingshu-today-real-e2e-"))
     log_path = runtime_dir / "fastapi.log"
@@ -163,9 +193,19 @@ def main() -> int:
             "HERMES_ENABLED": "false",
             "VITE_PROXY_TARGET": f"http://127.0.0.1:{BACKEND_PORT}",
         })
+        if args.production_dist:
+            env.update({
+                "QINGSHU_FRONTEND_DIST_DIR": str(FRONTEND / "dist"),
+                "SESSION_COOKIE_SECURE": "false",
+                "QINGSHU_PRODUCTION_E2E_BASE_URL": f"http://127.0.0.1:{BACKEND_PORT}",
+                "QINGSHU_PRODUCTION_E2E_ACCOUNT": f"local-production-{uuid4().hex[:10]}",
+                "QINGSHU_PRODUCTION_E2E_PHONE": "13900000001",
+                "QINGSHU_PRODUCTION_E2E_PASSWORD": f"Local-Production-{uuid4().hex}",
+            })
         print(
             f"[real-e2e] database={EXPECTED_DATABASE}; isolated_schema={schema}; "
-            f"market_snapshot_database={urlsplit(market_snapshot_url).path.lstrip('/')}"
+            f"market_snapshot_database={urlsplit(market_snapshot_url).path.lstrip('/')}; "
+            f"frontend_mode={'production-dist' if args.production_dist else 'vite'}"
         )
         with log_path.open("wb") as backend_log:
             backend = subprocess.Popen(
@@ -176,12 +216,11 @@ def main() -> int:
                 stderr=subprocess.STDOUT,
             )
             wait_for_backend(backend, log_path)
-            playwright = playwright_executable()
-            command = [str(playwright), "test", "--config=playwright.real.config.ts"]
-            if args.spec:
-                command.append(args.spec)
             result = subprocess.run(
-                command,
+                playwright_command(
+                    production_dist=args.production_dist,
+                    spec=args.spec,
+                ),
                 cwd=FRONTEND,
                 env=env,
                 check=False,

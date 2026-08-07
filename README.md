@@ -385,6 +385,20 @@ node capture_screenshots_v3.mjs
 An anonymous result means the frontend proxy target, backend process, or
 session setup is wrong; it is not acceptable evidence of an empty Today page.
 
+在没有 Docker 的开发机上，可先运行同源生产包验收。该命令会构建当前 React
+`dist`，由真实 FastAPI 直接托管静态文件，并使用隔离 PostgreSQL Schema、只读
+行情快照库和 Chromium 验证注册、Today、六个正式页面、刷新恢复、SSE、390px
+横向溢出和静态资源响应：
+
+```bash
+cd frontend
+export QINGSHU_TEST_POSTGRES_URL='postgresql://user:***@db-host:5432/qingshu_auth_test'
+npm run test:e2e:production-local
+```
+
+这项检查证明生产构建和同源 FastAPI 托管链路，但不能替代
+`npm run test:e2e:docker` 的容器镜像、Linux 路径和运行时依赖验收。
+
 生产 Worker 会写入持久化注册表。运维端可看到进程、队列、最近心跳、当前任务、
 累计领取/成功/失败数；心跳过期会标记为离线。队列指标同时提供 ready/delayed、
 重试中任务、最老待执行任务延迟、过期租约、最近 24 小时成功/失败与失败率，以及

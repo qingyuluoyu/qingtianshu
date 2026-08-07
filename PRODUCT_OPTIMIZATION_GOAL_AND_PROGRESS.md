@@ -364,3 +364,4 @@
 - 真实 runner 继续使用 `HERMES_ENABLED=false`：本轮证明真实账户、数据库和研究聚合链路，并验证 preview Run 不冒充正式 Run；没有形成新的 Hermes/DeepSeek 对话质量结论。新账户没有研究报告锚点，因此真实结果模块按合同显示“暂无研究结果”。
 - 六个正式 React 页面至此都已具备真实产品实现，但仍不能等同于生产发布完成：Docker 生产 E2E、商业数据 SLA、备份恢复、长期队列和真实 Hermes 质量仍是发布门槛。
 - 生产 E2E 脚本已补齐六页桌面路由与 390px 根级溢出检查；当前机器没有 `docker` 命令，因此这项容器内验收仍待具备 Docker 的发布环境执行。
+- 新增 `npm run test:e2e:production-local`：先构建当前 React production bundle，再由真实 FastAPI 同源托管，并使用隔离 PostgreSQL Schema、只读 `qingshu_prod` 行情库和 Chromium 执行生产 E2E。当前实跑 `1/1` 通过，覆盖注册、Today、SSE、六页桌面与 390px、刷新恢复、静态资源安全响应和 legacy 兼容；临时账户与 Schema 已清理。该证据高于 Vite 开发服务器验收，但仍不替代 Docker 镜像门禁。

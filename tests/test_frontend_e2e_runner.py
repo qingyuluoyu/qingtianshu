@@ -24,6 +24,23 @@ def test_playwright_executable_is_cross_platform():
 
     assert runner.playwright_executable("posix").name == "playwright"
     assert runner.playwright_executable("nt").name == "playwright.cmd"
+    assert runner.npm_executable("posix") == "npm"
+    assert runner.npm_executable("nt") == "npm.cmd"
+
+
+def test_runner_selects_vite_or_production_playwright_config():
+    runner = _load_runner()
+
+    assert runner.playwright_command(production_dist=False)[-1] == (
+        "--config=playwright.real.config.ts"
+    )
+    assert runner.playwright_command(production_dist=True)[-1] == (
+        "--config=playwright.production.config.ts"
+    )
+    assert runner.playwright_command(
+        production_dist=True,
+        spec="e2e-production/production.spec.ts",
+    )[-1] == "e2e-production/production.spec.ts"
 
 
 def test_real_e2e_rejects_file_database_configuration(monkeypatch):

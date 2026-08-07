@@ -97,16 +97,20 @@ test("Docker production authentication, Today, routing, SSE and legacy chain", a
   expect(overview.headers()["content-type"]).toContain("application/json");
   const overviewBody = await overview.json() as {
     generated_at: string;
-    summary: { market_date: string; headline: string };
+    summary: { market_date: string | null; headline: string | null };
   };
   await expect(page.getByTestId("today-generated-at")).toHaveAttribute(
     "data-generated-at",
     overviewBody.generated_at,
   );
-  await expect(page.getByTestId("today-market-date")).toHaveText(overviewBody.summary.market_date);
-  await expect(page.getByText(overviewBody.summary.headline, { exact: true })).toBeVisible();
+  await expect(page.getByTestId("today-market-date")).toHaveText(
+    overviewBody.summary.market_date ?? "市场日期读取中",
+  );
+  if (overviewBody.summary.headline) {
+    await expect(page.getByText(overviewBody.summary.headline, { exact: true })).toBeVisible();
+  }
   await expect(page.getByRole("region", { name: "主要指数" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "数据状态" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "数据健康状态" })).toBeVisible();
 
   const events = await firstEventsResponse;
   expect(events.status()).toBe(200);
