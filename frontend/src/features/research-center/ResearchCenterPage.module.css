@@ -77,6 +77,10 @@
 .writeButton:disabled { cursor: wait; opacity: .6; }
 .writeButtonSecondary { border: 1px solid var(--border); color: var(--ink-muted); background: var(--surface); }
 .writeButtonSecondary:hover { border-color: #84adff; color: var(--brand); background: var(--surface); }
+.draftEditor { display: grid; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid #d9e2ef; border-radius: 9px; background: #f8faff; }
+.draftEditor label { display: grid; gap: 4px; color: var(--ink-muted); font-size: 11px; font-weight: 600; }
+.draftEditor textarea, .draftEditor input { width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--border); border-radius: 7px; color: var(--ink); background: var(--surface); font: inherit; font-size: 12px; }
+.draftEditor textarea { min-height: 58px; resize: vertical; }
 .checkList { margin: 6px 0 0; padding-left: 16px; color: #475467; font-size: 11px; line-height: 1.7; }
 .footer { padding: 3px 6px 16px; color: #667085; font-size: 11px; line-height: 1.6; text-align: center; }
 @media (max-width: 1279px) { .workspace { grid-template-columns: 220px minmax(0, 1fr); } .actionsColumn { grid-column: 1 / -1; } }

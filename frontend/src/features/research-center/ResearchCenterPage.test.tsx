@@ -15,6 +15,8 @@ import {
   generateTradeReviewDraft,
   confirmWriteback,
   rejectWriteback,
+  updateTradeReviewDraft,
+  createTradeReviewFollowup,
   ResearchCenterApiError,
 } from "./api";
 import {
@@ -47,6 +49,8 @@ vi.mock("./api", async (importOriginal) => {
     generateTradeReviewDraft: vi.fn(),
     confirmWriteback: vi.fn(),
     rejectWriteback: vi.fn(),
+    updateTradeReviewDraft: vi.fn(),
+    createTradeReviewFollowup: vi.fn(),
   };
 });
 
@@ -62,6 +66,8 @@ const mockArchive = vi.mocked(archiveTradeReview);
 const mockGenerateDraft = vi.mocked(generateTradeReviewDraft);
 const mockConfirmWriteback = vi.mocked(confirmWriteback);
 const mockRejectWriteback = vi.mocked(rejectWriteback);
+const mockUpdateDraft = vi.mocked(updateTradeReviewDraft);
+const mockCreateFollowup = vi.mocked(createTradeReviewFollowup);
 
 function renderPage(entry = "/research-center", authenticated = true) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -89,6 +95,8 @@ beforeEach(() => {
   mockGenerateDraft.mockResolvedValue({});
   mockConfirmWriteback.mockResolvedValue({});
   mockRejectWriteback.mockResolvedValue({});
+  mockUpdateDraft.mockResolvedValue({});
+  mockCreateFollowup.mockResolvedValue({});
 });
 
 afterEach(() => {
@@ -240,6 +248,35 @@ describe("ResearchCenterPage", () => {
     expect(await screen.findByText("版本已更新")).toBeInTheDocument();
     expect(mockGetTradeReviews.mock.calls.length).toBeGreaterThan(1);
     expect(mockConfirmWriteback).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves an edited draft with the current base version only after an explicit submit", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByRole("button", { name: "编辑复盘草稿" }));
+    fireEvent.change(screen.getByLabelText("逻辑复盘"), { target: { value: "订单兑现需要继续跟踪。" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
+
+    await waitFor(() => expect(mockUpdateDraft).toHaveBeenCalledWith("review-1", expect.objectContaining({
+      baseVersion: 2,
+      priceResult: "窗口收益 -1.85%。",
+      logicResult: "订单兑现需要继续跟踪。",
+      biasTags: [],
+    })));
+    expect(await screen.findByText(/草稿已保存/)).toBeInTheDocument();
+  });
+
+  it("creates followups only from a confirmed or archived review", async () => {
+    renderPage();
+
+    expect(await screen.findByRole("button", { name: "创建观察任务" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "创建观察任务" }));
+    await waitFor(() => expect(mockCreateFollowup).toHaveBeenCalledWith("review-2", {
+      target: "observation_task",
+      title: null,
+      priority: "normal",
+    }));
+    expect(mockCreateFollowup).not.toHaveBeenCalledWith("review-1", expect.anything());
   });
 
   it("keeps the research workspace scaffold when the user has no tracked stocks", async () => {

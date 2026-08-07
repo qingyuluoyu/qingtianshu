@@ -15,9 +15,11 @@ import {
   archiveTradeReview,
   confirmTradeReview,
   confirmWriteback,
+  createTradeReviewFollowup,
   generateTradeReviewDraft,
   rejectWriteback,
   ResearchCenterApiError,
+  updateTradeReviewDraft,
 } from "./api";
 import { researchCenterQueries, researchCenterQueryKeys } from "./queries";
 import styles from "./ResearchCenterPage.module.css";
@@ -493,15 +495,60 @@ function OutcomeCard({ anchor, name }: { anchor: OutcomeAnchor; name: string | n
 
 type MutationNotice = { kind: "success" | "conflict" | "failed"; text: string } | null;
 
+type ReviewDraftValues = {
+  priceResult: string;
+  logicResult: string;
+  planDeviation: string;
+  biasTags: string;
+  improvementText: string;
+};
+
+function DraftEditor({ review, pending, onCancel, onSave }: {
+  review: TradeReview;
+  pending: boolean;
+  onCancel: () => void;
+  onSave: (values: ReviewDraftValues) => void;
+}) {
+  const version = review.currentVersion;
+  const [values, setValues] = useState<ReviewDraftValues>({
+    priceResult: version?.priceResult ?? "",
+    logicResult: version?.logicResult ?? "",
+    planDeviation: version?.planDeviation ?? "",
+    biasTags: version?.biasTags?.join("、") ?? "",
+    improvementText: version?.improvementText ?? "",
+  });
+  const change = (key: keyof ReviewDraftValues, value: string) => setValues((current) => ({ ...current, [key]: value }));
+
+  return (
+    <form className={styles.draftEditor} onSubmit={(event) => { event.preventDefault(); onSave(values); }}>
+      <label>价格复盘<textarea aria-label="价格复盘" onChange={(event) => change("priceResult", event.target.value)} required value={values.priceResult} /></label>
+      <label>逻辑复盘<textarea aria-label="逻辑复盘" onChange={(event) => change("logicResult", event.target.value)} required value={values.logicResult} /></label>
+      <label>计划偏离<textarea aria-label="计划偏离" onChange={(event) => change("planDeviation", event.target.value)} value={values.planDeviation} /></label>
+      <label>偏差标签（以顿号或逗号分隔）<input aria-label="偏差标签" onChange={(event) => change("biasTags", event.target.value)} value={values.biasTags} /></label>
+      <label>改进建议<textarea aria-label="改进建议" onChange={(event) => change("improvementText", event.target.value)} value={values.improvementText} /></label>
+      <div className={styles.actionRow}>
+        <button className={styles.writeButton} disabled={pending} type="submit">{pending ? "保存中…" : "保存草稿"}</button>
+        <button className={styles.writeButtonSecondary} disabled={pending} onClick={onCancel} type="button">取消编辑</button>
+      </div>
+    </form>
+  );
+}
+
 function TradeReviewCenterSection({
   center,
   pendingId,
   pendingCandidates,
   generationReviewId,
   candidatePendingId,
+  editingReviewId,
+  draftPendingId,
+  followupPendingId,
   onStartGeneration,
   onGenerate,
   onCandidateAction,
+  onStartEditing,
+  onSaveDraft,
+  onCreateFollowup,
   onTransition,
 }: {
   center: TradeReviewCenter;
@@ -509,9 +556,15 @@ function TradeReviewCenterSection({
   pendingCandidates: Array<{ id: string; reviewId: string; logicResult: string | null; planDeviation: string | null; improvementText: string | null; biasTags: string[] }>;
   generationReviewId: string | null;
   candidatePendingId: string | null;
+  editingReviewId: string | null;
+  draftPendingId: string | null;
+  followupPendingId: string | null;
   onStartGeneration: (reviewId: string | null) => void;
   onGenerate: (review: TradeReview, tier: "economy" | "deep") => void;
   onCandidateAction: (candidateId: string, action: "confirm" | "reject") => void;
+  onStartEditing: (reviewId: string | null) => void;
+  onSaveDraft: (review: TradeReview, values: ReviewDraftValues) => void;
+  onCreateFollowup: (review: TradeReview, target: "observation_task" | "thesis_draft") => void;
   onTransition: (review: TradeReview, action: "confirm" | "archive") => void;
 }) {
   if (center.items.length === 0) {
@@ -532,6 +585,8 @@ function TradeReviewCenterSection({
         const rowPending = pendingId === review.id;
         const canConfirm = review.status === "draft" && review.canConfirm === true && versionNo !== null;
         const canArchive = review.status === "confirmed" && versionNo !== null;
+        const canEdit = review.status === "draft" && versionNo !== null;
+        const canCreateFollowup = (review.status === "confirmed" || review.status === "archived") && versionNo !== null;
         const candidate = pendingCandidates.find((item) => item.reviewId === review.id) ?? null;
         const canGenerate = review.status === "ready" && review.canGenerateDraft === true && candidate === null;
         const candidatePending = candidate !== null && candidatePendingId === candidate.id;
@@ -605,6 +660,26 @@ function TradeReviewCenterSection({
                 </div>
               )
             ) : null}
+            {canEdit ? (
+              editingReviewId === review.id ? (
+                <DraftEditor
+                  onCancel={() => onStartEditing(null)}
+                  onSave={(values) => onSaveDraft(review, values)}
+                  pending={draftPendingId === review.id}
+                  review={review}
+                />
+              ) : (
+                <div className={styles.actionRow}>
+                  <button className={styles.writeButtonSecondary} disabled={draftPendingId === review.id} onClick={() => onStartEditing(review.id)} type="button">编辑复盘草稿</button>
+                </div>
+              )
+            ) : null}
+            {canCreateFollowup ? (
+              <div className={styles.actionRow}>
+                <button className={styles.writeButtonSecondary} disabled={followupPendingId === review.id} onClick={() => onCreateFollowup(review, "observation_task")} type="button">创建观察任务</button>
+                <button className={styles.writeButtonSecondary} disabled={followupPendingId === review.id} onClick={() => onCreateFollowup(review, "thesis_draft")} type="button">创建研究草稿</button>
+              </div>
+            ) : null}
             {canConfirm || canArchive ? (
               <div className={styles.actionRow}>
                 {canConfirm ? (
@@ -658,6 +733,7 @@ export function ResearchCenterPage({ authenticated }: Props) {
 
   const [notice, setNotice] = useState<MutationNotice>(null);
   const [generationReviewId, setGenerationReviewId] = useState<string | null>(null);
+  const [editingReviewId, setEditingReviewId] = useState<string | null>(null);
 
   const mutation = useMutation({
     mutationFn: ({ reviewId, baseVersion, action }: { reviewId: string; baseVersion: number; action: "confirm" | "archive" }) =>
@@ -727,6 +803,53 @@ export function ResearchCenterPage({ authenticated }: Props) {
         return;
       }
       setNotice({ kind: "failed", text: `候选操作失败：${error instanceof Error ? error.message : "数据暂时不可用"}。未写入本地变更，请重试。` });
+    },
+  });
+
+  const reviewWriteMutation = useMutation({
+    mutationFn: ({
+      action,
+      review,
+      values,
+      target,
+    }: {
+      action: "saveDraft" | "followup";
+      review: TradeReview;
+      values?: ReviewDraftValues;
+      target?: "observation_task" | "thesis_draft";
+    }) => {
+      const baseVersion = review.currentVersion?.versionNo;
+      if (action === "saveDraft" && values && baseVersion !== null && baseVersion !== undefined) {
+        return updateTradeReviewDraft(review.id, {
+          baseVersion,
+          priceResult: values.priceResult,
+          logicResult: values.logicResult,
+          planDeviation: values.planDeviation.trim() || null,
+          biasTags: values.biasTags.split(/[、，,]/).map((tag) => tag.trim()).filter(Boolean),
+          improvementText: values.improvementText.trim() || null,
+        });
+      }
+      if (action === "followup" && target) {
+        return createTradeReviewFollowup(review.id, { target, title: null, priority: "normal" });
+      }
+      throw new Error("复盘写入参数不完整");
+    },
+    onSuccess: (_data, variables) => {
+      setEditingReviewId(null);
+      setNotice({ kind: "success", text: variables.action === "saveDraft" ? "草稿已保存，确认前仍可继续编辑。" : "后续研究事项已创建。" });
+      void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.tradeReviews() });
+      void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.actions() });
+      void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.changes() });
+      void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.outcomes() });
+    },
+    onError: (error) => {
+      if (error instanceof ResearchCenterApiError && error.status === 409) {
+        setEditingReviewId(null);
+        setNotice({ kind: "conflict", text: error.message });
+        void queryClient.invalidateQueries({ queryKey: researchCenterQueryKeys.tradeReviews() });
+        return;
+      }
+      setNotice({ kind: "failed", text: `复盘写入失败：${error instanceof Error ? error.message : "数据暂时不可用"}。未写入本地变更，请重试。` });
     },
   });
 
@@ -813,6 +936,16 @@ export function ResearchCenterPage({ authenticated }: Props) {
   const handleCandidateAction = (candidateId: string, action: "confirm" | "reject") => {
     setNotice(null);
     candidateMutation.mutate({ action, candidateId });
+  };
+
+  const handleSaveDraft = (review: TradeReview, values: ReviewDraftValues) => {
+    setNotice(null);
+    reviewWriteMutation.mutate({ action: "saveDraft", review, values });
+  };
+
+  const handleCreateFollowup = (review: TradeReview, target: "observation_task" | "thesis_draft") => {
+    setNotice(null);
+    reviewWriteMutation.mutate({ action: "followup", review, target });
   };
 
   if (!authenticated) {
@@ -975,9 +1108,15 @@ export function ResearchCenterPage({ authenticated }: Props) {
                 <TradeReviewCenterSection
                   center={tradeReviews}
                   candidatePendingId={candidateMutation.isPending && candidateMutation.variables?.candidateId ? candidateMutation.variables.candidateId : null}
+                  draftPendingId={reviewWriteMutation.isPending && reviewWriteMutation.variables?.action === "saveDraft" ? reviewWriteMutation.variables.review.id : null}
+                  editingReviewId={editingReviewId}
+                  followupPendingId={reviewWriteMutation.isPending && reviewWriteMutation.variables?.action === "followup" ? reviewWriteMutation.variables.review.id : null}
                   generationReviewId={generationReviewId}
                   onCandidateAction={handleCandidateAction}
+                  onCreateFollowup={handleCreateFollowup}
                   onGenerate={handleGenerate}
+                  onSaveDraft={handleSaveDraft}
+                  onStartEditing={setEditingReviewId}
                   onStartGeneration={setGenerationReviewId}
                   onTransition={handleTransition}
                   pendingCandidates={pendingCandidates}
