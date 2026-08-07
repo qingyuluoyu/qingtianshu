@@ -5,9 +5,30 @@ from pathlib import Path
 import pytest
 
 from scripts.export_openapi import require_test_database_url
+import scripts.export_openapi as openapi_export
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_openapi_export_prioritizes_its_own_repository_for_app_imports():
+    prioritize = getattr(openapi_export, "prioritize_repository_import_path", None)
+    assert callable(prioritize)
+
+    other_worktree = str(ROOT.parent / "other-worktree")
+    search_path = [other_worktree, str(ROOT), str(ROOT / "scripts")]
+    prioritize(search_path)
+
+    assert search_path[0] == str(ROOT)
+    assert search_path.count(str(ROOT)) == 1
+
+
+def test_openapi_export_uses_reviewable_stable_compact_json():
+    serialize = getattr(openapi_export, "serialize_openapi", None)
+    assert callable(serialize)
+    assert serialize({"openapi": "3.1.0", "paths": {}}) == (
+        '{"openapi":"3.1.0","paths":{}}\n'
+    )
 
 
 def test_dockerfile_builds_and_copies_locked_react_bundle():

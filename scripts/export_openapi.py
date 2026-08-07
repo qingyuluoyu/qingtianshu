@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
@@ -13,6 +14,24 @@ from psycopg import sql
 
 
 EXPECTED_DATABASE = "qingshu_auth_test"
+REPOSITORY = Path(__file__).resolve().parents[1]
+
+
+def prioritize_repository_import_path(
+    search_path: list[str] | None = None,
+) -> None:
+    entries = sys.path if search_path is None else search_path
+    repository = str(REPOSITORY)
+    entries[:] = [entry for entry in entries if entry != repository]
+    entries.insert(0, repository)
+
+
+def serialize_openapi(schema: dict[str, object]) -> str:
+    return json.dumps(
+        schema,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ) + "\n"
 
 
 def require_test_database_url(database_url: str) -> str:
@@ -67,6 +86,7 @@ def main() -> int:
     os.environ["BACKGROUND_WORKER_MODE"] = "disabled"
     os.environ["HERMES_ENABLED"] = "false"
     try:
+        prioritize_repository_import_path()
         with tempfile.TemporaryDirectory(prefix="qingshu-openapi-") as runtime:
             os.environ["QINGSHU_DATA_DIR"] = runtime
             os.environ["QINGSHU_WORKSPACE_ROOT"] = str(Path(runtime) / "workspaces")
@@ -76,7 +96,7 @@ def main() -> int:
             output = args.output.resolve()
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(
-                json.dumps(app.openapi(), ensure_ascii=False, indent=2) + "\n",
+                serialize_openapi(app.openapi()),
                 encoding="utf-8",
             )
         return 0

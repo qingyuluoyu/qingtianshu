@@ -106,7 +106,7 @@ test("Docker production authentication, Today, routing, SSE and legacy chain", a
   await expect(page.getByTestId("today-market-date")).toHaveText(overviewBody.summary.market_date);
   await expect(page.getByText(overviewBody.summary.headline, { exact: true })).toBeVisible();
   await expect(page.getByRole("region", { name: "主要指数" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "数据状态" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "数据健康状态" })).toBeVisible();
 
   const events = await firstEventsResponse;
   expect(events.status()).toBe(200);
