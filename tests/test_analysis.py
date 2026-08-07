@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.providers.market import ProviderError
+from app.data_freshness import attach_data_freshness
 from app.services.analysis import (
     _current_quote_snapshot,
     _validated_index_metrics,
@@ -740,6 +741,14 @@ def test_optional_industry_gap_does_not_override_ready_core_evidence():
     assert board["readiness"]["optional_gaps"] == ["行业供需与一致预期尚未接入"]
     assert "直接回答" in board["readiness"]["response_policy"]
 
+def test_unavailable_provider_response_is_not_labeled_fresh():
+    payload = attach_data_freshness(
+        {"status": "unavailable", "is_stale": False},
+        default_granularity="intraday_series",
+    )
+
+    assert payload["data_granularity"] == "intraday_series"
+    assert payload["data_freshness"]["status"] == "unavailable"
 
 
 def test_capital_flow_service_passthrough_and_degradation():

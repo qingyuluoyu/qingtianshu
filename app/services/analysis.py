@@ -1249,9 +1249,12 @@ class MarketAnalysisService:
 
     def hot_sectors(self, limit: int = 20) -> dict[str, Any]:
         try:
-            return self.sector_provider.fetch_hot_sectors(limit=limit)
+            return attach_data_freshness(
+                self.sector_provider.fetch_hot_sectors(limit=limit),
+                default_granularity="realtime_market_snapshot",
+            )
         except ProviderError as exc:
-            return {
+            return attach_data_freshness({
                 "source": "Eastmoney A-share sector ranking",
                 "market_timestamp": None,
                 "fetched_at": utc_now(),
@@ -1260,7 +1263,7 @@ class MarketAnalysisService:
                 "warnings": [str(exc)],
                 "sectors": [],
                 "status": "unavailable",
-            }
+            }, default_granularity="realtime_market_snapshot")
 
     def industry_snapshot(
         self, industry_name: str, market_date: str | None = None
@@ -1342,7 +1345,9 @@ class MarketAnalysisService:
             "金额为亿元人民币（快照存元，/1e8换算）；盘中快照为当日累计值，"
             "缺少成交额或日期的快照跳过，无数据时返回空数组。"
         )
-        return payload
+        return attach_data_freshness(
+            payload, default_granularity="realtime_market_snapshot"
+        )
 
     def _turnover_history(self, limit: int = 21) -> list[dict[str, Any]]:
         items = []
@@ -1386,12 +1391,16 @@ class MarketAnalysisService:
         }
         if self.breadth_provider is None:
             unavailable["warnings"] = ["当前运行环境没有配置A股全市场广度提供器。"]
-            return unavailable
+            return attach_data_freshness(
+                unavailable, default_granularity="realtime_market_snapshot"
+            )
         try:
             payload = self.breadth_provider.fetch_breadth()
         except ProviderError as exc:
             unavailable["warnings"] = [str(exc)]
-            return unavailable
+            return attach_data_freshness(
+                unavailable, default_granularity="realtime_market_snapshot"
+            )
         if payload.get("status") != "available":
             unavailable["market_date"] = payload.get("market_date")
             unavailable["is_stale"] = bool(payload.get("is_stale"))
@@ -1399,14 +1408,16 @@ class MarketAnalysisService:
                 "全市场快照不可用，无法派生异动榜。",
                 *(payload.get("warnings") or []),
             ]
-            return unavailable
+            return attach_data_freshness(
+                unavailable, default_granularity="realtime_market_snapshot"
+            )
         candidates = payload.get("anomaly_candidates")
         warnings = list(payload.get("warnings") or [])
         if not isinstance(candidates, list):
             # 旧缓存快照不含异动候选字段，下次刷新后自动恢复。
             candidates = []
             warnings.append("当前快照未包含异动候选数据，等待下次快照刷新。")
-        return {
+        return attach_data_freshness({
             "status": "available",
             "market_timestamp": payload.get("market_timestamp"),
             "market_date": payload.get("market_date"),
@@ -1414,7 +1425,7 @@ class MarketAnalysisService:
             "items": candidates[: max(1, min(int(limit), 50))],
             "method": method,
             "warnings": warnings,
-        }
+        }, default_granularity="realtime_market_snapshot")
 
     def capital_flow(self) -> dict[str, Any]:
         """大盘资金流向：东财沪深主力净流入分时累计（亿元），降级不抛500。"""
@@ -1436,12 +1447,19 @@ class MarketAnalysisService:
         }
         if self.capital_flow_provider is None:
             unavailable["warnings"] = ["当前运行环境没有配置大盘资金流提供器。"]
-            return unavailable
+            return attach_data_freshness(
+                unavailable, default_granularity="intraday_series"
+            )
         try:
-            return self.capital_flow_provider.fetch_intraday()
+            return attach_data_freshness(
+                self.capital_flow_provider.fetch_intraday(),
+                default_granularity="intraday_series",
+            )
         except ProviderError as exc:
             unavailable["warnings"] = [str(exc)]
-            return unavailable
+            return attach_data_freshness(
+                unavailable, default_granularity="intraday_series"
+            )
 
     def market_brief(self, market_key: str | None = None) -> dict[str, Any]:
         catalog = [INDEX_BY_SYMBOL[symbol] for symbol in CORE_INDEX_SYMBOLS]
