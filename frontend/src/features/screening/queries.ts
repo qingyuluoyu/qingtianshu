@@ -41,7 +41,7 @@ export const screeningQueries = {
   }),
   screen: (params: ScreenParams) => queryOptions({
     queryKey: screeningQueryKeys.screen(params),
-    queryFn: () => runStockScreen(params),
+    queryFn: ({ signal }) => runStockScreen(params, signal),
     // 切换筛选条件时保留上一份结果，避免整表闪骨架。
     placeholderData: (previous) => previous,
     ...stableErrorPolicy,

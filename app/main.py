@@ -1584,7 +1584,10 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except StockScreenerUnavailable as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
+            raise HTTPException(
+                status_code=503,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
 
     @app.get("/v1/data/tushare/stocks/{symbol}/snapshot")
     def get_tushare_symbol_snapshot(symbol: str, request: Request) -> dict[str, Any]:

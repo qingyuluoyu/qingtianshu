@@ -18,6 +18,10 @@ from app.utils import utc_now
 class StockScreenerUnavailable(RuntimeError):
     """Raised when the deterministic screening dataset cannot be built."""
 
+    def __init__(self, message: str, *, code: str = "snapshot_not_ready") -> None:
+        super().__init__(message)
+        self.code = code
+
 
 PROFILE_DEFINITIONS: dict[str, dict[str, Any]] = {
     "quality": {
@@ -583,47 +587,35 @@ class StockScreenerService:
     def _load_snapshot(
         self, *, force_refresh: bool
     ) -> tuple[pd.DataFrame, dict[str, Any]]:
+        # The public screening endpoint is intentionally read-only.  A caller
+        # cannot use force_refresh to turn one browser request into a full
+        # market TeaJoin scan; the durable background job owns publication.
+        del force_refresh
         now_monotonic = time.monotonic()
         with self._lock:
             if (
-                not force_refresh
-                and self._snapshot is not None
+                self._snapshot is not None
                 and now_monotonic - self._snapshot[0] < self.snapshot_ttl_seconds
             ):
                 cached_frame = self._snapshot[1].copy()
                 cached_meta = dict(self._snapshot[2])
                 cached_ratio = self._market_coverage_ratio(cached_frame, cached_meta)
-                if not (
-                    self.client is not None
-                    and cached_meta.get("source_mode") == "persisted"
-                    and cached_ratio < self.minimum_market_coverage_ratio
-                ):
+                if cached_ratio >= self.minimum_market_coverage_ratio:
                     return cached_frame, {
                         **cached_meta,
                         "cache_hit": True,
                     }
 
         persisted_error: Exception | None = None
-        persisted_snapshot: tuple[pd.DataFrame, dict[str, Any]] | None = None
-        if self.database is not None and not force_refresh:
+        if self.database is not None:
             try:
                 frame, meta = self._build_persisted_snapshot()
             except (ValueError, KeyError, TypeError) as exc:
                 persisted_error = exc
             else:
                 if not frame.empty:
-                    persisted_snapshot = (frame.copy(), dict(meta))
                     persisted_ratio = self._market_coverage_ratio(frame, meta)
-                    if (
-                        self.client is None
-                        or persisted_ratio >= self.minimum_market_coverage_ratio
-                    ):
-                        if persisted_ratio < self.minimum_market_coverage_ratio:
-                            meta = {
-                                **meta,
-                                "coverage_status": "constrained",
-                                "market_snapshot_representative": False,
-                            }
+                    if persisted_ratio >= self.minimum_market_coverage_ratio:
                         with self._lock:
                             self._snapshot = (
                                 now_monotonic,
@@ -632,37 +624,24 @@ class StockScreenerService:
                             )
                         return frame, {**meta, "cache_hit": False}
 
-        live_error: Exception | None = None
-        if self.client is not None:
+        # A database-less service is only used by deterministic unit callers.
+        # The FastAPI application always supplies PostgreSQL, so a browser
+        # request can never reach this ephemeral live-build path.
+        if self.database is None and self.client is not None:
             try:
                 frame, meta = self._build_snapshot()
             except (TushareProviderError, ValueError, KeyError) as exc:
-                live_error = exc
-            else:
-                if frame.empty:
-                    live_error = ValueError("实时市场截面为空")
-        if self.client is None or live_error is not None:
-            if persisted_snapshot is not None:
-                frame, meta = persisted_snapshot
-                meta = {
-                    **meta,
-                    "coverage_status": "constrained",
-                    "market_snapshot_representative": False,
-                    "live_refresh_attempted": self.client is not None,
-                    "live_refresh_succeeded": False,
-                }
-            else:
-                try:
-                    frame, meta = self._build_persisted_snapshot()
-                except (ValueError, KeyError, TypeError) as exc:
-                    raise StockScreenerUnavailable(
-                        "选股数据正在准备中，请稍后重试"
-                    ) from (live_error or persisted_error or exc)
-        if frame.empty:
-            raise StockScreenerUnavailable("当前没有可用于筛选的完整市场数据")
-        with self._lock:
-            self._snapshot = (now_monotonic, frame.copy(), dict(meta))
-        return frame, {**meta, "cache_hit": False}
+                raise StockScreenerUnavailable(
+                    "选股市场快照尚未准备完成，请等待后台数据发布后重试。"
+                ) from exc
+            if not frame.empty:
+                with self._lock:
+                    self._snapshot = (now_monotonic, frame.copy(), dict(meta))
+                return frame, {**meta, "cache_hit": False}
+
+        raise StockScreenerUnavailable(
+            "选股市场快照尚未准备完成，请等待后台数据发布后重试。"
+        ) from persisted_error
 
     @staticmethod
     def _market_coverage_ratio(frame: pd.DataFrame, meta: Mapping[str, Any]) -> float:

@@ -14,10 +14,22 @@ import {
 } from "./adapters";
 
 export class ScreeningApiError extends Error {
-  constructor(public readonly status: number, message: string) {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly code: string | null = null,
+  ) {
     super(message);
     this.name = "ScreeningApiError";
   }
+}
+
+function errorCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) return null;
+  const detail = (error as { detail?: unknown }).detail;
+  if (typeof detail !== "object" || detail === null) return null;
+  const code = (detail as { code?: unknown }).code;
+  return typeof code === "string" && code.length > 0 ? code : null;
 }
 
 function unwrap<T>(
@@ -27,7 +39,12 @@ function unwrap<T>(
   parse: (value: unknown) => T,
 ): T {
   if (!response.ok || error || data === undefined) {
-    throw new ScreeningApiError(response.status, response.status === 401 ? "会话已失效" : "数据暂时不可用");
+    const code = errorCode(error);
+    throw new ScreeningApiError(
+      response.status,
+      response.status === 401 ? "会话已失效" : "数据暂时不可用",
+      code,
+    );
   }
   return parse(data);
 }
@@ -54,7 +71,10 @@ export async function getScreenerProfiles(): Promise<ScreenerProfiles> {
  * POST /me/stock-screener 是契约定义的筛选查询入口（读语义，force_refresh 固定 false，
  * 不触发数据重建）；本切片没有任何其他写操作。
  */
-export async function runStockScreen(params: ScreenParams): Promise<StockScreen> {
+export async function runStockScreen(
+  params: ScreenParams,
+  signal?: AbortSignal,
+): Promise<StockScreen> {
   const body: ScreenRequestBody = {
     profile: params.profile as ScreenRequestBody["profile"],
     market: params.market as ScreenRequestBody["market"],
@@ -62,7 +82,7 @@ export async function runStockScreen(params: ScreenParams): Promise<StockScreen>
     force_refresh: false,
     filters: params.filters as ScreenFiltersBody,
   };
-  const { data, error, response } = await api.POST("/me/stock-screener", { body });
+  const { data, error, response } = await api.POST("/me/stock-screener", { body, signal });
   return unwrap(response, data, error, parseStockScreen);
 }
 
