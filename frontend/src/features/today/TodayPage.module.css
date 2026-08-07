@@ -1,15 +1,15 @@
-.page { display: grid; gap: 18px; max-width: 1480px; margin: 0 auto; color: var(--ink); }
-.hero { min-height: 148px; display: flex; justify-content: space-between; gap: 28px; padding: 24px 28px; border: 1px solid #d9e2ef; border-radius: 14px; background: linear-gradient(135deg, #f9fbff 0%, #eef4fc 100%); }
-.hero h1 { margin: 0; font-size: clamp(28px, 4vw, 40px); letter-spacing: -.04em; }
-.hero p { max-width: 720px; margin: 12px 0 0; color: var(--ink-muted); line-height: 1.65; }
-.heroStatus { display: flex; min-width: 180px; flex-direction: column; align-items: flex-end; justify-content: center; gap: 7px; color: var(--ink-muted); font-size: 12px; }
+.page { display: grid; gap: 14px; max-width: 1480px; margin: 0 auto; color: var(--ink); }
+.hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 2px 2px 0; }
+.hero h1 { margin: 0; font-size: clamp(26px, 3vw, 32px); letter-spacing: -.04em; }
+.hero p { max-width: 720px; margin: 6px 0 0; color: var(--ink-muted); font-size: 13px; line-height: 1.55; }
+.heroStatus { display: flex; min-width: 180px; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px 10px; color: var(--ink-muted); font-size: 12px; }
 .refresh { margin-top: 3px; padding: 6px 12px; border: 1px solid #cbd5e1; border-radius: 7px; color: #344054; background: #fff; cursor: pointer; }
 .refresh:hover { border-color: #84adff; color: var(--brand); }
 .badge { display: inline-flex; width: fit-content; padding: 5px 9px; border-radius: 999px; font-weight: 700; }
 .badgeLive { color: #067647; background: #dcfae6; }
 .badgeMuted { color: #475467; background: #eaecf0; }
 .notice { padding: 11px 14px; border: 1px solid #fedf89; border-radius: 9px; color: #93370d; background: #fffaeb; font-size: 13px; }
-.card { min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 1px 2px rgb(16 24 40 / 3%); }
+.card { min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 1px 2px rgb(16 24 40 / 3%); }
 .full { width: 100%; }
 .cardHeader { display: flex; min-height: 30px; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .cardHeader h2 { margin: 0; font-size: 17px; letter-spacing: -.01em; }
@@ -23,7 +23,7 @@
 @keyframes shimmer { from { background-position: 100%; } to { background-position: 0 0; } }
 .moduleError { min-height: 96px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; color: var(--ink-muted); text-align: center; }
 .moduleError button { padding: 7px 11px; border: 1px solid var(--border); border-radius: 7px; color: var(--ink); background: var(--surface); cursor: pointer; }
-.indexGrid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.indexGrid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
 .indexCard { min-width: 0; padding: 14px; border: 1px solid #eaecf0; border-radius: 9px; background: #fcfcfd; }
 .indexName { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .indexName strong { overflow: hidden; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
@@ -102,7 +102,7 @@
 .healthChecks strong { font-size: 12px; font-weight: 500; }
 .boundary { padding: 3px 6px 16px; color: #667085; font-size: 11px; line-height: 1.6; text-align: center; }
 @media (max-width: 1280px) { .fourColumns, .threeColumns { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 1120px) { .indexGrid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 1120px) { .indexGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 760px) { .hero { flex-direction: column; padding: 20px; } .heroStatus { align-items: flex-start; } .indexGrid { grid-template-columns: repeat(2, 1fr); } .fourColumns, .threeColumns { grid-template-columns: 1fr; } .healthLayout { grid-template-columns: 1fr; } .healthSummary { grid-template-columns: 12px 1fr; } .healthSummary dl { grid-column: 1 / -1; justify-content: space-around; } }
 @media (max-width: 460px) { .indexGrid { grid-template-columns: 1fr; } .donutWrap { flex-direction: column; } .sectorTableHead, .sectorTable > div:not(.sectorTableHead) { grid-template-columns: 22px minmax(70px, 1fr) 56px 64px; } }
 .themeGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
