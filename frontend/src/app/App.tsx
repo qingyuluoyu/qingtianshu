@@ -15,10 +15,16 @@ import { ResearchCenterPage } from "../features/research-center/ResearchCenterPa
 import { AdvisorPage } from "../features/advisor/AdvisorPage";
 import { MarketDataPage } from "../features/market-data/MarketDataPage";
 import { NotFoundPage } from "../pages/NotFoundPage";
+import { SearchPage } from "../features/search/SearchPage";
+import { FundsPage } from "../features/funds/FundsPage";
+import { RiskProfilePage } from "../features/risk-profile/RiskProfilePage";
+import { KnowledgePage } from "../features/knowledge/KnowledgePage";
+import { ArticlesPage } from "../features/articles/ArticlesPage";
+import { StrategiesPage } from "../features/strategies/StrategiesPage";
 import "../styles/global.css";
 
 function isProtectedPath(pathname: string): boolean {
-  return ["/today", "/screening", "/watchlist", "/market-data", "/research-center"].includes(pathname)
+  return ["/today", "/screening", "/watchlist", "/market-data", "/research-center", "/risk-profile", "/knowledge", "/articles", "/strategies"].includes(pathname)
     || /^\/stocks\/[^/]+$/.test(pathname)
     || /^\/advisor(?:\/[^/]+)?$/.test(pathname);
 }
@@ -74,6 +80,12 @@ function ProductApp() {
         <Route element={<ResearchCenterPage authenticated={formal} />} path="/research-center" />
         <Route element={<AdvisorPage authenticated={formal} />} path="/advisor/:conversationId?" />
         <Route element={<MarketDataPage authenticated={formal} />} path="/market-data" />
+        <Route element={<SearchPage authenticated={formal} />} path="/search" />
+        <Route element={<FundsPage authenticated={formal} />} path="/funds" />
+        <Route element={<RiskProfilePage authenticated={formal} />} path="/risk-profile" />
+        <Route element={<KnowledgePage authenticated={formal} />} path="/knowledge" />
+        <Route element={<ArticlesPage authenticated={formal} />} path="/articles" />
+        <Route element={<StrategiesPage authenticated={formal} />} path="/strategies" />
         <Route element={<NotFoundPage />} path="*" />
       </Route>
     </Routes>

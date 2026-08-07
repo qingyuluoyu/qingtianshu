@@ -22,7 +22,7 @@ import styles from "./StockResearchPage.module.css";
 
 type Props = { authenticated: boolean };
 
-type TabKey = "overview" | "technical" | "financials" | "events" | "research";
+type TabKey = "overview" | "technical" | "financials" | "events" | "research" | "shareholders" | "earnings_quality" | "financial_drivers" | "analyst_expectations";
 
 const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "overview", label: "研究总览" },
@@ -30,6 +30,10 @@ const TABS: Array<{ key: TabKey; label: string }> = [
   { key: "financials", label: "公司财务" },
   { key: "events", label: "事件预期" },
   { key: "research", label: "我的研究" },
+  { key: "shareholders", label: "股东结构" },
+  { key: "earnings_quality", label: "盈利质量" },
+  { key: "financial_drivers", label: "财务驱动" },
+  { key: "analyst_expectations", label: "分析师预期" },
 ];
 
 const RANGE_LABELS: Record<HistoryRange, string> = { "3mo": "近3月", "6mo": "近6月", "1y": "近1年" };
@@ -1023,10 +1027,118 @@ export function StockResearchPage({ authenticated }: Props) {
       {pageData && tab === "financials" ? <FinancialsTab onRetryPage={retryPage} page={pageData} symbol={symbol} /> : null}
       {pageData && tab === "events" ? <EventsTab onRetryPage={retryPage} page={pageData} /> : null}
       {tab === "research" ? <ResearchTab authenticated={authenticated} page={pageData} symbol={symbol} /> : null}
+      {pageData && tab === "shareholders" ? <ShareholdersTab onRetryPage={retryPage} page={pageData} /> : null}
+      {pageData && tab === "earnings_quality" ? <EarningsQualityTab onRetryPage={retryPage} page={pageData} /> : null}
+      {pageData && tab === "financial_drivers" ? <FinancialDriversTab onRetryPage={retryPage} page={pageData} /> : null}
+      {pageData && tab === "analyst_expectations" ? <AnalystExpectationsTab onRetryPage={retryPage} page={pageData} /> : null}
 
       <footer className={styles.footer}>
         {pageData?.modules.workspace.data?.boundary ?? "页面只呈现已确认事实、证据与个人研究状态，不生成买卖、目标价或收益建议。"}
       </footer>
     </div>
+  );
+}
+
+// ---------- 新增标签页组件（react-04 补充） ----------
+
+function ShareholdersTab({ page, onRetryPage }: { page: StockPage; onRetryPage: () => void }) {
+  return (
+    <ModuleSection envelope={page.modules.shareholders} meta={page.modules.shareholders.data?.holderCountAsOf ? `股东户数截至 ${page.modules.shareholders.data.holderCountAsOf}` : undefined} onRetry={onRetryPage} title="股东结构">
+      {(data: Shareholders) => (
+        <>
+          {data.summary ? <p className={styles.statement}>{data.summary}</p> : null}
+          <div className={styles.metricGrid}>
+            <div className={styles.metric}><span>股东户数</span><strong>{formatCount(data.holderCount)}</strong><small>较上次 {percent(data.holderCountChangePct)}（{data.signalLabel ?? "信号待确认"}）</small></div>
+            <div className={styles.metric}><span>前十大合计持股</span><strong>{percent(data.top10RatioPct, false)}</strong><small>报告期：{data.top10ReportDate ?? "待确认"}</small></div>
+            <div className={styles.metric}><span>前三名合计持股</span><strong>{percent(data.top3RatioPct, false)}</strong><small>存量口径</small></div>
+            <div className={styles.metric}><span>户均持股</span><strong>{data.averageHolding === null ? "--" : `${formatCount(Math.round(data.averageHolding))} 股`}</strong><small>披露日期 {data.announcedAt ?? "待确认"}</small></div>
+          </div>
+          {data.topHolders.length > 0 ? (
+            <div className={styles.tableWrap}>
+              <table className={styles.table}>
+                <thead><tr><th>排名</th><th>股东</th><th>持股数量</th><th>持股比例</th><th>变动</th></tr></thead>
+                <tbody>
+                  {data.topHolders.slice(0, 10).map((holder) => (
+                    <tr key={holder.rank ?? holder.name}>
+                      <td>{holder.rank ?? "--"}</td>
+                      <td>{holder.name}</td>
+                      <td>{formatShares100m(holder.holding)}</td>
+                      <td>{percent(holder.holdingRatioPct, false)}</td>
+                      <td>{holder.holdingChange ?? "--"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+          {data.boundary ? <p className={styles.boundaryNote}>{data.boundary}</p> : null}
+        </>
+      )}
+    </ModuleSection>
+  );
+}
+
+function EarningsQualityTab({ page, onRetryPage }: { page: StockPage; onRetryPage: () => void }) {
+  return (
+    <ModuleSection envelope={page.modules.earningsQuality} meta={page.modules.earningsQuality.data?.latestReportDateName ? `报告期：${page.modules.earningsQuality.data.latestReportDateName}` : undefined} onRetry={onRetryPage} title="盈利质量">
+      {(data) => <EarningsQualityCard data={data} />}
+    </ModuleSection>
+  );
+}
+
+function FinancialDriversTab({ page, onRetryPage }: { page: StockPage; onRetryPage: () => void }) {
+  return (
+    <ModuleSection envelope={page.modules.financialDrivers} onRetry={onRetryPage} title="利润与现金流驱动">
+      {(data) => <FinancialDriversCard data={data} />}
+    </ModuleSection>
+  );
+}
+
+function AnalystExpectationsTab({ page, onRetryPage }: { page: StockPage; onRetryPage: () => void }) {
+  return (
+    <ModuleSection envelope={page.modules.analystExpectations} meta={page.modules.analystExpectations.data?.asOfDate ? `数据截至 ${page.modules.analystExpectations.data.asOfDate}` : undefined} onRetry={onRetryPage} title="分析师预期">
+      {(data: AnalystExpectations) => (
+        <>
+          {data.ratingStatement ? <p className={styles.statement}>{data.ratingStatement}</p> : null}
+          {data.forecastEps.length > 0 ? (
+            <>
+              <h3 style={{ margin: "14px 0 8px", fontSize: 13 }}>每股收益汇总（A=历史实际，E=券商预测均值）</h3>
+              <div className={styles.epsTable}>
+                {data.forecastEps.map((eps) => (
+                  <div className={styles.epsCell} key={eps.year ?? "unknown"}>
+                    <span>{eps.year ?? "待确认"}{eps.kind === "actual" ? "A" : eps.kind === "estimate" ? "E" : ""}</span>
+                    <strong>{formatNumber(eps.value, 3)}</strong>
+                    <small>元/股</small>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+          {data.revision ? (
+            <p className={styles.helper} style={{ marginTop: 12 }}>
+              预期修订：{data.revision.summary ?? "暂无修订对比"}{data.revision.previousSnapshotAt ? `（对比快照 ${formatDateTime(data.revision.previousSnapshotAt)}）` : ""}
+            </p>
+          ) : null}
+          {data.latestReports.length > 0 ? (
+            <>
+              <h3 style={{ margin: "14px 0 6px", fontSize: 13 }}>最近研报（{data.ratingWindow ?? "统计窗口待确认"}）</h3>
+              <div className={styles.itemList}>
+                {data.latestReports.slice(0, 5).map((report, index) => (
+                  <article key={`${report.title}-${index}`}>
+                    <div className={styles.itemHead}>
+                      <strong>{report.reportUrl ? <a className={styles.extLink} href={report.reportUrl} rel="noreferrer" target="_blank">{report.title}</a> : report.title}</strong>
+                      {report.rating ? <span className={styles.tag}>评级 {report.rating}</span> : null}
+                    </div>
+                    <small>{[report.institution, report.researchers, report.publishedAt].filter(Boolean).join(" · ")}</small>
+                  </article>
+                ))}
+              </div>
+            </>
+          ) : null}
+          <p className={styles.helper}>覆盖机构 {data.coverage.ratingOrganizations ?? data.ratingOrganizationCount ?? "--"} 家 · 返回研报 {data.coverage.reportsReturned ?? "--"} 份 · 评级分布只描述研报样本，不构成交易建议。</p>
+          {data.boundary ? <p className={styles.boundaryNote}>{data.boundary}</p> : null}
+        </>
+      )}
+    </ModuleSection>
   );
 }
