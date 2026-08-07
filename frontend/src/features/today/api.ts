@@ -51,79 +51,79 @@ function unwrap<T>(
   return parse(data);
 }
 
-export async function getTodayOverview(): Promise<Overview> {
-  const { data, error, response } = await api.GET("/v1/today/overview");
+export async function getTodayOverview(signal?: AbortSignal): Promise<Overview> {
+  const { data, error, response } = await api.GET("/v1/today/overview", { signal });
   return unwrap(response, data, error, parseOverview);
 }
 
-export async function getIndices(): Promise<Indices> {
-  const { data, error, response } = await api.GET("/indices", { params: { query: { scope: "all", group: "china" } } });
+export async function getIndices(signal?: AbortSignal): Promise<Indices> {
+  const { data, error, response } = await api.GET("/indices", { params: { query: { scope: "all", group: "china" } }, signal });
   return unwrap(response, data, error, parseIndices);
 }
 
-export async function getBreadth(): Promise<Breadth> {
-  const { data, error, response } = await api.GET("/markets/breadth");
+export async function getBreadth(signal?: AbortSignal): Promise<Breadth> {
+  const { data, error, response } = await api.GET("/markets/breadth", { signal });
   return unwrap(response, data, error, parseBreadth);
 }
 
-export async function getSectors(): Promise<Sectors> {
-  const { data, error, response } = await api.GET("/sectors/hot", { params: { query: { limit: 10 } } });
+export async function getSectors(signal?: AbortSignal): Promise<Sectors> {
+  const { data, error, response } = await api.GET("/sectors/hot", { params: { query: { limit: 10 } }, signal });
   return unwrap(response, data, error, parseSectors);
 }
 
-export async function getWatchlistBrief(): Promise<WatchlistBrief> {
-  const { data, error, response } = await api.GET("/me/watchlist/brief");
+export async function getWatchlistBrief(signal?: AbortSignal): Promise<WatchlistBrief> {
+  const { data, error, response } = await api.GET("/me/watchlist/brief", { signal });
   return unwrap(response, data, error, parseWatchlistBrief);
 }
 
-export async function getResearchActions(): Promise<ResearchActions> {
-  const { data, error, response } = await api.GET("/me/research-actions");
+export async function getResearchActions(signal?: AbortSignal): Promise<ResearchActions> {
+  const { data, error, response } = await api.GET("/me/research-actions", { signal });
   return unwrap(response, data, error, parseResearchActions);
 }
 
-export async function getResearchChanges(): Promise<ResearchChanges> {
-  const { data, error, response } = await api.GET("/me/research-changes", { params: { query: { limit: 20 } } });
+export async function getResearchChanges(signal?: AbortSignal): Promise<ResearchChanges> {
+  const { data, error, response } = await api.GET("/me/research-changes", { params: { query: { limit: 20 } }, signal });
   return unwrap(response, data, error, parseResearchChanges);
 }
 
-export async function getDataHealth(): Promise<DataHealth> {
-  const { data, error, response } = await api.GET("/system/data-health");
+export async function getDataHealth(signal?: AbortSignal): Promise<DataHealth> {
+  const { data, error, response } = await api.GET("/system/data-health", { signal });
   return unwrap(response, data, error, parseDataHealth);
 }
 
-export async function getIndexHistory(symbol: string): Promise<IndexHistory> {
+export async function getIndexHistory(symbol: string, signal?: AbortSignal): Promise<IndexHistory> {
   const { data, error, response } = await api.GET("/indices/{symbol}/history", {
-    params: { path: { symbol }, query: { range: "1mo" } },
+    params: { path: { symbol }, query: { range: "1mo" } }, signal,
   });
   return unwrap(response, data, error, parseIndexHistory);
 }
 
-export async function getLatestResearchReports(): Promise<LatestResearchReports> {
-  const { data, error, response } = await api.GET("/research-reports/latest", { params: { query: { limit: 20 } } });
+export async function getLatestResearchReports(signal?: AbortSignal): Promise<LatestResearchReports> {
+  const { data, error, response } = await api.GET("/research-reports/latest", { params: { query: { limit: 20 } }, signal });
   return unwrap(response, data, error, parseLatestResearchReports);
 }
 
-export async function getCapitalFlow(): Promise<CapitalFlow> {
-  const { data, error, response } = await api.GET("/markets/capital-flow");
+export async function getCapitalFlow(signal?: AbortSignal): Promise<CapitalFlow> {
+  const { data, error, response } = await api.GET("/markets/capital-flow", { signal });
   return unwrap(response, data, error, parseCapitalFlow);
 }
 
-export async function getPositions(): Promise<Positions> {
-  const { data, error, response } = await api.GET("/v1/positions");
+export async function getPositions(signal?: AbortSignal): Promise<Positions> {
+  const { data, error, response } = await api.GET("/v1/positions", { signal });
   return unwrap(response, data, error, parsePositions);
 }
 
-export async function getMarketAnomalies(): Promise<MarketAnomalies> {
-  const { data, error, response } = await api.GET("/markets/anomalies", { params: { query: { limit: 10 } } });
+export async function getMarketAnomalies(signal?: AbortSignal): Promise<MarketAnomalies> {
+  const { data, error, response } = await api.GET("/markets/anomalies", { params: { query: { limit: 10 } }, signal });
   return unwrap(response, data, error, parseMarketAnomalies);
 }
 
-export async function getGlobalIndices(): Promise<GlobalIndices> {
-  const { data, error, response } = await api.GET("/indices", { params: { query: { scope: "all", group: "us" } } });
+export async function getGlobalIndices(signal?: AbortSignal): Promise<GlobalIndices> {
+  const { data, error, response } = await api.GET("/indices", { params: { query: { scope: "all", group: "us" } }, signal });
   return unwrap(response, data, error, parseGlobalIndices);
 }
 
-export async function getLiveMarkets(): Promise<LiveMarkets> {
-  const { data, error, response } = await api.GET("/markets/live");
+export async function getLiveMarkets(signal?: AbortSignal): Promise<LiveMarkets> {
+  const { data, error, response } = await api.GET("/markets/live", { signal });
   return unwrap(response, data, error, parseLiveMarkets);
 }
