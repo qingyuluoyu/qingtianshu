@@ -363,3 +363,4 @@
 - 后端 `1100` 项全量测试执行至 `100%` 通过；产品范围 Ruff、Python `compileall`、`uv lock --check` 和 `git diff --check` 通过。
 - 真实 runner 继续使用 `HERMES_ENABLED=false`：本轮证明真实账户、数据库和研究聚合链路，并验证 preview Run 不冒充正式 Run；没有形成新的 Hermes/DeepSeek 对话质量结论。新账户没有研究报告锚点，因此真实结果模块按合同显示“暂无研究结果”。
 - 六个正式 React 页面至此都已具备真实产品实现，但仍不能等同于生产发布完成：Docker 生产 E2E、商业数据 SLA、备份恢复、长期队列和真实 Hermes 质量仍是发布门槛。
+- 生产 E2E 脚本已补齐六页桌面路由与 390px 根级溢出检查；当前机器没有 `docker` 命令，因此这项容器内验收仍待具备 Docker 的发布环境执行。

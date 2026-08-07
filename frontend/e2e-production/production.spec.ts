@@ -133,6 +133,34 @@ test("Docker production authentication, Today, routing, SSE and legacy chain", a
   expect(stockPage?.headers()["content-type"]).toContain("text/html");
   await expect(page.getByRole("heading", { name: "个股研究" })).toBeVisible();
 
+  for (const [path, heading] of [
+    ["/screening", "透明选股"],
+    ["/watchlist", "我的关注"],
+    ["/advisor", "金融顾问"],
+    ["/research-center", "研究中心"],
+  ] as const) {
+    const response = await page.goto(path);
+    expect(response?.status(), path).toBe(200);
+    expect(response?.headers()["content-type"], path).toContain("text/html");
+    await expect(page.getByRole("heading", { name: heading, exact: true }), path).toBeVisible();
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  for (const [path, heading] of [
+    ["/today", "今日观察"],
+    ["/screening", "透明选股"],
+    ["/watchlist", "我的关注"],
+    ["/stocks/600519.SS", "个股研究"],
+    ["/advisor", "金融顾问"],
+    ["/research-center", "研究中心"],
+  ] as const) {
+    await page.goto(path);
+    await expect(page.getByRole("heading", { name: heading }).first(), path).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), path)
+      .toBeLessThanOrEqual(1);
+  }
+  await page.setViewportSize({ width: 1280, height: 900 });
+
   for (const endpoint of ["/stocks/600519.SS/history", "/stocks/600519.SS/intraday"]) {
     const response = await context.request.get(endpoint, {
       headers: { accept: "application/json" },
