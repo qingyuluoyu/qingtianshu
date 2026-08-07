@@ -562,6 +562,7 @@ export type TradeReview = {
     priceResult: string | null;
     logicResult: string | null;
     planDeviation: string | null;
+    biasTags: string[] | null;
     improvementText: string | null;
     createdSource: string | null;
     createdAt: string | null;
@@ -604,10 +605,47 @@ function parseTradeReview(value: unknown): TradeReview | null {
       priceResult: optionalString(version.price_result),
       logicResult: optionalString(version.logic_result),
       planDeviation: optionalString(version.plan_deviation),
+      biasTags: Array.isArray(version.bias_tags) ? strings(version.bias_tags) : null,
       improvementText: optionalString(version.improvement_text),
       createdSource: optionalString(version.created_source),
       createdAt: optionalString(version.created_at),
     },
+  };
+}
+
+export type PendingWriteback = {
+  id: string;
+  reviewId: string;
+  symbol: string | null;
+  logicResult: string | null;
+  planDeviation: string | null;
+  improvementText: string | null;
+  biasTags: string[];
+  createdAt: string | null;
+};
+
+export type PendingWritebacks = { items: PendingWriteback[] };
+
+export function parsePendingWritebacks(value: unknown): PendingWritebacks {
+  const root = record(value);
+  return {
+    items: list(root.items).flatMap((raw) => {
+      const item = optionalRecord(raw);
+      const payload = optionalRecord(item?.payload);
+      const id = optionalString(item?.id);
+      const reviewId = optionalString(payload?.review_id);
+      if (!item || item.candidate_type !== "review_draft" || item.status !== "pending_confirmation" || !id || !reviewId) return [];
+      return [{
+        id,
+        reviewId,
+        symbol: optionalString(item.symbol),
+        logicResult: optionalString(payload.logic_result),
+        planDeviation: optionalString(payload.plan_deviation),
+        improvementText: optionalString(payload.improvement_text),
+        biasTags: strings(payload.bias_tags),
+        createdAt: optionalString(item.created_at),
+      }];
+    }),
   };
 }
 

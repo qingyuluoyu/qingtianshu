@@ -5,6 +5,7 @@ import {
   parseResearchChanges,
   parseResearchOutcomes,
   parseResearchReport,
+  parsePendingWritebacks,
   parseTradeReviewCenter,
   parseWorkspaceTimeline,
 } from "./adapters";
@@ -141,6 +142,39 @@ describe("parseTradeReviewCenter", () => {
     (payload.items as unknown[]).push({ symbol: "000063.SZ", status: "draft" });
     const parsed = parseTradeReviewCenter(payload);
     expect(parsed.items).toHaveLength(2);
+  });
+});
+
+describe("parsePendingWritebacks", () => {
+  it("keeps only pending review-draft writebacks with their originating review", () => {
+    const parsed = parsePendingWritebacks({
+      items: [
+        {
+          id: "candidate-1",
+          candidate_type: "review_draft",
+          status: "pending_confirmation",
+          payload: {
+            review_id: "review-1",
+            logic_result: "需要复核兑现节奏。",
+            plan_deviation: "未按计划设置复核窗口。",
+            improvement_text: "下次先验证订单进度。",
+            bias_tags: ["锚定"],
+          },
+          created_at: "2026-08-07T08:00:00+00:00",
+        },
+        { id: "candidate-2", candidate_type: "thesis", status: "pending_confirmation" },
+        { id: "candidate-3", candidate_type: "review_draft", status: "confirmed" },
+      ],
+    });
+
+    expect(parsed.items).toEqual([
+      expect.objectContaining({
+        id: "candidate-1",
+        reviewId: "review-1",
+        logicResult: "需要复核兑现节奏。",
+        biasTags: ["锚定"],
+      }),
+    ]);
   });
 });
 

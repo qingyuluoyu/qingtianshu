@@ -4,12 +4,14 @@ import {
   parseResearchChanges,
   parseResearchOutcomes,
   parseResearchReport,
+  parsePendingWritebacks,
   parseTradeReviewCenter,
   parseWorkspaceTimeline,
   type ResearchActions,
   type ResearchChanges,
   type ResearchOutcomes,
   type ResearchReport,
+  type PendingWritebacks,
   type TradeReviewCenter,
   type WorkspaceTimeline,
 } from "./adapters";
@@ -65,6 +67,84 @@ export async function getResearchReport(symbol: string): Promise<ResearchReport>
     params: { path: { symbol } },
   });
   return unwrap(response, data, error, parseResearchReport);
+}
+
+export type TradeReviewDraftInput = {
+  baseVersion: number;
+  priceResult: string;
+  logicResult: string;
+  planDeviation: string | null;
+  biasTags: string[];
+  improvementText: string | null;
+};
+
+export type TradeReviewFollowupInput = {
+  target: "observation_task" | "thesis_draft";
+  title: string | null;
+  priority: "high" | "normal" | "low";
+};
+
+function unwrapMutation(response: Response, data: unknown, error: unknown): unknown {
+  if (response.status === 409) {
+    throw new ResearchCenterApiError(409, "该记录已被其他操作更新，已刷新最新状态，请确认后重试。");
+  }
+  return unwrap(response, data, error, (value) => value);
+}
+
+export async function getPendingWritebacks(): Promise<PendingWritebacks> {
+  const { data, error, response } = await api.GET("/v1/ai-writebacks", {
+    params: { query: { status: "pending_confirmation", limit: 100 } },
+  });
+  return unwrap(response, data, error, parsePendingWritebacks);
+}
+
+export async function generateTradeReviewDraft(
+  reviewId: string,
+  baseVersion: number,
+  modelTier: "economy" | "deep",
+): Promise<unknown> {
+  const { data, error, response } = await api.POST("/v1/trade-reviews/{review_id}/generate-draft", {
+    params: { path: { review_id: reviewId } },
+    body: { base_version: baseVersion, model_tier: modelTier },
+  });
+  return unwrapMutation(response, data, error);
+}
+
+export async function confirmWriteback(candidateId: string): Promise<unknown> {
+  const { data, error, response } = await api.POST("/v1/ai-writebacks/{candidate_id}/confirm", {
+    params: { path: { candidate_id: candidateId } },
+  });
+  return unwrapMutation(response, data, error);
+}
+
+export async function rejectWriteback(candidateId: string): Promise<unknown> {
+  const { data, error, response } = await api.POST("/v1/ai-writebacks/{candidate_id}/reject", {
+    params: { path: { candidate_id: candidateId } },
+  });
+  return unwrapMutation(response, data, error);
+}
+
+export async function updateTradeReviewDraft(reviewId: string, draft: TradeReviewDraftInput): Promise<unknown> {
+  const { data, error, response } = await api.PATCH("/v1/trade-reviews/{review_id}/draft", {
+    params: { path: { review_id: reviewId } },
+    body: {
+      base_version: draft.baseVersion,
+      price_result: draft.priceResult,
+      logic_result: draft.logicResult,
+      plan_deviation: draft.planDeviation,
+      bias_tags: draft.biasTags,
+      improvement_text: draft.improvementText,
+    },
+  });
+  return unwrapMutation(response, data, error);
+}
+
+export async function createTradeReviewFollowup(reviewId: string, followup: TradeReviewFollowupInput): Promise<unknown> {
+  const { data, error, response } = await api.POST("/v1/trade-reviews/{review_id}/followups", {
+    params: { path: { review_id: reviewId } },
+    body: followup,
+  });
+  return unwrapMutation(response, data, error);
 }
 
 async function postTradeReviewTransition(
