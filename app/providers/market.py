@@ -614,7 +614,7 @@ class TencentChinaIndexQuoteProvider:
         cache_key = f"tencent:china-index:quotes:{','.join(quote_symbols)}"
         cached = self.database.get_cache(cache_key)
         if cached is not None:
-            return dict(cached.get("quotes") or {})
+            return self._with_cache_freshness(cached)
         try:
             url = self.URL.format(quote_symbols=",".join(quote_symbols))
             response = self.http_get(
@@ -642,12 +642,21 @@ class TencentChinaIndexQuoteProvider:
         except Exception as exc:
             stale = self.database.get_cache(cache_key, allow_stale=True)
             if stale is not None:
-                return dict(stale.get("quotes") or {})
+                return self._with_cache_freshness(stale)
             if isinstance(exc, ProviderError):
                 raise
             raise ProviderError(
                 f"腾讯指数实时快照不可用：{type(exc).__name__}: {exc}"
             ) from exc
+
+    @staticmethod
+    def _with_cache_freshness(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        is_stale = bool(payload.get("is_stale"))
+        return {
+            symbol: {**quote, "is_stale": is_stale}
+            for symbol, quote in dict(payload.get("quotes") or {}).items()
+            if isinstance(quote, dict)
+        }
 
     @classmethod
     def _parse(

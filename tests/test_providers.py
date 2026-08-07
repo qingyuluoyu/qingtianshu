@@ -61,6 +61,29 @@ def test_tencent_china_index_quote_parser_keeps_realtime_fields_separate_from_da
     assert parsed["399001.SZ"]["pct_change"] == -0.32
 
 
+def test_tencent_china_index_quote_provider_marks_expired_quote_cache_as_stale(tmp_path: Path):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+
+    class QuoteResponse:
+        content = (
+            'v_sh000001="1~上证指数~000001~3348.37~3339.06~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~0~20260807143005~9.31~0.28";'
+        ).encode("gb18030")
+
+        def raise_for_status(self):
+            return None
+
+    provider = TencentChinaIndexQuoteProvider(
+        database, ttl_seconds=0, http_get=lambda *args, **kwargs: QuoteResponse()
+    )
+    provider.fetch_quotes(["000001.SS"])
+    provider.http_get = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("network unavailable"))
+
+    stale = provider.fetch_quotes(["000001.SS"])
+
+    assert stale["000001.SS"]["is_stale"] is True
+
+
 def test_yahoo_provider_parses_and_caches(tmp_path: Path):
     database = Database(tmp_path / "workspaces")
     database.initialize()

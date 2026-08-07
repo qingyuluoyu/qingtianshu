@@ -1738,7 +1738,7 @@ class MarketAnalysisService:
                     "source": history["source"],
                     "market_timestamp": history["market_timestamp"],
                     "fetched_at": history["fetched_at"],
-                    "is_stale": history.get("is_stale", False),
+                    "is_stale": quote.get("is_stale", False) if quote is not None else history.get("is_stale", False),
                     "coverage": history["coverage"],
                     "warnings": history.get("warnings", []),
                 }
