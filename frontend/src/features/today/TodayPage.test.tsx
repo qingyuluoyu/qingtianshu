@@ -34,7 +34,18 @@ describe("TodayPage runtime closure", () => {
     expect(shouldLoadDataHealth(false)).toBe(false);
   });
 
-  it("keeps the five required index cards in order and removes CSI 500", () => { page(client()); expect(screen.getAllByRole("article").slice(0, 5).map((node) => node.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("上证综指"), expect.stringContaining("深证成指"), expect.stringContaining("创业板指"), expect.stringContaining("沪深300"), expect.stringContaining("科创50")])); expect(screen.queryByText("中证500")).not.toBeInTheDocument(); });
+  it("keeps the five required index cards in exact order and removes CSI 500", () => {
+    page(client());
+    const indexRegion = screen.getByRole("region", { name: "主要指数" });
+    expect(within(indexRegion).getAllByRole("article").map((node) => node.querySelector("strong")?.textContent)).toEqual([
+      "上证综指",
+      "深证成指",
+      "创业板指",
+      "沪深300",
+      "科创50",
+    ]);
+    expect(screen.queryByText("中证500")).not.toBeInTheDocument();
+  });
   it("keeps turnover headline and precise comparison but no chart when real history is absent", () => { page(client()); expect(screen.getByTestId("turnover-card")).toHaveTextContent("25,470.71 亿"); expect(screen.getByTestId("turnover-card")).toHaveTextContent("-4.94%"); expect(screen.queryByText("近日成交额（亿元）")).not.toBeInTheDocument(); });
   it("renders a turnover chart only with at least two actual history points", () => { page(client(true)); expect(screen.getByText("近日成交额（亿元）")).toBeInTheDocument(); });
   it("restores capital flow, anomalies, research reports and the positions tab with passthrough values", () => {

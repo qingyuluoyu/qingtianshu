@@ -75,6 +75,9 @@ describe("ScreeningPage 通用筛选模式", () => {
     // 条件面板（档案来自 profiles）。
     expect(await screen.findByLabelText("筛选档案")).toBeInTheDocument();
     expect(screen.getByLabelText("ROE 下限（%）")).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "筛选条件栏" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "筛选结果工作区" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "候选详情" })).toBeInTheDocument();
     // 摘要：真实命中总数 + 不代表全市场（§5.2 禁全市场伪装）。
     expect(await screen.findByText("命中候选（真实总数）")).toBeInTheDocument();
     expect(screen.getByText("不代表全市场")).toBeInTheDocument();

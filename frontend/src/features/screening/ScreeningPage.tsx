@@ -995,78 +995,79 @@ export function ScreeningPage({ authenticated }: Props) {
       />
 
       {mode === "screen" ? (
-        <>
-          {profilesQuery.isError ? (
-            <div className={styles.moduleError} role="status">
-              <span>筛选档案暂时不可用。</span>
-              <button type="button" onClick={() => void profilesQuery.refetch()}>重新读取</button>
-            </div>
-          ) : null}
-          {profilesQuery.isPending ? <div className={styles.skeleton} aria-live="polite">正在读取筛选档案…</div> : null}
-          {screenParams ? (
-            <FilterBuilder
-              applied={screenParams}
-              disabled={screenQuery.isFetching}
-              onApply={(next) => {
-                const updates: Record<string, string | null> = {
-                  profile: next.profile,
-                  m: next.market === "all" ? null : next.market,
-                  n: next.maxResults === 12 ? null : String(next.maxResults),
-                  symbol: null,
-                };
-                const reset: string[] = [];
-                for (const key of searchParams.keys()) {
-                  if (key.startsWith("f_")) reset.push(key);
-                }
-                for (const [key, value] of Object.entries(next.filters)) updates[`f_${key}`] = String(value);
-                updateParams(updates, reset);
-              }}
-              profiles={profiles}
-            />
-          ) : null}
-          {screenQuery.isError ? (
-            <div className={styles.moduleError} role="status">
-              <span>筛选结果暂时不可用。</span>
-              <button type="button" onClick={() => void screenQuery.refetch()}>重新读取</button>
-            </div>
-          ) : null}
-          {screenQuery.isPending && screenParams ? <div className={styles.skeleton} aria-live="polite">正在执行筛选…</div> : null}
-          {screen ? (
-            <>
-              <ScreenRunSummary screen={screen} />
-              {screen.items.length === 0 ? (
-                <div className={styles.card}>
+        <div className={styles.screenWorkspace}>
+          <aside className={styles.mainColumn} aria-label="筛选条件栏">
+            {profilesQuery.isError ? (
+              <div className={styles.moduleError} role="status">
+                <span>筛选档案暂时不可用。</span>
+                <button type="button" onClick={() => void profilesQuery.refetch()}>重新读取</button>
+              </div>
+            ) : null}
+            {profilesQuery.isPending ? <div className={styles.skeleton} aria-live="polite">正在读取筛选档案…</div> : null}
+            {screenParams ? (
+              <FilterBuilder
+                applied={screenParams}
+                disabled={screenQuery.isFetching}
+                onApply={(next) => {
+                  const updates: Record<string, string | null> = {
+                    profile: next.profile,
+                    m: next.market === "all" ? null : next.market,
+                    n: next.maxResults === 12 ? null : String(next.maxResults),
+                    symbol: null,
+                  };
+                  const reset: string[] = [];
+                  for (const key of searchParams.keys()) {
+                    if (key.startsWith("f_")) reset.push(key);
+                  }
+                  for (const [key, value] of Object.entries(next.filters)) updates[`f_${key}`] = String(value);
+                  updateParams(updates, reset);
+                }}
+                profiles={profiles}
+              />
+            ) : null}
+            {profilesQuery.data?.boundary ? <p className={styles.boundaryNote}>{profilesQuery.data.boundary}</p> : null}
+          </aside>
+
+          <div className={styles.mainColumn} role="region" aria-label="筛选结果工作区">
+            {screenQuery.isError ? (
+              <div className={styles.moduleError} role="status">
+                <span>筛选结果暂时不可用。</span>
+                <button type="button" onClick={() => void screenQuery.refetch()}>重新读取</button>
+              </div>
+            ) : null}
+            {screenQuery.isPending && screenParams ? <div className={styles.skeleton} aria-live="polite">正在执行筛选…</div> : null}
+            {screen ? <ScreenRunSummary screen={screen} /> : null}
+            {screen ? (
+              <ModuleCard meta={`${screen.items.length} / ${screen.universe.matched ?? "--"} 条`} title="筛选候选">
+                {screen.items.length > 0 ? (
+                  <ScreenCandidateTable
+                    items={screen.items}
+                    onSelect={(symbol) => updateParams({ symbol })}
+                    selectedSymbol={selectedScreenItem?.symbol ?? null}
+                  />
+                ) : (
                   <div className={styles.empty}>
                     <span>当前条件下没有命中候选。</span>
-                    <span>放宽上方阈值后重新应用筛选；命中数为 0 是真实结果，不用示例数据填充。</span>
+                    <span>放宽左侧阈值后重新应用筛选；命中数为 0 是真实结果，不用示例数据填充。</span>
                   </div>
-                  {screen.boundary ? <p className={styles.boundaryNote}>{screen.boundary}</p> : null}
-                </div>
-              ) : (
-                <div className={styles.layout}>
-                  <div className={styles.mainColumn}>
-                    <ModuleCard meta={`${screen.items.length} / ${screen.universe.matched ?? "--"} 条`} title="筛选候选">
-                      <ScreenCandidateTable
-                        items={screen.items}
-                        onSelect={(symbol) => updateParams({ symbol })}
-                        selectedSymbol={selectedScreenItem?.symbol ?? null}
-                      />
-                      <p className={styles.helper}>
-                        服务端暂无分页参数：仅展示排序后的前 {screen.items.length} 条（上限由「展示条数」控制），命中总数见上方摘要，不提供伪分页。
-                      </p>
-                      {screen.boundary ? <p className={styles.boundaryNote}>{screen.boundary}</p> : null}
-                    </ModuleCard>
-                  </div>
-                  <div className={styles.mainColumn}>
-                    {selectedScreenItem ? <ScreenCandidateDetail item={selectedScreenItem} /> : null}
-                    <ScreenExplainPanel screen={screen} />
-                  </div>
-                </div>
-              )}
-            </>
-          ) : null}
-          {profilesQuery.data?.boundary ? <p className={styles.boundaryNote}>{profilesQuery.data.boundary}</p> : null}
-        </>
+                )}
+                <p className={styles.helper}>
+                  服务端暂无分页参数：仅展示排序后的前 {screen.items.length} 条（上限由「展示条数」控制），命中总数见上方摘要，不提供伪分页。
+                </p>
+                {screen.boundary ? <p className={styles.boundaryNote}>{screen.boundary}</p> : null}
+              </ModuleCard>
+            ) : null}
+          </div>
+
+          <aside className={styles.mainColumn} aria-label="候选详情">
+            {selectedScreenItem ? <ScreenCandidateDetail item={selectedScreenItem} /> : (
+              <ModuleCard title="候选详情">
+                <div className={styles.empty}>选择中间候选后查看命中依据与数据缺口。</div>
+              </ModuleCard>
+            )}
+            {screen ? <ScreenExplainPanel screen={screen} /> : null}
+          </aside>
+        </div>
       ) : null}
 
       {mode === "lizong" ? (

@@ -20,6 +20,7 @@
 .modeCard span { display: block; font-size: 14px; font-weight: 700; }
 .modeCard small { display: block; margin-top: 5px; color: var(--ink-muted); font-size: 11px; line-height: 1.5; }
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 18px; align-items: start; }
+.screenWorkspace { display: grid; grid-template-columns: 280px minmax(0, 1fr) 360px; gap: 18px; align-items: start; }
 .mainColumn { min-width: 0; display: grid; gap: 18px; }
 .card { min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 1px 2px rgb(16 24 40 / 3%); }
 .cardHeader { display: flex; min-height: 30px; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
@@ -89,5 +90,6 @@
 .actionLink { padding: 8px 14px; border: 1px solid var(--brand); border-radius: 8px; color: var(--brand); background: var(--brand-soft); font-size: 12px; font-weight: 700; text-decoration: none; }
 .actionLink:hover { background: #dbe9ff; }
 .footer { padding: 3px 6px 16px; color: #667085; font-size: 11px; line-height: 1.6; text-align: center; }
-@media (max-width: 1279px) { .layout { grid-template-columns: minmax(0, 1fr); } .modeGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 1279px) { .layout { grid-template-columns: minmax(0, 1fr); } .screenWorkspace { grid-template-columns: 260px minmax(0, 1fr); } .screenWorkspace > :last-child { grid-column: 1 / -1; } .modeGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 819px) { .screenWorkspace { grid-template-columns: minmax(0, 1fr); } .screenWorkspace > :last-child { grid-column: auto; } }
 @media (max-width: 620px) { .modeGrid { grid-template-columns: minmax(0, 1fr); } .header { padding: 18px; } .filterGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
