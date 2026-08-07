@@ -1339,6 +1339,15 @@ class MarketAnalysisService:
             "金额为亿元人民币（快照存元，/1e8换算）；盘中快照为当日累计值，"
             "缺少成交额或日期的快照跳过，无数据时返回空数组。"
         )
+        # 将 enrichment 写回 provider 缓存，避免第二请求因缓存命中
+        # 而丢失 turnover_history 字段（provider 缓存只存原始快照数据）。
+        if self.breadth_provider is not None and hasattr(self.breadth_provider, "CACHE_KEY"):
+            try:
+                self.database.update_cache_payload_preserving_expiry(
+                    self.breadth_provider.CACHE_KEY, payload
+                )
+            except Exception:  # noqa: BLE001 - 缓存 enrichment 失败不影响主响应
+                pass
         return payload
 
     def _turnover_history(self, limit: int = 21) -> list[dict[str, Any]]:

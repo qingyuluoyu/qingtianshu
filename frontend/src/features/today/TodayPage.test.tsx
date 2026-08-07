@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it } from "vitest";
 import breadthFixture from "./__fixtures__/breadth-real.json";
 import { parseBreadth, parseCapitalFlow, parseDataHealth, parseGlobalIndices, parseIndices, parseLatestResearchReports, parseLiveMarkets, parseMarketAnomalies, parseOverview, parsePositions, parseResearchActions, parseResearchChanges, parseSectors, parseWatchlistBrief } from "./adapters";
-import { shouldLoadDataHealth, TodayPage } from "./TodayPage";
+import { TodayPage } from "./TodayPage";
 import { todayQueryKeys } from "./queries";
 
 function client(history = false) {
@@ -29,11 +29,6 @@ function page(queryClient: QueryClient) { return render(<QueryClientProvider cli
 afterEach(cleanup);
 
 describe("TodayPage runtime closure", () => {
-  it("loads independent data health as soon as an authenticated session exists", () => {
-    expect(shouldLoadDataHealth(true)).toBe(true);
-    expect(shouldLoadDataHealth(false)).toBe(false);
-  });
-
   it("keeps the five required index cards in order and removes CSI 500", () => { page(client()); expect(screen.getAllByRole("article").slice(0, 5).map((node) => node.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("上证综指"), expect.stringContaining("深证成指"), expect.stringContaining("创业板指"), expect.stringContaining("沪深300"), expect.stringContaining("科创50")])); expect(screen.queryByText("中证500")).not.toBeInTheDocument(); });
   it("keeps turnover headline and precise comparison but no chart when real history is absent", () => { page(client()); expect(screen.getByTestId("turnover-card")).toHaveTextContent("25,470.71 亿"); expect(screen.getByTestId("turnover-card")).toHaveTextContent("-4.94%"); expect(screen.queryByText("近日成交额（亿元）")).not.toBeInTheDocument(); });
   it("renders a turnover chart only with at least two actual history points", () => { page(client(true)); expect(screen.getByText("近日成交额（亿元）")).toBeInTheDocument(); });

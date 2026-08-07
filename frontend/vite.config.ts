@@ -23,7 +23,7 @@ export default defineConfig({
   server: {
     proxy: {
       "/auth": apiProxy,
-      "/session": apiProxy,
+      "/session/*": apiProxy,
       "/sessions": apiProxy,
       "/users": apiProxy,
       "/v1": apiProxy,

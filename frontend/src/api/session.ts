@@ -9,12 +9,17 @@ export function isFormalAccount(session: AuthSession | null): boolean {
 }
 
 export async function getSession(): Promise<AuthSession | null> {
-  const response = await fetch("/session/status", { credentials: "same-origin" });
-  if (!response.ok) throw new Error("无法读取当前会话");
-  const payload = await response.json() as { authenticated?: unknown; session?: AuthSession };
-  if (payload.authenticated === false) return null;
-  if (payload.authenticated === true && payload.session) return payload.session;
-  throw new Error("无法读取当前会话");
+  try {
+    const response = await fetch("/session/status", { credentials: "same-origin" });
+    if (!response.ok) return null;
+    const payload = await response.json() as { authenticated?: unknown; session?: AuthSession };
+    if (payload.authenticated === false) return null;
+    if (payload.authenticated === true && payload.session) return payload.session;
+    return null;
+  } catch {
+    // 网络错误、JSON 解析失败、端点不存在等情况统一视为未登录。
+    return null;
+  }
 }
 
 export async function signOut(): Promise<void> {

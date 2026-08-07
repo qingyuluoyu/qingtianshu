@@ -356,17 +356,22 @@ export function parseBreadth(value: unknown): Breadth {
     limitUpCount: optionalNumber(breadth?.limit_up_count),
     limitDownCount: optionalNumber(breadth?.limit_down_count),
     limitMethod: optionalString(breadth?.limit_method),
-    turnoverHistory: list(root.turnover_history).flatMap((raw) => {
-      const item = optionalRecord(raw);
-      const date = optionalString(item?.date);
-      const amount = optionalNumber(item?.amount_100m_cny);
-      // amount_100m_cny 后端已换算为亿元，直通。
-      return item && date && amount !== null ? [{ date, amount100mCny: amount }] : [];
-    }),
+    turnoverHistory: (() => {
+      // 优先读取 market_breadth() enrichment 写入的顶层 turnover_history；
+      // 防御性回退到 provider 的 turnover.history_comparison（仅单点百分比，非时间序列）。
+      const raw = root.turnover_history ?? root.turnover?.history_comparison;
+      return list(raw).flatMap((entry) => {
+        const record = optionalRecord(entry);
+        const date = optionalString(record?.date);
+        // 顶层数组项含 amount_100m_cny；回退的 history_comparison 不含该字段。
+        const amount = optionalNumber(record?.amount_100m_cny);
+        return date && amount !== null ? [{ date, amount100mCny: amount }] : [];
+      });
+    })(),
   };
 }
 
-export function parseSectors(value: unknown): Sectors {
+export function parseSectors(value: unknown, limit = 10): Sectors {
   const root = record(value);
   return {
     source: optionalString(root.source),
@@ -374,7 +379,7 @@ export function parseSectors(value: unknown): Sectors {
     fetchedAt: optionalString(root.fetched_at),
     isStale: optionalBoolean(root.is_stale),
     hasWarnings: strings(root.warnings).length > 0,
-    items: list(root.sectors).slice(0, 10).flatMap((raw) => {
+    items: list(root.sectors).slice(0, limit).flatMap((raw) => {
       const item = optionalRecord(raw);
       const code = optionalString(item?.code);
       const name = optionalString(item?.name);

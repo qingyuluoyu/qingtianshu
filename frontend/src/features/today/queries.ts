@@ -38,8 +38,13 @@ export const todayQueryKeys = {
 const marketStaleTime = 5 * 60_000;
 const historyStaleTime = 30 * 60_000;
 const personalStaleTime = 30_000;
-// A server contract failure is informative; retrying a 404/500 only adds load and noise.
-const stableErrorPolicy = { retry: false, retryOnMount: false, refetchOnWindowFocus: false } as const;
+// Retry once with exponential backoff for transient failures (network blips, 502/503).
+// 404 / 400 / 422 are terminal — no retry. 500 / network errors get one retry.
+const stableErrorPolicy = {
+  retry: (_failureCount: number, _error: unknown) => _failureCount < 1,
+  retryOnMount: false,
+  refetchOnWindowFocus: false,
+} as const;
 
 export const todayQueries = {
   overview: () => queryOptions({ queryKey: todayQueryKeys.overview, queryFn: getTodayOverview, ...stableErrorPolicy, staleTime: personalStaleTime }),

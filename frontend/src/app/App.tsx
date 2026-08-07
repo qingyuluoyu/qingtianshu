@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tan
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { getSession, isFormalAccount, signOut } from "../api/session";
 import { AppShell } from "../components/AppShell";
+import { ErrorBoundary } from "../components/ErrorBoundary";
 import { AuthModal } from "../features/auth/AuthModal";
 import { useUnauthorizedBoundary } from "../features/auth/useUnauthorizedBoundary";
 import { TodayPage } from "../features/today/TodayPage";
@@ -12,13 +13,9 @@ import { WatchlistPage } from "../features/watchlist/WatchlistPage";
 import { ScreeningPage } from "../features/screening/ScreeningPage";
 import { ResearchCenterPage } from "../features/research-center/ResearchCenterPage";
 import { AdvisorPage } from "../features/advisor/AdvisorPage";
+import { MarketDataPage } from "../features/market-data/MarketDataPage";
 import { NotFoundPage } from "../pages/NotFoundPage";
-import { PlaceholderPage } from "../pages/PlaceholderPage";
 import "../styles/global.css";
-
-const pages = [
-  ["/market-data", "行情数据", "集中呈现指数、广度、板块与全球市场行情。"],
-] as const;
 
 function isProtectedPath(pathname: string): boolean {
   return ["/today", "/screening", "/watchlist", "/market-data", "/research-center"].includes(pathname)
@@ -38,10 +35,14 @@ function ProductApp() {
 
   useEffect(() => {
     if (session.isLoading || formal || !isProtectedPath(location.pathname)) return;
+    if (session.isError) {
+      // 会话查询出错时（端点 404 / 网络异常），清除错误状态并触发登录。
+      queryClient.setQueryData(["session"], null);
+    }
     if (promptedLocationRef.current === location.key) return;
     promptedLocationRef.current = location.key;
     setAuthOpen(true);
-  }, [formal, location.key, location.pathname, session.isLoading]);
+  }, [formal, location.key, location.pathname, session.isLoading, session.isError, queryClient]);
 
   useEffect(() => {
     if (formal) setAuthOpen(false);
@@ -72,7 +73,7 @@ function ProductApp() {
         <Route element={<ScreeningPage authenticated={formal} />} path="/screening" />
         <Route element={<ResearchCenterPage authenticated={formal} />} path="/research-center" />
         <Route element={<AdvisorPage authenticated={formal} />} path="/advisor/:conversationId?" />
-        {pages.map(([path, title, responsibility]) => <Route element={<PlaceholderPage key={path} locked={!formal} responsibility={responsibility} title={title} />} key={path} path={path} />)}
+        <Route element={<MarketDataPage authenticated={formal} />} path="/market-data" />
         <Route element={<NotFoundPage />} path="*" />
       </Route>
     </Routes>
@@ -82,5 +83,5 @@ function ProductApp() {
 
 export function App() {
   const [client] = useState(() => new QueryClient({ defaultOptions: { queries: { staleTime: 30_000 } } }));
-  return <QueryClientProvider client={client}><BrowserRouter><ProductApp /></BrowserRouter></QueryClientProvider>;
+  return <QueryClientProvider client={client}><BrowserRouter><ErrorBoundary><ProductApp /></ErrorBoundary></BrowserRouter></QueryClientProvider>;
 }

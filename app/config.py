@@ -97,7 +97,7 @@ class Settings:
     background_fund_product_refresh_seconds: int = 1800
     sec_user_agent: str = "QingshuFinancialResearch/0.1 research@example.com"
     background_data_quality_seconds: int = 60
-    session_ttl_days: int = 365
+    session_ttl_days: int = 30
     session_cookie_secure: bool = False
     auth_rate_limit_per_source: int = 120
     auth_rate_limit_per_principal: int = 10

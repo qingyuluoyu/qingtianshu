@@ -1758,11 +1758,10 @@ class SinaMarketBreadthProvider:
                     cache_key, resolved
                 )
             if resolved.get("status") == "available":
-                resolved = self._attach_history_comparison(resolved)
-                self.database.update_cache_payload_preserving_expiry(
-                    cache_key, resolved
-                )
-                return resolved
+                # Use read-only computation to avoid unnecessary DB writes on
+                # cache-hit reads; the snapshot has already been persisted on
+                # the cache-miss write.
+                resolved = self._compute_history_comparison(resolved)
             return resolved
 
         headers = {
@@ -1831,7 +1830,7 @@ class SinaMarketBreadthProvider:
                     self._with_derived_ratios(self._with_inferred_market_date(stale))
                 )
                 if resolved.get("status") == "available":
-                    return self._attach_history_comparison(resolved)
+                    return self._compute_history_comparison(resolved)
                 return resolved
             raise ProviderError(
                 f"新浪A股全市场广度不可用：{type(exc).__name__}: {exc}"
@@ -2005,9 +2004,13 @@ class SinaMarketBreadthProvider:
                 inferred -= timedelta(days=1)
         return inferred.isoformat()
 
-    def _attach_history_comparison(
+    def _compute_history_comparison(
         self, payload: dict[str, Any]
     ) -> dict[str, Any]:
+        """Read-only: compute history_comparison without writing snapshots.
+
+        Use this on cache-hit reads where the snapshot has already been persisted.
+        """
         turnover = payload.get("turnover") or {}
         if (
             turnover.get("status") != "available"
@@ -2016,8 +2019,6 @@ class SinaMarketBreadthProvider:
         ):
             return payload
         current_is_complete = self._is_completed_turnover_snapshot(payload)
-        if current_is_complete:
-            self.database.upsert_market_breadth_snapshot(payload)
         history = self.database.list_market_breadth_snapshots(limit=21)
         market_date = str(payload.get("market_date") or "")
         stored_prior = [
@@ -2111,9 +2112,26 @@ class SinaMarketBreadthProvider:
                             f"change_vs_{prefix}_average_pct"
                         ] = self._relative_change_pct(current_total, average)
         turnover["history_comparison"] = comparison
+        return payload
+
+    def _attach_history_comparison(
+        self, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Persist snapshot (if complete) and attach history_comparison.
+
+        Use this only on fresh fetches (cache miss), not on cache-hit reads.
+        """
+        turnover = payload.get("turnover") or {}
+        if (
+            turnover.get("status") != "available"
+            or not payload.get("market_date")
+            or self._is_zero_placeholder(payload)
+        ):
+            return payload
+        current_is_complete = self._is_completed_turnover_snapshot(payload)
         if current_is_complete:
             self.database.upsert_market_breadth_snapshot(payload)
-        return payload
+        return self._compute_history_comparison(payload)
 
     @staticmethod
     def _tick_seconds(value: Any) -> int | None:

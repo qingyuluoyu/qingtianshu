@@ -60,8 +60,11 @@ export function AuthModal({ onClose, returnFocusRef }: Props) {
       if (apiError || !data) throw apiError;
       return data;
     },
-    onSuccess: (session) => {
-      queryClient.setQueryData(["session"], session);
+    onSuccess: () => {
+      // Invalidate the session query so App.tsx refetches /session/status,
+      // the authoritative source. This ensures isFormalAccount is computed
+      // from verified server data rather than the auth endpoint response.
+      void queryClient.invalidateQueries({ queryKey: ["session"] });
       onClose();
     },
     onError: (reason) => setError(messageFor(reason)),
