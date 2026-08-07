@@ -594,7 +594,7 @@ export function AdvisorPage({ authenticated }: Props) {
     return [...writebacks.items].sort((a, b) => rank(a) - rank(b)).slice(0, 20);
   }, [writebacks]);
 
-  const showDrawer = pendingCandidates.length > 0 || evidenceMessage !== null || structured !== null || evidenceSources.length > 0;
+  const hasDrawerContent = pendingCandidates.length > 0 || evidenceMessage !== null || structured !== null || evidenceSources.length > 0;
 
   if (!authenticated) {
     return (
@@ -636,7 +636,7 @@ export function AdvisorPage({ authenticated }: Props) {
         </p>
       ) : null}
 
-      <div className={`${styles.layout} ${showDrawer ? "" : styles.layoutNoDrawer}`}>
+      <div className={styles.layout}>
         <aside className={`${styles.card} ${styles.sidebar}`} aria-label="会话列表与上下文">
           <ConversationSidebar
             items={conversationsQuery.data?.items ?? []}
@@ -703,8 +703,7 @@ export function AdvisorPage({ authenticated }: Props) {
           </ModuleCard>
         </main>
 
-        {showDrawer ? (
-          <aside className={styles.drawerColumn} aria-label="证据与候选写回">
+        <aside className={styles.drawerColumn} aria-label="证据与候选写回">
             {pendingCandidates.length > 0 ? (
               <ModuleCard
                 meta={writebacks?.summary.total !== null && writebacks?.summary.total !== undefined ? `共 ${writebacks.summary.total} 条` : undefined}
@@ -756,8 +755,12 @@ export function AdvisorPage({ authenticated }: Props) {
                 ) : null}
               </ModuleCard>
             ) : null}
+            {!hasDrawerContent ? (
+              <ModuleCard title="当前证据状态">
+                <div className={styles.empty}>尚未形成可追溯的结构化分析</div>
+              </ModuleCard>
+            ) : null}
           </aside>
-        ) : null}
       </div>
 
       {confirmCandidate ? (

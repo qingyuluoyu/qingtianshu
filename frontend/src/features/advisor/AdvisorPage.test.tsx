@@ -141,7 +141,7 @@ describe("AdvisorPage", () => {
   it("renders pending candidate card with confirm dialog carrying the version", async () => {
     renderPage("/advisor/conv-1");
     const drawer = await screen.findByLabelText("证据与候选写回");
-    expect(within(drawer).getByText("研究判断候选")).toBeInTheDocument();
+    expect(await within(drawer).findByText("研究判断候选")).toBeInTheDocument();
     expect(within(drawer).getByText("待确认草稿")).toBeInTheDocument();
     expect(within(drawer).getByText(/基于版本 2/)).toBeInTheDocument();
     // 无 PATCH：候选只有查看/确认/拒绝/回到对话修改，没有编辑按钮。
@@ -163,7 +163,7 @@ describe("AdvisorPage", () => {
   it("rejects a candidate without a dialog", async () => {
     renderPage("/advisor/conv-1");
     const drawer = await screen.findByLabelText("证据与候选写回");
-    fireEvent.click(within(drawer).getByRole("button", { name: "拒绝" }));
+    fireEvent.click(await within(drawer).findByRole("button", { name: "拒绝" }));
     await waitFor(() => expect(mockReject).toHaveBeenCalledWith("cand-1"));
     expect(await screen.findByText(/候选已拒绝/)).toBeInTheDocument();
   });
@@ -172,7 +172,7 @@ describe("AdvisorPage", () => {
     mockConfirm.mockRejectedValue(new AdvisorApiError(409, "该候选对应的正式对象已更新，候选已失效；已刷新最新状态，请回到对话重新生成候选。"));
     renderPage("/advisor/conv-1");
     const drawer = await screen.findByLabelText("证据与候选写回");
-    fireEvent.click(within(drawer).getByRole("button", { name: "确认写回" }));
+    fireEvent.click(await within(drawer).findByRole("button", { name: "确认写回" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "确认写回" }));
     expect(await screen.findByText(/已刷新最新状态/)).toBeInTheDocument();
     // 冲突后重拉候选列表。
@@ -182,7 +182,7 @@ describe("AdvisorPage", () => {
   it("routes revise back to the composer", async () => {
     renderPage("/advisor/conv-1");
     const drawer = await screen.findByLabelText("证据与候选写回");
-    fireEvent.click(within(drawer).getByRole("button", { name: "回到对话修改" }));
+    fireEvent.click(await within(drawer).findByRole("button", { name: "回到对话修改" }));
     const input = await screen.findByLabelText("向顾问提问");
     expect(input).toHaveValue("关于刚才的研究判断候选（000063.SZ），我希望调整为：");
     expect(mockPostChat).not.toHaveBeenCalled();
@@ -194,7 +194,15 @@ describe("AdvisorPage", () => {
     renderPage("/advisor");
     expect(await screen.findByText(/还没有研究对话/)).toBeInTheDocument();
     expect(screen.getByText(/输入第一个问题/)).toBeInTheDocument();
-    // 无候选且无证据时不渲染抽屉空壳。
-    expect(screen.queryByLabelText("证据与候选写回")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("证据与候选写回")).toBeInTheDocument();
+  });
+
+  it("keeps the evidence column visible for a new conversation", async () => {
+    mockGetConversations.mockResolvedValue({ items: [] });
+    mockGetWritebacks.mockResolvedValue({ status: "ready", items: [], summary: { total: 0, pendingConfirmation: 0 } });
+    renderPage("/advisor");
+
+    const drawer = await screen.findByLabelText("证据与候选写回");
+    expect(await within(drawer).findByText("尚未形成可追溯的结构化分析")).toBeInTheDocument();
   });
 });

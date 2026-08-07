@@ -171,6 +171,19 @@ describe("ResearchCenterPage", () => {
     expect(screen.getByRole("link", { name: "前往透明选股" })).toBeInTheDocument();
   });
 
+  it("keeps the research workspace scaffold when the user has no tracked stocks", async () => {
+    mockGetChanges.mockResolvedValue(parsedEmptyChanges());
+    mockGetOutcomes.mockResolvedValue(parsedEmptyOutcomes());
+    mockGetTradeReviews.mockResolvedValue(parsedEmptyTradeReviewCenter());
+    mockGetTimeline.mockResolvedValue(parsedEmptyTimeline());
+    renderPage();
+
+    expect(await screen.findByRole("region", { name: "研究股票" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "判断、变化与处理" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "下一步" })).toBeInTheDocument();
+    expect(await screen.findByText("尚未选择研究股票")).toBeInTheDocument();
+  });
+
   it("keeps a failed timeline module isolated from the rest of the page", async () => {
     mockGetTimeline.mockRejectedValue(new ResearchCenterApiError(500, "数据暂时不可用"));
     renderPage();

@@ -741,23 +741,19 @@ export function ResearchCenterPage({ authenticated }: Props) {
         />
       ) : null}
 
-      {stockEntries.length === 0 && !aggregatePending && !aggregateError ? (
-        <div className={styles.card}>
-          <div className={styles.empty}>
-            <span>还没有研究跟踪记录。先在关注页添加股票并形成研究快照，研究中心才会出现判断、变化与结果。</span>
-            <div className={styles.actionRow}>
-              <Link className={styles.actionLink} to="/watchlist">前往我的关注</Link>
-              <Link className={styles.actionLink} to="/screening">前往透明选股</Link>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {stockEntries.length > 0 ? (
-        <div className={styles.workspace}>
-          <div className={styles.column}>
-            <ModuleCard meta={`${filteredEntries.length} / ${stockEntries.length} 只`} title="研究股票">
-              {filteredEntries.length === 0 ? (
+      <div className={styles.workspace}>
+          <div className={styles.column} role="region" aria-label="研究股票">
+            <ModuleCard meta={`${filteredEntries.length} / ${stockEntries.length} 只`} title="跟踪标的">
+              {stockEntries.length === 0 && !aggregatePending && !aggregateError ? (
+                <div className={styles.empty}>
+                  <strong>尚未选择研究股票</strong>
+                  <span>还没有研究跟踪记录。先在关注页添加股票并形成研究快照，研究中心才会出现判断、变化与结果。</span>
+                  <div className={styles.actionRow}>
+                    <Link className={styles.actionLink} to="/watchlist">前往我的关注</Link>
+                    <Link className={styles.actionLink} to="/screening">前往透明选股</Link>
+                  </div>
+                </div>
+              ) : filteredEntries.length === 0 ? (
                 <div className={styles.empty}>当前分组下没有股票，切换上方概览卡查看其他分组。</div>
               ) : (
                 <ReviewStockList
@@ -769,7 +765,7 @@ export function ResearchCenterPage({ authenticated }: Props) {
             </ModuleCard>
           </div>
 
-          <div className={styles.column}>
+          <div className={styles.column} role="region" aria-label="判断、变化与处理">
             {selectedSymbol ? (
               <>
                 <ModuleCard
@@ -815,11 +811,11 @@ export function ResearchCenterPage({ authenticated }: Props) {
                 </ModuleCard>
               </>
             ) : (
-              <div className={styles.card}><div className={styles.empty}>选择左侧一只股票查看判断-变化-处理链。</div></div>
+              <div className={styles.card}><div className={styles.empty}>选择左侧一只股票查看判断、变化与处理记录。</div></div>
             )}
           </div>
 
-          <div className={`${styles.column} ${styles.actionsColumn}`}>
+          <div className={`${styles.column} ${styles.actionsColumn}`} role="region" aria-label="下一步">
             {selectedSymbol ? (
               <ModuleCard
                 error={actionsQuery.isError}
@@ -830,7 +826,11 @@ export function ResearchCenterPage({ authenticated }: Props) {
                   <ReviewActions actionItem={selectedActionItem} symbol={selectedSymbol} />
                 )}
               </ModuleCard>
-            ) : null}
+            ) : (
+              <ModuleCard title="待处理动作">
+                <div className={styles.empty}>选择研究股票后查看待处理任务与复盘动作。</div>
+              </ModuleCard>
+            )}
             <ModuleCard
               error={tradeReviewsQuery.isError}
               meta={tradeReviews ? `共 ${tradeReviews.summary.total ?? "--"} 项 · 已确认 ${tradeReviews.summary.confirmed ?? "--"} · 已归档 ${tradeReviews.summary.archived ?? "--"}` : undefined}
@@ -848,7 +848,6 @@ export function ResearchCenterPage({ authenticated }: Props) {
             </ModuleCard>
           </div>
         </div>
-      ) : null}
 
       {changes?.boundary ? <p className={styles.boundaryNote}>{changes.boundary}</p> : null}
       {outcomes?.boundary ? <p className={styles.boundaryNote}>{outcomes.boundary}</p> : null}

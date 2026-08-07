@@ -14,9 +14,8 @@
 .noticeSuccess { border-color: #abefc6; color: #067647; background: #ecfdf3; }
 .noticeConflict { border-color: #fecdc9; color: #b42318; background: #fef3f2; }
 
-/* 三栏：会话侧栏 / 消息主列 / 证据与候选抽屉；无内容时抽屉不渲染（不做空壳）。 */
+/* 三栏：会话侧栏 / 消息主列 / 证据与候选栏。固定骨架避免数据加载前后页面跳变。 */
 .layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) 370px; gap: 18px; align-items: start; }
-.layoutNoDrawer { grid-template-columns: 280px minmax(0, 1fr); }
 .mainColumn { min-width: 0; display: grid; gap: 18px; }
 .drawerColumn { min-width: 0; display: grid; gap: 18px; }
 
@@ -126,7 +125,7 @@
   .drawerColumn { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 819px) {
-  .layout, .layoutNoDrawer { grid-template-columns: minmax(0, 1fr); }
+  .layout { grid-template-columns: minmax(0, 1fr); }
   .drawerColumn { grid-template-columns: minmax(0, 1fr); }
   .messageBubble { max-width: 94%; }
   .conversationList { max-height: 220px; }
