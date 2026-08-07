@@ -551,7 +551,7 @@ function LiZongRunSummaryCard({ data, pending, error, onRetry }: {
         <>
           <div className={styles.chipRow}>
             <span className={`${styles.badge} ${statusTone(run.status ?? "unavailable")}`}>{statusLabel(run.status ?? "unavailable")}</span>
-            {data?.coverage?.fullMarketCoverage === false ? (
+            {data?.coverage?.fullMarketCoverage !== true ? (
               <span className={`${styles.badge} ${styles.badgePartial}`}>未覆盖全市场</span>
             ) : null}
           </div>
@@ -1116,9 +1116,12 @@ export function ScreeningPage({ authenticated }: Props) {
                   {liZongData.boundary ? <p className={styles.boundaryNote}>{liZongData.boundary}</p> : null}
                 </div>
               ) : (
-                <div className={styles.layout}>
-                  <div className={styles.mainColumn}>
-                    <ModuleCard meta={`${liZongData.items.length} 条 · 数据日期 ${formatDate(liZongData.dataMeta.latestAsOfDate)}`} title="李总策略候选">
+              <div className={styles.layout}>
+                <div className={styles.mainColumn}>
+                    <ModuleCard meta={`${liZongData.items.length} 条 · 数据日期 ${formatDate(liZongData.dataMeta.latestAsOfDate)}`} title={liZongData.dataMeta.fullMarketCoverage === true ? "李总策略候选" : "李总策略局部快照"}>
+                      {liZongData.dataMeta.fullMarketCoverage !== true ? (
+                        <p className={styles.helper}>当前仅显示已发布的局部快照，不能用于全市场排名或漏选判断。</p>
+                      ) : null}
                       <LiZongCandidateTable
                         data={liZongData}
                         onSelect={(symbol) => updateParams({ symbol })}

@@ -145,6 +145,7 @@ describe("ScreeningPage 李总模式", () => {
     expect(await screen.findByText("最近筛选 Run")).toBeInTheDocument();
     expect(await screen.findByText("部分数据可用")).toBeInTheDocument();
     expect(screen.getByText(/等待补齐数据/)).toBeInTheDocument();
+    expect(screen.getByText("当前仅显示已发布的局部快照，不能用于全市场排名或漏选判断。")).toBeInTheDocument();
     // 状态筛选 chips 带真实计数。
     const chipGroup = screen.getByRole("group", { name: "候选状态筛选" });
     expect(within(chipGroup).getByRole("button", { name: /全部 3/ })).toBeInTheDocument();
