@@ -19,9 +19,13 @@ const AdvisorPage = lazy(async () => {
   return { default: module.AdvisorPage };
 });
 
+const ResearchCenterPage = lazy(async () => {
+  const module = await import("../features/research-center/ResearchCenterPage");
+  return { default: module.ResearchCenterPage };
+});
+
 const pages = [
   ["/market-data", "行情数据", "集中呈现指数、广度、板块与全球市场行情。"],
-  ["/research-center", "研究中心", "汇集可核验研究产出、变化和结论。"],
 ] as const;
 
 function isProtectedPath(pathname: string): boolean {
@@ -75,6 +79,7 @@ function ProductApp() {
         <Route element={<WatchlistPage authenticated={formal} />} path="/watchlist" />
         <Route element={<ScreeningPage authenticated={formal} />} path="/screening" />
         <Route element={<Suspense fallback={<PlaceholderPage locked={!formal} responsibility="正在加载个人研究对话。" title="金融顾问" />}><AdvisorPage authenticated={formal} /></Suspense>} path="/advisor/:conversationId?" />
+        <Route element={<Suspense fallback={<PlaceholderPage locked={!formal} responsibility="正在加载个人研究状态。" title="研究中心" />}><ResearchCenterPage authenticated={formal} /></Suspense>} path="/research-center" />
         {pages.map(([path, title, responsibility]) => <Route element={<PlaceholderPage key={path} locked={!formal} responsibility={responsibility} title={title} />} key={path} path={path} />)}
         <Route element={<NotFoundPage />} path="*" />
       </Route>

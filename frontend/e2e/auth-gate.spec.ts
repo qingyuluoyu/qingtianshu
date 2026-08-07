@@ -11,6 +11,15 @@ const accountSession = {
   session_expires_at: "2026-08-11T00:00:00+00:00",
 };
 
+const emptyResearchCenterPackets: Record<string, unknown> = {
+  "/me/research-priority": { type: "research_priority", items: [], coverage: { requested: 0, available: 0, missing_baseline: 0 } },
+  "/me/research-changes": { type: "research_tracking", events: [], coverage: { requested: 0, with_report: 0, with_change_archive: 0 } },
+  "/me/research-actions": { type: "research_actions", items: [], summary: { symbols: 0, triggered: 0, pending_data: 0, watching: 0, priority_research: 0 } },
+  "/me/evidence-tasks": { items: [], summary: { total: 0 } },
+  "/me/research-outcomes": { type: "research_outcome", items: [], coverage: { requested_symbols: 0, with_archives: 0, available_outcomes: 0, pending_outcomes: 0 } },
+  "/me/run-reviews": { items: [], summary: { total: 0, filtered: 0, repaired: 0, days: 30 } },
+};
+
 test.beforeEach(async ({ page }) => {
   await page.route("**/session/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: false }) }));
   await page.route("**/events", (route) => route.fulfill({ status: 200, contentType: "text/event-stream", body: "" }));
@@ -25,6 +34,12 @@ test.beforeEach(async ({ page }) => {
       boundary: "认证测试空态。",
     }),
   }));
+  await page.route("**/me/*", (route) => {
+    const payload = emptyResearchCenterPackets[new URL(route.request().url()).pathname];
+    return payload
+      ? route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) })
+      : route.continue();
+  });
 });
 
 for (const path of ["/today", "/screening", "/watchlist", "/stocks/000063.SZ", "/advisor", "/research-center"]) {
@@ -111,7 +126,8 @@ test("legacy session stays locked while a refreshed formal session restores acce
   await page.route("**/session/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, session: accountSession }) }));
   await page.reload();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByText("建设中：本轮不接入业务数据。")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "研究中心", exact: true })).toBeVisible();
+  await expect(page.getByText("还没有需要排序的关注标的")).toBeVisible();
 });
 
 test("logout clears the authenticated view and reopens the dialog on the current URL", async ({ page }) => {
