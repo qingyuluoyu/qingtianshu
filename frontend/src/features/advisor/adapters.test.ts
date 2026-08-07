@@ -49,7 +49,7 @@ describe("advisor adapters", () => {
 
   it("throws ContractError on wrong structured_answer contract version", () => {
     const payload = conversationDetailPayload();
-    payload.messages[1].metadata.structured_answer.contract_version = "other_v9";
+    payload.messages[1]!.metadata!.structured_answer.contract_version = "other_v9";
     expect(() => parseConversationDetail(payload)).toThrow(ContractError);
   });
 

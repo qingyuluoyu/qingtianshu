@@ -164,8 +164,8 @@ async function mockStockResearch(page: Page) {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
-    if (path === "/session" && request.method() === "GET") {
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(accountSession) });
+    if (path === "/session/status" && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, session: accountSession }) });
       return;
     }
     if (path === "/events") {

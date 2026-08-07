@@ -13,7 +13,7 @@ const accountSession = {
 };
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/session", (route) => route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify(sessionExpired) }));
+  await page.route("**/session/status", (route) => route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify(sessionExpired) }));
 });
 
 for (const path of ["/today", "/screening", "/watchlist", "/stocks/000063.SZ", "/advisor", "/research-center"]) {
@@ -92,19 +92,19 @@ test("auth errors are rendered from stable backend codes", async ({ page }) => {
 });
 
 test("legacy session stays locked while a refreshed formal session restores access", async ({ page }) => {
-  await page.route("**/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...accountSession, auth_type: "legacy_anonymous", is_registered: false, account: null, masked_phone: null }) }));
+  await page.route("**/session/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, session: { ...accountSession, auth_type: "legacy_anonymous", is_registered: false, account: null, masked_phone: null } }) }));
   await page.goto("/research-center");
   await expect(page.getByRole("dialog")).toBeVisible();
 
-  await page.unroute("**/session");
-  await page.route("**/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(accountSession) }));
+  await page.unroute("**/session/status");
+  await page.route("**/session/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, session: accountSession }) }));
   await page.reload();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByText("建设中：本轮不接入业务数据。")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "研究中心" })).toBeVisible();
 });
 
 test("logout clears the authenticated view and reopens the dialog on the current URL", async ({ page }) => {
-  await page.route("**/session", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(accountSession) }));
+  await page.route("**/session/status", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, session: accountSession }) }));
   await page.route("**/session", (route) => {
     if (route.request().method() === "DELETE") return route.fulfill({ status: 204 });
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(accountSession) });
