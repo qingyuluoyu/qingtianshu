@@ -10,6 +10,7 @@ import {
   type LiZongStatusFilter,
   type ScreenParams,
 } from "./api";
+import { ApiTransportError } from "../../api/client";
 
 /**
  * Query key 遵循合同 §2.3：`['screener', profile, params, page]`。
@@ -24,6 +25,7 @@ export const screeningQueryKeys = {
 };
 
 function retry(failureCount: number, error: Error): boolean {
+  if (error instanceof ApiTransportError) return false;
   if (error instanceof ScreeningApiError && (error.status === 401 || error.status === 422 || error.status === 503)) return false;
   return failureCount < 2;
 }

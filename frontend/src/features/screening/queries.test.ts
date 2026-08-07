@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ApiTransportError } from "../../api/client";
 import { ScreeningApiError, type ScreenParams } from "./api";
 import { screeningQueries } from "./queries";
 
@@ -15,5 +16,10 @@ describe("screening query retry policy", () => {
 
     expect(typeof retry).toBe("function");
     expect((retry as (failureCount: number, error: Error) => boolean)(0, new ScreeningApiError(503, "数据正在准备中"))).toBe(false);
+  });
+  it("does not turn a transport timeout into multiple full screening runs", () => {
+    const retry = screeningQueries.screen(params).retry;
+
+    expect((retry as (failureCount: number, error: Error) => boolean)(0, new ApiTransportError("timeout"))).toBe(false);
   });
 });
