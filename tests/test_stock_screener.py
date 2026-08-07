@@ -354,6 +354,96 @@ def test_persisted_database_snapshot_keeps_screener_usable_without_live_provider
     assert "生产数据库" in result["warnings"][0]
 
 
+def test_published_market_snapshot_keeps_screener_usable_without_live_provider(app):
+    publisher = StockScreenerService(
+        FakeTushareClient(), database=app.state.database, snapshot_ttl_seconds=600
+    )
+
+    published = publisher.refresh_persisted_market_snapshot()
+
+    assert published["published"] is True
+    reader = StockScreenerService(
+        None, database=app.state.database, snapshot_ttl_seconds=600
+    )
+    result = reader.screen(profile="trend", max_results=3)
+    assert result["status"] == "ready"
+    assert result["data_meta"]["source_mode"] == "persisted"
+    assert result["data_contract"]["data_version"].startswith(
+        "stock-screen-market-v1-"
+    )
+
+
+def test_incomplete_market_snapshot_cannot_replace_previously_published_snapshot(app):
+    publisher = StockScreenerService(
+        FakeTushareClient(), database=app.state.database, snapshot_ttl_seconds=600
+    )
+    stable = publisher.refresh_persisted_market_snapshot()
+    assert stable["published"] is True
+
+    original_build_snapshot = publisher._build_snapshot
+
+    def under_covered_snapshot():
+        frame, metadata = original_build_snapshot()
+        incomplete = frame.head(2).copy()
+        return incomplete, {
+            **metadata,
+            "market_coverage_ratio": 0.4,
+            "listed_stock_count": 5,
+        }
+
+    publisher._build_snapshot = under_covered_snapshot  # type: ignore[method-assign]
+    refresh = publisher.refresh_persisted_market_snapshot()
+
+    assert refresh["published"] is False
+    assert refresh["previous_stable_retained"] is True
+    reader = StockScreenerService(None, database=app.state.database)
+    result = reader.screen(profile="trend", max_results=3)
+    assert result["status"] == "ready"
+    assert result["data_contract"]["data_version"] == stable["data_version"]
+
+
+def test_failed_market_snapshot_refresh_keeps_previously_published_snapshot(app):
+    publisher = StockScreenerService(
+        FakeTushareClient(), database=app.state.database, snapshot_ttl_seconds=600
+    )
+    stable = publisher.refresh_persisted_market_snapshot()
+    assert stable["published"] is True
+
+    def unavailable_snapshot():
+        raise RuntimeError("provider_unavailable")
+
+    publisher._build_snapshot = unavailable_snapshot  # type: ignore[method-assign]
+    refresh = publisher.refresh_persisted_market_snapshot()
+
+    assert refresh == {
+        "status": "failed",
+        "published": False,
+        "data_version": None,
+        "snapshot_stock_count": 0,
+        "market_coverage_ratio": 0.0,
+        "previous_stable_retained": True,
+    }
+    reader = StockScreenerService(None, database=app.state.database)
+    assert reader.screen(profile="trend", max_results=3)["data_contract"][
+        "data_version"
+    ] == stable["data_version"]
+
+
+def test_background_does_not_register_market_snapshot_without_tushare(app):
+    app.state.stock_screener.client = None
+
+    assert "stock_screener_market_snapshot_refresh" not in app.state.background._job_functions()
+
+
+def test_background_registers_market_snapshot_refresh_when_tushare_is_configured(app):
+    app.state.stock_screener.client = FakeTushareClient()
+
+    jobs = app.state.background._job_functions()
+
+    assert "stock_screener_market_snapshot_refresh" in jobs
+    assert jobs["stock_screener_market_snapshot_refresh"]()["published"] is True
+
+
 def test_pullback_candidates_prioritize_samples_closest_to_stabilizing():
     frame = pd.DataFrame(
         [

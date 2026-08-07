@@ -109,6 +109,7 @@ class Settings:
     max_image_pixels: int = 25_000_000
     max_document_upload_bytes: int = 20 * 1024 * 1024
     background_market_news_refresh_seconds: int = 600
+    background_stock_screener_snapshot_refresh_seconds: int = 86_400
     tushare_token: str = ""
     tushare_api_url: str = "https://teajoin.com"
     tushare_enabled: bool = False
@@ -251,6 +252,15 @@ class Settings:
             ),
             background_market_news_refresh_seconds=int(
                 os.getenv("BACKGROUND_MARKET_NEWS_REFRESH_SECONDS", "600")
+            ),
+            background_stock_screener_snapshot_refresh_seconds=max(
+                3600,
+                int(
+                    os.getenv(
+                        "BACKGROUND_STOCK_SCREENER_SNAPSHOT_REFRESH_SECONDS",
+                        "86400",
+                    )
+                ),
             ),
             tushare_token=os.getenv("TUSHARE_TOKEN", "").strip(),
             tushare_api_url=os.getenv("TUSHARE_API_URL", "https://teajoin.com").strip().rstrip("/"),

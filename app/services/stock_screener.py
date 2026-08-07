@@ -124,6 +124,9 @@ FINANCIAL_FILTERS = {
 class StockScreenerService:
     """Transparent A-share candidate screening backed by deterministic data."""
 
+    MARKET_SNAPSHOT_DATASET = "stock_screen_market"
+    MARKET_SNAPSHOT_INCOMPLETE_DATASET = "stock_screen_market_incomplete"
+
     def __init__(
         self,
         client: Any | None,
@@ -468,6 +471,102 @@ class StockScreenerService:
             "boundary": "这是可解释的研究候选筛选，不构成推荐、评级、目标价或交易建议。",
         }
 
+    def refresh_persisted_market_snapshot(self) -> dict[str, Any]:
+        """Publish the market inputs consumed by the generic screener.
+
+        This executes in a background worker.  The user-facing screening
+        request only reads the resulting stable snapshot, so it never needs
+        to initiate a full-market provider scan.
+        """
+
+        if self.client is None:
+            raise StockScreenerUnavailable("选股快照同步尚未配置数据源")
+        if self.database is None:
+            raise StockScreenerUnavailable("选股快照同步缺少持久化数据库")
+
+        run = self.database.start_tushare_sync_run(
+            job_scope="stock_screen_market",
+            as_of_date=None,
+            datasets=["trade_cal", "stock_basic", "daily", "daily_basic"],
+        )
+        try:
+            frame, metadata = self._build_snapshot()
+            rows = self._json_rows(frame)
+            coverage_ratio = float(metadata.get("market_coverage_ratio") or 0.0)
+            stable = bool(rows) and coverage_ratio >= self.minimum_market_coverage_ratio
+            dataset = (
+                self.MARKET_SNAPSHOT_DATASET
+                if stable
+                else self.MARKET_SNAPSHOT_INCOMPLETE_DATASET
+            )
+            fingerprint = hashlib.sha256(b"stock-screen-market-v1")
+            fingerprint.update(str(metadata.get("latest_completed_trade_date") or "").encode("utf-8"))
+            fingerprint.update(
+                pd.util.hash_pandas_object(
+                    frame.sort_values("ts_code", kind="stable"), index=False
+                ).values.tobytes()
+            )
+            data_version = f"stock-screen-market-v1-{fingerprint.hexdigest()[:16]}"
+            payload = {
+                "rows": rows,
+                "metadata": metadata,
+                "requested_as_of_date": metadata.get("latest_completed_trade_date"),
+            }
+            self.database.save_tushare_dataset_snapshot(
+                dataset=dataset,
+                scope_key="all",
+                as_of_date=metadata.get("latest_completed_trade_date"),
+                report_period=None,
+                source_updated_at=metadata.get("snapshot_built_at"),
+                sync_run_id=str(run["id"]),
+                data_version=data_version,
+                data_status="stable" if stable else "incomplete",
+                payload=payload,
+            )
+            finished = self.database.finish_tushare_sync_run(
+                str(run["id"]),
+                status="stable" if stable else "partial",
+                data_version=data_version,
+                summary={
+                    "snapshot_stock_count": len(rows),
+                    "market_coverage_ratio": coverage_ratio,
+                    "as_of_date": metadata.get("latest_completed_trade_date"),
+                    "published": stable,
+                },
+            )
+            return {
+                "status": finished.get("status"),
+                "published": stable,
+                "data_version": data_version,
+                "snapshot_stock_count": len(rows),
+                "market_coverage_ratio": coverage_ratio,
+                "previous_stable_retained": bool(
+                    not stable
+                    and self.database.latest_tushare_dataset_snapshot(
+                        self.MARKET_SNAPSHOT_DATASET, "all"
+                    )
+                ),
+            }
+        except Exception as exc:
+            previous = self.database.latest_tushare_dataset_snapshot(
+                self.MARKET_SNAPSHOT_DATASET, "all"
+            )
+            finished = self.database.finish_tushare_sync_run(
+                str(run["id"]),
+                status="failed",
+                data_version=None,
+                summary={"previous_stable_retained": previous is not None},
+                error=type(exc).__name__,
+            )
+            return {
+                "status": finished.get("status"),
+                "published": False,
+                "data_version": None,
+                "snapshot_stock_count": 0,
+                "market_coverage_ratio": 0.0,
+                "previous_stable_retained": previous is not None,
+            }
+
     def _query(self, api_name: str, **params: Any) -> pd.DataFrame:
         try:
             result = self.client.query(api_name, **params)
@@ -579,6 +678,11 @@ class StockScreenerService:
     def _build_persisted_snapshot(self) -> tuple[pd.DataFrame, dict[str, Any]]:
         if self.database is None:
             raise ValueError("没有持久化选股数据库")
+        published = self.database.latest_tushare_dataset_snapshot(
+            self.MARKET_SNAPSHOT_DATASET, "all"
+        )
+        if published is not None:
+            return self._read_published_market_snapshot(published)
         datasets = {
             name: self.database.list_latest_tushare_dataset_snapshots(
                 name,
@@ -769,6 +873,70 @@ class StockScreenerService:
                 else "constrained"
             ),
         }
+
+    def _read_published_market_snapshot(
+        self, snapshot: Mapping[str, Any]
+    ) -> tuple[pd.DataFrame, dict[str, Any]]:
+        payload = snapshot.get("payload") or {}
+        rows = payload.get("rows") or []
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("通用选股稳定快照为空")
+        frame = pd.DataFrame(rows)
+        required = {"ts_code", "latest_close", "return_5d_pct", "return_20d_pct"}
+        if frame.empty or not required.issubset(frame.columns):
+            raise ValueError("通用选股稳定快照字段不完整")
+        for column in (
+            "latest_close",
+            "pct_change",
+            "amount",
+            "volume",
+            "close_5d_base",
+            "close_20d_base",
+            "turnover_rate",
+            "volume_ratio",
+            "pe_ttm",
+            "pb",
+            "ps_ttm",
+            "total_mv_yi",
+            "circ_mv_yi",
+            "return_5d_pct",
+            "return_20d_pct",
+        ):
+            frame[column] = pd.to_numeric(frame.get(column), errors="coerce")
+        frame["industry"] = frame.get("industry", "未分类").fillna("未分类").replace("", "未分类")
+        frame["industry_avg_return_20d_pct"] = frame.groupby("industry")["return_20d_pct"].transform("mean")
+        frame["industry_excess_20d_pct"] = frame["return_20d_pct"] - frame["industry_avg_return_20d_pct"]
+        metadata = dict(payload.get("metadata") or {})
+        metadata.update(
+            {
+                "source": "PostgreSQL 通用选股稳定快照",
+                "source_mode": "persisted",
+                "data_version": snapshot.get("data_version"),
+                "snapshot_built_at": snapshot.get("created_at"),
+                "cache_hit": False,
+            }
+        )
+        if not metadata.get("latest_completed_trade_date"):
+            raise ValueError("通用选股稳定快照缺少交易日")
+        return frame, metadata
+
+    @staticmethod
+    def _json_rows(frame: pd.DataFrame) -> list[dict[str, Any]]:
+        def clean(value: Any) -> Any:
+            if value is None or value is pd.NA:
+                return None
+            if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+                return None
+            if isinstance(value, pd.Timestamp):
+                return value.isoformat()
+            if hasattr(value, "item"):
+                return value.item()
+            return value
+
+        return [
+            {str(key): clean(value) for key, value in row.items()}
+            for row in frame.to_dict(orient="records")
+        ]
 
     def _build_snapshot(self) -> tuple[pd.DataFrame, dict[str, Any]]:
         now_cn = datetime.now(ZoneInfo("Asia/Shanghai"))

@@ -666,6 +666,7 @@ def create_app(
         event_broker,
         settings,
         tushare_snapshots=tushare_snapshots,
+        stock_screener=stock_screener,
         li_zong_strategy=li_zong_strategy,
         li_zong_history=li_zong_history,
         li_zong_backtest=li_zong_backtest,

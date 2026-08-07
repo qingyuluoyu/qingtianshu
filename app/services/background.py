@@ -167,6 +167,7 @@ class BackgroundScheduler:
         broker: EventBroker,
         settings: Settings,
         tushare_snapshots: TushareSnapshotService | None = None,
+        stock_screener: Any | None = None,
         li_zong_strategy: LiZongStrategyService | None = None,
         li_zong_history: LiZongHistoryService | None = None,
         li_zong_backtest: LiZongPortfolioBacktestService | None = None,
@@ -199,6 +200,7 @@ class BackgroundScheduler:
         self.broker = broker
         self.settings = settings
         self.tushare_snapshots = tushare_snapshots
+        self.stock_screener = stock_screener
         self.li_zong_strategy = li_zong_strategy
         self.li_zong_history = li_zong_history
         self.li_zong_backtest = li_zong_backtest
@@ -384,6 +386,12 @@ class BackgroundScheduler:
             "article_uses_hermes": self.settings.background_use_hermes
             and self.settings.hermes_enabled,
             "li_zong_strategy_enabled": bool(self._li_zong_enabled),
+            "stock_screener_snapshot_enabled": bool(
+                self._stock_screener_snapshot_enabled
+            ),
+            "stock_screener_snapshot_refresh_seconds": (
+                self.settings.background_stock_screener_snapshot_refresh_seconds
+            ),
             "li_zong_worker_running": bool(
                 (self.is_running or active_workers > 0) and self._li_zong_enabled
             ),
@@ -415,6 +423,10 @@ class BackgroundScheduler:
             "li_zong_strategy_refresh": self._refresh_li_zong_strategy,
             "li_zong_backtest_refresh": self._refresh_li_zong_backtest,
         }
+        if self._stock_screener_snapshot_enabled:
+            functions["stock_screener_market_snapshot_refresh"] = (
+                self._refresh_stock_screener_market_snapshot
+            )
         if self.trade_workflow is not None:
             functions["trade_reviews_readiness_refresh"] = (
                 self.trade_workflow.refresh_pending_reviews
@@ -503,6 +515,12 @@ class BackgroundScheduler:
                 max(10, self.settings.li_zong_refresh_seconds),
                 80,
                 self._li_zong_enabled,
+            ),
+            (
+                "stock_screener_market_snapshot_refresh",
+                self.settings.background_stock_screener_snapshot_refresh_seconds,
+                75,
+                self._stock_screener_snapshot_enabled,
             ),
             (
                 "li_zong_backtest_refresh",
@@ -646,6 +664,13 @@ class BackgroundScheduler:
             and self.li_zong_strategy is not None
         )
 
+    @property
+    def _stock_screener_snapshot_enabled(self) -> bool:
+        return bool(
+            self.stock_screener is not None
+            and getattr(self.stock_screener, "client", None) is not None
+        )
+
     def _run_job(self, job_name: str, function: Callable[[], dict[str, Any]]) -> None:
         job_id = self.database.start_background_job(job_name)
         try:
@@ -764,6 +789,21 @@ class BackgroundScheduler:
             "sync_results": strategy.get("sync_results") or [],
             "history": history,
         }
+
+    def _refresh_stock_screener_market_snapshot(self) -> dict[str, Any]:
+        if self.stock_screener is None:
+            return {"status": "disabled", "published": False}
+        result = self.stock_screener.refresh_persisted_market_snapshot()
+        self.broker.publish(
+            {
+                "type": "stock_screener_snapshot_updated",
+                "time": utc_now(),
+                "status": result.get("status"),
+                "published": bool(result.get("published")),
+                "data_version": result.get("data_version"),
+            }
+        )
+        return result
 
     def _refresh_li_zong_backtest(self) -> dict[str, Any]:
         if self.li_zong_backtest is None:
