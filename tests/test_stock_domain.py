@@ -158,6 +158,40 @@ def test_ai_thesis_candidate_needs_completed_run_and_can_be_rejected(app):
     ] == "正式判断保持不变"
 
 
+def test_demo_watchlist_seed_never_overwrites_confirmed_thesis_or_restores_delete(app):
+    client = TestClient(app)
+    _create_user(client, "网页体验用户")
+    initial = client.get("/v1/stocks/000063/theses").json()["active"]
+
+    draft = client.post(
+        "/v1/stocks/000063/theses",
+        json={
+            "reason_text": "用户确认的新判断：重点核验利润和经营现金流",
+            "watch_items": ["利润兑现", "经营现金流"],
+            "recheck_conditions": ["现金流继续恶化时重新判断"],
+            "source": "user",
+            "base_version": initial["version_no"],
+        },
+    )
+    assert draft.status_code == 201
+    confirmed = client.post(
+        f"/v1/stocks/000063/theses/{draft.json()['id']}/confirm"
+    )
+    assert confirmed.status_code == 200
+    assert confirmed.json()["status"] == "active"
+
+    assert client.get("/session").status_code == 200
+    assert client.get("/me/watchlist").status_code == 200
+    active = client.get("/v1/stocks/000063/theses").json()["active"]
+    assert active["version_no"] == initial["version_no"] + 1
+    assert active["reason_text"].startswith("用户确认的新判断")
+
+    assert client.delete("/me/watchlist/NVDA").status_code == 204
+    assert client.get("/session").status_code == 200
+    symbols = {item["symbol"] for item in client.get("/me/watchlist").json()["items"]}
+    assert "NVDA" not in symbols
+
+
 def test_relation_version_history_end_restore_and_user_isolation(app):
     owner = TestClient(app)
     _create_user(owner, "Relation Owner")

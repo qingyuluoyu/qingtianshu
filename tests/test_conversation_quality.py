@@ -49,7 +49,7 @@ def _create_run(
 
 
 def test_conversation_quality_detects_runtime_and_repeated_answer_issues(settings):
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     user = database.create_user("Quality User")
     conversation = database.create_conversation(user["id"], "行情复盘")
@@ -108,7 +108,12 @@ def test_conversation_quality_detects_runtime_and_repeated_answer_issues(setting
     payload = ConversationQualityService(database).analyze(user["id"])
 
     issue_keys = {item["key"] for item in payload["issues"]}
-    assert {"run_fallbacks", "guard_repairs", "slow_answers", "repeated_answers"} <= issue_keys
+    assert {
+        "run_fallbacks",
+        "guard_repairs",
+        "slow_answers",
+        "repeated_answers",
+    } <= issue_keys
     assert payload["summary"]["runs"] == 2
     assert payload["summary"]["conversations"] == 1
     assert payload["summary"]["quality_score"] is None
@@ -119,7 +124,9 @@ def test_conversation_quality_detects_runtime_and_repeated_answer_issues(setting
     assert payload["latency"]["p50_seconds"]["request_total_seconds"] == 18.5
     assert payload["latency"]["p50_seconds"]["first_token_seconds"] == 0.8
     assert payload["latency"]["p50_seconds"]["first_visible_seconds"] == 1.6
-    slow_issue = next(item for item in payload["issues"] if item["key"] == "slow_answers")
+    slow_issue = next(
+        item for item in payload["issues"] if item["key"] == "slow_answers"
+    )
     assert "网页已反馈取证、生成、守卫和保存阶段" in slow_issue["detail"]
     assert "正文增量展示" in slow_issue["detail"]
     assert "首个安全可见片段" in slow_issue["next_step"]
@@ -127,7 +134,7 @@ def test_conversation_quality_detects_runtime_and_repeated_answer_issues(setting
 
 
 def test_rendered_source_metadata_prevents_false_missing_reference_issue(settings):
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     user = database.create_user("Referenced User")
     conversation = database.create_conversation(user["id"], "有引用的研究")
@@ -145,9 +152,7 @@ def test_rendered_source_metadata_prevents_false_missing_reference_issue(setting
         intent="market_brief",
         run_id=run["id"],
         metadata={
-            "knowledge_sources": [
-                {"title": "市场因果证据规则", "scope": "common"}
-            ]
+            "knowledge_sources": [{"title": "市场因果证据规则", "scope": "common"}]
         },
     )
 
@@ -159,7 +164,7 @@ def test_rendered_source_metadata_prevents_false_missing_reference_issue(setting
 
 
 def test_conversation_quality_persists_snapshot_and_workspace_json(settings):
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     user = database.create_user("Persistence User")
 
@@ -167,9 +172,7 @@ def test_conversation_quality_persists_snapshot_and_workspace_json(settings):
 
     snapshot = database.latest_conversation_quality_snapshot(user["id"])
     output_path = (
-        Path(user["workspace_path"])
-        / "quality"
-        / "conversation-review-latest.json"
+        Path(user["workspace_path"]) / "quality" / "conversation-review-latest.json"
     )
     assert snapshot is not None
     assert snapshot["payload"]["method"] == payload["method"]
@@ -178,7 +181,7 @@ def test_conversation_quality_persists_snapshot_and_workspace_json(settings):
 
 
 def test_conversation_quality_excludes_explicit_evaluation_scope(settings):
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     user = database.create_user("Evaluation Isolation User")
     user_conversation = database.create_conversation(user["id"], "正常研究")
@@ -227,7 +230,7 @@ def test_conversation_quality_excludes_explicit_evaluation_scope(settings):
 
 
 def test_available_market_statistics_are_not_misclassified_as_data_gaps(settings):
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     user = database.create_user("Data Gap User")
     conversation = database.create_conversation(user["id"], "数据口径")

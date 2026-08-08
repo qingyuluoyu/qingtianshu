@@ -12,12 +12,13 @@ def _item(
     title: str,
     published_at: str,
     suffix: str,
+    summary: str | None = None,
 ) -> dict:
     return {
         "symbol": "000063.SZ",
         "category": category,
         "title": title,
-        "summary": None,
+        "summary": summary,
         "source": "test",
         "url": f"https://example.invalid/{suffix}",
         "published_at": published_at,
@@ -27,7 +28,7 @@ def _item(
 
 
 def test_event_timeline_classifies_persists_and_indexes_knowledge(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     database.upsert_news_items(
         [
@@ -36,6 +37,7 @@ def test_event_timeline_classifies_persists_and_indexes_knowledge(tmp_path: Path
                 title="关于回购公司股份的进展公告",
                 published_at="2026-07-20T10:00:00+08:00",
                 suffix="buyback",
+                summary="公司公告原文摘录：截至公告日，公司已回购股份120万股。",
             ),
             _item(
                 category="announcement",
@@ -64,9 +66,7 @@ def test_event_timeline_classifies_persists_and_indexes_knowledge(tmp_path: Path
         ]
     )
 
-    packet = EventTimelineService(database).get_packet(
-        "000063", refresh_sources=False
-    )
+    packet = EventTimelineService(database).get_packet("000063", refresh_sources=False)
 
     assert packet["status"] == "available"
     assert packet["coverage"] == {
@@ -77,16 +77,59 @@ def test_event_timeline_classifies_persists_and_indexes_knowledge(tmp_path: Path
         "risk_events": 1,
         "supportive_events": 1,
         "event_types": 3,
+        "direct_excerpt_events": 1,
     }
     assert packet["supportive_events"][0]["event_type"] == "capital_return"
+    assert packet["supportive_events"][0]["direct_excerpt"] == (
+        "截至公告日，公司已回购股份120万股。"
+    )
     assert packet["risk_events"][0]["event_type"] == "regulatory_legal"
     assert all("必涨" not in item["title"] for item in packet["events"])
     assert database.latest_event_timeline_snapshot("000063.SZ") is not None
-    documents = database.list_knowledge_documents(None)
+    documents = database.list_knowledge_documents(None, include_content=True)
     document = next(
         item for item in documents if item["source_key"] == "event-timeline:000063.SZ"
     )
     assert document["title"] == "中兴通讯重要事件脉络"
+    assert "公司已回购股份120万股" in document["content"]
+
+
+def test_event_timeline_reserves_space_for_official_disclosures(tmp_path: Path):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    newer_media = [
+        _item(
+            category="news",
+            title=f"公司发布新产品进展{i}",
+            published_at=f"2026-07-28T{23 - (i % 20):02d}:00:00+08:00",
+            suffix=f"media-{i}",
+        )
+        for i in range(45)
+    ]
+    older_official = [
+        _item(
+            category="announcement",
+            title=f"关于第{i}项重大合同的公告",
+            published_at=f"2026-07-{20 - i:02d}T18:00:00+08:00",
+            suffix=f"official-{i}",
+            summary=f"公司公告原文摘录：第{i}项合同仍在正常履行。",
+        )
+        for i in range(3)
+    ]
+    database.upsert_news_items([*newer_media, *older_official])
+
+    packet = EventTimelineService(database).get_packet(
+        "000063.SZ", refresh_sources=False
+    )
+
+    official = [
+        item
+        for item in packet["events"]
+        if item["evidence_level"] == "official_disclosure"
+    ]
+    assert len(packet["events"]) == 31
+    assert len(official) == 3
+    assert all(item.get("direct_excerpt") for item in official)
 
 
 def test_event_timeline_api_chat_and_followup_keep_symbol_context(client):
@@ -126,9 +169,7 @@ def test_stock_research_packet_includes_persisted_event_timeline(app):
 
     assert evidence["event_timeline"]["status"] == "available"
     news_module = next(
-        item
-        for item in evidence["analysis_board"]["modules"]
-        if item["key"] == "news"
+        item for item in evidence["analysis_board"]["modules"] if item["key"] == "news"
     )
     assert news_module["status"] == "ready"
     assert "事件脉络" in news_module["label"]

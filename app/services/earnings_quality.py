@@ -128,7 +128,10 @@ class EarningsQualityService:
 
         if latest_cash_ratio is not None:
             if latest_cash_ratio >= 1:
-                supports.append("经营现金流对归母净利润覆盖达到或超过 1。")
+                supports.append(
+                    "本期经营现金流金额高于归母净利润；这只说明本期覆盖关系，"
+                    "仍需结合经营现金流同比变化、销售收现和营运资金判断现金质量。"
+                )
             elif latest_cash_ratio < 0:
                 contradictions.append("经营现金流与归母净利润方向相反，盈利兑现需要优先复核。")
             elif latest_cash_ratio < 0.5:
@@ -404,6 +407,10 @@ def _cashflow_factor(current: float | None, comparable: float | None) -> dict[st
                 if comparable is not None
                 else "，尚无同类报告期比较。"
             )
+        ),
+        "interpretation_boundary": (
+            "该比率只表示同一报告期经营现金流金额与归母净利润的关系；"
+            "不能单独证明整体盈利质量、回款情况或现金流趋势。"
         ),
     }
 

@@ -89,7 +89,7 @@ def main() -> None:
     show("创建记忆候选", candidate, args.compact)
 
     if args.compact:
-        print("\n✅ 开发联调流程已跑通。产品页面可在 /demo 查看。")
+        print("\n✅ 开发联调流程已跑通。产品页面可在 /today 查看。")
 
 
 if __name__ == "__main__":

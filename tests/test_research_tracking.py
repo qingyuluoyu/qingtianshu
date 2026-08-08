@@ -137,7 +137,12 @@ def test_generated_report_enters_change_archive_and_common_knowledge(client, app
         "技术状态",
         "风险事件",
     }
-    for heading in ("六维证据覆盖", "反方证据", "失效条件", "下一步核验"):
+    for heading in (
+        "六维证据覆盖",
+        "反方证据",
+        "什么时候需要重新判断",
+        "下一步核验",
+    ):
         assert heading in coverage_payload["answer"]
     for label in ("公司经营", "财务质量", "行业与相对表现", "估值", "技术状态", "风险事件"):
         assert label in coverage_payload["answer"]
@@ -175,6 +180,21 @@ def test_research_refresh_ignores_editor_pollution_but_keeps_user_targets(
         "CN",
         "普通用户真实关注",
     )
+    conversation = database.create_conversation(
+        user["id"], "宁德时代筛选线索继续研究"
+    )
+    database.save_deep_stock_session(
+        user_id=user["id"],
+        symbol="300750.SZ",
+        name="宁德时代",
+        conversation_id=conversation["id"],
+        workflow_version="deep_stock_v1",
+        status="active",
+        stages=[],
+        evidence_modules={},
+        unresolved_items=["核验最新经营现金流"],
+        next_question="继续核验筛选线索",
+    )
 
     requested: list[str] = []
 
@@ -190,6 +210,7 @@ def test_research_refresh_ignores_editor_pollution_but_keeps_user_targets(
 
     assert "T" not in requested
     assert "600000.SS" in requested
+    assert "300750.SZ" in requested
     assert set(app.state.settings.default_research_symbols).issubset(requested)
     assert result["requested"] == len(requested)
 

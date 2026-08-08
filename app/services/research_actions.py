@@ -7,6 +7,7 @@ from typing import Any
 from app.catalog import RESEARCH_TARGETS
 from app.db import Database
 from app.services.research_priority import ResearchPriorityService
+from app.services.security_master import SecurityMasterService
 from app.utils import utc_now
 
 
@@ -26,6 +27,7 @@ class ResearchActionService:
     ):
         self.database = database
         self.research_priority = research_priority or ResearchPriorityService(database)
+        self.security_master = SecurityMasterService(database)
 
     def get_packet(self, user_id: str, persist: bool = True) -> dict[str, Any]:
         watchlist = self.database.list_watchlist(user_id)
@@ -93,11 +95,12 @@ class ResearchActionService:
     ) -> dict[str, Any]:
         symbol = str(watchlist_item["symbol"])
         report = self.database.latest_research_report(symbol)
-        name = (
-            RESEARCH_TARGETS.get(symbol, {}).get("name")
-            or watchlist_item.get("name")
-            or (report or {}).get("name")
-            or symbol
+        name = self.security_master.display_name(
+            symbol,
+            RESEARCH_TARGETS.get(symbol, {}).get("name"),
+            priority_item.get("name"),
+            watchlist_item.get("name"),
+            (report or {}).get("name"),
         )
         if report is None:
             action = self._action(

@@ -8,6 +8,7 @@ from typing import Any
 
 from app.catalog import RESEARCH_TARGETS, SECURITY_NAME_ALIASES
 from app.db import Database
+from app.services.security_master import SecurityMasterService
 from app.utils import utc_now
 
 
@@ -22,6 +23,7 @@ class ResearchPriorityService:
 
     def __init__(self, database: Database):
         self.database = database
+        self.security_master = SecurityMasterService(database)
 
     def get_packet(self, user_id: str, persist: bool = True) -> dict[str, Any]:
         watchlist = self.database.list_watchlist(user_id)
@@ -69,7 +71,9 @@ class ResearchPriorityService:
         if report is None:
             return {
                 "symbol": symbol,
-                "name": watchlist_item.get("name") or symbol,
+                "name": self.security_master.display_name(
+                    symbol, watchlist_item.get("name")
+                ),
                 "thesis": watchlist_item.get("thesis"),
                 "status": "baseline_missing",
                 "priority_score": 45,
@@ -91,12 +95,12 @@ class ResearchPriorityService:
             }
 
         evidence = report.get("evidence") or {}
-        display_name = (
-            RESEARCH_TARGETS.get(symbol, {}).get("name")
-            or evidence.get("display_name")
-            or watchlist_item.get("name")
-            or report.get("name")
-            or symbol
+        display_name = self.security_master.display_name(
+            symbol,
+            RESEARCH_TARGETS.get(symbol, {}).get("name"),
+            evidence.get("display_name"),
+            watchlist_item.get("name"),
+            report.get("name"),
         )
         metrics = evidence.get("metrics") or {}
         board = evidence.get("analysis_board") or {}

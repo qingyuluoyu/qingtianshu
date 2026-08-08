@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, time as clock_time, timedelta
+import hashlib
 import math
 import threading
 import time
@@ -63,7 +64,7 @@ PROFILE_DEFINITIONS: dict[str, dict[str, Any]] = {
     "pullback": {
         "label": "回撤后待复核候选",
         "description": "寻找近 20 日回撤、近 5 日暂时企稳且交易活跃度达到门槛的高风险观察样本。",
-        "sort_rule": "按近 5 日收益从高到低排列；不计算综合分。",
+        "sort_rule": "按近 5 日收益从低到高排列，优先展示刚转正、较接近企稳的样本；不计算综合分。",
         "defaults": {
             "min_market_cap_yi": 30.0,
             "min_return_5d": 0.0,
@@ -127,16 +128,23 @@ class StockScreenerService:
         self,
         client: Any | None,
         *,
+        database: Any | None = None,
         snapshot_ttl_seconds: int = 300,
         finance_ttl_seconds: int = 6 * 3600,
         finance_workers: int = 6,
+        minimum_market_coverage_ratio: float = 0.95,
     ) -> None:
         self.client = client
+        self.database = database
         self.snapshot_ttl_seconds = max(30, snapshot_ttl_seconds)
         self.finance_ttl_seconds = max(300, finance_ttl_seconds)
         self.finance_workers = max(1, min(int(finance_workers), 8))
+        self.minimum_market_coverage_ratio = max(
+            0.5, min(float(minimum_market_coverage_ratio), 1.0)
+        )
         self._snapshot: tuple[float, pd.DataFrame, dict[str, Any]] | None = None
         self._finance_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._persisted_finance_packets: dict[str, dict[str, Any]] = {}
         self._lock = threading.RLock()
 
     @staticmethod
@@ -155,13 +163,13 @@ class StockScreenerService:
     def screen(
         self,
         *,
-        profile: str = "quality",
+        profile: str = "trend",
         max_results: int = 12,
         market: str = "all",
         filters: Mapping[str, Any] | None = None,
         force_refresh: bool = False,
     ) -> dict[str, Any]:
-        if self.client is None:
+        if self.client is None and self.database is None:
             raise StockScreenerUnavailable("选股数据尚未就绪，请稍后重试")
         if profile not in PROFILE_DEFINITIONS:
             raise ValueError("不支持的选股模板")
@@ -187,6 +195,9 @@ class StockScreenerService:
         frame, snapshot_meta = self._load_snapshot(force_refresh=force_refresh)
         working = frame.copy()
         input_count = len(working)
+        market_cap_available = int(working["total_mv_yi"].notna().sum())
+        valuation_available = int(working[["pe_ttm", "pb"]].notna().all(axis=1).sum())
+        return_20d_available = int(working["return_20d_pct"].notna().sum())
         working = self._apply_universe_rules(
             working,
             market=market,
@@ -200,14 +211,55 @@ class StockScreenerService:
         needs_financial_filter = profile == "quality" or any(
             key in effective_filters for key in FINANCIAL_FILTERS
         )
+        financial_candidate_pool_count = len(working)
+        finance_packets: dict[str, dict[str, Any]] = {}
         if needs_financial_filter:
-            pool_size = min(40, max(24, max_results * 2))
-            working = self._diverse_financial_pool(working, pool_size)
+            all_financial_symbols = [
+                str(value)
+                for value in working.get("ts_code", pd.Series(dtype=str)).tolist()
+            ]
+            finance_packets.update(
+                self._persisted_financials_many(all_financial_symbols)
+            )
+            persisted_matches = self._apply_financial_filters(
+                working, finance_packets, effective_filters
+            )
+            if self.client is not None and len(persisted_matches) < max_results:
+                incomplete_symbols = {
+                    code
+                    for code in all_financial_symbols
+                    if not self._financial_packet_complete_for_filters(
+                        finance_packets.get(code), effective_filters
+                    )
+                }
+                supplemental = working[
+                    working["ts_code"].astype(str).isin(incomplete_symbols)
+                ]
+                pool_size = min(40, max(24, max_results * 2))
+                supplemental = self._diverse_financial_pool(supplemental, pool_size)
+                supplemental_symbols = [
+                    str(value)
+                    for value in supplemental.get(
+                        "ts_code", pd.Series(dtype=str)
+                    ).tolist()
+                ]
+                finance_packets.update(self._load_financials_many(supplemental_symbols))
+            working = working[working["ts_code"].astype(str).isin(finance_packets)]
         else:
             working = self._sort_frame(working, profile).head(max_results * 2)
-
-        finance_packets = self._load_financials_many(
-            [str(value) for value in working.get("ts_code", pd.Series(dtype=str)).tolist()]
+            financial_symbols = [
+                str(value)
+                for value in working.get("ts_code", pd.Series(dtype=str)).tolist()
+            ]
+            finance_packets = self._load_financials_many(
+                financial_symbols,
+                persisted_only=snapshot_meta.get("source_mode") == "persisted",
+            )
+            financial_candidate_pool_count = len(financial_symbols)
+        financial_available = sum(
+            bool(packet.get("report_period"))
+            and str(packet.get("coverage_status") or "") != "unavailable"
+            for packet in finance_packets.values()
         )
 
         if needs_financial_filter:
@@ -234,16 +286,156 @@ class StockScreenerService:
             "financial_report_periods": report_periods,
             "financial_data_note": "财务指标按各公司最新已取得报告期展示，不与行情交易日混用。",
             "financial_candidate_pool_note": (
-                "财务逐股补齐范围先按行业分散，再按成交额和市值确定；"
-                "这是首轮研究候选池，不代表全市场财务排名。"
+                "需要财务条件时，先使用生产数据库已有财务快照覆盖初筛池；"
+                "不足部分再按行业分散补充实时逐股核验。"
+                "财务覆盖未达到门槛时，结果不代表全市场财务排名。"
             ),
             "cache_hit": bool(snapshot_meta.get("cache_hit")),
         }
+        expected_snapshot = int(snapshot_meta.get("listed_stock_count") or input_count)
+
+        def coverage(available: int, expected: int) -> dict[str, Any]:
+            return {
+                "available": available,
+                "expected": expected,
+                "missing": max(0, expected - available),
+                "ratio": round(available / expected, 6) if expected else 0.0,
+            }
+
+        market_snapshot_coverage = coverage(input_count, expected_snapshot)
+        financial_pool_coverage = coverage(
+            financial_available, financial_candidate_pool_count
+        )
+        required_coverage: list[tuple[str, dict[str, Any]]] = [
+            ("行情截面", market_snapshot_coverage),
+            ("20日比较日线", coverage(return_20d_available, input_count)),
+        ]
+        if any("market_cap" in key for key in effective_filters):
+            required_coverage.append(
+                ("市值字段", coverage(market_cap_available, input_count))
+            )
+        if any(
+            key in effective_filters
+            for key in ("min_pe_ttm", "max_pe_ttm", "min_pb", "max_pb")
+        ):
+            required_coverage.append(
+                ("估值字段", coverage(valuation_available, input_count))
+            )
+        if needs_financial_filter:
+            required_coverage.append(("财务核验", financial_pool_coverage))
+        represents_requested_scope = all(
+            float(item.get("ratio") or 0) >= self.minimum_market_coverage_ratio
+            for _, item in required_coverage
+        )
+        represents_full_market = market == "all" and represents_requested_scope
+        market_labels = {
+            "sh": "上海A股",
+            "sz": "深圳A股",
+            "bj": "北京A股",
+            "main": "沪深主板",
+            "gem": "创业板",
+            "star": "科创板",
+        }
+        if market == "all" and represents_full_market:
+            actual_scope_label = "全部A股"
+        elif (
+            market == "all"
+            and market_snapshot_coverage["ratio"] >= self.minimum_market_coverage_ratio
+        ):
+            actual_scope_label = "A股完整行情范围，财务或规则字段部分覆盖"
+        elif market == "all":
+            actual_scope_label = f"已同步A股 {input_count}/{expected_snapshot} 只"
+        else:
+            actual_scope_label = market_labels.get(market, "所选A股范围")
+        representation_reasons: list[str] = []
+        for label, item in required_coverage:
+            if float(item.get("ratio") or 0) < self.minimum_market_coverage_ratio:
+                representation_reasons.append(f"{label}覆盖不足")
+        representation_note = (
+            "本轮数据足以代表所选范围的确定性规则计算。"
+            if represents_requested_scope
+            else "；".join(representation_reasons)
+            + "，结果只代表当前已覆盖范围，不能外推为全市场结论。"
+        )
+        data_meta.update(
+            {
+                "actual_scope_label": actual_scope_label,
+                "coverage_status": (
+                    "complete" if represents_requested_scope else "constrained"
+                ),
+                "represents_full_market": represents_full_market,
+            }
+        )
+
+        data_contract = {
+            "contract_version": "stock_screen_data_v1",
+            "data_version": snapshot_meta.get("data_version"),
+            "market_scope": market,
+            "universe_definition": snapshot_meta.get("universe_definition"),
+            "as_of": {
+                "market_date": snapshot_meta.get("latest_completed_trade_date"),
+                "return_5d_base_date": snapshot_meta.get("return_5d_base_date"),
+                "return_20d_base_date": snapshot_meta.get("return_20d_base_date"),
+                "financial_report_periods": report_periods,
+                "generated_at": data_meta["generated_at"],
+            },
+            "coverage": {
+                "market_snapshot": market_snapshot_coverage,
+                "market_cap": coverage(market_cap_available, input_count),
+                "valuation": coverage(valuation_available, input_count),
+                "return_20d": coverage(return_20d_available, input_count),
+                "financial_candidate_pool": financial_pool_coverage,
+            },
+            "representation": {
+                "actual_scope_label": actual_scope_label,
+                "coverage_status": (
+                    "complete" if represents_requested_scope else "constrained"
+                ),
+                "represents_requested_scope": represents_requested_scope,
+                "represents_full_market": represents_full_market,
+                "minimum_coverage_ratio": self.minimum_market_coverage_ratio,
+                "note": representation_note,
+            },
+            "sources": [
+                {
+                    "module": "股票基础",
+                    "source": "Tushare Pro:stock_basic",
+                    "as_of": snapshot_meta.get("latest_completed_trade_date"),
+                },
+                {
+                    "module": "行情与收益",
+                    "source": "Tushare Pro:daily",
+                    "as_of": snapshot_meta.get("latest_completed_trade_date"),
+                },
+                {
+                    "module": "估值与市值",
+                    "source": "Tushare Pro:daily_basic",
+                    "as_of": snapshot_meta.get("latest_completed_trade_date"),
+                },
+                {
+                    "module": "财务质量",
+                    "source": "Tushare Pro:fina_indicator",
+                    "as_of": report_periods[0] if report_periods else None,
+                },
+            ],
+            "license_boundary": (
+                "当前兼容数据可用于MVP研究验证；商业展示、缓存和衍生使用仍需"
+                "按数据供应商许可书面确认。"
+            ),
+        }
         warnings: list[str] = []
+        if snapshot_meta.get("source_mode") == "persisted":
+            warnings.append("本轮使用生产数据库中的最近稳定快照完成筛选。")
+        if not represents_requested_scope:
+            warnings.append(representation_note)
         if items and any(item["missing_fields"] for item in items):
             warnings.append("部分候选的财务或估值字段不完整，缺失项已逐只列出。")
         if not items:
-            warnings.append("当前没有股票同时满足全部规则；可放宽一项条件后重新筛选。")
+            warnings.append(
+                "按当前规则未命中候选；本轮不默认建议放宽规则。"
+                if represents_requested_scope
+                else "当前已覆盖范围内未命中候选；这不等于全市场没有候选。"
+            )
 
         return {
             "type": "stock_screen",
@@ -258,11 +450,17 @@ class StockScreenerService:
             "rules": self._rules(effective_filters),
             "effective_filters": effective_filters,
             "data_meta": data_meta,
+            "data_contract": data_contract,
             "universe": {
                 "listed_input": input_count,
                 "after_common_rules": common_count,
                 "after_market_rules": market_rule_count,
+                "expected_listed": expected_snapshot,
+                "market_coverage": input_count,
+                "valuation_coverage": valuation_available,
+                "financial_candidate_pool": financial_candidate_pool_count,
                 "financials_checked": len(finance_packets),
+                "represents_full_market": represents_full_market,
                 "matched": len(items),
             },
             "items": items,
@@ -293,22 +491,284 @@ class StockScreenerService:
                 and self._snapshot is not None
                 and now_monotonic - self._snapshot[0] < self.snapshot_ttl_seconds
             ):
-                return self._snapshot[1].copy(), {
-                    **self._snapshot[2],
-                    "cache_hit": True,
-                }
+                cached_frame = self._snapshot[1].copy()
+                cached_meta = dict(self._snapshot[2])
+                cached_ratio = self._market_coverage_ratio(cached_frame, cached_meta)
+                if not (
+                    self.client is not None
+                    and cached_meta.get("source_mode") == "persisted"
+                    and cached_ratio < self.minimum_market_coverage_ratio
+                ):
+                    return cached_frame, {
+                        **cached_meta,
+                        "cache_hit": True,
+                    }
 
-        try:
-            frame, meta = self._build_snapshot()
-        except (TushareProviderError, ValueError, KeyError) as exc:
-            raise StockScreenerUnavailable(
-                "选股数据正在准备中，请稍后重试"
-            ) from exc
+        persisted_error: Exception | None = None
+        persisted_snapshot: tuple[pd.DataFrame, dict[str, Any]] | None = None
+        if self.database is not None and not force_refresh:
+            try:
+                frame, meta = self._build_persisted_snapshot()
+            except (ValueError, KeyError, TypeError) as exc:
+                persisted_error = exc
+            else:
+                if not frame.empty:
+                    persisted_snapshot = (frame.copy(), dict(meta))
+                    persisted_ratio = self._market_coverage_ratio(frame, meta)
+                    if (
+                        self.client is None
+                        or persisted_ratio >= self.minimum_market_coverage_ratio
+                    ):
+                        if persisted_ratio < self.minimum_market_coverage_ratio:
+                            meta = {
+                                **meta,
+                                "coverage_status": "constrained",
+                                "market_snapshot_representative": False,
+                            }
+                        with self._lock:
+                            self._snapshot = (
+                                now_monotonic,
+                                frame.copy(),
+                                dict(meta),
+                            )
+                        return frame, {**meta, "cache_hit": False}
+
+        live_error: Exception | None = None
+        if self.client is not None:
+            try:
+                frame, meta = self._build_snapshot()
+            except (TushareProviderError, ValueError, KeyError) as exc:
+                live_error = exc
+            else:
+                if frame.empty:
+                    live_error = ValueError("实时市场截面为空")
+        if self.client is None or live_error is not None:
+            if persisted_snapshot is not None:
+                frame, meta = persisted_snapshot
+                meta = {
+                    **meta,
+                    "coverage_status": "constrained",
+                    "market_snapshot_representative": False,
+                    "live_refresh_attempted": self.client is not None,
+                    "live_refresh_succeeded": False,
+                }
+            else:
+                try:
+                    frame, meta = self._build_persisted_snapshot()
+                except (ValueError, KeyError, TypeError) as exc:
+                    raise StockScreenerUnavailable(
+                        "选股数据正在准备中，请稍后重试"
+                    ) from (live_error or persisted_error or exc)
         if frame.empty:
             raise StockScreenerUnavailable("当前没有可用于筛选的完整市场数据")
         with self._lock:
             self._snapshot = (now_monotonic, frame.copy(), dict(meta))
         return frame, {**meta, "cache_hit": False}
+
+    @staticmethod
+    def _market_coverage_ratio(frame: pd.DataFrame, meta: Mapping[str, Any]) -> float:
+        expected = int(meta.get("listed_stock_count") or len(frame))
+        return len(frame) / expected if expected else 0.0
+
+    @staticmethod
+    def _snapshot_rows(record: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+        payload = (record or {}).get("payload") or {}
+        rows = payload.get("rows") or []
+        return [dict(row) for row in rows if isinstance(row, Mapping)]
+
+    def _build_persisted_snapshot(self) -> tuple[pd.DataFrame, dict[str, Any]]:
+        if self.database is None:
+            raise ValueError("没有持久化选股数据库")
+        datasets = {
+            name: self.database.list_latest_tushare_dataset_snapshots(
+                name,
+                data_status="stable",
+                limit=20_000,
+            )
+            for name in ("stock_basic", "daily", "daily_basic", "fina_indicator")
+        }
+        if not datasets["daily"] or not datasets["stock_basic"]:
+            raise ValueError("持久化日线或股票基础数据为空")
+
+        stock_by_code: dict[str, dict[str, Any]] = {}
+        for record in datasets["stock_basic"]:
+            for row in self._snapshot_rows(record)[:1]:
+                code = str(row.get("ts_code") or "").strip().upper()
+                if code:
+                    stock_by_code[code] = row
+
+        daily_basic_by_code: dict[str, dict[str, Any]] = {}
+        for record in datasets["daily_basic"]:
+            for row in self._snapshot_rows(record)[:1]:
+                code = str(row.get("ts_code") or "").strip().upper()
+                if code:
+                    daily_basic_by_code[code] = row
+
+        daily_by_code: dict[str, list[dict[str, Any]]] = {}
+        recent_trade_dates: set[str] = set()
+        for record in datasets["daily"]:
+            rows = sorted(
+                self._snapshot_rows(record),
+                key=lambda row: self._date_string(row.get("trade_date")),
+                reverse=True,
+            )
+            if not rows:
+                continue
+            code = str(rows[0].get("ts_code") or "").strip().upper()
+            if not code:
+                continue
+            daily_by_code[code] = rows
+            recent_trade_dates.update(
+                self._date_string(row.get("trade_date"))
+                for row in rows[:40]
+                if self._date_string(row.get("trade_date"))
+            )
+        ordered_dates = sorted(recent_trade_dates)
+        if len(ordered_dates) < 21:
+            raise ValueError("持久化日线不足 21 个交易日")
+        latest_date = ordered_dates[-1]
+        date_5d = ordered_dates[-6]
+        date_20d = ordered_dates[-21]
+        target_dates = {latest_date, date_5d, date_20d}
+
+        rows: list[dict[str, Any]] = []
+        for code, history_rows in daily_by_code.items():
+            basic = stock_by_code.get(code)
+            if not basic:
+                continue
+            by_date = {
+                self._date_string(row.get("trade_date")): row
+                for row in history_rows
+                if self._date_string(row.get("trade_date")) in target_dates
+            }
+            latest = by_date.get(latest_date)
+            if latest is None:
+                continue
+            close = self._number(latest.get("close"))
+            close_5d = self._number((by_date.get(date_5d) or {}).get("close"))
+            close_20d = self._number((by_date.get(date_20d) or {}).get("close"))
+            valuation = daily_basic_by_code.get(code, {})
+            total_mv_yi = self._number(valuation.get("total_mv_yi"))
+            circ_mv_yi = self._number(valuation.get("circ_mv_yi"))
+            if total_mv_yi is None:
+                total_mv = self._number(valuation.get("total_mv"))
+                total_mv_yi = total_mv / 10_000.0 if total_mv is not None else None
+            if circ_mv_yi is None:
+                circ_mv = self._number(valuation.get("circ_mv"))
+                circ_mv_yi = circ_mv / 10_000.0 if circ_mv is not None else None
+            rows.append(
+                {
+                    **basic,
+                    "ts_code": code,
+                    "latest_close": close,
+                    "pct_change": self._number(latest.get("pct_chg")),
+                    "amount": self._number(latest.get("amount")),
+                    "volume": self._number(latest.get("vol")),
+                    "close_5d_base": close_5d,
+                    "close_20d_base": close_20d,
+                    "return_5d_pct": (
+                        (close / close_5d - 1.0) * 100.0
+                        if close is not None and close_5d not in {None, 0}
+                        else math.nan
+                    ),
+                    "return_20d_pct": (
+                        (close / close_20d - 1.0) * 100.0
+                        if close is not None and close_20d not in {None, 0}
+                        else math.nan
+                    ),
+                    "turnover_rate": self._number(valuation.get("turnover_rate")),
+                    "volume_ratio": self._number(valuation.get("volume_ratio")),
+                    "pe_ttm": self._number(valuation.get("pe_ttm")),
+                    "pb": self._number(valuation.get("pb")),
+                    "ps_ttm": self._number(valuation.get("ps_ttm")),
+                    "total_mv_yi": total_mv_yi,
+                    "circ_mv_yi": circ_mv_yi,
+                    "trade_date": latest_date,
+                    "internal_symbol": self._internal_symbol(code),
+                }
+            )
+        frame = pd.DataFrame(rows)
+        if frame.empty:
+            raise ValueError("持久化选股截面为空")
+        frame["industry"] = (
+            frame.get("industry", "未分类").fillna("未分类").replace("", "未分类")
+        )
+        frame["industry_avg_return_20d_pct"] = frame.groupby("industry")[
+            "return_20d_pct"
+        ].transform("mean")
+        frame["industry_excess_20d_pct"] = (
+            frame["return_20d_pct"] - frame["industry_avg_return_20d_pct"]
+        )
+
+        persisted_finance: dict[str, dict[str, Any]] = {}
+        for record in datasets["fina_indicator"]:
+            packet = self._financial_packet(pd.DataFrame(self._snapshot_rows(record)))
+            scope = str(record.get("scope_key") or "").strip().upper()
+            if scope:
+                persisted_finance[scope] = packet
+        with self._lock:
+            self._persisted_finance_packets = persisted_finance
+
+        universe = self.database.latest_tushare_dataset_snapshot(
+            "a_share_universe", "all"
+        )
+        universe_payload = (universe or {}).get("payload") or {}
+        listed_stock_count = int(
+            (universe_payload.get("coverage") or {}).get("listed") or len(stock_by_code)
+        )
+        fingerprint_columns = [
+            "ts_code",
+            "trade_date",
+            "latest_close",
+            "return_5d_pct",
+            "return_20d_pct",
+            "pe_ttm",
+            "pb",
+            "total_mv_yi",
+            "volume_ratio",
+        ]
+        digest = hashlib.sha256(b"stock_screen_persisted_v1")
+        digest.update(latest_date.encode("utf-8"))
+        digest.update(
+            pd.util.hash_pandas_object(
+                frame[fingerprint_columns].sort_values("ts_code", kind="stable"),
+                index=False,
+            ).values.tobytes()
+        )
+        return frame, {
+            "source": "PostgreSQL 持久化 Tushare 稳定快照",
+            "source_mode": "persisted",
+            "data_version": f"stock-screen-db-v1-{digest.hexdigest()[:16]}",
+            "universe_definition": (
+                "生产数据库中已发布稳定 stock_basic、daily 与 daily_basic 快照的A股；"
+                "仅使用同一最近完整交易日及其5日、20日基准日。"
+            ),
+            "listed_stock_count": listed_stock_count,
+            "latest_daily_count": len(daily_by_code),
+            "daily_basic_count": len(daily_basic_by_code),
+            "snapshot_stock_count": len(frame),
+            "latest_completed_trade_date": self._iso_date(latest_date),
+            "return_5d_base_date": self._iso_date(date_5d),
+            "return_20d_base_date": self._iso_date(date_20d),
+            "snapshot_built_at": utc_now(),
+            "price_basis": "生产数据库最近稳定完整日线",
+            "valuation_basis": "生产数据库同交易日 daily_basic 稳定截面",
+            "market_coverage_ratio": round(len(frame) / listed_stock_count, 6)
+            if listed_stock_count
+            else 0.0,
+            "market_snapshot_representative": (
+                len(frame) / listed_stock_count >= self.minimum_market_coverage_ratio
+                if listed_stock_count
+                else False
+            ),
+            "coverage_status": (
+                "complete"
+                if listed_stock_count
+                and len(frame) / listed_stock_count
+                >= self.minimum_market_coverage_ratio
+                else "constrained"
+            ),
+        }
 
     def _build_snapshot(self) -> tuple[pd.DataFrame, dict[str, Any]]:
         now_cn = datetime.now(ZoneInfo("Asia/Shanghai"))
@@ -411,7 +871,9 @@ class StockScreenerService:
         frame = stock_basic.merge(latest, on="ts_code", how="inner")
         frame = frame.merge(base_5, on="ts_code", how="left")
         frame = frame.merge(base_20, on="ts_code", how="left")
-        frame = frame.merge(daily_basic, on="ts_code", how="left", suffixes=("", "_basic"))
+        frame = frame.merge(
+            daily_basic, on="ts_code", how="left", suffixes=("", "_basic")
+        )
         numeric_columns = [
             "latest_close",
             "pct_change",
@@ -433,11 +895,11 @@ class StockScreenerService:
             else:
                 frame[column] = math.nan
         frame["return_5d_pct"] = (
-            (frame["latest_close"] / frame["close_5d_base"] - 1.0) * 100.0
-        )
+            frame["latest_close"] / frame["close_5d_base"] - 1.0
+        ) * 100.0
         frame["return_20d_pct"] = (
-            (frame["latest_close"] / frame["close_20d_base"] - 1.0) * 100.0
-        )
+            frame["latest_close"] / frame["close_20d_base"] - 1.0
+        ) * 100.0
         frame["total_mv_yi"] = frame["total_mv"] / 10_000.0
         frame["circ_mv_yi"] = frame["circ_mv"] / 10_000.0
         if "industry" not in frame:
@@ -451,15 +913,67 @@ class StockScreenerService:
         )
         frame["internal_symbol"] = frame["ts_code"].map(self._internal_symbol)
         frame["trade_date"] = latest_date
+        fingerprint_columns = [
+            column
+            for column in (
+                "ts_code",
+                "trade_date",
+                "latest_close",
+                "return_5d_pct",
+                "return_20d_pct",
+                "pe_ttm",
+                "pb",
+                "total_mv_yi",
+                "volume_ratio",
+            )
+            if column in frame
+        ]
+        fingerprint_frame = frame[fingerprint_columns].sort_values(
+            "ts_code", kind="stable"
+        )
+        digest = hashlib.sha256(b"stock_screen_snapshot_v1")
+        digest.update(latest_date.encode("utf-8"))
+        digest.update(
+            pd.util.hash_pandas_object(fingerprint_frame, index=False).values.tobytes()
+        )
+        data_version = f"stock-screen-v1-{digest.hexdigest()[:16]}"
+        listed_stock_count = int(stock_basic["ts_code"].nunique())
+        latest_daily_count = int(latest_daily["ts_code"].nunique())
+        daily_basic_count = int(daily_basic["ts_code"].nunique())
 
         return frame, {
             "source": "Tushare Pro",
+            "source_mode": "live",
+            "data_version": data_version,
+            "universe_definition": (
+                "Tushare stock_basic 中 list_status=L 的A股，且最近完整交易日"
+                "存在可用日线；ST、上市时长和市场范围随后按本轮规则过滤。"
+            ),
+            "listed_stock_count": listed_stock_count,
+            "latest_daily_count": latest_daily_count,
+            "daily_basic_count": daily_basic_count,
+            "snapshot_stock_count": len(frame),
             "latest_completed_trade_date": self._iso_date(latest_date),
             "return_5d_base_date": self._iso_date(date_5d),
             "return_20d_base_date": self._iso_date(date_20d),
             "snapshot_built_at": utc_now(),
             "price_basis": "最近完整交易日日线",
             "valuation_basis": "与最近完整交易日对齐的 daily_basic 截面",
+            "market_coverage_ratio": round(len(frame) / listed_stock_count, 6)
+            if listed_stock_count
+            else 0.0,
+            "market_snapshot_representative": (
+                len(frame) / listed_stock_count >= self.minimum_market_coverage_ratio
+                if listed_stock_count
+                else False
+            ),
+            "coverage_status": (
+                "complete"
+                if listed_stock_count
+                and len(frame) / listed_stock_count
+                >= self.minimum_market_coverage_ratio
+                else "constrained"
+            ),
         }
 
     def _apply_universe_rules(
@@ -492,15 +1006,14 @@ class StockScreenerService:
         elif market == "star":
             result = result[code.str.startswith("688")]
         elif market == "main":
-            result = result[
-                code.str.match(r"^(?:000|001|002|003|600|601|603|605)")
-            ]
+            result = result[code.str.match(r"^(?:000|001|002|003|600|601|603|605)")]
         industry = str(filters.get("industry") or "").strip()
         if industry:
             result = result[
-                result["industry"].fillna("").astype(str).str.contains(
-                    industry, case=False, regex=False
-                )
+                result["industry"]
+                .fillna("")
+                .astype(str)
+                .str.contains(industry, case=False, regex=False)
             ]
         return result[
             result["latest_close"].notna()
@@ -542,7 +1055,50 @@ class StockScreenerService:
             )
         return diversified.head(limit).copy()
 
-    def _load_financials(self, ts_code: str) -> dict[str, Any]:
+    def _load_persisted_financials(self, ts_code: str) -> dict[str, Any]:
+        internal = self._internal_symbol(ts_code)
+        with self._lock:
+            cached = self._persisted_finance_packets.get(internal)
+        if cached is not None:
+            return dict(cached)
+        if self.database is None:
+            return {"status": "unavailable"}
+        record = self.database.latest_tushare_dataset_snapshot(
+            "fina_indicator", internal
+        )
+        packet = self._financial_packet(pd.DataFrame(self._snapshot_rows(record)))
+        with self._lock:
+            self._persisted_finance_packets[internal] = dict(packet)
+        return packet
+
+    def _persisted_financials_many(
+        self, ts_codes: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            persisted = dict(self._persisted_finance_packets)
+        packets: dict[str, dict[str, Any]] = {}
+        for code in dict.fromkeys(ts_codes):
+            packet = persisted.get(self._internal_symbol(code))
+            if packet and packet.get("status") == "available":
+                packets[code] = dict(packet)
+        return packets
+
+    @staticmethod
+    def _financial_packet_complete_for_filters(
+        packet: Mapping[str, Any] | None,
+        filters: Mapping[str, Any],
+    ) -> bool:
+        if not packet or packet.get("status") != "available":
+            return False
+        return all(
+            StockScreenerService._number(packet.get(field)) is not None
+            for filter_name, field in FINANCIAL_FILTERS.items()
+            if filter_name in filters and filters[filter_name] is not None
+        )
+
+    def _load_financials(
+        self, ts_code: str, *, persisted_only: bool = False
+    ) -> dict[str, Any]:
         now_monotonic = time.monotonic()
         with self._lock:
             cached = self._finance_cache.get(ts_code)
@@ -554,6 +1110,9 @@ class StockScreenerService:
                 )
                 if now_monotonic - cached[0] < cached_ttl:
                     return dict(cached[1])
+        persisted = self._load_persisted_financials(ts_code)
+        if persisted_only or self.client is None:
+            return persisted
         try:
             frame = self._query(
                 "fina_indicator",
@@ -579,20 +1138,25 @@ class StockScreenerService:
         return packet
 
     def _load_financials_many(
-        self, ts_codes: list[str]
+        self, ts_codes: list[str], *, persisted_only: bool = False
     ) -> dict[str, dict[str, Any]]:
         unique_codes = list(dict.fromkeys(ts_codes))
         if not unique_codes:
             return {}
         if self.finance_workers == 1 or len(unique_codes) == 1:
-            return {code: self._load_financials(code) for code in unique_codes}
+            return {
+                code: self._load_financials(code, persisted_only=persisted_only)
+                for code in unique_codes
+            }
         packets: dict[str, dict[str, Any]] = {}
         with ThreadPoolExecutor(
             max_workers=min(self.finance_workers, len(unique_codes)),
             thread_name_prefix="qingshu-finance",
         ) as executor:
             futures = {
-                executor.submit(self._load_financials, code): code
+                executor.submit(
+                    self._load_financials, code, persisted_only=persisted_only
+                ): code
                 for code in unique_codes
             }
             for future in as_completed(futures):
@@ -608,7 +1172,7 @@ class StockScreenerService:
         for code in unique_codes:
             if packets.get(code, {}).get("status") == "available":
                 continue
-            packets[code] = self._load_financials(code)
+            packets[code] = self._load_financials(code, persisted_only=persisted_only)
         return packets
 
     @classmethod
@@ -658,7 +1222,11 @@ class StockScreenerService:
             )
         )
         packet["coverage_status"] = (
-            "sufficient" if available >= 5 else "partial" if available else "unavailable"
+            "sufficient"
+            if available >= 5
+            else "partial"
+            if available
+            else "unavailable"
         )
         return packet
 
@@ -700,7 +1268,7 @@ class StockScreenerService:
         elif profile == "value":
             columns, ascending = ["pe_ttm", "pb", "ts_code"], [True, True, True]
         elif profile == "pullback":
-            columns, ascending = ["return_5d_pct", "ts_code"], [False, True]
+            columns, ascending = ["return_5d_pct", "ts_code"], [True, True]
         else:
             if "revenue_yoy" in frame:
                 columns, ascending = ["revenue_yoy", "ts_code"], [False, True]
@@ -722,9 +1290,7 @@ class StockScreenerService:
             "industry_avg_return_20d_pct": self._number(
                 row.get("industry_avg_return_20d_pct")
             ),
-            "industry_excess_20d_pct": self._number(
-                row.get("industry_excess_20d_pct")
-            ),
+            "industry_excess_20d_pct": self._number(row.get("industry_excess_20d_pct")),
             "pe_ttm": self._number(row.get("pe_ttm")),
             "pb": self._number(row.get("pb")),
             "ps_ttm": self._number(row.get("ps_ttm")),
@@ -752,17 +1318,32 @@ class StockScreenerService:
             # profit presentation. Treating a structurally absent gross margin
             # as a data failure would mislead users.
             not_applicable_fields.append("gross_margin")
+        relevant_metric_fields = {
+            "latest_close",
+            "return_5d_pct",
+            "return_20d_pct",
+            "industry_excess_20d_pct",
+            "pe_ttm",
+            "pb",
+            "total_mv_yi",
+            "turnover_rate_pct",
+            "volume_ratio",
+        }
+        relevant_financial_fields = (
+            {"revenue_yoy", "net_profit_yoy", "roe"} if profile == "quality" else set()
+        )
+        relevant_fields = relevant_metric_fields | relevant_financial_fields
         missing_fields = [
             key
             for key, value in {**metrics, **clean_financials}.items()
-            if key in {*metrics.keys(), *financial_fields}
+            if key in relevant_fields
             and value is None
             and key not in not_applicable_fields
         ]
         if not financials or financials.get("status") == "unavailable":
             missing_fields.extend(
                 key
-                for key in financial_fields
+                for key in relevant_financial_fields
                 if key not in missing_fields and key not in not_applicable_fields
             )
             clean_financials = {
@@ -770,9 +1351,38 @@ class StockScreenerService:
                 "coverage_status": "unavailable",
             }
         reasons = self._matched_reasons(profile, metrics, clean_financials)
+        research_focus, attention_flags = self._research_guidance(
+            profile, metrics, clean_financials
+        )
         financial_coverage = str(
             clean_financials.get("coverage_status") or "unavailable"
         )
+        missing_reasons = []
+        for field in sorted(set(missing_fields)):
+            if field in financial_fields:
+                code = (
+                    "financial_report_unavailable"
+                    if not clean_financials.get("report_period")
+                    else "financial_field_missing"
+                )
+                reason = (
+                    "尚未取得可用财务报告期"
+                    if code == "financial_report_unavailable"
+                    else f"最新财务报告期未返回{FILTER_LABELS.get('min_' + field, field)}字段"
+                )
+            elif field in {"pe_ttm", "pb", "ps_ttm", "total_mv_yi", "circ_mv_yi"}:
+                code = "daily_basic_field_missing"
+                reason = "最近完整交易日的估值或市值截面未返回该字段"
+            elif field in {"return_5d_pct", "return_20d_pct"}:
+                code = "comparison_bar_missing"
+                reason = "当前或比较基准交易日缺少完整日线"
+            elif field in {"volume_ratio", "turnover_rate_pct"}:
+                code = "liquidity_field_missing"
+                reason = "最近完整交易日的流动性字段未返回"
+            else:
+                code = "market_field_missing"
+                reason = "最近完整交易日未返回该字段"
+            missing_reasons.append({"field": field, "code": code, "reason": reason})
         return {
             "ts_code": str(row.get("ts_code") or ""),
             "internal_symbol": str(row.get("internal_symbol") or ""),
@@ -782,6 +1392,18 @@ class StockScreenerService:
             "list_date": self._iso_date(row.get("list_date")),
             "metrics": metrics,
             "financials": clean_financials,
+            "evidence_times": {
+                "market_date": self._iso_date(row.get("trade_date")),
+                "financial_report_period": clean_financials.get("report_period"),
+                "financial_announcement_date": clean_financials.get(
+                    "announcement_date"
+                ),
+            },
+            "source_contract": {
+                "market_and_trend": "Tushare Pro:daily",
+                "valuation": "Tushare Pro:daily_basic",
+                "financial_quality": "Tushare Pro:fina_indicator",
+            },
             "coverage_status": {
                 "market_and_trend": "sufficient",
                 "valuation": (
@@ -792,7 +1414,10 @@ class StockScreenerService:
                 "financial_quality": financial_coverage,
             },
             "matched_reasons": reasons,
+            "research_focus": research_focus,
+            "attention_flags": attention_flags,
             "missing_fields": sorted(set(missing_fields)),
+            "missing_reasons": missing_reasons,
             "not_applicable_fields": not_applicable_fields,
             "limitations": [
                 "阶段收益基于完整日线，不是盘中信号。",
@@ -836,6 +1461,86 @@ class StockScreenerService:
         ]
 
     @staticmethod
+    def _research_guidance(
+        profile: str,
+        metrics: Mapping[str, Any],
+        financials: Mapping[str, Any],
+    ) -> tuple[str, list[str]]:
+        """Build deterministic research priorities from displayed metrics."""
+
+        def number(value: Any) -> float | None:
+            return StockScreenerService._number(value)
+
+        def fmt(value: Any) -> str:
+            parsed = number(value)
+            return "—" if parsed is None else f"{parsed:.2f}"
+
+        if profile == "quality":
+            research_focus = (
+                f"营收同比 {fmt(financials.get('revenue_yoy'))}%、"
+                f"净利润同比 {fmt(financials.get('net_profit_yoy'))}% 与 "
+                f"ROE {fmt(financials.get('roe'))}% 是否来自主营并能转化为现金流，"
+                "同时排除一次性损益。"
+            )
+        elif profile == "value":
+            research_focus = (
+                f"PE TTM {fmt(metrics.get('pe_ttm'))}、"
+                f"PB {fmt(metrics.get('pb'))} 对应的是持续盈利能力，"
+                "还是盈利恶化、周期高点或高负债造成的低估值。"
+            )
+        elif profile == "pullback":
+            research_focus = (
+                f"近 20 日 {fmt(metrics.get('return_20d_pct'))}% 的回撤原因是什么，"
+                f"并确认近 5 日 {fmt(metrics.get('return_5d_pct'))}% "
+                "是接近转正或刚转正的企稳迹象，还是快速反弹后的二次波动。"
+            )
+        else:
+            research_focus = (
+                f"近 20 日 {fmt(metrics.get('return_20d_pct'))}%、"
+                f"相对行业 {fmt(metrics.get('industry_excess_20d_pct'))} 个百分点的强势"
+                "是否有业绩或公告支撑，并明确趋势转弱条件。"
+            )
+
+        flags: list[str] = []
+        pct_change = number(metrics.get("pct_change"))
+        if pct_change is not None and pct_change <= -5:
+            flags.append(
+                f"当日下跌 {abs(pct_change):.2f}%，短期价格出现明显转弱，"
+                "需优先核对公告、行业事件和资金兑现。"
+            )
+        return_5d = number(metrics.get("return_5d_pct"))
+        if profile == "pullback" and return_5d is not None and return_5d >= 15:
+            flags.append(
+                f"近 5 日已反弹 {return_5d:.2f}%，不宜继续理解为“刚企稳”，"
+                "需要检查追高和再次回落风险。"
+            )
+        net_profit_yoy = number(financials.get("net_profit_yoy"))
+        if net_profit_yoy is not None and net_profit_yoy < 0:
+            flags.append(
+                f"最新财报净利润同比 {net_profit_yoy:.2f}%，"
+                "盈利变化是当前候选逻辑的反方线索。"
+            )
+        roe = number(financials.get("roe"))
+        if roe is not None and roe < 3:
+            flags.append(f"最新财报 ROE {roe:.2f}%，资本回报仍偏低。")
+        debt_to_assets = number(financials.get("debt_to_assets"))
+        if debt_to_assets is not None and debt_to_assets >= 75:
+            flags.append(f"资产负债率 {debt_to_assets:.2f}%，负债约束需要优先核验。")
+        pe_ttm = number(metrics.get("pe_ttm"))
+        pb = number(metrics.get("pb"))
+        if (pe_ttm is not None and pe_ttm >= 80) or (pb is not None and pb >= 8):
+            valuation_parts = []
+            if pe_ttm is not None:
+                valuation_parts.append(f"PE TTM {pe_ttm:.2f}")
+            if pb is not None:
+                valuation_parts.append(f"PB {pb:.2f}")
+            flags.append(
+                f"{'、'.join(valuation_parts)}，估值约束较高，"
+                "对盈利兑现和预期变化更敏感。"
+            )
+        return research_focus, flags[:4]
+
+    @staticmethod
     def _rules(filters: Mapping[str, Any]) -> list[dict[str, Any]]:
         rules: list[dict[str, Any]] = []
         if filters.get("exclude_st", True):
@@ -859,10 +1564,16 @@ class StockScreenerService:
         for key, label in FILTER_LABELS.items():
             if key not in filters or filters[key] is None:
                 continue
-            unit = "%" if any(
-                token in key
-                for token in ("return", "turnover", "revenue", "profit", "roe")
-            ) else "亿元" if "market_cap" in key else None
+            unit = (
+                "%"
+                if any(
+                    token in key
+                    for token in ("return", "turnover", "revenue", "profit", "roe")
+                )
+                else "亿元"
+                if "market_cap" in key
+                else None
+            )
             rules.append(
                 {
                     "field": label,

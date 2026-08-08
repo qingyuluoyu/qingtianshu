@@ -1,0 +1,1 @@
+"""Bundled financial skill specifications."""

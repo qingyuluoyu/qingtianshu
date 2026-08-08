@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
 from pathlib import Path
 
 from app.db import Database
@@ -35,7 +34,9 @@ def _duration_row(
     }
 
 
-def _instant_row(*, end: str, value: float, accession: str, fy: int, fp: str, form: str):
+def _instant_row(
+    *, end: str, value: float, accession: str, fy: int, fp: str, form: str
+):
     return {
         "end": end,
         "val": value,
@@ -142,9 +143,13 @@ def _companyfacts_payload():
         "facts": {
             "us-gaap": {
                 "Revenues": durations(81_615_000_000, 44_062_000_000, 215_938_000_000),
-                "NetIncomeLoss": durations(58_321_000_000, 18_775_000_000, 120_067_000_000),
+                "NetIncomeLoss": durations(
+                    58_321_000_000, 18_775_000_000, 120_067_000_000
+                ),
                 "EarningsPerShareDiluted": durations(2.39, 0.76, 4.90, "USD/shares"),
-                "GrossProfit": durations(61_157_000_000, 26_668_000_000, 153_463_000_000),
+                "GrossProfit": durations(
+                    61_157_000_000, 26_668_000_000, 153_463_000_000
+                ),
                 "NetCashProvidedByUsedInOperatingActivities": durations(
                     50_344_000_000, 27_414_000_000, 102_718_000_000
                 ),
@@ -224,9 +229,7 @@ def test_sec_companyfacts_build_detailed_statement_rows_without_inference():
     assert by_type["income"]["fields"]["gross_profit"] == 61_157_000_000.0
     assert by_type["income"]["fields"]["research_expense"] is None
     assert by_type["balance"]["fields"]["total_assets"] == 259_474_000_000.0
-    assert by_type["cashflow"]["fields"][
-        "operating_cashflow"
-    ] == 50_344_000_000.0
+    assert by_type["cashflow"]["fields"]["operating_cashflow"] == 50_344_000_000.0
 
 
 def test_sec_submissions_build_official_edgar_urls():
@@ -267,48 +270,20 @@ def test_sec_submissions_build_official_edgar_urls():
     )
 
 
-def test_database_migrates_existing_financial_table_for_us_fields(tmp_path: Path):
-    database_path = tmp_path / "legacy.db"
-    with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            """
-            CREATE TABLE financial_periods (
-                symbol TEXT NOT NULL,
-                report_date TEXT NOT NULL,
-                report_type TEXT NOT NULL,
-                report_date_name TEXT NOT NULL,
-                notice_date TEXT,
-                name TEXT NOT NULL,
-                currency TEXT NOT NULL,
-                eps_basic REAL,
-                book_value_per_share REAL,
-                revenue REAL,
-                revenue_yoy_pct REAL,
-                parent_net_profit REAL,
-                net_profit_yoy_pct REAL,
-                roe_weighted_pct REAL,
-                gross_margin_pct REAL,
-                net_margin_pct REAL,
-                debt_asset_ratio_pct REAL,
-                operating_cashflow REAL,
-                operating_cashflow_per_share REAL,
-                total_assets REAL,
-                total_equity REAL,
-                period_basis TEXT NOT NULL,
-                source TEXT NOT NULL,
-                source_url TEXT NOT NULL,
-                warnings_json TEXT NOT NULL,
-                fetched_at TEXT NOT NULL,
-                PRIMARY KEY(symbol, report_date, report_type)
-            )
-            """
-        )
-    database = Database(database_path, tmp_path / "workspaces")
+def test_postgres_financial_table_includes_us_fields(tmp_path: Path):
+    database = Database(tmp_path / "workspaces")
 
     database.initialize()
 
     with database.connect() as connection:
         columns = {
-            row["name"] for row in connection.execute("PRAGMA table_info(financial_periods)")
+            row["column_name"]
+            for row in connection.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'financial_periods'
+                """
+            ).fetchall()
         }
     assert {"eps_diluted", "total_liabilities"}.issubset(columns)

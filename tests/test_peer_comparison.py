@@ -106,8 +106,58 @@ def save_business_profile(database: Database, symbol: str, name: str) -> None:
     database.save_business_structure_snapshot(packet, f"profile-{symbol}")
 
 
+def save_tushare_row(
+    database: Database,
+    dataset: str,
+    scope_key: str,
+    row: dict,
+    *,
+    as_of_date: str = "20260728",
+) -> None:
+    run = database.start_tushare_sync_run(
+        job_scope=f"peer-test:{dataset}:{scope_key}",
+        as_of_date=as_of_date,
+        datasets=[dataset],
+    )
+    database.save_tushare_dataset_snapshot(
+        dataset=dataset,
+        scope_key=scope_key,
+        as_of_date=as_of_date,
+        report_period=None,
+        source_updated_at="2026-07-28T15:00:00+08:00",
+        sync_run_id=run["id"],
+        data_version=f"version-{dataset}-{scope_key}-{as_of_date}-{run['id']}",
+        data_status="stable",
+        payload={"rows": [row]},
+    )
+
+
+def save_a_share_universe(
+    database: Database,
+    items: list[dict],
+    *,
+    as_of_date: str = "2026-07-28",
+) -> None:
+    run = database.start_tushare_sync_run(
+        job_scope="peer-test:a-share-universe",
+        as_of_date=as_of_date,
+        datasets=["stock_basic", "daily_basic"],
+    )
+    database.save_tushare_dataset_snapshot(
+        dataset="a_share_universe",
+        scope_key="all",
+        as_of_date=as_of_date,
+        report_period=None,
+        source_updated_at="2026-07-28T15:00:00+08:00",
+        sync_run_id=run["id"],
+        data_version=f"peer-universe-{as_of_date}-{run['id']}",
+        data_status="stable",
+        payload={"items": items},
+    )
+
+
 def test_fixed_peer_packet_uses_peer_median_without_rating_language(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     values = {
         "000063.SZ": (40.0, 3.0, 100_000_000_000.0),
@@ -137,7 +187,7 @@ def test_fixed_peer_packet_uses_peer_median_without_rating_language(tmp_path: Pa
 
 
 def test_peer_refresh_persists_subject_and_all_peers(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     values = {
         "000063.SZ": (40.0, 3.0, 100.0),
@@ -155,10 +205,163 @@ def test_peer_refresh_persists_subject_and_all_peers(tmp_path: Path):
     assert database.latest_valuation_snapshot("301165.SZ")["pe_ttm"] == 100.0
 
 
+def test_catl_peer_packet_uses_fixed_battery_sample(tmp_path: Path):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    values = {
+        "300750.SZ": (21.0, 4.8, 1_800_000_000_000.0),
+        "300014.SZ": (28.0, 3.2, 180_000_000_000.0),
+        "002074.SZ": (34.0, 2.9, 110_000_000_000.0),
+        "300207.SZ": (24.0, 2.5, 90_000_000_000.0),
+    }
+    service = PeerComparisonService(
+        database, MappingProvider(values), MappingProvider({})
+    )
+
+    packet = service.get_packet("300750.SZ")
+
+    assert packet["group_label"] == "动力与储能电池固定同行样本"
+    assert [item["name"] for item in packet["peers"]] == [
+        "亿纬锂能",
+        "国轩高科",
+        "欣旺达",
+    ]
+    assert packet["coverage"] == {"requested_peers": 3, "available_peers": 3}
+    assert packet["metrics"]["pe_ttm"]["peer_median"] == 28.0
+    assert packet["metrics"]["pe_ttm"]["subject_to_peer_median"] == 0.75
+
+
+def test_dynamic_a_share_peer_packet_uses_same_day_industry_and_market_cap(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    rows = [
+        ("600841.SH", "动力新科", "汽车配件", 760_000.0, 2.43, 1.18),
+        ("600104.SH", "上汽集团", "汽车配件", 800_000.0, 8.0, 0.8),
+        ("000338.SZ", "潍柴动力", "汽车配件", 700_000.0, 10.0, 1.5),
+        ("000625.SZ", "长安汽车", "汽车配件", 1_000_000.0, 12.0, 1.9),
+        ("002594.SZ", "比亚迪", "汽车配件", 8_000_000.0, 30.0, 5.0),
+        ("601398.SH", "工商银行", "银行", 20_000_000.0, 6.0, 0.6),
+    ]
+    for ts_code, name, industry, total_mv, pe_ttm, pb in rows:
+        save_tushare_row(
+            database,
+            "stock_basic",
+            ts_code,
+            {
+                "ts_code": ts_code,
+                "name": name,
+                "industry": industry,
+            },
+        )
+        save_tushare_row(
+            database,
+            "daily_basic",
+            ts_code,
+            {
+                "ts_code": ts_code,
+                "trade_date": "20260728",
+                "total_mv": total_mv,
+                "pe_ttm": pe_ttm,
+                "pb": pb,
+            },
+        )
+    service = PeerComparisonService(database, MappingProvider({}), MappingProvider({}))
+
+    packet = service.get_packet("600841.SS")
+
+    assert packet["method"] == "dynamic_same_day_peer_valuation_snapshot_v1"
+    assert packet["as_of"] == "2026-07-28"
+    assert packet["group_label"] == "汽车配件同日估值样本"
+    assert [item["name"] for item in packet["peers"]] == [
+        "上汽集团",
+        "潍柴动力",
+        "长安汽车",
+    ]
+    assert packet["subject"]["pe_ttm"] == 2.43
+    assert packet["metrics"]["pe_ttm"]["peer_median"] == 10.0
+    assert packet["metrics"]["pb"]["peer_median"] == 1.5
+    assert packet["coverage"] == {"requested_peers": 3, "available_peers": 3}
+    assert "总市值最接近" in packet["selection_basis"]
+
+
+def test_dynamic_peer_packet_prefers_current_full_market_universe_over_stale_symbol(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    save_tushare_row(
+        database,
+        "stock_basic",
+        "600841.SH",
+        {"ts_code": "600841.SH", "name": "动力新科", "industry": "汽车配件"},
+        as_of_date="20260227",
+    )
+    save_tushare_row(
+        database,
+        "daily_basic",
+        "600841.SH",
+        {
+            "ts_code": "600841.SH",
+            "trade_date": "20260227",
+            "total_mv_yi": 152.94,
+            "pe_ttm": None,
+            "pb": None,
+        },
+        as_of_date="20260227",
+    )
+    save_a_share_universe(
+        database,
+        [
+            {
+                "symbol": "600841.SS",
+                "ts_code": "600841.SH",
+                "name": "动力新科",
+                "industry": "汽车配件",
+                "trade_date": "2026-07-28",
+                "total_mv_yi": 75.91,
+                "pe_ttm": 2.43,
+                "pb": 1.18,
+            },
+            {
+                "symbol": "600104.SS",
+                "ts_code": "600104.SH",
+                "name": "上汽集团",
+                "industry": "汽车配件",
+                "trade_date": "2026-07-28",
+                "total_mv_yi": 80.0,
+                "pe_ttm": 8.0,
+                "pb": 0.8,
+            },
+            {
+                "symbol": "000338.SZ",
+                "ts_code": "000338.SZ",
+                "name": "潍柴动力",
+                "industry": "汽车配件",
+                "trade_date": "2026-07-28",
+                "total_mv_yi": 70.0,
+                "pe_ttm": 10.0,
+                "pb": 1.5,
+            },
+        ],
+    )
+    service = PeerComparisonService(database, MappingProvider({}), MappingProvider({}))
+
+    packet = service.get_packet("600841.SS")
+
+    assert packet["as_of"] == "2026-07-28"
+    assert packet["subject"]["pe_ttm"] == 2.43
+    assert [item["name"] for item in packet["peers"]] == [
+        "上汽集团",
+        "潍柴动力",
+    ]
+
+
 def test_peer_operating_packet_compares_exact_period_and_persists_knowledge(
     tmp_path: Path,
 ):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     rows = [
         financial_period(
@@ -209,20 +412,18 @@ def test_peer_operating_packet_compares_exact_period_and_persists_knowledge(
         "business_profile_peers": 3,
     }
     assert packet["metrics"]["revenue_yoy_pct"]["peer_median"] == 20.0
-    assert packet["metrics"]["operating_cashflow_to_net_profit"][
-        "peer_sample_size"
-    ] == 3
+    assert (
+        packet["metrics"]["operating_cashflow_to_net_profit"]["peer_sample_size"] == 3
+    )
     assert all(item["status"] == "comparable" for item in packet["peers"])
     snapshot = database.latest_peer_operating_snapshot("000063.SZ")
     assert snapshot["payload"]["method"] == "fixed_peer_operating_comparison_v1"
     documents = database.list_knowledge_documents(None)
-    assert any(
-        item["source_key"] == "peer-operating:000063.SZ" for item in documents
-    )
+    assert any(item["source_key"] == "peer-operating:000063.SZ" for item in documents)
 
 
 def test_peer_operating_packet_excludes_period_mismatch_from_metrics(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     database.upsert_financial_periods(
         [
@@ -372,6 +573,6 @@ def test_research_report_fingerprint_changes_with_peer_operating_evidence():
         },
     }
 
-    assert ResearchReportService._fingerprint(base) != ResearchReportService._fingerprint(
-        changed
-    )
+    assert ResearchReportService._fingerprint(
+        base
+    ) != ResearchReportService._fingerprint(changed)

@@ -1,18 +1,65 @@
 services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: qingshu
+      POSTGRES_USER: qingshu
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-qingshu-local-only}"
+    volumes:
+      - qingshu-postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U qingshu -d qingshu"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   qingshu-agent:
     build: .
     ports:
-      - "8000:8000"
-    environment:
+      - "${QINGSHU_HTTP_BIND:-0.0.0.0}:${QINGSHU_HTTP_PORT:-8000}:8000"
+    environment: &qingshu-environment
       QINGSHU_DATA_DIR: /data
+      QINGSHU_DATABASE_URL: "postgresql://qingshu:${POSTGRES_PASSWORD:-qingshu-local-only}@postgres:5432/qingshu"
+      QINGSHU_DB_POOL_MIN_SIZE: "${QINGSHU_DB_POOL_MIN_SIZE:-1}"
+      QINGSHU_DB_POOL_MAX_SIZE: "${QINGSHU_DB_POOL_MAX_SIZE:-8}"
+      QINGSHU_OPERATIONAL_DB_POOL_MIN_SIZE: "${QINGSHU_OPERATIONAL_DB_POOL_MIN_SIZE:-1}"
+      QINGSHU_OPERATIONAL_DB_POOL_MAX_SIZE: "${QINGSHU_OPERATIONAL_DB_POOL_MAX_SIZE:-4}"
       BACKGROUND_JOBS_ENABLED: "true"
+      BACKGROUND_WORKER_MODE: "external"
+      JOB_WORKER_CONCURRENCY: "${JOB_WORKER_CONCURRENCY:-2}"
+      JOB_LEASE_SECONDS: "${JOB_LEASE_SECONDS:-300}"
+      JOB_MAX_ATTEMPTS: "${JOB_MAX_ATTEMPTS:-3}"
+      JOB_RETRY_BASE_SECONDS: "${JOB_RETRY_BASE_SECONDS:-10}"
+      JOB_RETRY_MAX_SECONDS: "${JOB_RETRY_MAX_SECONDS:-600}"
+      JOB_WORKER_HEARTBEAT_SECONDS: "${JOB_WORKER_HEARTBEAT_SECONDS:-10}"
+      JOB_WORKER_STALE_SECONDS: "${JOB_WORKER_STALE_SECONDS:-45}"
+      JOB_SUCCEEDED_RETENTION_HOURS: "${JOB_SUCCEEDED_RETENTION_HOURS:-168}"
+      JOB_FAILED_RETENTION_HOURS: "${JOB_FAILED_RETENTION_HOURS:-720}"
+      JOB_CANCELLED_RETENTION_HOURS: "${JOB_CANCELLED_RETENTION_HOURS:-168}"
+      BACKGROUND_RUN_COMPLETED_RETENTION_HOURS: "${BACKGROUND_RUN_COMPLETED_RETENTION_HOURS:-720}"
+      BACKGROUND_RUN_FAILED_RETENTION_HOURS: "${BACKGROUND_RUN_FAILED_RETENTION_HOURS:-2160}"
+      DATA_HEALTH_RETENTION_HOURS: "${DATA_HEALTH_RETENTION_HOURS:-720}"
+      QINGSHU_BACKUP_DIR: /backups
+      QINGSHU_BACKUP_MAX_AGE_SECONDS: "${QINGSHU_BACKUP_MAX_AGE_SECONDS:-93600}"
       BACKGROUND_MARKET_REFRESH_SECONDS: "30"
       BACKGROUND_ARTICLE_CHECK_SECONDS: "1800"
       BACKGROUND_INFO_REFRESH_SECONDS: "600"
       BACKGROUND_USE_HERMES: "false"
       HERMES_ENABLED: "false"
+      TUSHARE_ENABLED: "${TUSHARE_ENABLED:-false}"
+      TUSHARE_TOKEN: "${TUSHARE_TOKEN:-}"
+      TUSHARE_API_URL: "${TUSHARE_API_URL:-https://teajoin.com}"
+      SEC_USER_AGENT: "${SEC_USER_AGENT:-QingshuFinancialResearch/0.1 research@example.com}"
+      DEFAULT_A_SHARE_SYMBOLS: "${DEFAULT_A_SHARE_SYMBOLS:-000063.SZ,300308.SZ}"
+      DEFAULT_RESEARCH_SYMBOLS: "${DEFAULT_RESEARCH_SYMBOLS:-000063.SZ,300308.SZ,NVDA}"
+      QINGSHU_ADMIN_API_TOKEN: "${QINGSHU_ADMIN_API_TOKEN:-}"
     volumes:
       - qingshu-data:/data
+      - qingshu-backups:/backups:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test:
@@ -20,11 +67,80 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=5)",
         ]
       interval: 30s
       timeout: 10s
       retries: 3
 
+  qingshu-worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    environment: *qingshu-environment
+    volumes:
+      - qingshu-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "scripts/check_operations.py",
+          "--require-postgres",
+          "--minimum-active-workers",
+          "1",
+          "--max-queue-lag-seconds",
+          "600",
+          "--max-failure-rate-24h",
+          "0.2",
+          "--skip-backup",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  qingshu-backup:
+    build: .
+    command:
+      [
+        "python",
+        "scripts/postgres_backup.py",
+        "--output-dir",
+        "/backups",
+        "--interval-seconds",
+        "${QINGSHU_BACKUP_INTERVAL_SECONDS:-86400}",
+        "--retention-days",
+        "${QINGSHU_BACKUP_RETENTION_DAYS:-14}",
+        "--minimum-retained",
+        "${QINGSHU_BACKUP_MINIMUM_RETAINED:-7}",
+      ]
+    environment: *qingshu-environment
+    volumes:
+      - qingshu-backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "scripts/postgres_backup.py",
+          "--output-dir",
+          "/backups",
+          "--check-max-age-seconds",
+          "${QINGSHU_BACKUP_MAX_AGE_SECONDS:-93600}",
+        ]
+      interval: 5m
+      timeout: 15s
+      retries: 3
+      start_period: 2m
+
 volumes:
   qingshu-data:
+  qingshu-postgres:
+  qingshu-backups:

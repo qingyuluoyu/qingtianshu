@@ -45,7 +45,16 @@ _EVENT_RULES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "shareholder_change",
         "股东与股权变化",
-        ("减持", "解禁", "股东权益变动", "股权变动", "股份变动", "股东总数", "质押", "股权激励"),
+        (
+            "减持",
+            "解禁",
+            "股东权益变动",
+            "股权变动",
+            "股份变动",
+            "股东总数",
+            "质押",
+            "股权激励",
+        ),
     ),
     (
         "regulatory_legal",
@@ -68,17 +77,51 @@ _EVENT_RULES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "financing_mna",
         "融资与并购重组",
-        ("定向增发", "定增", "可转债", "可转换债券", "转股价格调整", "收购", "并购", "重组", "出售资产", "acquisition", "merger"),
+        (
+            "定向增发",
+            "定增",
+            "可转债",
+            "可转换债券",
+            "转股价格调整",
+            "收购",
+            "并购",
+            "重组",
+            "出售资产",
+            "acquisition",
+            "merger",
+        ),
     ),
     (
         "operations_product",
         "经营、产品与产能",
-        ("产品发布", "新产品", "发布", "亮相", "获批", "投产", "产能", "项目建设", "战略合作", "合作协议", "调价", "launch"),
+        (
+            "产品发布",
+            "新产品",
+            "发布",
+            "亮相",
+            "获批",
+            "投产",
+            "产能",
+            "项目建设",
+            "战略合作",
+            "合作协议",
+            "调价",
+            "launch",
+        ),
     ),
     (
         "governance",
         "治理与管理层",
-        ("董事", "监事", "高级管理人员", "总经理", "辞职", "聘任", "任命", "chief executive"),
+        (
+            "董事",
+            "监事",
+            "高级管理人员",
+            "总经理",
+            "辞职",
+            "聘任",
+            "任命",
+            "chief executive",
+        ),
     ),
 )
 
@@ -187,11 +230,17 @@ class EventTimelineService:
         return self.refresh_symbol(symbol, refresh_sources=refresh_sources)
 
     def _build_packet(self, symbol: str) -> dict[str, Any]:
-        items = self.database.list_news(
+        official_items = self.database.list_news(
             symbol,
-            limit=160,
-            categories=("announcement", "news", "regulatory_filing", "global_news"),
+            limit=80,
+            categories=("announcement", "regulatory_filing"),
         )
+        media_items = self.database.list_news(
+            symbol,
+            limit=120,
+            categories=("news", "global_news"),
+        )
+        items = [*official_items, *media_items]
         events: list[dict[str, Any]] = []
         seen: set[str] = set()
         for item in items:
@@ -208,6 +257,7 @@ class EventTimelineService:
             seen.add(identity)
             relevance = _research_relevance(title)
             evidence_level, evidence_label, event_status = _evidence_level(category)
+            direct_excerpt = _direct_announcement_excerpt(item)
             events.append(
                 {
                     "event_type": event_type,
@@ -226,14 +276,21 @@ class EventTimelineService:
                         "mixed": "双向事件",
                         "neutral": "中性事件",
                     }[relevance],
+                    "source": item.get("source"),
                     "url": item.get("url"),
                     "fetched_at": item.get("fetched_at"),
+                    **(
+                        {"direct_excerpt": direct_excerpt}
+                        if direct_excerpt
+                        else {}
+                    ),
                 }
             )
         events.sort(
             key=lambda item: (
                 str(item.get("event_date") or ""),
-                item.get("evidence_level") in {"official_disclosure", "regulatory_filing"},
+                item.get("evidence_level")
+                in {"official_disclosure", "regulatory_filing"},
                 str(item.get("published_at") or ""),
             ),
             reverse=True,
@@ -243,7 +300,24 @@ class EventTimelineService:
             if any(_same_event(event, existing) for existing in deduplicated):
                 continue
             deduplicated.append(event)
-        events = deduplicated[:40]
+        recent_events = deduplicated[:28]
+        official_supplement = [
+            item
+            for item in deduplicated
+            if item.get("evidence_level")
+            in {"official_disclosure", "regulatory_filing"}
+            and item not in recent_events
+        ][:12]
+        events = sorted(
+            [*recent_events, *official_supplement],
+            key=lambda item: (
+                str(item.get("event_date") or ""),
+                item.get("evidence_level")
+                in {"official_disclosure", "regulatory_filing"},
+                str(item.get("published_at") or ""),
+            ),
+            reverse=True,
+        )[:40]
         type_counts = Counter(item["event_type"] for item in events)
         themes = [
             {
@@ -289,6 +363,9 @@ class EventTimelineService:
                 "risk_events": len(adverse),
                 "supportive_events": len(supportive),
                 "event_types": len(type_counts),
+                "direct_excerpt_events": sum(
+                    bool(item.get("direct_excerpt")) for item in events
+                ),
             },
             "review_points": [
                 "优先阅读最新官方公告或监管文件原文，不只依赖标题。",
@@ -304,19 +381,31 @@ class EventTimelineService:
 
     def _index_common_knowledge(self, packet: dict[str, Any]) -> None:
         source_key = f"event-timeline:{packet['symbol']}"
-        document_id = "event-timeline-" + hashlib.sha256(
-            source_key.encode("utf-8")
-        ).hexdigest()[:24]
-        event_lines = "\n".join(
-            f"- {item.get('event_date') or '日期待确认'}｜"
-            f"{item.get('evidence_label')}｜{item.get('event_label')}｜"
-            f"{item.get('research_relevance_label')}｜{item.get('title')}"
-            for item in (packet.get("events") or [])[:24]
-        ) or "- 当前未形成可用的事件脉络。"
-        theme_lines = "\n".join(
-            f"- {item.get('label')}：{item.get('count')} 条"
-            for item in packet.get("themes") or []
-        ) or "- 尚未形成可分类事件。"
+        document_id = (
+            "event-timeline-"
+            + hashlib.sha256(source_key.encode("utf-8")).hexdigest()[:24]
+        )
+        event_lines = (
+            "\n".join(
+                f"- {item.get('event_date') or '日期待确认'}｜"
+                f"{item.get('evidence_label')}｜{item.get('event_label')}｜"
+                f"{item.get('research_relevance_label')}｜{item.get('title')}"
+                + (
+                    f"\n  公司公告原文摘录：{item.get('direct_excerpt')}"
+                    if item.get("direct_excerpt")
+                    else ""
+                )
+                for item in (packet.get("events") or [])[:24]
+            )
+            or "- 当前未形成可用的事件脉络。"
+        )
+        theme_lines = (
+            "\n".join(
+                f"- {item.get('label')}：{item.get('count')} 条"
+                for item in packet.get("themes") or []
+            )
+            or "- 尚未形成可分类事件。"
+        )
         content = (
             f"# {packet['name']}重要事件脉络\n\n"
             f"证券代码：{packet['symbol']}\n\n"
@@ -376,15 +465,24 @@ def _evidence_level(category: str) -> tuple[str, str, str]:
     return "unknown", "证据类型待确认", "reported_clue"
 
 
+def _direct_announcement_excerpt(item: dict[str, Any]) -> str:
+    if str(item.get("category") or "") != "announcement":
+        return ""
+    summary = re.sub(r"\s+", " ", str(item.get("summary") or "")).strip()
+    prefix = "公司公告原文摘录："
+    if not summary.startswith(prefix):
+        return ""
+    return summary[len(prefix) :].strip()[:1200]
+
+
 def _normalized_title(title: str) -> str:
     return re.sub(r"[^0-9a-z\u4e00-\u9fff]+", "", title.casefold())
 
 
 def _same_event(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    if (
-        left.get("event_date") != right.get("event_date")
-        or left.get("event_type") != right.get("event_type")
-    ):
+    if left.get("event_date") != right.get("event_date") or left.get(
+        "event_type"
+    ) != right.get("event_type"):
         return False
     left_title = str(left.get("title") or "")
     right_title = str(right.get("title") or "")

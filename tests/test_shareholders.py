@@ -117,7 +117,11 @@ def test_shareholder_service_persists_snapshot_and_long_term_knowledge(app):
             """,
             ("000063.SZ",),
         ).fetchone()
-    assert tuple(row) == (575136, -9.452498, "2026-03-31", 36.96)
+    assert row is not None
+    assert row["holder_count"] == 575136
+    assert row["change_pct"] == pytest.approx(-9.452498)
+    assert row["top10_report_date"] == "2026-03-31"
+    assert row["top10_ratio"] == pytest.approx(36.96)
 
     document = next(
         item
@@ -212,6 +216,6 @@ def test_research_report_fingerprint_changes_with_shareholder_structure():
         },
     }
 
-    assert ResearchReportService._fingerprint(base) != ResearchReportService._fingerprint(
-        changed
-    )
+    assert ResearchReportService._fingerprint(
+        base
+    ) != ResearchReportService._fingerprint(changed)

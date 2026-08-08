@@ -5,7 +5,13 @@ from collections import Counter
 import pandas as pd
 from fastapi.testclient import TestClient
 
-from app.main import _filter_knowledge_context
+from app.main import (
+    _build_visible_evidence_sources,
+    _filter_knowledge_context,
+    _is_stock_screen_query,
+    _stock_screen_parameters,
+)
+from app.services.agent import AgentService
 from app.services.stock_screener import StockScreenerService
 
 
@@ -113,7 +119,12 @@ class FakeTushareClient:
         }
 
     def _daily_basic(
-        self, ts_code: str, pe: float, pb: float, total_mv_yi: float, volume_ratio: float
+        self,
+        ts_code: str,
+        pe: float,
+        pb: float,
+        total_mv_yi: float,
+        volume_ratio: float,
     ) -> dict:
         return {
             "ts_code": ts_code,
@@ -141,6 +152,133 @@ class TransientFinanceFailureClient(FakeTushareClient):
         return super().query(api_name, **params)
 
 
+class MissingValuationFieldClient(FakeTushareClient):
+    def query(self, api_name: str, **params):
+        result = super().query(api_name, **params)
+        if api_name == "daily_basic":
+            result.loc[result["ts_code"] == "300308.SZ", "pb"] = None
+        return result
+
+
+class FakePersistedSnapshotDatabase:
+    def __init__(self) -> None:
+        self.trade_dates = [
+            value.strftime("%Y%m%d")
+            for value in pd.bdate_range(end="2026-07-24", periods=25)
+        ]
+        self.codes = ["000063.SZ", "300308.SZ", "000001.SZ", "600000.SH"]
+        self.names = ["中兴通讯", "中际旭创", "平安银行", "浦发银行"]
+        self.industries = ["通信设备", "通信设备", "银行", "银行"]
+        self.latest_closes = [120.0, 100.0, 12.0, 11.0]
+        self.base_5 = [100.0, 95.0, 11.5, 10.0]
+        self.base_20 = [80.0, 90.0, 10.0, 9.0]
+
+    def list_latest_tushare_dataset_snapshots(self, dataset: str, **_kwargs):
+        if dataset == "stock_basic":
+            return [
+                self._record(
+                    code,
+                    [
+                        {
+                            "ts_code": code,
+                            "name": name,
+                            "industry": industry,
+                            "market": "主板",
+                            "list_date": "20100101",
+                            "exchange": code.split(".")[1],
+                        }
+                    ],
+                )
+                for code, name, industry in zip(
+                    self.codes, self.names, self.industries, strict=True
+                )
+            ]
+        if dataset == "daily_basic":
+            return [
+                self._record(
+                    code,
+                    [
+                        {
+                            "ts_code": code,
+                            "trade_date": self.trade_dates[-1],
+                            "turnover_rate": 2.0,
+                            "volume_ratio": 1.2,
+                            "pe_ttm": 20.0 + index,
+                            "pb": 2.0,
+                            "total_mv_yi": 200.0 + index * 20,
+                            "circ_mv_yi": 160.0 + index * 20,
+                        }
+                    ],
+                )
+                for index, code in enumerate(self.codes)
+            ]
+        if dataset == "daily":
+            records = []
+            for index, code in enumerate(self.codes):
+                rows = []
+                for offset, trade_date in enumerate(self.trade_dates):
+                    close = 90.0 + index + offset
+                    if offset == 4:
+                        close = self.base_20[index]
+                    elif offset == 19:
+                        close = self.base_5[index]
+                    elif offset == 24:
+                        close = self.latest_closes[index]
+                    rows.append(
+                        {
+                            "ts_code": code,
+                            "trade_date": trade_date,
+                            "open": close - 0.2,
+                            "high": close + 0.5,
+                            "low": close - 0.5,
+                            "close": close,
+                            "pct_chg": 1.0,
+                            "vol": 1_000_000 + index,
+                            "amount": 50_000 - index * 1_000,
+                        }
+                    )
+                records.append(self._record(code, list(reversed(rows))))
+            return records
+        if dataset == "fina_indicator":
+            return [
+                self._record(
+                    code,
+                    [
+                        {
+                            "ts_code": code,
+                            "ann_date": "20260429",
+                            "end_date": "20260331",
+                            "roe": 8.0 + index,
+                        }
+                    ],
+                )
+                for index, code in enumerate(self.codes)
+            ]
+        return []
+
+    def latest_tushare_dataset_snapshot(self, dataset: str, scope_key: str):
+        if dataset == "a_share_universe" and scope_key == "all":
+            return {"payload": {"coverage": {"listed": len(self.codes)}}}
+        return None
+
+    @staticmethod
+    def _record(scope_key: str, rows: list[dict]) -> dict:
+        internal = scope_key[:-3] + ".SS" if scope_key.endswith(".SH") else scope_key
+        return {"scope_key": internal, "payload": {"rows": rows}}
+
+
+class UndercoveredPersistedSnapshotDatabase(FakePersistedSnapshotDatabase):
+    def latest_tushare_dataset_snapshot(self, dataset: str, scope_key: str):
+        if dataset == "a_share_universe" and scope_key == "all":
+            return {"payload": {"coverage": {"listed": 100}}}
+        return super().latest_tushare_dataset_snapshot(dataset, scope_key)
+
+
+class UnavailableLiveClient:
+    def query(self, api_name: str, **_params):
+        raise RuntimeError(f"{api_name} unavailable")
+
+
 def test_quality_screen_is_transparent_and_has_separate_data_dates():
     fake = FakeTushareClient()
     service = StockScreenerService(fake, snapshot_ttl_seconds=600)
@@ -151,7 +289,34 @@ def test_quality_screen_is_transparent_and_has_separate_data_dates():
     assert result["profile"]["key"] == "quality"
     assert result["data_meta"]["latest_completed_trade_date"] == "2026-07-21"
     assert result["data_meta"]["financial_report_periods"] == ["2026-03-31"]
+    assert result["data_contract"]["contract_version"] == "stock_screen_data_v1"
+    assert result["data_contract"]["data_version"].startswith("stock-screen-v1-")
+    assert result["data_contract"]["as_of"]["market_date"] == "2026-07-21"
+    assert result["data_contract"]["coverage"]["market_snapshot"] == {
+        "available": 5,
+        "expected": 5,
+        "missing": 0,
+        "ratio": 1.0,
+    }
+    assert result["data_contract"]["representation"] == {
+        "actual_scope_label": "全部A股",
+        "coverage_status": "complete",
+        "represents_requested_scope": True,
+        "represents_full_market": True,
+        "minimum_coverage_ratio": 0.95,
+        "note": "本轮数据足以代表所选范围的确定性规则计算。",
+    }
+    assert result["universe"]["financial_candidate_pool"] == 4
+    assert result["universe"]["financials_checked"] == 4
     assert result["items"][0]["name"] == "中际旭创"
+    assert result["items"][0]["evidence_times"] == {
+        "market_date": "2026-07-21",
+        "financial_report_period": "2026-03-31",
+        "financial_announcement_date": "2026-04-29",
+    }
+    assert result["items"][0]["source_contract"]["valuation"] == (
+        "Tushare Pro:daily_basic"
+    )
     assert "中兴通讯" not in {item["name"] for item in result["items"]}
     assert all("score" not in item for item in result["items"])
     assert result["items"][0]["matched_reasons"]
@@ -162,14 +327,148 @@ def test_quality_screen_is_transparent_and_has_separate_data_dates():
     assert fake.calls["trade_cal"] == 1
 
 
+def test_persisted_database_snapshot_keeps_screener_usable_without_live_provider():
+    service = StockScreenerService(
+        None,
+        database=FakePersistedSnapshotDatabase(),
+        snapshot_ttl_seconds=600,
+    )
+
+    result = service.screen(max_results=3)
+
+    assert result["status"] == "ready"
+    assert result["profile"]["key"] == "trend"
+    assert result["data_meta"]["source_mode"] == "persisted"
+    assert result["data_meta"]["latest_completed_trade_date"] == "2026-07-24"
+    assert result["data_contract"]["data_version"].startswith("stock-screen-db-v1-")
+    assert result["data_contract"]["coverage"]["market_snapshot"] == {
+        "available": 4,
+        "expected": 4,
+        "missing": 0,
+        "ratio": 1.0,
+    }
+    assert {item["name"] for item in result["items"]} == {"中兴通讯", "浦发银行"}
+    assert all(
+        item["financials"]["report_period"] == "2026-03-31" for item in result["items"]
+    )
+    assert "生产数据库" in result["warnings"][0]
+
+
+def test_pullback_candidates_prioritize_samples_closest_to_stabilizing():
+    frame = pd.DataFrame(
+        [
+            {"ts_code": "000001.SZ", "return_5d_pct": 30.0},
+            {"ts_code": "000002.SZ", "return_5d_pct": 2.0},
+            {"ts_code": "000003.SZ", "return_5d_pct": 12.0},
+        ]
+    )
+
+    sorted_frame = StockScreenerService._sort_frame(frame, "pullback")
+
+    assert sorted_frame["return_5d_pct"].tolist() == [2.0, 12.0, 30.0]
+    profile = next(
+        item for item in StockScreenerService.profiles() if item["key"] == "pullback"
+    )
+    assert "从低到高" in profile["sort_rule"]
+    assert "刚转正" in profile["sort_rule"]
+
+
+def test_screen_candidate_builds_research_focus_and_real_metric_attention_flags():
+    service = StockScreenerService(None)
+    item = service._build_item(
+        pd.Series(
+            {
+                "ts_code": "000063.SZ",
+                "internal_symbol": "000063.SZ",
+                "name": "中兴通讯",
+                "industry": "通信设备",
+                "market": "主板",
+                "list_date": "19851118",
+                "trade_date": "20260728",
+                "latest_close": 40.0,
+                "pct_change": -9.2,
+                "return_5d_pct": 8.0,
+                "return_20d_pct": 30.0,
+                "industry_avg_return_20d_pct": 10.0,
+                "industry_excess_20d_pct": 20.0,
+                "pe_ttm": 120.0,
+                "pb": 9.0,
+                "ps_ttm": 5.0,
+                "total_mv_yi": 800.0,
+                "circ_mv_yi": 700.0,
+                "turnover_rate": 4.0,
+                "volume_ratio": 1.5,
+            }
+        ),
+        "trend",
+        {
+            "status": "available",
+            "coverage_status": "sufficient",
+            "report_period": "2026-03-31",
+            "announcement_date": "2026-04-29",
+            "revenue_yoy": 5.0,
+            "net_profit_yoy": -12.5,
+            "roe": 5.0,
+            "gross_margin": 30.0,
+            "net_margin": 8.0,
+            "debt_to_assets": 55.0,
+        },
+    )
+
+    assert "近 20 日" in item["research_focus"]
+    assert "相对行业" in item["research_focus"]
+    assert any("当日下跌 9.20%" in value for value in item["attention_flags"])
+    assert any("净利润同比 -12.50%" in value for value in item["attention_flags"])
+    assert any("反方线索" in value for value in item["attention_flags"])
+    assert any("PE TTM 120.00" in value for value in item["attention_flags"])
+    assert len(item["attention_flags"]) <= 4
+
+
+def test_undercovered_persisted_snapshot_switches_to_live_full_market_data():
+    live = FakeTushareClient()
+    service = StockScreenerService(
+        live,
+        database=UndercoveredPersistedSnapshotDatabase(),
+        snapshot_ttl_seconds=600,
+    )
+
+    result = service.screen(profile="trend", max_results=3)
+
+    assert result["data_meta"]["source_mode"] == "live"
+    assert result["data_contract"]["coverage"]["market_snapshot"]["ratio"] == 1.0
+    assert result["data_contract"]["representation"]["represents_full_market"] is True
+    assert live.calls["stock_basic"] == 1
+
+
+def test_undercovered_persisted_fallback_never_claims_an_empty_full_market_result():
+    service = StockScreenerService(
+        UnavailableLiveClient(),
+        database=UndercoveredPersistedSnapshotDatabase(),
+        snapshot_ttl_seconds=600,
+    )
+
+    result = service.screen(
+        profile="value",
+        max_results=3,
+        filters={"min_market_cap_yi": 10_000},
+    )
+
+    assert result["status"] == "empty"
+    assert result["data_meta"]["coverage_status"] == "constrained"
+    assert result["data_contract"]["representation"]["represents_full_market"] is False
+    assert result["data_contract"]["representation"]["actual_scope_label"] == (
+        "已同步A股 4/100 只"
+    )
+    assert "这不等于全市场没有候选" in result["warnings"][-1]
+    assert all("放宽" not in warning for warning in result["warnings"])
+
+
 def test_stock_screener_api_requires_user_and_returns_deterministic_candidates(app):
     fake = FakeTushareClient()
     app.state.stock_screener.client = fake
     client = TestClient(app)
 
-    unauthenticated = client.post(
-        "/me/stock-screener", json={"profile": "trend"}
-    )
+    unauthenticated = client.post("/me/stock-screener", json={"profile": "trend"})
     assert unauthenticated.status_code == 401
 
     assert client.post("/users", json={"name": "Screener User"}).status_code == 201
@@ -226,6 +525,49 @@ def test_agent_routes_natural_language_screening_to_deterministic_service(app):
     assert payload["evidence_sources"]
 
 
+def test_agent_routes_product_screening_language_to_stock_screen(app):
+    fake = FakeTushareClient()
+    app.state.stock_screener.client = fake
+    client = TestClient(app)
+    assert client.post("/users", json={"name": "Product Screener"}).status_code == 201
+
+    response = client.post(
+        "/me/chat",
+        json={
+            "message": (
+                "用经营改善模板筛选A股，并明确说明股票池覆盖、数据版本、"
+                "行情日、财务报告期和关键数据缺口。"
+            ),
+            "execute_agent": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "stock_screen"
+    assert payload["evidence"]["profile"]["key"] == "quality"
+    assert payload["evidence"]["data_contract"]["contract_version"] == (
+        "stock_screen_data_v1"
+    )
+    assert "股票池覆盖 5/5 只（100.0%）" in payload["answer"]
+    assert "数据版本 stock-screen-v1-" in payload["answer"]
+    assert "行情日 2026-07-21" in payload["answer"]
+    assert "财务报告期 2026-03-31" in payload["answer"]
+
+
+def test_stock_screen_product_terms_route_to_expected_profiles():
+    cases = {
+        "查看经营改善候选": "quality",
+        "给我相对行业增强候选": "trend",
+        "按估值约束筛选": "value",
+        "查看回撤后待复核": "pullback",
+    }
+
+    for message, expected_profile in cases.items():
+        assert _is_stock_screen_query(message) is True
+        assert _stock_screen_parameters(message)["profile"] == expected_profile
+
+
 def test_transient_financial_failure_is_retried_instead_of_becoming_a_gap():
     fake = TransientFinanceFailureClient()
     service = StockScreenerService(fake, finance_workers=4)
@@ -236,6 +578,156 @@ def test_transient_financial_failure_is_retried_instead_of_becoming_a_gap():
     assert item["financials"]["status"] == "available"
     assert item["financials"]["report_period"] == "2026-03-31"
     assert "revenue_yoy" not in item["missing_fields"]
+
+
+def test_stock_screen_explains_field_level_missing_reason():
+    service = StockScreenerService(MissingValuationFieldClient())
+
+    result = service.screen(profile="trend", max_results=3)
+
+    item = next(value for value in result["items"] if value["name"] == "中际旭创")
+    assert "pb" in item["missing_fields"]
+    reason = next(value for value in item["missing_reasons"] if value["field"] == "pb")
+    assert reason == {
+        "field": "pb",
+        "code": "daily_basic_field_missing",
+        "reason": "最近完整交易日的估值或市值截面未返回该字段",
+    }
+
+
+def test_stock_screen_agent_contract_keeps_scope_dates_and_readable_gaps():
+    service = StockScreenerService(MissingValuationFieldClient())
+    result = service.screen(profile="trend", max_results=3)
+
+    compact = AgentService._compact_stock_screen_evidence(result)
+    preview = AgentService._render_preview(compact)
+    sources = _build_visible_evidence_sources(result)
+
+    assert compact["candidate_count_total"] == len(result["items"])
+    assert compact["items_in_prompt"] == len(result["items"])
+    assert compact["data_contract"]["data_version"].startswith("stock-screen-v1-")
+    assert compact["data_contract"]["coverage"]["market_snapshot"]["expected"] == 5
+    assert all("ts_code" not in item for item in compact["items"])
+    assert all(item.get("research_focus") for item in compact["items"])
+    assert "股票池覆盖 5/5 只（100.0%）" in preview
+    assert "数据版本 stock-screen-v1-" in preview
+    assert "行情日 2026-07-21" in preview
+    assert "财务报告期 2026-03-31" in preview
+    assert "财报公告日 2026-04-29" in preview
+    assert "最近完整交易日的估值或市值截面未返回该字段" in preview
+    assert sources[0]["kind"] == "选股范围"
+    assert "股票池覆盖 5/5 只" in sources[0]["summary"]
+    assert "数据版本 stock-screen-v1-" in sources[0]["summary"]
+
+
+def test_stock_screen_guard_rejects_full_market_claim_when_snapshot_is_incomplete():
+    evidence = {
+        "type": "stock_screen",
+        "profile": {"key": "trend", "label": "相对行业增强候选"},
+        "data_contract": {
+            "coverage": {
+                "market_snapshot": {
+                    "available": 5526,
+                    "expected": 5530,
+                    "missing": 4,
+                    "ratio": 0.999277,
+                }
+            }
+        },
+        "items": [],
+    }
+
+    overclaim = AgentService._validate_model_output(
+        "A股全市场没有股票满足本轮条件。", evidence
+    )
+    scoped = AgentService._validate_model_output(
+        "股票池覆盖5526/5530只；本轮已覆盖范围内没有股票满足全部条件，不能外推全市场。",
+        evidence,
+    )
+
+    assert overclaim["passed"] is False
+    assert (
+        "通用选股覆盖不足时不能外推为全市场结论"
+        in (overclaim["unsupported_market_inferences"])
+    )
+    assert scoped["passed"] is True
+
+
+def test_stock_screen_guard_uses_financial_representation_not_only_market_rows():
+    evidence = {
+        "type": "stock_screen",
+        "profile": {"key": "quality", "label": "经营改善候选"},
+        "data_contract": {
+            "coverage": {
+                "market_snapshot": {
+                    "available": 5530,
+                    "expected": 5530,
+                    "missing": 0,
+                    "ratio": 1.0,
+                }
+            },
+            "representation": {
+                "represents_full_market": False,
+                "actual_scope_label": "A股完整行情范围，财务或规则字段部分覆盖",
+            },
+        },
+        "items": [],
+    }
+
+    result = AgentService._validate_model_output("全部A股没有经营改善候选。", evidence)
+
+    assert result["passed"] is False
+    assert (
+        "通用选股覆盖不足时不能外推为全市场结论"
+        in (result["unsupported_market_inferences"])
+    )
+
+
+def test_stock_screen_guard_rejects_candidate_count_conflict():
+    evidence = {
+        "type": "stock_screen",
+        "profile": {"key": "quality", "label": "经营改善候选"},
+        "universe": {"matched": 2},
+        "items": [
+            {"name": "甲公司", "internal_symbol": "000001.SZ"},
+            {"name": "乙公司", "internal_symbol": "000002.SZ"},
+        ],
+    }
+
+    conflict = AgentService._validate_model_output(
+        "本轮筛选出 10 只研究候选。", evidence
+    )
+    aligned = AgentService._validate_model_output("本轮筛选出 2 只研究候选。", evidence)
+
+    assert conflict["passed"] is False
+    assert (
+        "通用选股候选数量必须与确定性结果一致"
+        in (conflict["unsupported_market_inferences"])
+    )
+    assert aligned["passed"] is True
+
+
+def test_stock_screen_guard_keeps_provider_named_listed_company():
+    evidence = {
+        "type": "stock_screen",
+        "profile": {"key": "quality", "label": "经营改善候选"},
+        "universe": {"matched": 1},
+        "items": [
+            {
+                "name": "东方财富",
+                "internal_symbol": "300059.SZ",
+                "matched_reasons": ["最新财报营收同比为正"],
+            }
+        ],
+    }
+
+    result = AgentService._validate_model_output(
+        "本轮筛选出 1 只研究候选：东方财富（300059.SZ）。",
+        evidence,
+    )
+
+    assert result["passed"] is True
+    assert result["private_operational_patterns"] == []
 
 
 def test_stock_screen_knowledge_drops_unrelated_stock_archives():

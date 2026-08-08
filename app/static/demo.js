@@ -1,0 +1,130 @@
+const welcomeMessage = "你好，我是清数智算。你可以问市场、个股、基金、ETF、财报或理财常识；我会结合实时证据、你的资料和金融知识，先回答问题，再解释关键依据、风险和适合条件。";
+    const evaluationMode = new URLSearchParams(window.location.search).get("qa") === "1";
+    const state = {
+      user: null,
+      health: null,
+      pendingImage: null,
+      imageUploading: false,
+      conversationId: null,
+      conversations: [],
+      conversationMessages: [],
+      expandedConversationTopics: new Set(),
+      conversationHistoryExpanded: false,
+      conversationQuery: "",
+      conversationScope: "all",
+      watchlist: [],
+      stockAssets: [],
+      researchActions: [],
+      researchActionSummary: {},
+      researchReports: [],
+      selectedWatchlistSymbol: null,
+      watchlistTimeframe: "intraday",
+      watchlistKlineExplorer: null,
+      watchlistFilter: "all",
+      watchlistSecondaryFilter: "all",
+      editingWatchlistSymbol: null,
+      knowledge: [],
+      knowledgeSummary: {},
+      knowledgeQuery: "",
+      knowledgeScope: "all",
+      knowledgeType: "all",
+      workspacePage: "insights",
+      workspaceNavigationVersion: 0,
+      workspaceBootReady: false,
+      workspaceBootPromise: null,
+      insightItems: [],
+      insightFilter: "market",
+      stockScreener: null,
+      stockScreenerLoading: false,
+      screeningSection: "general",
+      liZongStrategy: null,
+      liZongHistory: null,
+      liZongBacktest: null,
+      liZongBacktestPeriod: "1y",
+      liZongBacktestLoading: false,
+      liZongObservationCounts: {},
+      liZongLoading: false,
+      liZongLoadToken: 0,
+      liZongFilter: "qualified",
+      liZongRenderedFilter: "qualified",
+      liZongHistoryExpanded: false,
+      stockActionPlans: {},
+      stockTradeReviews: {},
+      pendingReviewDrafts: {},
+      pendingReviewDraftsLoaded: false,
+      pendingReviewDraftsPromise: null,
+      deepStock: null,
+      deepStockSessions: [],
+      deepStockLoaded: false,
+      deepStockLoadPromise: null,
+      deepStockOverviewSymbol: null,
+      deepStockOverviewPromises: {},
+      deepStockKlineController: null,
+      pendingDeepStockSymbol: null,
+      stockSpaceTab: "overview",
+      diagnosisSymbol: null,
+      liveMarkets: [],
+      marketBreadth: null,
+      marketSectors: [],
+      todayOverview: null,
+      todayOverviewAvailable: false,
+      reviewTab: "trades",
+      tradeReviewCenter: [],
+      tradeReviewCenterSummary: {},
+      selectedTradeReviewId: null,
+      pendingTradeReviewId: null,
+      tradeReviewSearchTimer: null,
+      researchOutcomes: null,
+      selectedOutcomeSymbol: null,
+      reviewRuns: [],
+      reviewRunSummary: {},
+      selectedReviewRunId: null,
+      reviewRunSearchTimer: null,
+      reviewQuality: null,
+      globalSearchTimer: null,
+      globalSearchToken: 0,
+      globalSearchItems: [],
+      globalSearchActiveIndex: -1,
+      searchQuery: "",
+      searchResults: null,
+      agentContextMetadata: {},
+      agentContextQuestion: "",
+      agentProcessExpanded: false,
+      agentContextCollapsed: true,
+      pendingAgentRequests: new Map(),
+      agentResearchRunning: false,
+      chatDraftRevision: 0,
+      chatDraftUserEdited: false,
+      fundComparison: null,
+      riskProfile: null,
+      riskProfileLoading: false,
+      riskProfileDirty: false,
+      evaluationMode
+    };
+    const $ = (id) => document.getElementById(id);
+    function setChatInputDraft(value, options = {}) {
+      const input = $("chatInput");
+      if (!input) return false;
+      const expectedRevision = options.expectedRevision;
+      if (
+        expectedRevision != null
+        && expectedRevision !== state.chatDraftRevision
+      ) return false;
+      if (
+        !options.force
+        && state.chatDraftUserEdited
+        && input.value.trim()
+      ) return false;
+      const next = String(value ?? "");
+      if (input.value === next) return true;
+      input.value = next;
+      state.chatDraftRevision += 1;
+      state.chatDraftUserEdited = false;
+      return true;
+    }
+    function clearChatInputDraft() {
+      return setChatInputDraft("", {force: true});
+    }
+    // Keep the frequently used general screener first. The strict strategy stays
+    // discoverable through the section shortcut without shifting the form after load.
+    $("stockScreenerPanel").appendChild($("liZongPanel"));

@@ -3,934 +3,58 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import secrets
-import sqlite3
 from typing import Any
 from uuid import uuid4
 
+from app.domain_schema import DOMAIN_SCHEMA_SQL
+from app.postgres_compat import PostgresConnection, create_postgres_pool
 from app.utils import json_dumps, utc_now, write_json
 
 
 class Database:
     SYSTEM_EDITOR_ID = "system-market-editor"
+    SCHEMA_VERSION = 5
 
-    def __init__(self, path: Path, workspace_root: Path):
-        self.path = Path(path)
+    def __init__(
+        self,
+        workspace_root: Path,
+        database_url: str = "",
+    ):
         self.workspace_root = Path(workspace_root)
+        self.database_url = str(
+            database_url or os.getenv("QINGSHU_DATABASE_URL", "")
+        ).strip()
+        if not self.database_url.startswith(
+            ("postgresql://", "postgres://", "postgresql+psycopg://")
+        ):
+            raise ValueError("QINGSHU_DATABASE_URL is required and must use PostgreSQL")
+        self._postgres_pool = create_postgres_pool(self.database_url)
 
-    def connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        return connection
+    def __del__(self) -> None:
+        pool = getattr(self, "_postgres_pool", None)
+        if pool is not None:
+            pool.close()
+            self._postgres_pool = None
+
+    def connect(self) -> PostgresConnection:
+        if self._postgres_pool is None:
+            raise RuntimeError("PostgreSQL connection pool is closed")
+        return PostgresConnection(self._postgres_pool)
 
     def initialize(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.workspace_root.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
-            connection.executescript(
+            connection.execute(
                 """
-                CREATE TABLE IF NOT EXISTS users (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    workspace_path TEXT NOT NULL UNIQUE,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS user_sessions (
-                    id TEXT PRIMARY KEY,
-                    token_hash TEXT NOT NULL UNIQUE,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    created_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL,
-                    revoked_at TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS user_uploads (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    kind TEXT NOT NULL,
-                    original_name TEXT NOT NULL,
-                    mime_type TEXT NOT NULL,
-                    size_bytes INTEGER NOT NULL,
-                    width INTEGER NOT NULL,
-                    height INTEGER NOT NULL,
-                    workspace_path TEXT NOT NULL UNIQUE,
-                    created_at TEXT NOT NULL,
-                    used_at TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS watchlist (
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    symbol TEXT NOT NULL,
-                    name TEXT,
-                    market TEXT,
-                    thesis TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY (user_id, symbol)
-                );
-
-                CREATE TABLE IF NOT EXISTS memories (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    kind TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('candidate', 'confirmed', 'rejected')),
-                    created_at TEXT NOT NULL,
-                    confirmed_at TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS runs (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    intent TEXT NOT NULL,
-                    model_tier TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    input_json TEXT NOT NULL,
-                    evidence_json TEXT,
-                    answer TEXT,
-                    usage_json TEXT,
-                    error TEXT,
-                    workspace_path TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    finished_at TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS stock_workspaces (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    symbol TEXT NOT NULL,
-                    name TEXT,
-                    market TEXT,
-                    relation_type TEXT NOT NULL
-                        CHECK(relation_type IN ('watching', 'holding', 'ended')),
-                    priority TEXT
-                        CHECK(priority IS NULL OR priority IN ('high', 'normal', 'low')),
-                    tracking_status TEXT NOT NULL
-                        CHECK(tracking_status IN ('active', 'paused')),
-                    workflow_status TEXT NOT NULL
-                        CHECK(workflow_status IN ('idle', 'researching', 'waiting_data')),
-                    attention_tags_json TEXT NOT NULL DEFAULT '[]',
-                    version INTEGER NOT NULL DEFAULT 1,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    ended_at TEXT,
-                    UNIQUE(user_id, symbol)
-                );
-
-                CREATE TABLE IF NOT EXISTS stock_relation_history (
-                    id TEXT PRIMARY KEY,
-                    workspace_id TEXT NOT NULL
-                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    relation_type TEXT NOT NULL
-                        CHECK(relation_type IN ('watching', 'holding', 'ended')),
-                    priority TEXT
-                        CHECK(priority IS NULL OR priority IN ('high', 'normal', 'low')),
-                    tracking_status TEXT NOT NULL
-                        CHECK(tracking_status IN ('active', 'paused')),
-                    source TEXT NOT NULL,
-                    effective_at TEXT NOT NULL,
-                    ended_at TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS thesis_versions (
-                    id TEXT PRIMARY KEY,
-                    workspace_id TEXT NOT NULL
-                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    symbol TEXT NOT NULL,
-                    version_no INTEGER NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN (
-                        'draft', 'pending_confirmation', 'active',
-                        'superseded', 'invalidated', 'rejected'
-                    )),
-                    reason_text TEXT NOT NULL,
-                    watch_items_json TEXT NOT NULL DEFAULT '[]',
-                    recheck_conditions_json TEXT NOT NULL DEFAULT '[]',
-                    source TEXT NOT NULL,
-                    source_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-                    base_version INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    confirmed_at TEXT,
-                    superseded_at TEXT,
-                    UNIQUE(workspace_id, version_no)
-                );
-
-                CREATE TABLE IF NOT EXISTS conversations (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    title TEXT NOT NULL,
-                    quality_scope TEXT NOT NULL DEFAULT 'user',
-                    status TEXT NOT NULL DEFAULT 'active'
-                        CHECK(status IN ('active', 'archived')),
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    archived_at TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS conversation_messages (
-                    id TEXT PRIMARY KEY,
-                    conversation_id TEXT NOT NULL
-                        REFERENCES conversations(id) ON DELETE CASCADE,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    role TEXT NOT NULL CHECK(role IN ('user', 'assistant')),
-                    content TEXT NOT NULL,
-                    intent TEXT,
-                    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-                    metadata_json TEXT NOT NULL DEFAULT '{}',
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS knowledge_documents (
-                    id TEXT PRIMARY KEY,
-                    owner_user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
-                    scope TEXT NOT NULL CHECK(scope IN ('common', 'user')),
-                    title TEXT NOT NULL,
-                    original_name TEXT NOT NULL,
-                    mime_type TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    source_key TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    UNIQUE(scope, owner_user_id, source_key)
-                );
-
-                CREATE TABLE IF NOT EXISTS market_cache (
-                    cache_key TEXT PRIMARY KEY,
-                    payload_json TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    market_at TEXT,
-                    fetched_at TEXT NOT NULL,
-                    expires_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS market_breadth_snapshots (
-                    market_date TEXT PRIMARY KEY,
-                    payload_json TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    fetched_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS articles (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    kind TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    summary TEXT NOT NULL,
-                    body TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL,
-                    evidence_json TEXT NOT NULL,
-                    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS market_bars (
-                    symbol TEXT NOT NULL,
-                    interval TEXT NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    open REAL,
-                    high REAL,
-                    low REAL,
-                    close REAL NOT NULL,
-                    adjusted_close REAL,
-                    volume INTEGER,
-                    source TEXT NOT NULL,
-                    fetched_at TEXT NOT NULL,
-                    PRIMARY KEY (symbol, interval, timestamp)
-                );
-
-                CREATE TABLE IF NOT EXISTS background_job_runs (
-                    id TEXT PRIMARY KEY,
-                    job_name TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    summary_json TEXT,
-                    error TEXT,
-                    started_at TEXT NOT NULL,
-                    finished_at TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS data_health_snapshots (
-                    id TEXT PRIMARY KEY,
-                    status TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS tushare_sync_runs (
-                    id TEXT PRIMARY KEY,
-                    job_scope TEXT NOT NULL,
-                    status TEXT NOT NULL
-                        CHECK(status IN ('running', 'stable', 'partial', 'failed')),
-                    as_of_date TEXT,
-                    data_version TEXT,
-                    datasets_json TEXT NOT NULL,
-                    summary_json TEXT,
-                    error TEXT,
-                    started_at TEXT NOT NULL,
-                    finished_at TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS tushare_dataset_snapshots (
-                    id TEXT PRIMARY KEY,
-                    dataset TEXT NOT NULL,
-                    scope_key TEXT NOT NULL,
-                    as_of_date TEXT,
-                    report_period TEXT,
-                    source_updated_at TEXT,
-                    sync_run_id TEXT NOT NULL
-                        REFERENCES tushare_sync_runs(id) ON DELETE CASCADE,
-                    data_version TEXT NOT NULL,
-                    data_status TEXT NOT NULL
-                        CHECK(data_status IN ('stable', 'incomplete')),
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(dataset, scope_key, data_version)
-                );
-
-                CREATE TABLE IF NOT EXISTS strategy_definitions (
-                    strategy_id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    status TEXT NOT NULL
-                        CHECK(status IN ('active', 'paused', 'retired')),
-                    owner_type TEXT NOT NULL DEFAULT 'system',
-                    current_version TEXT NOT NULL,
-                    boundary TEXT NOT NULL,
-                    subscriptions_enabled INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS strategy_versions (
-                    id TEXT PRIMARY KEY,
-                    strategy_id TEXT NOT NULL
-                        REFERENCES strategy_definitions(strategy_id) ON DELETE CASCADE,
-                    version TEXT NOT NULL,
-                    method TEXT NOT NULL,
-                    rules_json TEXT NOT NULL,
-                    formulas_json TEXT NOT NULL,
-                    change_notes TEXT NOT NULL,
-                    published_at TEXT NOT NULL,
-                    UNIQUE(strategy_id, version)
-                );
-
-                CREATE TABLE IF NOT EXISTS strategy_parameter_versions (
-                    id TEXT PRIMARY KEY,
-                    strategy_id TEXT NOT NULL
-                        REFERENCES strategy_definitions(strategy_id) ON DELETE CASCADE,
-                    strategy_version TEXT NOT NULL,
-                    parameter_version TEXT NOT NULL,
-                    parameters_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(strategy_id, strategy_version, parameter_version)
-                );
-
-                CREATE TABLE IF NOT EXISTS strategy_screen_runs (
-                    id TEXT PRIMARY KEY,
-                    strategy_id TEXT NOT NULL
-                        REFERENCES strategy_definitions(strategy_id) ON DELETE CASCADE,
-                    strategy_version TEXT NOT NULL,
-                    parameter_version TEXT NOT NULL,
-                    data_version TEXT NOT NULL,
-                    data_versions_json TEXT NOT NULL,
-                    as_of_date TEXT,
-                    status TEXT NOT NULL
-                        CHECK(status IN ('running', 'completed', 'partial', 'failed')),
-                    requested_count INTEGER NOT NULL,
-                    processed_count INTEGER NOT NULL DEFAULT 0,
-                    qualified_count INTEGER NOT NULL DEFAULT 0,
-                    triggered_count INTEGER NOT NULL DEFAULT 0,
-                    incomplete_count INTEGER NOT NULL DEFAULT 0,
-                    invalidated_count INTEGER NOT NULL DEFAULT 0,
-                    error TEXT,
-                    started_at TEXT NOT NULL,
-                    finished_at TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS strategy_candidate_snapshots (
-                    id TEXT PRIMARY KEY,
-                    run_id TEXT NOT NULL
-                        REFERENCES strategy_screen_runs(id) ON DELETE CASCADE,
-                    strategy_id TEXT NOT NULL
-                        REFERENCES strategy_definitions(strategy_id) ON DELETE CASCADE,
-                    strategy_version TEXT NOT NULL,
-                    parameter_version TEXT NOT NULL,
-                    data_version TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    as_of_date TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN (
-                        'qualified', 'triggered', 'not_qualified',
-                        'data_incomplete', 'invalidated'
-                    )),
-                    evaluation_status TEXT NOT NULL CHECK(evaluation_status IN (
-                        'qualified', 'triggered', 'not_qualified', 'data_incomplete'
-                    )),
-                    previous_status TEXT,
-                    result_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    invalidated_at TEXT,
-                    UNIQUE(
-                        strategy_id, strategy_version, parameter_version,
-                        data_version, symbol
-                    )
-                );
-
-                CREATE TABLE IF NOT EXISTS strategy_rule_results (
-                    id TEXT PRIMARY KEY,
-                    candidate_snapshot_id TEXT NOT NULL
-                        REFERENCES strategy_candidate_snapshots(id) ON DELETE CASCADE,
-                    rule_id TEXT NOT NULL,
-                    status TEXT NOT NULL
-                        CHECK(status IN ('passed', 'failed', 'data_incomplete')),
-                    actual_value_json TEXT,
-                    threshold_json TEXT NOT NULL,
-                    evidence_date TEXT,
-                    report_period TEXT,
-                    source TEXT NOT NULL,
-                    formula_version TEXT NOT NULL,
-                    limitations_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(candidate_snapshot_id, rule_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS strategy_trigger_events (
-                    id TEXT PRIMARY KEY,
-                    candidate_snapshot_id TEXT NOT NULL
-                        REFERENCES strategy_candidate_snapshots(id) ON DELETE CASCADE,
-                    strategy_id TEXT NOT NULL
-                        REFERENCES strategy_definitions(strategy_id) ON DELETE CASCADE,
-                    strategy_version TEXT NOT NULL,
-                    parameter_version TEXT NOT NULL,
-                    data_version TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    rule_id TEXT NOT NULL,
-                    evidence_date TEXT NOT NULL,
-                    evidence_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(
-                        strategy_id, strategy_version, parameter_version,
-                        symbol, rule_id, evidence_date
-                    )
-                );
-
-                CREATE TABLE IF NOT EXISTS news_items (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    category TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    summary TEXT,
-                    source TEXT NOT NULL,
-                    url TEXT NOT NULL,
-                    published_at TEXT,
-                    engagement REAL,
-                    fetched_at TEXT NOT NULL,
-                    UNIQUE(symbol, source, url)
-                );
-
-                CREATE TABLE IF NOT EXISTS sentiment_snapshots (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    score REAL NOT NULL,
-                    band TEXT NOT NULL,
-                    confidence TEXT NOT NULL,
-                    sample_size INTEGER NOT NULL,
-                    positive_count INTEGER NOT NULL,
-                    negative_count INTEGER NOT NULL,
-                    neutral_count INTEGER NOT NULL,
-                    method TEXT NOT NULL,
-                    evidence_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS valuation_snapshots (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    currency TEXT NOT NULL,
-                    price REAL,
-                    previous_close REAL,
-                    pct_change REAL,
-                    turnover_rate_pct REAL,
-                    pe_ttm REAL,
-                    pe_dynamic REAL,
-                    pe_static REAL,
-                    pb REAL,
-                    float_market_cap REAL,
-                    total_market_cap REAL,
-                    market_timestamp TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    source_url TEXT NOT NULL,
-                    field_mapping TEXT NOT NULL,
-                    warnings_json TEXT NOT NULL,
-                    fetched_at TEXT NOT NULL,
-                    UNIQUE(symbol, source, market_timestamp)
-                );
-
-                CREATE TABLE IF NOT EXISTS financial_periods (
-                    symbol TEXT NOT NULL,
-                    report_date TEXT NOT NULL,
-                    report_type TEXT NOT NULL,
-                    report_date_name TEXT NOT NULL,
-                    notice_date TEXT,
-                    name TEXT NOT NULL,
-                    currency TEXT NOT NULL,
-                    eps_basic REAL,
-                    eps_diluted REAL,
-                    book_value_per_share REAL,
-                    revenue REAL,
-                    revenue_yoy_pct REAL,
-                    parent_net_profit REAL,
-                    net_profit_yoy_pct REAL,
-                    roe_weighted_pct REAL,
-                    gross_margin_pct REAL,
-                    net_margin_pct REAL,
-                    debt_asset_ratio_pct REAL,
-                    operating_cashflow REAL,
-                    operating_cashflow_per_share REAL,
-                    total_assets REAL,
-                    total_liabilities REAL,
-                    total_equity REAL,
-                    period_basis TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    source_url TEXT NOT NULL,
-                    warnings_json TEXT NOT NULL,
-                    fetched_at TEXT NOT NULL,
-                    PRIMARY KEY(symbol, report_date, report_type)
-                );
-
-                CREATE TABLE IF NOT EXISTS earnings_quality_snapshots (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    report_date TEXT NOT NULL,
-                    method TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(symbol, report_date, method)
-                );
-
-                CREATE TABLE IF NOT EXISTS financial_statement_details (
-                    symbol TEXT NOT NULL,
-                    report_date TEXT NOT NULL,
-                    report_type TEXT NOT NULL,
-                    report_date_name TEXT NOT NULL,
-                    notice_date TEXT,
-                    name TEXT NOT NULL,
-                    currency TEXT NOT NULL,
-                    fiscal_period TEXT NOT NULL,
-                    period_basis TEXT NOT NULL,
-                    statement_type TEXT NOT NULL
-                        CHECK(statement_type IN ('income', 'balance', 'cashflow')),
-                    fields_json TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    source_url TEXT NOT NULL,
-                    warnings_json TEXT NOT NULL,
-                    fetched_at TEXT NOT NULL,
-                    PRIMARY KEY(symbol, report_date, report_type, statement_type)
-                );
-
-                CREATE TABLE IF NOT EXISTS financial_driver_snapshots (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    report_date TEXT NOT NULL,
-                    method TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(symbol, report_date, method)
-                );
-
-                CREATE TABLE IF NOT EXISTS filing_documents (
-                    symbol TEXT NOT NULL,
-                    article_code TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    document_type TEXT NOT NULL,
-                    report_period TEXT,
-                    notice_date TEXT,
-                    published_at TEXT,
-                    content_text TEXT NOT NULL,
-                    attach_url TEXT,
-                    content_hash TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    source_url TEXT NOT NULL,
-                    warnings_json TEXT NOT NULL DEFAULT '[]',
-                    fetched_at TEXT NOT NULL,
-                    PRIMARY KEY(symbol, article_code)
-                );
-
-                CREATE TABLE IF NOT EXISTS filing_evidence_snapshots (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    article_code TEXT NOT NULL,
-                    report_period TEXT,
-                    method TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(symbol, article_code, method),
-                    FOREIGN KEY(symbol, article_code)
-                        REFERENCES filing_documents(symbol, article_code)
-                        ON DELETE CASCADE
-                );
-
-                CREATE TABLE IF NOT EXISTS business_segment_rows (
-                    symbol TEXT NOT NULL,
-                    report_date TEXT NOT NULL,
-                    classification TEXT NOT NULL
-                        CHECK(classification IN ('industry', 'product', 'region')),
-                    item_name TEXT NOT NULL,
-                    revenue REAL,
-                    revenue_share_pct REAL,
-                    cost REAL,
-                    cost_share_pct REAL,
-                    gross_profit REAL,
-                    gross_profit_share_pct REAL,
-                    gross_margin_pct REAL,
-                    source TEXT NOT NULL,
-                    source_url TEXT NOT NULL,
-                    fetched_at TEXT NOT NULL,
-                    PRIMARY KEY(symbol, report_date, classification, item_name)
-                );
-
-                CREATE TABLE IF NOT EXISTS business_structure_snapshots (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    anchor_report_date TEXT NOT NULL,
-                    method TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(symbol, anchor_report_date, method)
-                );
-
-                CREATE TABLE IF NOT EXISTS peer_operating_snapshots (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    anchor_report_date TEXT NOT NULL,
-                    method TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(symbol, fingerprint)
-                );
-
-                CREATE TABLE IF NOT EXISTS shareholder_structure_snapshots (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    holder_count_as_of TEXT NOT NULL,
-                    announced_at TEXT,
-                    holder_count INTEGER,
-                    previous_holder_count INTEGER,
-                    holder_count_change INTEGER,
-                    change_pct REAL,
-                    average_holding REAL,
-                    average_market_cap REAL,
-                    interval_price_change_pct REAL,
-                    top10_report_date TEXT,
-                    top10_ratio REAL,
-                    top3_ratio REAL,
-                    top_holders_json TEXT NOT NULL,
-                    method TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(symbol, holder_count_as_of, method)
-                );
-
-                CREATE TABLE IF NOT EXISTS analyst_expectation_snapshots (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    as_of_date TEXT NOT NULL,
-                    latest_report_date TEXT,
-                    rating_organization_count INTEGER,
-                    method TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(symbol, fingerprint)
-                );
-
-                CREATE TABLE IF NOT EXISTS event_timeline_snapshots (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    as_of_date TEXT NOT NULL,
-                    method TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(symbol, fingerprint)
-                );
-
-                CREATE TABLE IF NOT EXISTS research_reports (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    summary TEXT NOT NULL,
-                    body TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    fingerprint TEXT NOT NULL,
-                    evidence_json TEXT NOT NULL,
-                    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-                    market_timestamp TEXT,
-                    generated_at TEXT NOT NULL,
-                    UNIQUE(symbol, fingerprint)
-                );
-
-                CREATE TABLE IF NOT EXISTS deep_stock_sessions (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    symbol TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    conversation_id TEXT NOT NULL
-                        REFERENCES conversations(id) ON DELETE CASCADE,
-                    workflow_version TEXT NOT NULL,
-                    status TEXT NOT NULL
-                        CHECK(status IN ('active', 'completed')),
-                    stages_json TEXT NOT NULL,
-                    evidence_modules_json TEXT NOT NULL DEFAULT '{}',
-                    unresolved_json TEXT NOT NULL DEFAULT '[]',
-                    next_question TEXT NOT NULL,
-                    latest_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-                    latest_report_id TEXT
-                        REFERENCES research_reports(id) ON DELETE SET NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    completed_at TEXT,
-                    UNIQUE(user_id, symbol)
-                );
-
-                CREATE TABLE IF NOT EXISTS research_change_events (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    report_id TEXT NOT NULL
-                        REFERENCES research_reports(id) ON DELETE CASCADE,
-                    previous_report_id TEXT
-                        REFERENCES research_reports(id) ON DELETE SET NULL,
-                    event_type TEXT NOT NULL
-                        CHECK(event_type IN ('baseline', 'evidence_change')),
-                    severity TEXT NOT NULL
-                        CHECK(severity IN ('stable', 'notice', 'attention')),
-                    summary TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(symbol, report_id)
-                );
-
-                CREATE TABLE IF NOT EXISTS research_priority_snapshots (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    fingerprint TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(user_id, fingerprint)
-                );
-
-                CREATE TABLE IF NOT EXISTS research_action_snapshots (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    fingerprint TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(user_id, fingerprint)
-                );
-
-                CREATE TABLE IF NOT EXISTS conversation_quality_snapshots (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    fingerprint TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(user_id, fingerprint)
-                );
-
-                CREATE TABLE IF NOT EXISTS evidence_tasks (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                    conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
-                    run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
-                    subject_kind TEXT NOT NULL
-                        CHECK(subject_kind IN ('stock', 'market', 'general')),
-                    symbol TEXT,
-                    market_key TEXT,
-                    intent TEXT NOT NULL,
-                    task_type TEXT NOT NULL,
-                    gap_key TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    query TEXT NOT NULL,
-                    status TEXT NOT NULL
-                        CHECK(status IN (
-                            'pending', 'collecting', 'resolved',
-                            'pending_external', 'failed'
-                        )),
-                    priority INTEGER NOT NULL DEFAULT 50,
-                    fingerprint TEXT NOT NULL UNIQUE,
-                    resolution_document_id TEXT
-                        REFERENCES knowledge_documents(id) ON DELETE SET NULL,
-                    retry_count INTEGER NOT NULL DEFAULT 0,
-                    max_retries INTEGER NOT NULL DEFAULT 3,
-                    last_error TEXT,
-                    metadata_json TEXT NOT NULL DEFAULT '{}',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL,
-                    started_at TEXT,
-                    resolved_at TEXT
-                );
-
-                CREATE TABLE IF NOT EXISTS research_outcomes (
-                    id TEXT PRIMARY KEY,
-                    report_id TEXT NOT NULL
-                        REFERENCES research_reports(id) ON DELETE CASCADE,
-                    symbol TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    anchor_timestamp TEXT NOT NULL,
-                    horizon_sessions INTEGER NOT NULL
-                        CHECK(horizon_sessions IN (3, 5, 10)),
-                    result_status TEXT NOT NULL
-                        CHECK(result_status IN ('pending', 'available', 'unavailable')),
-                    observed_sessions INTEGER NOT NULL,
-                    anchor_close REAL,
-                    target_timestamp TEXT,
-                    target_close REAL,
-                    close_return_pct REAL,
-                    maximum_favorable_excursion_pct REAL,
-                    maximum_adverse_excursion_pct REAL,
-                    scenario_result TEXT,
-                    review_conclusion TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    calculated_at TEXT NOT NULL,
-                    UNIQUE(symbol, anchor_timestamp, horizon_sessions)
-                );
-
-                CREATE TABLE IF NOT EXISTS outlook_calibrations (
-                    id TEXT PRIMARY KEY,
-                    symbol TEXT NOT NULL,
-                    method TEXT NOT NULL,
-                    history_first TEXT,
-                    history_last TEXT NOT NULL,
-                    history_points INTEGER NOT NULL,
-                    source TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    fetched_at TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    UNIQUE(symbol, method, history_last)
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_memories_user_status
-                    ON memories(user_id, status);
-                CREATE INDEX IF NOT EXISTS idx_user_sessions_user_expiry
-                    ON user_sessions(user_id, expires_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_user_uploads_user_created
-                    ON user_uploads(user_id, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_runs_user_created
-                    ON runs(user_id, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_stock_workspaces_user_updated
-                    ON stock_workspaces(user_id, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_relation_history_workspace_time
-                    ON stock_relation_history(workspace_id, effective_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_thesis_versions_workspace_status
-                    ON thesis_versions(workspace_id, status, version_no DESC);
-                CREATE INDEX IF NOT EXISTS idx_conversations_user_updated
-                    ON conversations(user_id, status, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_created
-                    ON conversation_messages(conversation_id, created_at ASC);
-                CREATE INDEX IF NOT EXISTS idx_knowledge_documents_owner_updated
-                    ON knowledge_documents(owner_user_id, scope, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_articles_user_created
-                    ON articles(user_id, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_market_bars_symbol_time
-                    ON market_bars(symbol, interval, timestamp DESC);
-                CREATE INDEX IF NOT EXISTS idx_background_jobs_name_time
-                    ON background_job_runs(job_name, started_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_data_health_time
-                    ON data_health_snapshots(created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_tushare_sync_scope_time
-                    ON tushare_sync_runs(job_scope, started_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_tushare_snapshot_lookup
-                    ON tushare_dataset_snapshots(
-                        dataset, scope_key, data_status, created_at DESC
-                    );
-                CREATE INDEX IF NOT EXISTS idx_strategy_runs_time
-                    ON strategy_screen_runs(strategy_id, started_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_strategy_candidates_current
-                    ON strategy_candidate_snapshots(
-                        strategy_id, strategy_version, parameter_version,
-                        symbol, created_at DESC
-                    );
-                CREATE INDEX IF NOT EXISTS idx_strategy_candidates_status
-                    ON strategy_candidate_snapshots(
-                        strategy_id, strategy_version, parameter_version,
-                        status, as_of_date DESC
-                    );
-                CREATE INDEX IF NOT EXISTS idx_strategy_rules_candidate
-                    ON strategy_rule_results(candidate_snapshot_id, rule_id);
-                CREATE INDEX IF NOT EXISTS idx_strategy_triggers_time
-                    ON strategy_trigger_events(
-                        strategy_id, evidence_date DESC, created_at DESC
-                    );
-                CREATE INDEX IF NOT EXISTS idx_news_symbol_time
-                    ON news_items(symbol, published_at DESC, fetched_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_sentiment_symbol_time
-                    ON sentiment_snapshots(symbol, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_valuation_symbol_time
-                    ON valuation_snapshots(symbol, market_timestamp DESC, fetched_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_financial_symbol_report
-                    ON financial_periods(symbol, report_date DESC);
-                CREATE INDEX IF NOT EXISTS idx_earnings_quality_symbol_report
-                    ON earnings_quality_snapshots(symbol, report_date DESC);
-                CREATE INDEX IF NOT EXISTS idx_financial_statement_symbol_report
-                    ON financial_statement_details(symbol, report_date DESC, statement_type);
-                CREATE INDEX IF NOT EXISTS idx_financial_driver_symbol_report
-                    ON financial_driver_snapshots(symbol, report_date DESC);
-                CREATE INDEX IF NOT EXISTS idx_filing_documents_symbol_period
-                    ON filing_documents(symbol, report_period DESC, published_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_filing_evidence_symbol_period
-                    ON filing_evidence_snapshots(symbol, report_period DESC, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_business_segments_symbol_report
-                    ON business_segment_rows(symbol, report_date DESC, classification);
-                CREATE INDEX IF NOT EXISTS idx_business_structure_symbol_report
-                    ON business_structure_snapshots(symbol, anchor_report_date DESC, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_peer_operating_symbol_report
-                    ON peer_operating_snapshots(symbol, anchor_report_date DESC, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_shareholder_structure_symbol_report
-                    ON shareholder_structure_snapshots(symbol, holder_count_as_of DESC, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_analyst_expectations_symbol_time
-                    ON analyst_expectation_snapshots(symbol, as_of_date DESC, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_event_timeline_symbol_time
-                    ON event_timeline_snapshots(symbol, as_of_date DESC, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_research_reports_symbol_time
-                    ON research_reports(symbol, generated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_deep_stock_user_time
-                    ON deep_stock_sessions(user_id, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_deep_stock_conversation
-                    ON deep_stock_sessions(conversation_id);
-                CREATE INDEX IF NOT EXISTS idx_research_change_events_symbol_time
-                    ON research_change_events(symbol, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_research_priority_user_time
-                    ON research_priority_snapshots(user_id, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_research_actions_user_time
-                    ON research_action_snapshots(user_id, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_evidence_tasks_user_status
-                    ON evidence_tasks(user_id, status, priority DESC, updated_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_evidence_tasks_pending
-                    ON evidence_tasks(status, priority DESC, updated_at ASC);
-                CREATE INDEX IF NOT EXISTS idx_research_outcomes_symbol_anchor
-                    ON research_outcomes(symbol, anchor_timestamp DESC, horizon_sessions);
-                CREATE INDEX IF NOT EXISTS idx_outlook_calibration_symbol_time
-                    ON outlook_calibrations(symbol, created_at DESC);
+                SELECT pg_advisory_xact_lock(
+                    hashtext('qingshu_domain_schema_migration')
+                )
                 """
             )
+            connection.executescript(DOMAIN_SCHEMA_SQL)
             self._ensure_column(connection, "market_bars", "adjusted_close", "REAL")
             self._ensure_column(
                 connection,
@@ -942,37 +66,213 @@ class Database:
             self._ensure_column(
                 connection, "financial_periods", "total_liabilities", "REAL"
             )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "run_scope",
+                "TEXT NOT NULL DEFAULT 'symbol_batch'",
+            )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "universe_count",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "prefiltered_count",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "coverage_ratio",
+                "REAL NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "warnings_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
+            self._ensure_column(
+                connection,
+                "trade_review_versions",
+                "source_run_id",
+                "TEXT REFERENCES runs(id) ON DELETE SET NULL",
+            )
+            self._ensure_column(
+                connection,
+                "action_plans",
+                "idempotency_key",
+                "TEXT",
+            )
+            self._ensure_column(
+                connection,
+                "background_job_runs",
+                "queue_job_id",
+                "TEXT",
+            )
+            self._ensure_column(
+                connection,
+                "background_job_runs",
+                "worker_id",
+                "TEXT",
+            )
+            self._ensure_column(
+                connection,
+                "tushare_dataset_snapshots",
+                "requested_as_of_date",
+                "TEXT",
+            )
+            connection.execute(
+                r"""
+                UPDATE tushare_dataset_snapshots
+                SET requested_as_of_date = substring(
+                    payload_json FROM
+                    '"requested_as_of_date"[[:space:]]*:[[:space:]]*"([^"]+)"'
+                )
+                WHERE dataset IN ('li_zong_inputs', 'li_zong_inputs_incomplete')
+                    AND requested_as_of_date IS NULL
+                    AND payload_json LIKE ?
+                """,
+                ('%"requested_as_of_date"%',),
+            )
+            self._upgrade_postgres_real_columns(connection)
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_action_plans_idempotency
+                ON action_plans(user_id, idempotency_key)
+                WHERE idempotency_key IS NOT NULL
+                """
+            )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_deep_stock_user_conversation
+                ON deep_stock_sessions(user_id, conversation_id)
+                """
+            )
             self._backfill_stock_domains(connection)
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS domain_schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO domain_schema_migrations(version, applied_at)
+                VALUES (?, ?)
+                """,
+                (self.SCHEMA_VERSION, utc_now()),
+            )
+
+    def close(self) -> None:
+        if self._postgres_pool is not None:
+            self._postgres_pool.close()
+            self._postgres_pool = None
+
+    def schema_status(self) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT MAX(version) AS version FROM domain_schema_migrations"
+            ).fetchone()
+        return {
+            "backend": "postgresql",
+            "schema_version": int(row["version"] or 0),
+        }
+
+    def pool_status(self) -> dict[str, Any]:
+        if self._postgres_pool is None:
+            return {"backend": "postgresql", "status": "closed"}
+        return dict(self._postgres_pool.get_stats())
 
     @staticmethod
     def _ensure_column(
-        connection: sqlite3.Connection, table: str, column: str, definition: str
+        connection: PostgresConnection,
+        table: str,
+        column: str,
+        definition: str,
     ) -> None:
         columns = {
-            str(row["name"])
-            for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+            str(row["column_name"])
+            for row in connection.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = current_schema() AND table_name = ?
+                """,
+                (table,),
+            ).fetchall()
         }
         if column not in columns:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     @staticmethod
-    def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _upgrade_postgres_real_columns(connection: PostgresConnection) -> None:
+        rows = connection.execute(
+            """
+            SELECT table_name, column_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND data_type = 'real'
+            ORDER BY table_name, ordinal_position
+            """
+        ).fetchall()
+        for row in rows:
+            table = str(row["table_name"]).replace('"', '""')
+            column = str(row["column_name"]).replace('"', '""')
+            connection.execute(
+                f'ALTER TABLE "{table}" ALTER COLUMN "{column}" '
+                f'TYPE DOUBLE PRECISION USING "{column}"::DOUBLE PRECISION'
+            )
+
+    @staticmethod
+    def _row(row: Any | None) -> dict[str, Any] | None:
         return dict(row) if row is not None else None
 
     @staticmethod
+    def _risk_profile_row(row: Any | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["answers"] = json.loads(item.pop("answers_json") or "{}")
+        item["derived"] = json.loads(item.pop("derived_json") or "{}")
+        return item
+
+    @staticmethod
+    def _fund_product_row(row: Any | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["returns"] = json.loads(item.pop("returns_json") or "{}")
+        item["return_ranks"] = json.loads(
+            item.pop("return_ranks_json") or "{}"
+        )
+        item["fees"] = json.loads(item.pop("fees_json") or "{}")
+        item["top_holdings_summary"] = json.loads(
+            item.pop("top_holdings_json") or "[]"
+        )
+        raw_quote = item.pop("live_quote_json")
+        item["live_quote"] = json.loads(raw_quote) if raw_quote else None
+        item["warnings"] = json.loads(item.pop("warnings_json") or "[]")
+        return item
+
+    @staticmethod
     def _stock_workspace_row(
-        row: sqlite3.Row | None,
+        row: Any | None,
     ) -> dict[str, Any] | None:
         if row is None:
             return None
         item = dict(row)
-        item["attention_tags"] = json.loads(
-            item.pop("attention_tags_json") or "[]"
-        )
+        item["attention_tags"] = json.loads(item.pop("attention_tags_json") or "[]")
         return item
 
     @staticmethod
-    def _thesis_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _thesis_row(row: Any | None) -> dict[str, Any] | None:
         if row is None:
             return None
         item = dict(row)
@@ -982,7 +282,7 @@ class Database:
         )
         return item
 
-    def _backfill_stock_domains(self, connection: sqlite3.Connection) -> None:
+    def _backfill_stock_domains(self, connection: PostgresConnection) -> None:
         rows = connection.execute(
             "SELECT * FROM watchlist ORDER BY created_at ASC"
         ).fetchall()
@@ -1000,7 +300,7 @@ class Database:
 
     def _sync_stock_domain_from_watchlist(
         self,
-        connection: sqlite3.Connection,
+        connection: PostgresConnection,
         *,
         user_id: str,
         symbol: str,
@@ -1173,7 +473,11 @@ class Database:
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
-            return self._row(connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
+            return self._row(
+                connection.execute(
+                    "SELECT * FROM users WHERE id = ?", (user_id,)
+                ).fetchone()
+            )
 
     @staticmethod
     def _session_token_hash(token: str) -> str:
@@ -1329,7 +633,8 @@ class Database:
                 (user_id, symbol, name, market, thesis, now, now),
             )
             row = connection.execute(
-                "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?", (user_id, symbol)
+                "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?",
+                (user_id, symbol),
             ).fetchone()
             self._sync_stock_domain_from_watchlist(
                 connection,
@@ -1348,7 +653,8 @@ class Database:
     def list_watchlist(self, user_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM watchlist WHERE user_id = ? ORDER BY updated_at DESC", (user_id,)
+                "SELECT * FROM watchlist WHERE user_id = ? ORDER BY updated_at DESC",
+                (user_id,),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -1376,7 +682,8 @@ class Database:
         with self.connect() as connection:
             return self._row(
                 connection.execute(
-                    "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?", (user_id, symbol)
+                    "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?",
+                    (user_id, symbol),
                 ).fetchone()
             )
 
@@ -1430,9 +737,7 @@ class Database:
             return True
         return False
 
-    def get_stock_workspace(
-        self, user_id: str, symbol: str
-    ) -> dict[str, Any] | None:
+    def get_stock_workspace(self, user_id: str, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -1486,9 +791,7 @@ class Database:
             ).fetchone()
         return self._thesis_row(row)
 
-    def get_thesis_version(
-        self, user_id: str, thesis_id: str
-    ) -> dict[str, Any] | None:
+    def get_thesis_version(self, user_id: str, thesis_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM thesis_versions WHERE user_id = ? AND id = ?",
@@ -1529,7 +832,8 @@ class Database:
         with self.connect() as connection:
             return self._row(
                 connection.execute(
-                    "SELECT * FROM memories WHERE user_id = ? AND id = ?", (user_id, memory_id)
+                    "SELECT * FROM memories WHERE user_id = ? AND id = ?",
+                    (user_id, memory_id),
                 ).fetchone()
             )
 
@@ -1561,7 +865,9 @@ class Database:
                 return None
         return self.get_memory(user_id, memory_id)
 
-    def list_memories(self, user_id: str, status: str = "confirmed") -> list[dict[str, Any]]:
+    def list_memories(
+        self, user_id: str, status: str = "confirmed"
+    ) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM memories WHERE user_id = ? AND status = ? ORDER BY created_at DESC",
@@ -1569,11 +875,130 @@ class Database:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def latest_risk_profile(
+        self, user_id: str, *, status: str | None = None
+    ) -> dict[str, Any] | None:
+        clause = "AND status = ?" if status else ""
+        params: tuple[Any, ...] = (user_id, status) if status else (user_id,)
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT * FROM risk_profile_versions
+                WHERE user_id = ? {clause}
+                ORDER BY version_no DESC, rowid DESC LIMIT 1
+                """,
+                params,
+            ).fetchone()
+        return self._risk_profile_row(row)
+
+    def save_risk_profile_draft(
+        self,
+        user_id: str,
+        *,
+        answers: dict[str, Any],
+        derived: dict[str, Any],
+        base_version: int,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as connection:
+            latest = connection.execute(
+                """
+                SELECT * FROM risk_profile_versions
+                WHERE user_id = ?
+                ORDER BY version_no DESC, rowid DESC LIMIT 1
+                """,
+                (user_id,),
+            ).fetchone()
+            latest_item = dict(latest) if latest is not None else None
+            latest_version = int(latest_item["version_no"]) if latest_item else 0
+            if int(base_version) != latest_version:
+                raise ValueError("风险画像版本已经变化，请刷新后重新保存")
+            if latest_item and latest_item["status"] == "draft":
+                profile_id = str(latest_item["id"])
+                version_no = latest_version
+                connection.execute(
+                    """
+                    UPDATE risk_profile_versions
+                    SET answers_json = ?, derived_json = ?, updated_at = ?
+                    WHERE id = ? AND user_id = ? AND status = 'draft'
+                    """,
+                    (
+                        json_dumps(answers),
+                        json_dumps(derived),
+                        now,
+                        profile_id,
+                        user_id,
+                    ),
+                )
+            else:
+                profile_id = str(uuid4())
+                version_no = latest_version + 1
+                connection.execute(
+                    """
+                    INSERT INTO risk_profile_versions(
+                        id, user_id, version_no, questionnaire_version,
+                        status, answers_json, derived_json, source,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, 'qingshu_suitability_v1', 'draft', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        profile_id,
+                        user_id,
+                        version_no,
+                        json_dumps(answers),
+                        json_dumps(derived),
+                        "user_questionnaire",
+                        now,
+                        now,
+                    ),
+                )
+        profile = self.latest_risk_profile(user_id, status="draft")
+        if profile is None or int(profile["version_no"]) != version_no:
+            raise RuntimeError("风险画像草稿保存失败")
+        return profile
+
+    def confirm_risk_profile(
+        self, user_id: str, version_no: int
+    ) -> dict[str, Any] | None:
+        now = utc_now()
+        with self.connect() as connection:
+            target = connection.execute(
+                """
+                SELECT * FROM risk_profile_versions
+                WHERE user_id = ? AND version_no = ? AND status = 'draft'
+                """,
+                (user_id, int(version_no)),
+            ).fetchone()
+            if target is None:
+                return None
+            connection.execute(
+                """
+                UPDATE risk_profile_versions
+                SET status = 'superseded', superseded_at = ?, updated_at = ?
+                WHERE user_id = ? AND status = 'confirmed'
+                """,
+                (now, now, user_id),
+            )
+            updated = connection.execute(
+                """
+                UPDATE risk_profile_versions
+                SET status = 'confirmed', confirmed_at = ?, updated_at = ?
+                WHERE user_id = ? AND version_no = ? AND status = 'draft'
+                """,
+                (now, now, user_id, int(version_no)),
+            )
+            if updated.rowcount == 0:
+                return None
+        return self.latest_risk_profile(user_id, status="confirmed")
+
     def _sync_watchlist_file(self, user_id: str) -> None:
         user = self.get_user(user_id)
         if user is None:
             return
-        write_json(Path(user["workspace_path"]) / "watchlist.json", self.list_watchlist(user_id))
+        write_json(
+            Path(user["workspace_path"]) / "watchlist.json",
+            self.list_watchlist(user_id),
+        )
 
     def _sync_confirmed_memory_file(self, user_id: str) -> None:
         user = self.get_user(user_id)
@@ -1626,18 +1051,34 @@ class Database:
                 """
                 SELECT conversations.*,
                     (SELECT COUNT(*) FROM conversation_messages
-                     WHERE conversation_id = conversations.id) AS message_count
+                     WHERE conversation_id = conversations.id) AS message_count,
+                    (SELECT intent FROM conversation_messages
+                     WHERE conversation_id = conversations.id
+                       AND intent IS NOT NULL AND intent <> ''
+                     ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_intent,
+                    (SELECT metadata_json FROM conversation_messages
+                     WHERE conversation_id = conversations.id
+                       AND role = 'assistant'
+                     ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_metadata_json,
+                    (SELECT symbol FROM deep_stock_sessions
+                     WHERE conversation_id = conversations.id
+                     ORDER BY updated_at DESC, rowid DESC LIMIT 1) AS bound_symbol,
+                    (SELECT name FROM deep_stock_sessions
+                     WHERE conversation_id = conversations.id
+                     ORDER BY updated_at DESC, rowid DESC LIMIT 1) AS bound_name
                 FROM conversations
                 WHERE id = ? AND user_id = ?
                 """,
                 (conversation_id, user_id),
             ).fetchone()
-        return self._row(row)
+        return self._conversation_row(row)
 
     def list_conversations(
         self, user_id: str, include_archived: bool = False, limit: int = 100
     ) -> list[dict[str, Any]]:
-        status_clause = "" if include_archived else "AND conversations.status = 'active'"
+        status_clause = (
+            "" if include_archived else "AND conversations.status = 'active'"
+        )
         with self.connect() as connection:
             rows = connection.execute(
                 f"""
@@ -1646,14 +1087,73 @@ class Database:
                      WHERE conversation_id = conversations.id) AS message_count,
                     (SELECT substr(content, 1, 120) FROM conversation_messages
                      WHERE conversation_id = conversations.id
-                     ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_message_preview
+                     ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_message_preview,
+                    (SELECT intent FROM conversation_messages
+                     WHERE conversation_id = conversations.id
+                       AND intent IS NOT NULL AND intent <> ''
+                     ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_intent,
+                    (SELECT metadata_json FROM conversation_messages
+                     WHERE conversation_id = conversations.id
+                       AND role = 'assistant'
+                     ORDER BY created_at DESC, rowid DESC LIMIT 1) AS last_metadata_json,
+                    (SELECT symbol FROM deep_stock_sessions
+                     WHERE conversation_id = conversations.id
+                     ORDER BY updated_at DESC, rowid DESC LIMIT 1) AS bound_symbol,
+                    (SELECT name FROM deep_stock_sessions
+                     WHERE conversation_id = conversations.id
+                     ORDER BY updated_at DESC, rowid DESC LIMIT 1) AS bound_name
                 FROM conversations
                 WHERE user_id = ? {status_clause}
                 ORDER BY updated_at DESC, rowid DESC LIMIT ?
                 """,
                 (user_id, limit),
             ).fetchall()
-        return [dict(row) for row in rows]
+        return [
+            self._conversation_row(row)  # type: ignore[misc]
+            for row in rows
+        ]
+
+    @staticmethod
+    def _conversation_row(row: Any | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        raw_metadata = item.pop("last_metadata_json", None)
+        bound_symbol = str(item.pop("bound_symbol", "") or "").strip().upper()
+        bound_name = str(item.pop("bound_name", "") or "").strip()
+        try:
+            metadata = json.loads(raw_metadata or "{}")
+        except (TypeError, ValueError):
+            metadata = {}
+        conversation_scope = str(metadata.get("conversation_scope") or "").strip()
+        item["conversation_scope"] = (
+            conversation_scope
+            if conversation_scope
+            in {"stock", "market", "screening", "portfolio", "funds", "other"}
+            else None
+        )
+        targets: dict[str, dict[str, str]] = {}
+
+        def add_target(symbol: Any, name: Any = None) -> None:
+            canonical = str(symbol or "").strip().upper().replace(".SH", ".SS")
+            if not canonical:
+                return
+            display_name = str(name or canonical).strip() or canonical
+            existing = targets.get(canonical)
+            if existing is None or (
+                existing["name"] == canonical and display_name != canonical
+            ):
+                targets[canonical] = {"symbol": canonical, "name": display_name}
+
+        for target in metadata.get("research_targets") or []:
+            if isinstance(target, dict):
+                add_target(target.get("symbol"), target.get("name"))
+            else:
+                add_target(target)
+        add_target(metadata.get("symbol"))
+        add_target(bound_symbol, bound_name)
+        item["research_targets"] = list(targets.values())[:10]
+        return item
 
     def rename_conversation(
         self, user_id: str, conversation_id: str, title: str
@@ -1824,6 +1324,54 @@ class Database:
             items.append(item)
         return items
 
+    def list_recent_conversation_messages(
+        self, user_id: str, conversation_id: str, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """Return the latest messages in chronological display order."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT conversation_messages.*
+                FROM conversation_messages
+                JOIN conversations ON conversations.id = conversation_messages.conversation_id
+                WHERE conversation_messages.conversation_id = ?
+                  AND conversations.user_id = ?
+                ORDER BY conversation_messages.created_at DESC,
+                    conversation_messages.rowid DESC LIMIT ?
+                """,
+                (conversation_id, user_id, limit),
+            ).fetchall()
+        items = []
+        for row in reversed(rows):
+            item = dict(row)
+            item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+            items.append(item)
+        return items
+
+    def list_recent_user_assistant_messages(
+        self, user_id: str, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        """Return one user's latest assistant messages across research conversations."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT conversation_messages.*
+                FROM conversation_messages
+                JOIN conversations ON conversations.id = conversation_messages.conversation_id
+                WHERE conversations.user_id = ?
+                  AND conversation_messages.role = 'assistant'
+                ORDER BY conversation_messages.created_at DESC,
+                    conversation_messages.rowid DESC LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+            items.append(item)
+        return items
+
     def save_deep_stock_session(
         self,
         *,
@@ -1945,20 +1493,28 @@ class Database:
             for row in rows
         ]
 
+    def list_distinct_deep_stock_symbols(self) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT symbol, MAX(updated_at) AS latest_updated_at
+                FROM deep_stock_sessions
+                GROUP BY symbol
+                ORDER BY latest_updated_at DESC, symbol ASC
+                """
+            ).fetchall()
+        return [str(row["symbol"]) for row in rows if row["symbol"]]
+
     @staticmethod
     def _deep_stock_session_row(
-        row: sqlite3.Row | None,
+        row: Any | None,
     ) -> dict[str, Any] | None:
         if row is None:
             return None
         item = dict(row)
         item["stages"] = json.loads(item.pop("stages_json") or "[]")
-        item["evidence_modules"] = json.loads(
-            item.pop("evidence_modules_json") or "{}"
-        )
-        item["unresolved_items"] = json.loads(
-            item.pop("unresolved_json") or "[]"
-        )
+        item["evidence_modules"] = json.loads(item.pop("evidence_modules_json") or "{}")
+        item["unresolved_items"] = json.loads(item.pop("unresolved_json") or "[]")
         return item
 
     def _sync_deep_stock_session_file(
@@ -2034,9 +1590,13 @@ class Database:
     def list_knowledge_documents(
         self, user_id: str | None, include_content: bool = False
     ) -> list[dict[str, Any]]:
-        fields = "*" if include_content else (
-            "id, owner_user_id, scope, title, original_name, mime_type, "
-            "source_key, length(content) AS content_chars, created_at, updated_at"
+        fields = (
+            "*"
+            if include_content
+            else (
+                "id, owner_user_id, scope, title, original_name, mime_type, "
+                "source_key, length(content) AS content_chars, created_at, updated_at"
+            )
         )
         with self.connect() as connection:
             rows = connection.execute(
@@ -2077,7 +1637,15 @@ class Database:
                     workspace_path, created_at
                 ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?)
                 """,
-                (run_id, user_id, intent, model_tier, json_dumps(input_data), str(workspace_path), utc_now()),
+                (
+                    run_id,
+                    user_id,
+                    intent,
+                    model_tier,
+                    json_dumps(input_data),
+                    str(workspace_path),
+                    utc_now(),
+                ),
             )
         return self.get_run(run_id, user_id)  # type: ignore[return-value]
 
@@ -2123,9 +1691,7 @@ class Database:
             item[key.removesuffix("_json")] = json.loads(raw) if raw else None
         return item
 
-    def list_user_runs(
-        self, user_id: str, limit: int = 500
-    ) -> list[dict[str, Any]]:
+    def list_user_runs(self, user_id: str, limit: int = 500) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
                 """
@@ -2239,7 +1805,8 @@ class Database:
     def get_article(self, user_id: str, article_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM articles WHERE user_id = ? AND id = ?", (user_id, article_id)
+                "SELECT * FROM articles WHERE user_id = ? AND id = ?",
+                (user_id, article_id),
             ).fetchone()
         item = self._row(row)
         if item is not None:
@@ -2287,9 +1854,13 @@ class Database:
             ).fetchone()
         return int(row["count"])
 
-    def put_cache(self, cache_key: str, payload: dict[str, Any], ttl_seconds: int) -> None:
+    def put_cache(
+        self, cache_key: str, payload: dict[str, Any], ttl_seconds: int
+    ) -> None:
         fetched_at = payload.get("fetched_at") or utc_now()
-        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat(timespec="seconds")
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+        ).isoformat(timespec="seconds")
         with self.connect() as connection:
             connection.execute(
                 """
@@ -2312,6 +1883,130 @@ class Database:
                     expires_at,
                 ),
             )
+
+    def save_fund_product_snapshot(
+        self, snapshot: dict[str, Any]
+    ) -> dict[str, Any]:
+        snapshot_id = str(uuid4())
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO fund_product_snapshots(
+                    id, code, name, product_kind, asset_class, fund_type,
+                    nav, accumulated_nav, nav_date, daily_return_pct,
+                    returns_json, return_ranks_json, purchase_status,
+                    redemption_status, fees_json, minimum_purchase_cny,
+                    minimum_recurring_purchase_cny, risk_level_upstream,
+                    net_assets_cny, fund_shares, fund_company, fund_manager,
+                    inception_date, top_holdings_json, live_quote_json,
+                    source, source_url, field_mapping, warnings_json, fetched_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(code, source, nav_date) DO UPDATE SET
+                    name = excluded.name,
+                    product_kind = excluded.product_kind,
+                    asset_class = excluded.asset_class,
+                    fund_type = excluded.fund_type,
+                    nav = excluded.nav,
+                    accumulated_nav = excluded.accumulated_nav,
+                    daily_return_pct = excluded.daily_return_pct,
+                    returns_json = excluded.returns_json,
+                    return_ranks_json = excluded.return_ranks_json,
+                    purchase_status = excluded.purchase_status,
+                    redemption_status = excluded.redemption_status,
+                    fees_json = excluded.fees_json,
+                    minimum_purchase_cny = excluded.minimum_purchase_cny,
+                    minimum_recurring_purchase_cny = excluded.minimum_recurring_purchase_cny,
+                    risk_level_upstream = excluded.risk_level_upstream,
+                    net_assets_cny = excluded.net_assets_cny,
+                    fund_shares = excluded.fund_shares,
+                    fund_company = excluded.fund_company,
+                    fund_manager = excluded.fund_manager,
+                    inception_date = excluded.inception_date,
+                    top_holdings_json = excluded.top_holdings_json,
+                    live_quote_json = excluded.live_quote_json,
+                    source_url = excluded.source_url,
+                    field_mapping = excluded.field_mapping,
+                    warnings_json = excluded.warnings_json,
+                    fetched_at = excluded.fetched_at
+                """,
+                (
+                    snapshot_id,
+                    snapshot["code"],
+                    snapshot["name"],
+                    snapshot["product_kind"],
+                    snapshot["asset_class"],
+                    snapshot["fund_type"],
+                    snapshot.get("nav"),
+                    snapshot.get("accumulated_nav"),
+                    snapshot.get("nav_date"),
+                    snapshot.get("daily_return_pct"),
+                    json_dumps(snapshot.get("returns") or {}),
+                    json_dumps(snapshot.get("return_ranks") or {}),
+                    snapshot.get("purchase_status"),
+                    snapshot.get("redemption_status"),
+                    json_dumps(snapshot.get("fees") or {}),
+                    snapshot.get("minimum_purchase_cny"),
+                    snapshot.get("minimum_recurring_purchase_cny"),
+                    snapshot.get("risk_level_upstream"),
+                    snapshot.get("net_assets_cny"),
+                    snapshot.get("fund_shares"),
+                    snapshot.get("fund_company"),
+                    snapshot.get("fund_manager"),
+                    snapshot.get("inception_date"),
+                    json_dumps(snapshot.get("top_holdings_summary") or []),
+                    (
+                        json_dumps(snapshot.get("live_quote"))
+                        if snapshot.get("live_quote") is not None
+                        else None
+                    ),
+                    snapshot["source"],
+                    snapshot.get("source_url"),
+                    snapshot.get("field_mapping") or "unknown",
+                    json_dumps(snapshot.get("warnings") or []),
+                    snapshot.get("fetched_at") or utc_now(),
+                ),
+            )
+        product = self.latest_fund_product_snapshot(snapshot["code"])
+        if product is None:
+            raise RuntimeError("基金产品快照保存失败")
+        return product
+
+    def latest_fund_product_snapshot(self, code: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM fund_product_snapshots
+                WHERE code = ? ORDER BY fetched_at DESC, rowid DESC LIMIT 1
+                """,
+                (code,),
+            ).fetchone()
+        return self._fund_product_row(row)
+
+    def search_fund_product_snapshots(
+        self, query: str, *, limit: int = 8
+    ) -> list[dict[str, Any]]:
+        keyword = str(query or "").strip()
+        if not keyword:
+            return []
+        like = f"%{keyword}%"
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM fund_product_snapshots
+                WHERE code LIKE ? OR name LIKE ? OR fund_type LIKE ?
+                ORDER BY fetched_at DESC, rowid DESC LIMIT ?
+                """,
+                (like, like, like, max(1, min(int(limit), 50))),
+            ).fetchall()
+        deduplicated: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            item = self._fund_product_row(row)
+            if item is None or item["code"] in seen:
+                continue
+            seen.add(str(item["code"]))
+            deduplicated.append(item)
+        return deduplicated
 
     def update_cache_payload_preserving_expiry(
         self, cache_key: str, payload: dict[str, Any]
@@ -2358,9 +2053,7 @@ class Database:
                 ),
             )
 
-    def list_market_breadth_snapshots(
-        self, limit: int = 21
-    ) -> list[dict[str, Any]]:
+    def list_market_breadth_snapshots(self, limit: int = 21) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
                 """
@@ -2380,21 +2073,27 @@ class Database:
             items.append(payload)
         return items
 
-    def get_cache(self, cache_key: str, allow_stale: bool = False) -> dict[str, Any] | None:
+    def get_cache(
+        self, cache_key: str, allow_stale: bool = False
+    ) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM market_cache WHERE cache_key = ?", (cache_key,)
             ).fetchone()
         if row is None:
             return None
-        expired = datetime.fromisoformat(row["expires_at"]) <= datetime.now(timezone.utc)
+        expired = datetime.fromisoformat(row["expires_at"]) <= datetime.now(
+            timezone.utc
+        )
         if expired and not allow_stale:
             return None
         payload = json.loads(row["payload_json"])
         payload["cache_hit"] = True
         payload["is_stale"] = expired
         if expired:
-            payload.setdefault("warnings", []).append("实时上游不可用，当前返回已过期缓存。")
+            payload.setdefault("warnings", []).append(
+                "实时上游不可用，当前返回已过期缓存。"
+            )
         return payload
 
     def upsert_market_bars(
@@ -2479,15 +2178,23 @@ class Database:
             )
         return cursor.rowcount
 
-    def start_background_job(self, job_name: str) -> str:
+    def start_background_job(
+        self,
+        job_name: str,
+        *,
+        queue_job_id: str | None = None,
+        worker_id: str | None = None,
+    ) -> str:
         job_id = str(uuid4())
         with self.connect() as connection:
             connection.execute(
                 """
-                INSERT INTO background_job_runs(id, job_name, status, started_at)
-                VALUES (?, ?, 'running', ?)
+                INSERT INTO background_job_runs(
+                    id, job_name, status, queue_job_id, worker_id, started_at
+                )
+                VALUES (?, ?, 'running', ?, ?, ?)
                 """,
-                (job_id, job_name, utc_now()),
+                (job_id, job_name, queue_job_id, worker_id, utc_now()),
             )
         return job_id
 
@@ -2513,6 +2220,125 @@ class Database:
                     job_id,
                 ),
             )
+
+    def repair_interrupted_background_runs(self) -> dict[str, int]:
+        """Close runs left in `running` when a previous process stopped."""
+
+        finished_at = utc_now()
+        repaired: dict[str, int] = {}
+        with self.connect() as connection:
+            background = connection.execute(
+                """
+                UPDATE background_job_runs
+                SET status = 'failed',
+                    error = COALESCE(error, 'process_restarted_before_completion'),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE status = 'running'
+                """,
+                (finished_at,),
+            )
+            repaired["background_job_runs"] = background.rowcount
+            tushare = connection.execute(
+                """
+                UPDATE tushare_sync_runs
+                SET status = 'failed',
+                    error = COALESCE(error, 'process_restarted_before_completion'),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE status = 'running'
+                """,
+                (finished_at,),
+            )
+            repaired["tushare_sync_runs"] = tushare.rowcount
+            strategy = connection.execute(
+                """
+                UPDATE strategy_screen_runs
+                SET status = 'failed',
+                    error = COALESCE(error, 'process_restarted_before_completion'),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE status = 'running'
+                """,
+                (finished_at,),
+            )
+            repaired["strategy_screen_runs"] = strategy.rowcount
+        return repaired
+
+    def repair_background_job_runs_from_queue(self) -> int:
+        """Close audit rows whose durable queue lease is no longer active."""
+
+        finished_at = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE background_job_runs
+                SET status = 'failed',
+                    error = COALESCE(
+                        error, 'queue_lease_no_longer_active'
+                    ),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE status = 'running'
+                    AND (
+                        queue_job_id IS NULL
+                        OR NOT EXISTS (
+                            SELECT 1
+                            FROM persistent_jobs AS jobs
+                            WHERE CAST(jobs.id AS TEXT) =
+                                  background_job_runs.queue_job_id
+                                AND jobs.status = 'running'
+                        )
+                    )
+                """,
+                (finished_at,),
+            )
+        return int(cursor.rowcount)
+
+    def prune_background_history(
+        self,
+        *,
+        completed_retention_hours: int = 720,
+        failed_retention_hours: int = 2160,
+        data_health_retention_hours: int = 720,
+    ) -> dict[str, int]:
+        now = datetime.now(timezone.utc)
+        completed_cutoff = (
+            now - timedelta(hours=max(1, completed_retention_hours))
+        ).isoformat()
+        failed_cutoff = (
+            now - timedelta(hours=max(1, failed_retention_hours))
+        ).isoformat()
+        health_cutoff = (
+            now - timedelta(hours=max(1, data_health_retention_hours))
+        ).isoformat()
+        with self.connect() as connection:
+            completed = connection.execute(
+                """
+                DELETE FROM background_job_runs
+                WHERE status = 'completed'
+                    AND finished_at IS NOT NULL
+                    AND finished_at < ?
+                """,
+                (completed_cutoff,),
+            )
+            failed = connection.execute(
+                """
+                DELETE FROM background_job_runs
+                WHERE status = 'failed'
+                    AND finished_at IS NOT NULL
+                    AND finished_at < ?
+                """,
+                (failed_cutoff,),
+            )
+            health = connection.execute(
+                """
+                DELETE FROM data_health_snapshots
+                WHERE created_at < ?
+                """,
+                (health_cutoff,),
+            )
+        return {
+            "completed_background_runs": int(completed.rowcount),
+            "failed_background_runs": int(failed.rowcount),
+            "data_health_snapshots": int(health.rowcount),
+        }
 
     def latest_background_jobs(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
@@ -2645,20 +2471,23 @@ class Database:
     ) -> dict[str, Any]:
         snapshot_id = str(uuid4())
         created_at = utc_now()
+        requested_as_of_date = str(payload.get("requested_as_of_date") or "").strip()
         with self.connect() as connection:
             connection.execute(
                 """
                 INSERT OR IGNORE INTO tushare_dataset_snapshots(
-                    id, dataset, scope_key, as_of_date, report_period,
+                    id, dataset, scope_key, as_of_date, requested_as_of_date,
+                    report_period,
                     source_updated_at, sync_run_id, data_version, data_status,
                     payload_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     snapshot_id,
                     dataset,
                     scope_key,
                     as_of_date,
+                    requested_as_of_date or None,
                     report_period,
                     source_updated_at,
                     sync_run_id,
@@ -2684,21 +2513,94 @@ class Database:
         *,
         stable_only: bool = True,
     ) -> dict[str, Any] | None:
+        order_by = (
+            "COALESCE(as_of_date, '') DESC, created_at DESC, rowid DESC"
+            if stable_only
+            else "created_at DESC, rowid DESC"
+        )
         with self.connect() as connection:
             row = connection.execute(
                 f"""
                 SELECT * FROM tushare_dataset_snapshots
                 WHERE dataset = ? AND scope_key = ?
                     {"AND data_status = 'stable'" if stable_only else ""}
-                ORDER BY created_at DESC, rowid DESC LIMIT 1
+                ORDER BY {order_by} LIMIT 1
                 """,
                 (dataset, scope_key),
             ).fetchone()
         return self._tushare_snapshot_row(row)
 
+    def list_latest_tushare_dataset_snapshots(
+        self,
+        dataset: str,
+        *,
+        data_status: str | None = None,
+        include_payload: bool = True,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the newest published snapshot for every scope in a dataset.
+
+        Stable financial snapshots are ordered by their data date before their
+        publication time. This prevents a provider retry that returns an older
+        market date from silently replacing a newer stable fact set. Incomplete
+        snapshots remain ordered by creation time so the latest failure context
+        is still available to operators.
+        """
+
+        if data_status not in {None, "stable", "incomplete"}:
+            raise ValueError("unsupported Tushare snapshot status")
+        size = None if limit is None else max(1, min(int(limit), 20_000))
+        selected = (
+            "*"
+            if include_payload
+            else (
+                "id, dataset, scope_key, as_of_date, requested_as_of_date, "
+                "report_period, "
+                "source_updated_at, sync_run_id, data_version, data_status, created_at"
+            )
+        )
+        status_clause = "AND data_status = ?" if data_status else ""
+        parameters: list[Any] = [dataset]
+        if data_status:
+            parameters.append(data_status)
+        limit_clause = " LIMIT ?" if size is not None else ""
+        if size is not None:
+            parameters.append(size)
+        ranked_order = (
+            "COALESCE(as_of_date, '') DESC, created_at DESC, rowid DESC"
+            if data_status == "stable"
+            else "created_at DESC, rowid DESC"
+        )
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                WITH ranked AS (
+                    SELECT {selected},
+                           ROW_NUMBER() OVER (
+                               PARTITION BY scope_key
+                               ORDER BY {ranked_order}
+                           ) AS snapshot_rank
+                    FROM tushare_dataset_snapshots
+                    WHERE dataset = ? {status_clause}
+                )
+                SELECT * FROM ranked
+                WHERE snapshot_rank = 1
+                ORDER BY created_at DESC, scope_key ASC{limit_clause}
+                """,
+                parameters,
+            ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item.pop("snapshot_rank", None)
+            if include_payload:
+                item["payload"] = json.loads(item.pop("payload_json") or "{}")
+            items.append(item)
+        return items
+
     @staticmethod
     def _tushare_snapshot_row(
-        row: sqlite3.Row | None,
+        row: Any | None,
     ) -> dict[str, Any] | None:
         if row is None:
             return None
@@ -2706,9 +2608,7 @@ class Database:
         item["payload"] = json.loads(item.pop("payload_json") or "{}")
         return item
 
-    def upsert_strategy_definition(
-        self, definition: dict[str, Any]
-    ) -> dict[str, Any]:
+    def upsert_strategy_definition(self, definition: dict[str, Any]) -> dict[str, Any]:
         now = utc_now()
         with self.connect() as connection:
             connection.execute(
@@ -2820,9 +2720,7 @@ class Database:
             ).fetchall()
         return [self._strategy_definition_row(row) for row in rows]  # type: ignore[misc]
 
-    def get_strategy_definition(
-        self, strategy_id: str
-    ) -> dict[str, Any] | None:
+    def get_strategy_definition(self, strategy_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM strategy_definitions WHERE strategy_id = ?",
@@ -2870,6 +2768,11 @@ class Database:
         data_versions: dict[str, str],
         as_of_date: str | None,
         requested_count: int,
+        run_scope: str = "symbol_batch",
+        universe_count: int = 0,
+        prefiltered_count: int = 0,
+        coverage_ratio: float = 0.0,
+        warnings: list[str] | None = None,
     ) -> dict[str, Any]:
         run_id = str(uuid4())
         started_at = utc_now()
@@ -2878,9 +2781,10 @@ class Database:
                 """
                 INSERT INTO strategy_screen_runs(
                     id, strategy_id, strategy_version, parameter_version,
-                    data_version, data_versions_json, as_of_date, status,
-                    requested_count, started_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
+                    data_version, data_versions_json, as_of_date, run_scope,
+                    universe_count, prefiltered_count, coverage_ratio,
+                    warnings_json, status, requested_count, started_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
                 """,
                 (
                     run_id,
@@ -2890,6 +2794,11 @@ class Database:
                     data_version,
                     json_dumps(data_versions),
                     as_of_date,
+                    run_scope,
+                    max(0, int(universe_count)),
+                    max(0, int(prefiltered_count)),
+                    max(0.0, min(float(coverage_ratio), 1.0)),
+                    json_dumps(warnings or []),
                     requested_count,
                     started_at,
                 ),
@@ -2903,6 +2812,8 @@ class Database:
         status: str,
         counts: dict[str, int],
         error: str | None = None,
+        coverage_ratio: float | None = None,
+        warnings: list[str] | None = None,
     ) -> dict[str, Any] | None:
         with self.connect() as connection:
             connection.execute(
@@ -2910,7 +2821,8 @@ class Database:
                 UPDATE strategy_screen_runs
                 SET status = ?, processed_count = ?, qualified_count = ?,
                     triggered_count = ?, incomplete_count = ?,
-                    invalidated_count = ?, error = ?, finished_at = ?
+                    invalidated_count = ?, coverage_ratio = COALESCE(?, coverage_ratio),
+                    warnings_json = COALESCE(?, warnings_json), error = ?, finished_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -2920,6 +2832,12 @@ class Database:
                     counts.get("triggered", 0),
                     counts.get("data_incomplete", 0),
                     counts.get("invalidated", 0),
+                    (
+                        max(0.0, min(float(coverage_ratio), 1.0))
+                        if coverage_ratio is not None
+                        else None
+                    ),
+                    json_dumps(warnings) if warnings is not None else None,
                     error,
                     utc_now(),
                     run_id,
@@ -2933,6 +2851,416 @@ class Database:
                 "SELECT * FROM strategy_screen_runs WHERE id = ?", (run_id,)
             ).fetchone()
         return self._strategy_run_row(row)
+
+    def latest_strategy_screen_run(
+        self,
+        *,
+        strategy_id: str,
+        parameter_version: str | None = None,
+        run_scope: str | None = None,
+    ) -> dict[str, Any] | None:
+        clauses = ["strategy_id = ?"]
+        params: list[Any] = [strategy_id]
+        if parameter_version is not None:
+            clauses.append("parameter_version = ?")
+            params.append(parameter_version)
+        if run_scope is not None:
+            clauses.append("run_scope = ?")
+            params.append(run_scope)
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT * FROM strategy_screen_runs
+                WHERE {" AND ".join(clauses)}
+                ORDER BY started_at DESC, rowid DESC LIMIT 1
+                """,
+                tuple(params),
+            ).fetchone()
+        return self._strategy_run_row(row)
+
+    def repair_unstable_strategy_prefilter_runs(self, strategy_id: str) -> int:
+        """Quarantine prefilter runs produced without any usable market-cap row."""
+
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE strategy_screen_runs
+                SET status = 'failed',
+                    error = COALESCE(error, 'unstable_universe_market_cap_snapshot'),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE strategy_id = ?
+                    AND run_scope = 'universe_prefilter'
+                    AND status <> 'failed'
+                    AND universe_count > 0
+                    AND prefiltered_count = 0
+                    AND processed_count = universe_count
+                    AND incomplete_count = universe_count
+                """,
+                (utc_now(), strategy_id),
+            )
+        return cursor.rowcount
+
+    def save_strategy_backtest_market_cap_day(
+        self,
+        *,
+        strategy_id: str,
+        backtest_version: str,
+        trade_date: str,
+        universe_count: int,
+        rows: list[dict[str, Any]],
+        data_version: str,
+        source: str,
+    ) -> dict[str, Any]:
+        created_at = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                DELETE FROM strategy_backtest_market_caps
+                WHERE strategy_id = ? AND backtest_version = ? AND trade_date = ?
+                """,
+                (strategy_id, backtest_version, trade_date),
+            )
+            connection.executemany(
+                """
+                INSERT INTO strategy_backtest_market_caps(
+                    strategy_id, backtest_version, trade_date, symbol,
+                    total_mv_yi, data_version, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(
+                    strategy_id, backtest_version, trade_date, symbol
+                ) DO UPDATE SET
+                    total_mv_yi = excluded.total_mv_yi,
+                    data_version = excluded.data_version,
+                    created_at = excluded.created_at
+                """,
+                [
+                    (
+                        strategy_id,
+                        backtest_version,
+                        trade_date,
+                        str(item["symbol"]),
+                        float(item["total_mv_yi"]),
+                        data_version,
+                        created_at,
+                    )
+                    for item in rows
+                ],
+            )
+            connection.execute(
+                """
+                INSERT INTO strategy_backtest_market_cap_days(
+                    strategy_id, backtest_version, trade_date,
+                    universe_count, eligible_count, data_version,
+                    source, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(strategy_id, backtest_version, trade_date)
+                DO UPDATE SET
+                    universe_count = excluded.universe_count,
+                    eligible_count = excluded.eligible_count,
+                    data_version = excluded.data_version,
+                    source = excluded.source,
+                    created_at = excluded.created_at
+                """,
+                (
+                    strategy_id,
+                    backtest_version,
+                    trade_date,
+                    max(0, int(universe_count)),
+                    len(rows),
+                    data_version,
+                    source,
+                    created_at,
+                ),
+            )
+        return {
+            "strategy_id": strategy_id,
+            "backtest_version": backtest_version,
+            "trade_date": trade_date,
+            "universe_count": max(0, int(universe_count)),
+            "eligible_count": len(rows),
+            "data_version": data_version,
+            "source": source,
+            "created_at": created_at,
+        }
+
+    def list_strategy_backtest_market_cap_days(
+        self,
+        *,
+        strategy_id: str,
+        backtest_version: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["strategy_id = ?", "backtest_version = ?"]
+        params: list[Any] = [strategy_id, backtest_version]
+        if start_date is not None:
+            clauses.append("trade_date >= ?")
+            params.append(start_date)
+        if end_date is not None:
+            clauses.append("trade_date <= ?")
+            params.append(end_date)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM strategy_backtest_market_cap_days
+                WHERE {" AND ".join(clauses)}
+                ORDER BY trade_date ASC
+                """,
+                tuple(params),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_strategy_backtest_eligible_symbols(
+        self,
+        *,
+        strategy_id: str,
+        backtest_version: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT symbol
+                FROM strategy_backtest_market_caps
+                WHERE strategy_id = ? AND backtest_version = ?
+                    AND trade_date >= ? AND trade_date <= ?
+                ORDER BY symbol ASC
+                """,
+                (strategy_id, backtest_version, start_date, end_date),
+            ).fetchall()
+        return [str(row["symbol"]) for row in rows]
+
+    def strategy_backtest_market_caps_for_symbol(
+        self,
+        *,
+        strategy_id: str,
+        backtest_version: str,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> dict[str, float]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT trade_date, total_mv_yi
+                FROM strategy_backtest_market_caps
+                WHERE strategy_id = ? AND backtest_version = ?
+                    AND symbol = ? AND trade_date >= ? AND trade_date <= ?
+                ORDER BY trade_date ASC
+                """,
+                (
+                    strategy_id,
+                    backtest_version,
+                    symbol,
+                    start_date,
+                    end_date,
+                ),
+            ).fetchall()
+        return {str(row["trade_date"]): float(row["total_mv_yi"]) for row in rows}
+
+    def save_strategy_backtest_symbol_states(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+        backtest_version: str,
+        symbol: str,
+        source_data_version: str,
+        data_version: str,
+        rows: list[dict[str, Any]],
+        status: str,
+    ) -> dict[str, Any]:
+        created_at = utc_now()
+        dates = sorted(str(item["trade_date"]) for item in rows)
+        start_date = dates[0] if dates else None
+        end_date = dates[-1] if dates else None
+        with self.connect() as connection:
+            connection.execute(
+                """
+                DELETE FROM strategy_backtest_symbol_states
+                WHERE strategy_id = ? AND strategy_version = ?
+                    AND parameter_version = ? AND backtest_version = ?
+                    AND symbol = ?
+                """,
+                (
+                    strategy_id,
+                    strategy_version,
+                    parameter_version,
+                    backtest_version,
+                    symbol,
+                ),
+            )
+            connection.executemany(
+                """
+                INSERT INTO strategy_backtest_symbol_states(
+                    strategy_id, strategy_version, parameter_version,
+                    backtest_version, symbol, trade_date, status,
+                    candidate_qualified, adjusted_open, adjusted_close,
+                    raw_open, raw_close, source_data_version,
+                    data_version, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        strategy_id,
+                        strategy_version,
+                        parameter_version,
+                        backtest_version,
+                        symbol,
+                        str(item["trade_date"]),
+                        str(item.get("status") or "data_incomplete"),
+                        int(bool(item.get("candidate_qualified"))),
+                        item.get("adjusted_open"),
+                        item.get("adjusted_close"),
+                        item.get("raw_open"),
+                        item.get("raw_close"),
+                        source_data_version,
+                        data_version,
+                        created_at,
+                    )
+                    for item in rows
+                ],
+            )
+            connection.execute(
+                """
+                INSERT INTO strategy_backtest_symbol_coverage(
+                    strategy_id, strategy_version, parameter_version,
+                    backtest_version, symbol, start_date, end_date,
+                    evaluated_days, source_data_version, data_version,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(
+                    strategy_id, strategy_version, parameter_version,
+                    backtest_version, symbol
+                ) DO UPDATE SET
+                    start_date = excluded.start_date,
+                    end_date = excluded.end_date,
+                    evaluated_days = excluded.evaluated_days,
+                    source_data_version = excluded.source_data_version,
+                    data_version = excluded.data_version,
+                    status = excluded.status,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    strategy_id,
+                    strategy_version,
+                    parameter_version,
+                    backtest_version,
+                    symbol,
+                    start_date,
+                    end_date,
+                    len(rows),
+                    source_data_version,
+                    data_version,
+                    status,
+                    created_at,
+                    created_at,
+                ),
+            )
+        return {
+            "symbol": symbol,
+            "start_date": start_date,
+            "end_date": end_date,
+            "evaluated_days": len(rows),
+            "source_data_version": source_data_version,
+            "data_version": data_version,
+            "status": status,
+            "updated_at": created_at,
+        }
+
+    def list_strategy_backtest_symbol_coverage(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+        backtest_version: str,
+    ) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM strategy_backtest_symbol_coverage
+                WHERE strategy_id = ? AND strategy_version = ?
+                    AND parameter_version = ? AND backtest_version = ?
+                ORDER BY symbol ASC
+                """,
+                (
+                    strategy_id,
+                    strategy_version,
+                    parameter_version,
+                    backtest_version,
+                ),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_strategy_backtest_candidate_states(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+        backtest_version: str,
+        start_date: str,
+        end_date: str,
+    ) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM strategy_backtest_symbol_states
+                WHERE strategy_id = ? AND strategy_version = ?
+                    AND parameter_version = ? AND backtest_version = ?
+                    AND trade_date >= ? AND trade_date <= ?
+                    AND candidate_qualified = 1
+                ORDER BY trade_date ASC, symbol ASC
+                """,
+                (
+                    strategy_id,
+                    strategy_version,
+                    parameter_version,
+                    backtest_version,
+                    start_date,
+                    end_date,
+                ),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_strategy_backtest_symbol_states(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+        backtest_version: str,
+        symbols: list[str],
+        start_date: str,
+        end_date: str,
+    ) -> list[dict[str, Any]]:
+        if not symbols:
+            return []
+        placeholders = ", ".join("?" for _ in symbols)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM strategy_backtest_symbol_states
+                WHERE strategy_id = ? AND strategy_version = ?
+                    AND parameter_version = ? AND backtest_version = ?
+                    AND symbol IN ({placeholders})
+                    AND trade_date >= ? AND trade_date <= ?
+                ORDER BY trade_date ASC, symbol ASC
+                """,
+                (
+                    strategy_id,
+                    strategy_version,
+                    parameter_version,
+                    backtest_version,
+                    *symbols,
+                    start_date,
+                    end_date,
+                ),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def save_strategy_candidate_snapshot(
         self,
@@ -3040,7 +3368,9 @@ class Database:
         exclude_data_version: str | None = None,
     ) -> dict[str, Any] | None:
         exclude_clause = (
-            "AND data_version <> ?" if exclude_data_version is not None else ""
+            "AND candidates.data_version <> ?"
+            if exclude_data_version is not None
+            else ""
         )
         params: list[Any] = [
             strategy_id,
@@ -3053,11 +3383,16 @@ class Database:
         with self.connect() as connection:
             row = connection.execute(
                 f"""
-                SELECT * FROM strategy_candidate_snapshots
-                WHERE strategy_id = ? AND strategy_version = ?
-                    AND parameter_version = ? AND symbol = ?
+                SELECT candidates.*
+                FROM strategy_candidate_snapshots AS candidates
+                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
+                WHERE candidates.strategy_id = ?
+                    AND candidates.strategy_version = ?
+                    AND candidates.parameter_version = ?
+                    AND candidates.symbol = ?
+                    AND runs.status <> 'failed'
                     {exclude_clause}
-                ORDER BY created_at DESC, rowid DESC LIMIT 1
+                ORDER BY candidates.created_at DESC, candidates.rowid DESC LIMIT 1
                 """,
                 params,
             ).fetchone()
@@ -3085,17 +3420,22 @@ class Database:
                 f"""
                 SELECT candidates.*
                 FROM strategy_candidate_snapshots AS candidates
+                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
                 WHERE candidates.strategy_id = ?
                     AND candidates.strategy_version = ?
                     AND candidates.parameter_version = ?
+                    AND runs.status <> 'failed'
                     {status_clause}
                     AND candidates.id = (
                         SELECT current.id
                         FROM strategy_candidate_snapshots AS current
+                        JOIN strategy_screen_runs AS current_runs
+                            ON current_runs.id = current.run_id
                         WHERE current.strategy_id = candidates.strategy_id
                             AND current.strategy_version = candidates.strategy_version
                             AND current.parameter_version = candidates.parameter_version
                             AND current.symbol = candidates.symbol
+                            AND current_runs.status <> 'failed'
                         ORDER BY current.created_at DESC, current.rowid DESC
                         LIMIT 1
                     )
@@ -3105,6 +3445,120 @@ class Database:
                 params,
             ).fetchall()
         return [self._strategy_candidate_row(row) for row in rows]  # type: ignore[misc]
+
+    def latest_strategy_candidate_dates(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+    ) -> dict[str, str]:
+        states = self.latest_strategy_candidate_states(
+            strategy_id=strategy_id,
+            strategy_version=strategy_version,
+            parameter_version=parameter_version,
+        )
+        return {symbol: str(state["as_of_date"]) for symbol, state in states.items()}
+
+    def latest_strategy_candidate_states(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+    ) -> dict[str, dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT candidates.symbol, candidates.as_of_date, candidates.status,
+                       candidates.result_json
+                FROM strategy_candidate_snapshots AS candidates
+                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
+                WHERE candidates.strategy_id = ?
+                    AND candidates.strategy_version = ?
+                    AND candidates.parameter_version = ?
+                    AND runs.status <> 'failed'
+                    AND candidates.id = (
+                        SELECT current.id
+                        FROM strategy_candidate_snapshots AS current
+                        JOIN strategy_screen_runs AS current_runs
+                            ON current_runs.id = current.run_id
+                        WHERE current.strategy_id = candidates.strategy_id
+                            AND current.strategy_version = candidates.strategy_version
+                            AND current.parameter_version = candidates.parameter_version
+                            AND current.symbol = candidates.symbol
+                            AND current_runs.status <> 'failed'
+                        ORDER BY current.created_at DESC, current.rowid DESC
+                        LIMIT 1
+                    )
+                """,
+                (strategy_id, strategy_version, parameter_version),
+            ).fetchall()
+        return {
+            str(row["symbol"]): {
+                "as_of_date": str(row["as_of_date"]),
+                "status": str(row["status"]),
+                "result": json.loads(str(row["result_json"] or "{}")),
+            }
+            for row in rows
+        }
+
+    def strategy_candidate_summary(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+        minimum_as_of_date: str | None = None,
+    ) -> dict[str, int]:
+        date_clause = "AND candidates.as_of_date >= ?" if minimum_as_of_date else ""
+        params: list[Any] = [strategy_id, strategy_version, parameter_version]
+        if minimum_as_of_date:
+            params.append(minimum_as_of_date)
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN candidates.status = 'qualified' THEN 1 ELSE 0 END) AS qualified,
+                    SUM(CASE WHEN candidates.status = 'triggered' THEN 1 ELSE 0 END) AS triggered,
+                    SUM(CASE WHEN candidates.status = 'not_qualified' THEN 1 ELSE 0 END) AS not_qualified,
+                    SUM(CASE WHEN candidates.status = 'data_incomplete' THEN 1 ELSE 0 END) AS data_incomplete,
+                    SUM(CASE WHEN candidates.status = 'invalidated' THEN 1 ELSE 0 END) AS invalidated
+                FROM strategy_candidate_snapshots AS candidates
+                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
+                WHERE candidates.strategy_id = ?
+                    AND candidates.strategy_version = ?
+                    AND candidates.parameter_version = ?
+                    AND runs.status <> 'failed'
+                    {date_clause}
+                    AND candidates.id = (
+                        SELECT current.id
+                        FROM strategy_candidate_snapshots AS current
+                        JOIN strategy_screen_runs AS current_runs
+                            ON current_runs.id = current.run_id
+                        WHERE current.strategy_id = candidates.strategy_id
+                            AND current.strategy_version = candidates.strategy_version
+                            AND current.parameter_version = candidates.parameter_version
+                            AND current.symbol = candidates.symbol
+                            AND current_runs.status <> 'failed'
+                        ORDER BY current.created_at DESC, current.rowid DESC
+                        LIMIT 1
+                    )
+                """,
+                tuple(params),
+            ).fetchone()
+        return {
+            key: int((row or {})[key] or 0)
+            for key in (
+                "total",
+                "qualified",
+                "triggered",
+                "not_qualified",
+                "data_incomplete",
+                "invalidated",
+            )
+        }
 
     def list_strategy_rule_results(
         self, candidate_snapshot_id: str
@@ -3196,7 +3650,7 @@ class Database:
 
     @staticmethod
     def _strategy_definition_row(
-        row: sqlite3.Row | None,
+        row: Any | None,
     ) -> dict[str, Any] | None:
         if row is None:
             return None
@@ -3206,7 +3660,7 @@ class Database:
 
     @staticmethod
     def _strategy_version_row(
-        row: sqlite3.Row | None,
+        row: Any | None,
     ) -> dict[str, Any] | None:
         if row is None:
             return None
@@ -3217,7 +3671,7 @@ class Database:
 
     @staticmethod
     def _strategy_parameter_row(
-        row: sqlite3.Row | None,
+        row: Any | None,
     ) -> dict[str, Any] | None:
         if row is None:
             return None
@@ -3226,16 +3680,17 @@ class Database:
         return item
 
     @staticmethod
-    def _strategy_run_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _strategy_run_row(row: Any | None) -> dict[str, Any] | None:
         if row is None:
             return None
         item = dict(row)
         item["data_versions"] = json.loads(item.pop("data_versions_json") or "{}")
+        item["warnings"] = json.loads(item.pop("warnings_json") or "[]")
         return item
 
     @staticmethod
     def _strategy_candidate_row(
-        row: sqlite3.Row | None,
+        row: Any | None,
     ) -> dict[str, Any] | None:
         if row is None:
             return None
@@ -3244,7 +3699,7 @@ class Database:
         return item
 
     @staticmethod
-    def _strategy_rule_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _strategy_rule_row(row: Any | None) -> dict[str, Any] | None:
         if row is None:
             return None
         item = dict(row)
@@ -3255,7 +3710,7 @@ class Database:
 
     @staticmethod
     def _strategy_trigger_row(
-        row: sqlite3.Row | None,
+        row: Any | None,
     ) -> dict[str, Any] | None:
         if row is None:
             return None
@@ -3283,25 +3738,69 @@ class Database:
         if not rows:
             return 0
         with self.connect() as connection:
-            connection.executemany(
-                """
-                INSERT INTO news_items(
-                    id, symbol, category, title, summary, source, url,
-                    published_at, engagement, fetched_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT DO UPDATE SET
-                    title = excluded.title,
-                    summary = excluded.summary,
-                    category = excluded.category,
-                    symbol = excluded.symbol,
-                    source = excluded.source,
-                    url = excluded.url,
-                    published_at = excluded.published_at,
-                    engagement = excluded.engagement,
-                    fetched_at = excluded.fetched_at
-                """,
-                rows,
-            )
+            for row in rows:
+                (
+                    item_id,
+                    symbol,
+                    category,
+                    title,
+                    summary,
+                    source,
+                    url,
+                    published_at,
+                    engagement,
+                    fetched_at,
+                ) = row
+                update_parameters = (
+                    symbol,
+                    category,
+                    title,
+                    summary,
+                    source,
+                    url,
+                    published_at,
+                    engagement,
+                    fetched_at,
+                    item_id,
+                    symbol,
+                    url,
+                )
+                updated = connection.execute(
+                    """
+                    UPDATE news_items
+                    SET symbol = ?, category = ?, title = ?, summary = ?,
+                        source = ?, url = ?, published_at = ?, engagement = ?,
+                        fetched_at = ?
+                    WHERE id = ? OR (symbol = ? AND url = ?)
+                    """,
+                    update_parameters,
+                )
+                if updated.rowcount:
+                    continue
+                inserted = connection.execute(
+                    """
+                    INSERT INTO news_items(
+                        id, symbol, category, title, summary, source, url,
+                        published_at, engagement, fetched_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    row,
+                )
+                if not inserted.rowcount:
+                    # A concurrent refresh may have inserted the same URL after
+                    # the first UPDATE. Re-apply the fresh payload without
+                    # changing the existing stable row id.
+                    connection.execute(
+                        """
+                        UPDATE news_items
+                        SET symbol = ?, category = ?, title = ?, summary = ?,
+                            source = ?, url = ?, published_at = ?, engagement = ?,
+                            fetched_at = ?
+                        WHERE id = ? OR (symbol = ? AND url = ?)
+                        """,
+                        update_parameters,
+                    )
         return len(rows)
 
     def list_news(
@@ -3570,9 +4069,7 @@ class Database:
             )
         return self.latest_earnings_quality_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
-    def latest_earnings_quality_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_earnings_quality_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -3693,9 +4190,7 @@ class Database:
             )
         return self.latest_financial_driver_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
-    def latest_financial_driver_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_financial_driver_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -3750,9 +4245,7 @@ class Database:
                     document.get("fetched_at") or utc_now(),
                 ),
             )
-        return self.get_filing_document(
-            document["symbol"], document["article_code"]
-        )  # type: ignore[return-value]
+        return self.get_filing_document(document["symbol"], document["article_code"])  # type: ignore[return-value]
 
     def get_filing_document(
         self, symbol: str, article_code: str
@@ -3777,12 +4270,16 @@ class Database:
         *,
         include_content: bool = False,
     ) -> list[dict[str, Any]]:
-        fields = "*" if include_content else """
+        fields = (
+            "*"
+            if include_content
+            else """
             symbol, article_code, title, document_type, report_period,
             notice_date, published_at, attach_url, content_hash, source,
             source_url, warnings_json, fetched_at,
             LENGTH(content_text) AS content_chars
         """
+        )
         with self.connect() as connection:
             rows = connection.execute(
                 f"""
@@ -3854,7 +4351,7 @@ class Database:
             row = connection.execute(
                 f"""
                 SELECT * FROM filing_evidence_snapshots
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 ORDER BY COALESCE(report_period, created_at) DESC,
                     created_at DESC, rowid DESC LIMIT 1
                 """,
@@ -3962,13 +4459,9 @@ class Database:
                     created_at,
                 ),
             )
-        return self.latest_business_structure_snapshot(
-            snapshot["symbol"]
-        )  # type: ignore[return-value]
+        return self.latest_business_structure_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
-    def latest_business_structure_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_business_structure_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4011,13 +4504,9 @@ class Database:
                     created_at,
                 ),
             )
-        return self.latest_peer_operating_snapshot(
-            snapshot["symbol"]
-        )  # type: ignore[return-value]
+        return self.latest_peer_operating_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
-    def latest_peer_operating_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_peer_operating_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4090,9 +4579,7 @@ class Database:
                     created_at,
                 ),
             )
-        return self.latest_shareholder_structure_snapshot(
-            snapshot["symbol"]
-        )  # type: ignore[return-value]
+        return self.latest_shareholder_structure_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
     def latest_shareholder_structure_snapshot(
         self, symbol: str
@@ -4109,9 +4596,7 @@ class Database:
             ).fetchone()
         item = self._row(row)
         if item is not None:
-            item["top_holders"] = json.loads(
-                item.pop("top_holders_json") or "[]"
-            )
+            item["top_holders"] = json.loads(item.pop("top_holders_json") or "[]")
             item["payload"] = json.loads(item.pop("payload_json") or "{}")
         return item
 
@@ -4149,9 +4634,7 @@ class Database:
                     created_at,
                 ),
             )
-        return self.latest_analyst_expectation_snapshot(
-            snapshot["symbol"]
-        )  # type: ignore[return-value]
+        return self.latest_analyst_expectation_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
     def save_event_timeline_snapshot(
         self, snapshot: dict[str, Any], fingerprint: str
@@ -4186,9 +4669,7 @@ class Database:
             ).fetchone()
         return self._event_timeline_row(row)  # type: ignore[return-value]
 
-    def latest_event_timeline_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_event_timeline_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4201,16 +4682,277 @@ class Database:
         return self._event_timeline_row(row)
 
     @staticmethod
-    def _event_timeline_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _event_timeline_row(row: Any | None) -> dict[str, Any] | None:
         if row is None:
             return None
         item = dict(row)
         item["payload"] = json.loads(item.pop("payload_json") or "{}")
         return item
 
-    def latest_analyst_expectation_snapshot(
-        self, symbol: str
+    def upsert_change_event(
+        self,
+        *,
+        symbol: str,
+        event_type: str,
+        title: str,
+        fact_summary: str,
+        occurred_at: str,
+        detected_at: str,
+        source_name: str,
+        source_url: str | None,
+        data_status: str,
+        rule_version: str,
+        dedupe_hash: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        event_id = str(uuid4())
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO change_events(
+                    id, symbol, event_type, title, fact_summary, occurred_at,
+                    detected_at, source_name, source_url, data_status,
+                    rule_version, dedupe_hash, payload_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(dedupe_hash) DO UPDATE SET
+                    title = excluded.title,
+                    fact_summary = excluded.fact_summary,
+                    detected_at = excluded.detected_at,
+                    source_name = excluded.source_name,
+                    source_url = excluded.source_url,
+                    data_status = excluded.data_status,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    event_id,
+                    symbol,
+                    event_type,
+                    title,
+                    fact_summary,
+                    occurred_at,
+                    detected_at,
+                    source_name,
+                    source_url,
+                    data_status,
+                    rule_version,
+                    dedupe_hash,
+                    json_dumps(payload),
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM change_events WHERE dedupe_hash = ?",
+                (dedupe_hash,),
+            ).fetchone()
+        return self._change_event_row(row)  # type: ignore[return-value]
+
+    def get_change_event(self, event_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM change_events WHERE id = ?", (event_id,)
+            ).fetchone()
+        return self._change_event_row(row)
+
+    def list_change_events(
+        self, *, symbol: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if symbol:
+            clauses.append("symbol = ?")
+            parameters.append(symbol)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        parameters.append(max(1, min(limit, 500)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM change_events{where}
+                ORDER BY occurred_at DESC, detected_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        return [
+            item for row in rows if (item := self._change_event_row(row)) is not None
+        ]
+
+    @staticmethod
+    def _change_event_row(row: Any | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json") or "{}")
+        return item
+
+    def ensure_user_change_links(self, user_id: str, symbol: str) -> int:
+        now = utc_now()
+        with self.connect() as connection:
+            event_rows = connection.execute(
+                "SELECT id FROM change_events WHERE symbol = ?", (symbol,)
+            ).fetchall()
+            inserted = connection.executemany(
+                """
+                INSERT OR IGNORE INTO user_change_links(
+                    id, user_id, change_event_id, symbol, relevance_status,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, 'pending', ?, ?)
+                """,
+                [
+                    (str(uuid4()), user_id, str(row["id"]), symbol, now, now)
+                    for row in event_rows
+                ],
+            )
+        return max(0, int(inserted or 0))
+
+    def list_watchlist_user_ids(self) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT user_id
+                FROM watchlist
+                ORDER BY user_id
+                """
+            ).fetchall()
+        return [str(row["user_id"]) for row in rows]
+
+    def list_user_change_links(
+        self,
+        user_id: str,
+        *,
+        symbol: str | None = None,
+        relevance_status: str | None = None,
+        unread_only: bool = False,
+        pending_only: bool = False,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses = ["links.user_id = ?"]
+        parameters: list[Any] = [user_id]
+        if symbol:
+            clauses.append("links.symbol = ?")
+            parameters.append(symbol)
+        if relevance_status:
+            clauses.append("links.relevance_status = ?")
+            parameters.append(relevance_status)
+        if unread_only:
+            clauses.append("links.read_at IS NULL")
+        if pending_only:
+            clauses.append("links.relevance_status = 'pending'")
+            clauses.append("links.handled_at IS NULL")
+        parameters.append(max(1, min(limit, 500)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT
+                    links.id AS link_id,
+                    links.relevance_status,
+                    links.read_at,
+                    links.handled_at,
+                    links.created_at AS linked_at,
+                    links.updated_at AS link_updated_at,
+                    events.id AS event_id,
+                    events.symbol,
+                    events.event_type,
+                    events.title,
+                    events.fact_summary,
+                    events.occurred_at,
+                    events.detected_at,
+                    events.source_name,
+                    events.source_url,
+                    events.data_status,
+                    events.rule_version,
+                    events.payload_json,
+                    events.created_at,
+                    events.updated_at
+                FROM user_change_links AS links
+                JOIN change_events AS events ON events.id = links.change_event_id
+                WHERE {" AND ".join(clauses)}
+                ORDER BY events.occurred_at DESC, events.detected_at DESC, links.rowid DESC
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        return [self._user_change_link_row(row) for row in rows]
+
+    def get_user_change_link(self, user_id: str, link_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    links.id AS link_id,
+                    links.relevance_status,
+                    links.read_at,
+                    links.handled_at,
+                    links.created_at AS linked_at,
+                    links.updated_at AS link_updated_at,
+                    events.id AS event_id,
+                    events.symbol,
+                    events.event_type,
+                    events.title,
+                    events.fact_summary,
+                    events.occurred_at,
+                    events.detected_at,
+                    events.source_name,
+                    events.source_url,
+                    events.data_status,
+                    events.rule_version,
+                    events.payload_json,
+                    events.created_at,
+                    events.updated_at
+                FROM user_change_links AS links
+                JOIN change_events AS events ON events.id = links.change_event_id
+                WHERE links.id = ? AND links.user_id = ?
+                """,
+                (link_id, user_id),
+            ).fetchone()
+        return self._user_change_link_row(row) if row is not None else None
+
+    @staticmethod
+    def _user_change_link_row(row: Any) -> dict[str, Any]:
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json") or "{}")
+        return item
+
+    def mark_user_change_read(
+        self, user_id: str, link_id: str
     ) -> dict[str, Any] | None:
+        now = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE user_change_links
+                SET read_at = COALESCE(read_at, ?), updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (now, now, link_id, user_id),
+            )
+        if cursor.rowcount == 0:
+            return None
+        return self.get_user_change_link(user_id, link_id)
+
+    def set_user_change_relevance(
+        self, user_id: str, link_id: str, relevance_status: str
+    ) -> dict[str, Any] | None:
+        if relevance_status not in {"relevant", "irrelevant"}:
+            raise ValueError("相关性状态只接受 relevant 或 irrelevant")
+        now = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE user_change_links
+                SET relevance_status = ?, handled_at = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (relevance_status, now, now, link_id, user_id),
+            )
+        if cursor.rowcount == 0:
+            return None
+        return self.get_user_change_link(user_id, link_id)
+
+    def latest_analyst_expectation_snapshot(self, symbol: str) -> dict[str, Any] | None:
         items = self.list_analyst_expectation_snapshots(symbol, limit=1)
         return items[0] if items else None
 
@@ -4279,7 +5021,7 @@ class Database:
             row = connection.execute(
                 """
                 SELECT * FROM research_reports
-                WHERE symbol = ? ORDER BY generated_at DESC LIMIT 1
+                WHERE symbol = ? ORDER BY generated_at DESC, rowid DESC LIMIT 1
                 """,
                 (symbol,),
             ).fetchone()
@@ -4414,7 +5156,7 @@ class Database:
         return [self._research_change_row(row) for row in rows]  # type: ignore[misc]
 
     @staticmethod
-    def _research_change_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _research_change_row(row: Any | None) -> dict[str, Any] | None:
         if row is None:
             return None
         item = dict(row)
@@ -4450,9 +5192,7 @@ class Database:
             ).fetchone()
         return self._research_priority_row(row)  # type: ignore[return-value]
 
-    def latest_research_priority_snapshot(
-        self, user_id: str
-    ) -> dict[str, Any] | None:
+    def latest_research_priority_snapshot(self, user_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4465,7 +5205,7 @@ class Database:
         return self._research_priority_row(row)
 
     @staticmethod
-    def _research_priority_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _research_priority_row(row: Any | None) -> dict[str, Any] | None:
         if row is None:
             return None
         item = dict(row)
@@ -4501,9 +5241,7 @@ class Database:
             ).fetchone()
         return self._research_action_row(row)  # type: ignore[return-value]
 
-    def latest_research_action_snapshot(
-        self, user_id: str
-    ) -> dict[str, Any] | None:
+    def latest_research_action_snapshot(self, user_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4516,7 +5254,7 @@ class Database:
         return self._research_action_row(row)
 
     @staticmethod
-    def _research_action_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _research_action_row(row: Any | None) -> dict[str, Any] | None:
         if row is None:
             return None
         item = dict(row)
@@ -4589,9 +5327,7 @@ class Database:
             ).fetchone()
         return self._evidence_task_row(row)  # type: ignore[return-value]
 
-    def get_evidence_task(
-        self, user_id: str, task_id: str
-    ) -> dict[str, Any] | None:
+    def get_evidence_task(self, user_id: str, task_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM evidence_tasks WHERE id = ? AND user_id = ?",
@@ -4605,11 +5341,16 @@ class Database:
         status: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        status_clause = " AND status = ?" if status is not None else ""
+        parameters: list[Any] = [user_id]
+        if status is not None:
+            parameters.append(status)
+        parameters.append(limit)
         with self.connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT * FROM evidence_tasks
-                WHERE user_id = ? AND (? IS NULL OR status = ?)
+                WHERE user_id = ?{status_clause}
                 ORDER BY
                     CASE status
                         WHEN 'collecting' THEN 5
@@ -4621,26 +5362,30 @@ class Database:
                     priority DESC, updated_at DESC, rowid DESC
                 LIMIT ?
                 """,
-                (user_id, status, status, limit),
+                parameters,
             ).fetchall()
         return [self._evidence_task_row(row) for row in rows]  # type: ignore[misc]
 
     def list_pending_evidence_tasks(
         self, user_id: str | None = None, limit: int = 20
     ) -> list[dict[str, Any]]:
+        user_clause = "user_id = ? AND " if user_id is not None else ""
+        parameters: list[Any] = []
+        if user_id is not None:
+            parameters.append(user_id)
+        parameters.append(limit)
         with self.connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT * FROM evidence_tasks
-                WHERE (? IS NULL OR user_id = ?)
-                  AND (
+                WHERE {user_clause}(
                     status = 'pending'
                     OR (status = 'failed' AND retry_count < max_retries)
                   )
                 ORDER BY priority DESC, updated_at ASC, rowid ASC
                 LIMIT ?
                 """,
-                (user_id, user_id, limit),
+                parameters,
             ).fetchall()
         return [self._evidence_task_row(row) for row in rows]  # type: ignore[misc]
 
@@ -4648,19 +5393,23 @@ class Database:
         self, task_id: str, user_id: str | None = None
     ) -> dict[str, Any] | None:
         now = utc_now()
+        user_clause = " AND user_id = ?" if user_id is not None else ""
+        parameters: list[Any] = [now, now, task_id]
+        if user_id is not None:
+            parameters.append(user_id)
         with self.connect() as connection:
             cursor = connection.execute(
-                """
+                f"""
                 UPDATE evidence_tasks
                 SET status = 'collecting', retry_count = retry_count + 1,
                     started_at = ?, updated_at = ?, last_error = NULL
-                WHERE id = ? AND (? IS NULL OR user_id = ?)
+                WHERE id = ?{user_clause}
                   AND (
                     status = 'pending'
                     OR (status = 'failed' AND retry_count < max_retries)
                   )
                 """,
-                (now, now, task_id, user_id, user_id),
+                parameters,
             )
             if cursor.rowcount == 0:
                 return None
@@ -4724,7 +5473,7 @@ class Database:
         }
 
     @staticmethod
-    def _evidence_task_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _evidence_task_row(row: Any | None) -> dict[str, Any] | None:
         if row is None:
             return None
         item = dict(row)
@@ -4734,9 +5483,14 @@ class Database:
     def list_research_anchor_reports(
         self, symbol: str | None = None, limit: int = 1000
     ) -> list[dict[str, Any]]:
+        symbol_clause = "WHERE symbol = ?" if symbol is not None else ""
+        parameters: list[Any] = []
+        if symbol is not None:
+            parameters.append(symbol)
+        parameters.append(limit)
         with self.connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 WITH ranked AS (
                     SELECT reports.*,
                         ROW_NUMBER() OVER (
@@ -4745,7 +5499,7 @@ class Database:
                             ORDER BY generated_at DESC, rowid DESC
                         ) AS anchor_rank
                     FROM research_reports AS reports
-                    WHERE (? IS NULL OR symbol = ?)
+                    {symbol_clause}
                 )
                 SELECT * FROM ranked
                 WHERE anchor_rank = 1
@@ -4753,7 +5507,7 @@ class Database:
                     generated_at DESC
                 LIMIT ?
                 """,
-                (symbol, symbol, limit),
+                parameters,
             ).fetchall()
         items = []
         for row in rows:
@@ -4868,7 +5622,7 @@ class Database:
         return [self._research_outcome_row(row) for row in rows]  # type: ignore[misc]
 
     @staticmethod
-    def _research_outcome_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    def _research_outcome_row(row: Any | None) -> dict[str, Any] | None:
         if row is None:
             return None
         item = dict(row)

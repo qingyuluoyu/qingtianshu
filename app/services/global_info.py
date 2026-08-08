@@ -18,10 +18,18 @@ class GlobalInformationService:
         canonical = normalize_symbol(symbol)
         items = self.provider.fetch_company_news(canonical)
         saved = self.database.upsert_news_items(items)
+        polled_at = utc_now()
         return {
             "symbol": canonical,
-            "refreshed_at": utc_now(),
+            "refreshed_at": polled_at,
             "news_saved": saved,
+            "sources": {
+                "global_news": {
+                    "status": "ok",
+                    "items": len(items),
+                    "polled_at": polled_at,
+                }
+            },
             "warnings": [],
         }
 

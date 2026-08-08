@@ -137,13 +137,13 @@ def test_external_gap_remains_explicitly_unresolved(client, app):
 
 
 def test_chat_creates_evidence_task_and_review_page_renders_lifecycle(
-    client, app, monkeypatch
+    client, app, monkeypatch, frontend_source
 ):
     _create_user(client)
     original_build = app.state.research_evidence.build
 
-    def build_with_gap(user_id: str, symbol: str):
-        evidence = original_build(user_id, symbol)
+    def build_with_gap(user_id: str, symbol: str, **kwargs):
+        evidence = original_build(user_id, symbol, **kwargs)
         gap = "公司最新公告尚未接入"
         evidence["research_frame"]["missing_information"] = [gap]
         evidence["evidence_readiness"]["optional_gaps"] = [gap]
@@ -167,7 +167,7 @@ def test_chat_creates_evidence_task_and_review_page_renders_lifecycle(
     assert task["conversation_id"] == payload["conversation_id"]
     assert task["run_id"] == payload["run_id"]
 
-    page = client.get("/demo").text
+    page = frontend_source
     assert "待补证与后台补齐" in page
     assert 'api("/me/evidence-tasks?limit=50")' in page
     assert "function renderEvidenceTasks(data)" in page

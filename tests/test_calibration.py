@@ -23,7 +23,9 @@ def make_points(count: int = 500) -> list[dict]:
         close = max(10.0, close + drift + ((index % 7) - 3) * 0.06)
         points.append(
             {
-                "timestamp": (start + timedelta(days=index)).isoformat(timespec="seconds"),
+                "timestamp": (start + timedelta(days=index)).isoformat(
+                    timespec="seconds"
+                ),
                 "open": close - 0.2,
                 "high": close + 0.5,
                 "low": close - 0.5,
@@ -65,12 +67,14 @@ def test_calibration_uses_last_thirty_percent_as_chronological_holdout():
     out_of_sample = ten_day["out_of_sample"]
     assert ten_day["total_samples"] > 20
     assert out_of_sample["sample_size"] > 0
-    assert in_sample["period"]["last_evaluated_at"] <= out_of_sample["period"][
-        "first_signal_at"
-    ]
-    assert sum(
-        item["sample_size"] for item in out_of_sample["by_label"].values()
-    ) == out_of_sample["sample_size"]
+    assert (
+        in_sample["period"]["last_evaluated_at"]
+        <= out_of_sample["period"]["first_signal_at"]
+    )
+    assert (
+        sum(item["sample_size"] for item in out_of_sample["by_label"].values())
+        == out_of_sample["sample_size"]
+    )
     assert calibration["method"] == "fixed_rule_prequential_oos_v2"
     assert calibration["history"]["price_basis"] == "adjusted_close_when_available"
 
@@ -131,7 +135,7 @@ def test_calibration_service_persists_latest_snapshot(tmp_path: Path):
                 "points": points,
             }
 
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     service = OutlookCalibrationService(database, Provider())
     packet = service.get_packet("NVDA")

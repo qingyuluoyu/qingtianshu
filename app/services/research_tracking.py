@@ -4,6 +4,7 @@ from typing import Any
 
 from app.catalog import normalize_symbol
 from app.db import Database
+from app.services.security_master import SecurityMasterService
 from app.utils import utc_now
 
 
@@ -346,6 +347,7 @@ def build_research_change_payload(
 class ResearchTrackingService:
     def __init__(self, database: Database):
         self.database = database
+        self.security_master = SecurityMasterService(database)
 
     def record_report(
         self,
@@ -401,9 +403,11 @@ class ResearchTrackingService:
             states.append(
                 {
                     "symbol": item_symbol,
-                    "name": item.get("name")
-                    or (report or {}).get("name")
-                    or item_symbol,
+                    "name": self.security_master.display_name(
+                        item_symbol,
+                        item.get("name"),
+                        (report or {}).get("name"),
+                    ),
                     "thesis": item.get("thesis"),
                     "in_watchlist": item_symbol in watchlist_map,
                     "latest_report_at": (report or {}).get("generated_at"),
@@ -449,24 +453,41 @@ class ResearchTrackingService:
             ),
         }
 
-    @staticmethod
-    def public_event(event: dict[str, Any] | None) -> dict[str, Any] | None:
+    def public_event(self, event: dict[str, Any] | None) -> dict[str, Any] | None:
         if event is None:
             return None
         payload = event.get("payload") or {}
+        symbol = str(event.get("symbol") or payload.get("symbol") or "")
+        original_name = str(payload.get("name") or "")
+        display_name = self.security_master.display_name(
+            symbol,
+            original_name,
+        )
+
+        def localized(value: Any) -> Any:
+            if not original_name or original_name == display_name:
+                return value
+            if isinstance(value, str):
+                return value.replace(original_name, display_name)
+            if isinstance(value, list):
+                return [localized(item) for item in value]
+            if isinstance(value, dict):
+                return {key: localized(item) for key, item in value.items()}
+            return value
+
         return {
             "id": event.get("id"),
             "symbol": event.get("symbol"),
             "event_type": event.get("event_type"),
             "severity": event.get("severity"),
-            "summary": event.get("summary"),
+            "summary": localized(event.get("summary")),
             "created_at": event.get("created_at"),
             "data_as_of": payload.get("data_as_of"),
-            "changes": payload.get("changes") or [],
-            "new_evidence": payload.get("new_evidence") or [],
+            "changes": localized(payload.get("changes") or []),
+            "new_evidence": localized(payload.get("new_evidence") or []),
             "current_state": payload.get("current_state") or {},
-            "next_review": payload.get("next_review"),
-            "boundary": payload.get("boundary"),
+            "next_review": localized(payload.get("next_review")),
+            "boundary": localized(payload.get("boundary")),
         }
 
 

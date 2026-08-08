@@ -136,6 +136,16 @@ def test_workspace_returns_honest_candidate_empty_state(app):
         "available": False,
         "status": "not_configured",
     }
+    assert payload["evidence_layers"]["contract_version"] == (
+        "stock_workspace_evidence_layers_v1"
+    )
+    assert len(payload["evidence_layers"]["dimensions"]) == 6
+    assert payload["evidence_layers"]["ai_status"] == "not_generated"
+    assert payload["evidence_layers"]["ai_source"] == "not_generated"
+    assert all(
+        not item["raw_data"] and not item["ai_explanations"]
+        for item in payload["evidence_layers"]["dimensions"]
+    )
     assert payload["completeness"]["has_stock_space"] is False
     assert "尚未加入股票研究空间" in payload["completeness"]["missing_items"]
 
@@ -203,6 +213,32 @@ def test_workspace_aggregates_private_context_and_public_evidence(app):
     )
     started = client.post("/me/deep-stock", json={"symbol": "000063"})
     assert started.status_code == 201
+    database.add_conversation_message(
+        user_id=user["id"],
+        conversation_id=started.json()["conversation_id"],
+        role="assistant",
+        content="结构化研究解释",
+        intent="stock_research",
+        metadata={
+            "structured_answer": {
+                "status": "complete",
+                "answer_summary": "财务质量与行业证据仍需交叉核验。",
+                "evidence_based_inferences": [
+                    {
+                        "text": "营收增长但经营现金流仍需复核",
+                        "citation_ids": ["citation-financial"],
+                    }
+                ],
+                "counter_evidence_and_risks": [],
+                "hypotheses_to_verify": [],
+                "confirmed_facts": [],
+                "information_gaps": [
+                    {"description": "行业供需证据仍缺失"}
+                ],
+                "invalidation_conditions": [],
+            }
+        },
+    )
 
     response = client.get("/v1/stocks/000063/workspace")
 
@@ -232,6 +268,30 @@ def test_workspace_aggregates_private_context_and_public_evidence(app):
     }
     assert payload["claim_ledger"]["method"] == "structured_claim_ledger_v1"
     assert payload["claim_ledger"]["summary"]["weakens"] == 1
+    layers = {
+        item["key"]: item
+        for item in payload["evidence_layers"]["dimensions"]
+    }
+    assert payload["evidence_layers"]["ai_status"] == "complete"
+    assert payload["evidence_layers"]["ai_source"] == (
+        "bound_research_conversation"
+    )
+    assert any(
+        "主营构成报告期" in item
+        for item in layers["company_operating"]["raw_data"]
+    )
+    assert any(
+        "最新结构化财务报告期" in item
+        for item in layers["financial_quality"]["raw_data"]
+    )
+    assert any(
+        "营收增长但经营现金流仍需复核" in item
+        for item in layers["financial_quality"]["ai_explanations"]
+    )
+    assert "2026-03-31" in layers["financial_quality"]["as_of"]
+    assert "行业供需证据仍缺失" in layers["industry_relative"][
+        "missing_items"
+    ]
     assert payload["counterevidence"][0]["source_name"] == "财报质量确定性分析"
     assert payload["counterevidence"][0]["data_time"] == "2026-03-31"
     assert payload["counterevidence"][0]["coverage_status"] == "partial"
@@ -242,6 +302,11 @@ def test_workspace_aggregates_private_context_and_public_evidence(app):
     )
     assert payload["latest_report"]["body"] in {"研究正文", "研究正文（刷新）"}
     assert payload["data_meta"]["private_context_user_isolated"] is True
+    assert payload["thesis_history"][0]["reason_text"] == (
+        "关注算力业务、利润质量和经营现金流是否同步改善"
+    )
+    assert payload["history_summary"]["thesis_version_count"] == 1
+    assert payload["history_summary"]["observation_task_count"] == 0
 
     evidence_response = client.get("/v1/stocks/000063/workspace/evidence")
     assert evidence_response.status_code == 200
@@ -249,6 +314,7 @@ def test_workspace_aggregates_private_context_and_public_evidence(app):
         "stock_workspace_evidence_v1"
     )
     assert evidence_response.json()["claim_ledger"]["claims"]
+    assert evidence_response.json()["evidence_layers"]["ai_status"] == "complete"
 
     timeline_response = client.get("/v1/stocks/000063/workspace/timeline")
     assert timeline_response.status_code == 200
@@ -256,6 +322,8 @@ def test_workspace_aggregates_private_context_and_public_evidence(app):
         "stock_workspace_timeline_v1"
     )
     assert len(timeline_response.json()["important_changes"]) == 1
+    assert len(timeline_response.json()["thesis_history"]) == 1
+    assert timeline_response.json()["observation_tasks"]["items"] == []
 
     actions_response = client.get("/v1/stocks/000063/workspace/actions")
     assert actions_response.status_code == 200
@@ -263,6 +331,116 @@ def test_workspace_aggregates_private_context_and_public_evidence(app):
         "stock_workspace_actions_v1"
     )
     assert "不生成买卖" in actions_response.json()["boundary"]
+
+
+def test_workspace_restores_latest_structured_answer_from_long_conversation(app):
+    client = TestClient(app)
+    user = _create_user(client, "Long Workspace Conversation")
+    database = app.state.database
+    database.upsert_watchlist(
+        user["id"],
+        "000063.SZ",
+        "中兴通讯",
+        "A股",
+        "复核长对话中的最新结构化判断",
+    )
+    started = client.post("/me/deep-stock", json={"symbol": "000063"})
+    assert started.status_code == 201
+    conversation_id = started.json()["conversation_id"]
+    for index in range(205):
+        database.add_conversation_message(
+            user_id=user["id"],
+            conversation_id=conversation_id,
+            role="user",
+            content=f"历史核验 {index}",
+            intent="stock_research",
+        )
+    database.add_conversation_message(
+        user_id=user["id"],
+        conversation_id=conversation_id,
+        role="assistant",
+        content="最新结构化研究解释",
+        intent="stock_research",
+        metadata={
+            "structured_answer": {
+                "status": "complete",
+                "answer_summary": "最新财务解释需与现金流交叉核验。",
+                "confirmed_facts": [],
+                "evidence_based_inferences": [
+                    {"text": "最新营收与现金流解释", "citation_ids": []}
+                ],
+                "counter_evidence_and_risks": [],
+                "hypotheses_to_verify": [],
+                "information_gaps": [],
+                "invalidation_conditions": [],
+            }
+        },
+    )
+
+    response = client.get("/v1/stocks/000063/workspace")
+
+    assert response.status_code == 200
+    financial_layer = next(
+        item
+        for item in response.json()["evidence_layers"]["dimensions"]
+        if item["key"] == "financial_quality"
+    )
+    assert "最新营收与现金流解释" in financial_layer["ai_explanations"]
+
+
+def test_workspace_recovers_same_users_same_stock_structured_answer(app):
+    client = TestClient(app)
+    user = _create_user(client, "Same Stock History")
+    database = app.state.database
+    database.upsert_watchlist(
+        user["id"],
+        "000063.SZ",
+        "中兴通讯",
+        "A股",
+        "把同一股票的历史研究沉淀到工作空间",
+    )
+    started = client.post("/me/deep-stock", json={"symbol": "000063"})
+    assert started.status_code == 201
+    other_conversation = database.create_conversation(
+        user["id"],
+        "中兴通讯临时研究",
+    )
+    database.add_conversation_message(
+        user_id=user["id"],
+        conversation_id=other_conversation["id"],
+        role="assistant",
+        content="同股票历史结构化解释",
+        intent="stock_research",
+        metadata={
+            "symbol": "000063.SZ",
+            "structured_answer": {
+                "status": "complete",
+                "answer_summary": "估值与财务证据需要联合解释。",
+                "confirmed_facts": [],
+                "evidence_based_inferences": [
+                    {"text": "市盈率与净利润需联合核验", "citation_ids": []}
+                ],
+                "counter_evidence_and_risks": [],
+                "hypotheses_to_verify": [],
+                "information_gaps": [],
+                "invalidation_conditions": [],
+            },
+        },
+    )
+
+    response = client.get("/v1/stocks/000063/workspace")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["evidence_layers"]["ai_source"] == "same_stock_history"
+    valuation_layer = next(
+        item
+        for item in payload["evidence_layers"]["dimensions"]
+        if item["key"] == "valuation"
+    )
+    assert "市盈率与净利润需联合核验" in valuation_layer[
+        "ai_explanations"
+    ]
 
 
 def test_workspace_does_not_leak_another_users_private_context(app):
@@ -277,6 +455,30 @@ def test_workspace_does_not_leak_another_users_private_context(app):
     )
     owner_session = owner.post("/me/deep-stock", json={"symbol": "000063"})
     assert owner_session.status_code == 201
+    owner_conversation = app.state.database.create_conversation(
+        owner_user["id"],
+        "甲用户的中兴通讯研究",
+    )
+    app.state.database.add_conversation_message(
+        user_id=owner_user["id"],
+        conversation_id=owner_conversation["id"],
+        role="assistant",
+        content="甲用户私有的结构化解释",
+        intent="stock_research",
+        metadata={
+            "symbol": "000063.SZ",
+            "structured_answer": {
+                "status": "complete",
+                "answer_summary": "这是仅属于甲用户的私人结构化判断",
+                "confirmed_facts": [],
+                "evidence_based_inferences": [],
+                "counter_evidence_and_risks": [],
+                "hypotheses_to_verify": [],
+                "information_gaps": [],
+                "invalidation_conditions": [],
+            },
+        },
+    )
 
     other = TestClient(app)
     _create_user(other, "Workspace Other User")
@@ -288,6 +490,8 @@ def test_workspace_does_not_leak_another_users_private_context(app):
     assert payload["relation"]["preview_state"] == "candidate"
     assert payload["thesis"]["summary"] is None
     assert payload["conversation"] is None
+    assert payload["evidence_layers"]["ai_status"] == "not_generated"
+    assert payload["evidence_layers"]["ai_source"] == "not_generated"
     assert all(
         "这是仅属于甲用户的私人判断" not in str(value)
         for value in payload.values()

@@ -51,7 +51,7 @@ def financial_period(
 
 
 def test_zte_revenue_profit_and_cashflow_contradictions_are_explicit(settings):
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     database.upsert_financial_periods(
         [
@@ -108,7 +108,7 @@ def test_zte_revenue_profit_and_cashflow_contradictions_are_explicit(settings):
 def test_positive_growth_with_weak_cash_conversion_is_not_called_fully_consistent(
     settings,
 ):
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     database.upsert_financial_periods(
         [
@@ -148,10 +148,55 @@ def test_positive_growth_with_weak_cash_conversion_is_not_called_fully_consisten
     assert any("毛利率与净利率" in item for item in packet["supports"])
 
 
+def test_cashflow_coverage_above_one_keeps_amount_and_quality_boundary(settings):
+    database = Database(settings.workspace_root)
+    database.initialize()
+    database.upsert_financial_periods(
+        [
+            financial_period(
+                "000065.SZ",
+                "2026-03-31",
+                "一季报",
+                "2026一季报",
+                revenue_yoy_pct=-35.56,
+                net_profit_yoy_pct=-37.54,
+                gross_margin_pct=17.18,
+                net_margin_pct=5.12,
+                operating_cashflow=216_477_658.72,
+                parent_net_profit=110_473_004.33,
+                debt_asset_ratio_pct=53.47,
+            ),
+            financial_period(
+                "000065.SZ",
+                "2025-03-31",
+                "一季报",
+                "2025一季报",
+                revenue_yoy_pct=-27.22,
+                net_profit_yoy_pct=-32.97,
+                gross_margin_pct=13.03,
+                net_margin_pct=4.93,
+                operating_cashflow=333_946_803.60,
+                parent_net_profit=176_876_371.12,
+                debt_asset_ratio_pct=57.23,
+            ),
+        ]
+    )
+
+    packet = EarningsQualityService(database).get_packet("000065.SZ")
+    factor = next(
+        item for item in packet["factors"] if item["key"] == "cashflow_coverage"
+    )
+
+    assert factor["value_ratio"] == pytest.approx(1.96, abs=0.001)
+    assert "不能单独证明整体盈利质量" in factor["interpretation_boundary"]
+    assert any("只说明本期覆盖关系" in item for item in packet["supports"])
+    assert all("达到或超过 1" not in item for item in packet["supports"])
+
+
 def test_us_quarter_matches_previous_fiscal_quarter_and_snapshot_is_idempotent(
     settings,
 ):
-    database = Database(settings.database_path, settings.workspace_root)
+    database = Database(settings.workspace_root)
     database.initialize()
     database.upsert_financial_periods(
         [
@@ -192,9 +237,12 @@ def test_us_quarter_matches_previous_fiscal_quarter_and_snapshot_is_idempotent(
     assert first["overall_label"] == "增长与盈利兑现较一致"
     assert first["snapshot_id"] == second["snapshot_id"]
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM earnings_quality_snapshots WHERE symbol = 'NVDA'"
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM earnings_quality_snapshots WHERE symbol = 'NVDA'"
+            ).fetchone()["count"]
+            == 1
+        )
     documents = database.list_knowledge_documents(None, include_content=True)
     document = next(
         item for item in documents if item["source_key"] == "earnings-quality:NVDA"

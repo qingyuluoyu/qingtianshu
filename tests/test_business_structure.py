@@ -87,8 +87,7 @@ def test_service_separates_latest_revenue_and_margin_reference(app):
         "gross_margin_pct"
     ] == pytest.approx(53.0)
     assert any(
-        item.get("report_date") == "2025-06-30"
-        and "毛利率参考期" in item["statement"]
+        item.get("report_date") == "2025-06-30" and "毛利率参考期" in item["statement"]
         for item in packet["key_changes"]
     )
 
@@ -112,14 +111,20 @@ def test_business_structure_persists_snapshot_and_long_term_knowledge(app):
     app.state.business_structure.refresh_symbol("000063.SZ")
 
     with app.state.database.connect() as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM business_segment_rows WHERE symbol = ?",
-            ("000063.SZ",),
-        ).fetchone()[0] == 22
-        assert connection.execute(
-            "SELECT COUNT(*) FROM business_structure_snapshots WHERE symbol = ?",
-            ("000063.SZ",),
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM business_segment_rows WHERE symbol = ?",
+                ("000063.SZ",),
+            ).fetchone()["count"]
+            == 22
+        )
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) AS count FROM business_structure_snapshots WHERE symbol = ?",
+                ("000063.SZ",),
+            ).fetchone()["count"]
+            == 1
+        )
 
     document = next(
         item
@@ -157,6 +162,45 @@ def test_business_structure_api_and_chat_routing(client, app):
     assert "2025-06-30" in payload["answer"]
     assert "53%" in payload["answer"]
     assert "不能混写" in payload["answer"]
+
+    growth = client.post(
+        "/me/chat",
+        json={
+            "message": (
+                "中兴通讯这半年增长到底靠什么？第二增长曲线是否已经成立？"
+                "把财报和管理层解释分开说。"
+            ),
+            "execute_agent": False,
+        },
+    )
+    assert growth.status_code == 200
+    assert growth.json()["intent"] == "stock_research"
+    assert growth.json()["evidence"]["research_plan"]["focus"] == "business_growth"
+    assert "business_structure" in growth.json()["evidence"]
+    assert "financial_drivers" in growth.json()["evidence"]
+
+    price_conversation = client.post(
+        "/me/chat",
+        json={
+            "message": "中兴通讯7月30日为什么上涨？",
+            "execute_agent": False,
+        },
+    )
+    assert price_conversation.status_code == 200
+    switched = client.post(
+        "/me/chat",
+        json={
+            "message": (
+                "先不谈涨跌了，这家公司主要靠什么业务赚钱？"
+                "不要给股价和技术指标。"
+            ),
+            "conversation_id": price_conversation.json()["conversation_id"],
+            "execute_agent": False,
+        },
+    )
+    assert switched.status_code == 200
+    assert switched.json()["intent"] == "business_structure"
+    assert switched.json()["evidence"]["symbol"] == "000063.SZ"
 
     followup = client.post(
         "/me/chat",
@@ -199,8 +243,7 @@ def test_business_structure_api_and_chat_routing(client, app):
     ]
     assert operating["coverage"]["same_period_financial_peers"] == 3
     assert all(
-        (item.get("business_profile") or {}).get("anchor_report_date")
-        == "2025-12-31"
+        (item.get("business_profile") or {}).get("anchor_report_date") == "2025-12-31"
         for item in operating["peers"]
     )
 
@@ -239,6 +282,6 @@ def test_research_report_fingerprint_changes_with_business_structure():
         },
     }
 
-    assert ResearchReportService._fingerprint(base) != ResearchReportService._fingerprint(
-        changed
-    )
+    assert ResearchReportService._fingerprint(
+        base
+    ) != ResearchReportService._fingerprint(changed)

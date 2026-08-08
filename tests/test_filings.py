@@ -5,7 +5,10 @@ from pathlib import Path
 
 from app.db import Database
 from app.providers.filings import AShareFilingProvider
-from app.services.filings import AShareFilingService
+from app.services.filings import (
+    AShareFilingService,
+    _is_explicit_company_explanation,
+)
 
 
 class FakeResponse:
@@ -77,10 +80,27 @@ def test_provider_discovers_financial_report_and_fetches_all_text_pages():
     assert reports[0]["report_period"] == "2026-03-31"
     assert document["document_type"] == "first_quarter"
     assert "净利息收入减少" in document["content_text"]
-    assert document["content_hash"] == hashlib.sha256(
-        document["content_text"].encode("utf-8")
-    ).hexdigest()
-    assert [params.get("page_index") for _, params in calls if "content/ann" in _] == [1, 2]
+    assert (
+        document["content_hash"]
+        == hashlib.sha256(document["content_text"].encode("utf-8")).hexdigest()
+    )
+    assert [params.get("page_index") for _, params in calls if "content/ann" in _] == [
+        1,
+        2,
+    ]
+
+
+def test_filing_cause_extractor_rejects_inventory_table_and_policy_templates():
+    assert not _is_explicit_company_explanation(
+        "存货种类 确定可变现净值/剩余对价与将要发生的成本的具体依据 "
+        "本期转回或转销存货跌价准备/合同履约成本减值准备的原因"
+    )
+    assert not _is_explicit_company_explanation(
+        "资产负债表日，存货按成本与可变现净值孰低计量。"
+    )
+    assert _is_explicit_company_explanation(
+        "资产减值损失同比增加，主要因本期存货跌价准备计提增加。"
+    )
 
 
 class StubFilingProvider:
@@ -122,7 +142,7 @@ class StubFilingProvider:
 def test_filing_service_persists_full_text_extracts_causes_and_indexes_knowledge(
     tmp_path: Path,
 ):
-    database = Database(tmp_path / "qingshu.db", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     service = AShareFilingService(database, StubFilingProvider())
 

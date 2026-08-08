@@ -121,7 +121,10 @@ class YahooMarketProvider:
             cached, removed = self._sanitize_history(
                 cached, symbol=symbol, interval=interval
             )
-            if removed:
+            cached, restored = self._restore_newer_persisted_bars(
+                cached, symbol=symbol, interval=interval
+            )
+            if removed or restored:
                 self.database.delete_market_bars(symbol, interval, removed)
                 self.database.put_cache(cache_key, cached, self.ttl_seconds)
             self._persist_history(cached, symbol=symbol, interval=interval)
@@ -140,6 +143,9 @@ class YahooMarketProvider:
             result, removed = self._sanitize_history(
                 result, symbol=symbol, interval=interval
             )
+            result, _ = self._restore_newer_persisted_bars(
+                result, symbol=symbol, interval=interval
+            )
             if removed:
                 self.database.delete_market_bars(symbol, interval, removed)
             self.database.put_cache(cache_key, result, self.ttl_seconds)
@@ -149,6 +155,9 @@ class YahooMarketProvider:
             stale = self.database.get_cache(cache_key, allow_stale=True)
             if stale is not None:
                 stale, removed = self._sanitize_history(
+                    stale, symbol=symbol, interval=interval
+                )
+                stale, _ = self._restore_newer_persisted_bars(
                     stale, symbol=symbol, interval=interval
                 )
                 if removed:
@@ -171,6 +180,81 @@ class YahooMarketProvider:
             str(history.get("source") or "market history"),
             str(history.get("fetched_at") or utc_now()),
         )
+
+    def _restore_newer_persisted_bars(
+        self,
+        history: dict[str, Any],
+        *,
+        symbol: str,
+        interval: str,
+    ) -> tuple[dict[str, Any], int]:
+        """Prevent a transient upstream response from moving complete history back.
+
+        Yahoo occasionally returns an A-share daily series that temporarily omits
+        the newest completed session even though the same session was returned and
+        persisted minutes earlier.  Only strictly newer, already-persisted bars are
+        restored here; older gaps and same-timestamp values are left to the current
+        upstream response so this cannot silently rewrite history.
+        """
+
+        points = list(history.get("points") or [])
+        if not points:
+            return history, 0
+        latest_timestamp = str(points[-1].get("timestamp") or "")
+        if not latest_timestamp:
+            return history, 0
+        try:
+            stored = self.database.get_market_bars(symbol, interval, limit=32)
+        except (AttributeError, TypeError):
+            return history, 0
+        timezone_name = str(history.get("timezone") or "")
+        additions: list[dict[str, Any]] = []
+        for row in stored:
+            timestamp = str(row.get("timestamp") or "")
+            if not timestamp or timestamp <= latest_timestamp:
+                continue
+            point = {
+                key: row.get(key)
+                for key in (
+                    "timestamp",
+                    "open",
+                    "high",
+                    "low",
+                    "close",
+                    "adjusted_close",
+                    "volume",
+                )
+            }
+            if not _valid_ohlc(point):
+                continue
+            if interval == "1d" and _is_incomplete_daily_bar(
+                timestamp, timezone_name
+            ):
+                continue
+            additions.append(point)
+        if not additions:
+            return history, 0
+
+        additions.sort(key=lambda item: str(item.get("timestamp") or ""))
+        payload = deepcopy(history)
+        payload["points"] = points + additions
+        payload["market_timestamp"] = additions[-1]["timestamp"]
+        warnings = list(payload.get("warnings") or [])
+        warnings.append(
+            f"上游本次少返回 {len(additions)} 根已完成行情，已从生产数据库补回。"
+        )
+        payload["warnings"] = warnings
+        coverage = dict(payload.get("coverage") or {})
+        coverage.update(
+            {
+                "points": len(payload["points"]),
+                "first_timestamp": payload["points"][0]["timestamp"],
+                "last_timestamp": payload["points"][-1]["timestamp"],
+                "restored_persisted_newer_bars": len(additions),
+            }
+        )
+        payload["coverage"] = coverage
+        return payload, len(additions)
 
     @staticmethod
     def _sanitize_history(
@@ -321,6 +405,7 @@ class TencentChinaIndexProvider:
         "000001.SS": {"quote_symbol": "sh000001", "name": "上证综指", "exchange": "SSE"},
         "399001.SZ": {"quote_symbol": "sz399001", "name": "深证成指", "exchange": "SZSE"},
         "399006.SZ": {"quote_symbol": "sz399006", "name": "创业板指", "exchange": "SZSE"},
+        "000688.SS": {"quote_symbol": "sh000688", "name": "科创50", "exchange": "SSE"},
         "000300.SS": {"quote_symbol": "sh000300", "name": "沪深300", "exchange": "SSE"},
         "000905.SS": {"quote_symbol": "sh000905", "name": "中证500", "exchange": "SSE"},
     }
@@ -1362,7 +1447,10 @@ class CSIIndustryIndexProvider:
                 else str(row.get("Name") or "").strip() == industry_name
             )
             and row.get("SecurityTypeName") == "指数"
-            and re.fullmatch(r"\d{6}", str(row.get("Code") or ""))
+            and re.fullmatch(
+                r"(?:\d{6}|[A-Z]\d{5})",
+                str(row.get("Code") or "").strip().upper(),
+            )
             and str(row.get("QuoteID") or "").strip()
         ]
         if not exact:
@@ -1670,7 +1758,11 @@ class SinaMarketBreadthProvider:
                     cache_key, resolved
                 )
             if resolved.get("status") == "available":
-                return self._attach_history_comparison(resolved)
+                resolved = self._attach_history_comparison(resolved)
+                self.database.update_cache_payload_preserving_expiry(
+                    cache_key, resolved
+                )
+                return resolved
             return resolved
 
         headers = {
@@ -1923,18 +2015,41 @@ class SinaMarketBreadthProvider:
             or self._is_zero_placeholder(payload)
         ):
             return payload
-        self.database.upsert_market_breadth_snapshot(payload)
+        current_is_complete = self._is_completed_turnover_snapshot(payload)
+        if current_is_complete:
+            self.database.upsert_market_breadth_snapshot(payload)
         history = self.database.list_market_breadth_snapshots(limit=21)
         market_date = str(payload.get("market_date") or "")
-        prior = [
+        stored_prior = [
             item
             for item in history
             if str(item.get("market_date") or "") < market_date
             and ((item.get("turnover") or {}).get("status") == "available")
         ]
+        prior: list[dict[str, Any]] = []
+        excluded: list[dict[str, Any]] = []
+        for item in stored_prior:
+            compatible, reason = self._turnover_history_compatible(payload, item)
+            if compatible:
+                prior.append(item)
+            else:
+                excluded.append(
+                    {
+                        "market_date": item.get("market_date"),
+                        "reason": reason,
+                        "latest_tick_time": (item.get("coverage") or {}).get(
+                            "latest_tick_time"
+                        ),
+                        "total_amount_cny": (item.get("turnover") or {}).get(
+                            "total_amount_cny"
+                        ),
+                    }
+                )
         current_total = turnover.get("total_amount_cny")
         comparison: dict[str, Any] = {
-            "status": "building_history",
+            "status": (
+                "building_history" if current_is_complete else "intraday_not_comparable"
+            ),
             "previous_market_date": None,
             "previous_total_amount_cny": None,
             "change_vs_previous_pct": None,
@@ -1943,47 +2058,114 @@ class SinaMarketBreadthProvider:
             "previous_20d_average_amount_cny": None,
             "change_vs_previous_20d_average_pct": None,
             "available_prior_sessions": len(prior),
+            "stored_prior_sessions": len(stored_prior),
+            "excluded_prior_sessions": excluded,
             "method": (
-                "只比较本系统按同一沪深京全市场快照口径保存的历史交易日；"
-                "历史不足时不判断放量或缩量。"
+                "只比较本系统保存的完整收盘交易日，且市场范围、币种、单位与覆盖口径一致；"
+                "盘中累计额、盘前快照、口径不一致或数量级异常时不判断放量或缩量。"
             ),
         }
-        if isinstance(current_total, (int, float)) and prior:
+        if current_is_complete and isinstance(current_total, (int, float)) and prior:
             previous = prior[0]
             previous_total = (previous.get("turnover") or {}).get(
                 "total_amount_cny"
             )
-            comparison.update(
-                {
-                    "status": "available",
-                    "previous_market_date": previous.get("market_date"),
-                    "previous_total_amount_cny": previous_total,
-                    "change_vs_previous_pct": self._relative_change_pct(
-                        current_total, previous_total
-                    ),
-                }
-            )
-            for sessions, prefix in ((5, "previous_5d"), (20, "previous_20d")):
-                totals = [
-                    (item.get("turnover") or {}).get("total_amount_cny")
-                    for item in prior[:sessions]
-                ]
-                totals = [
-                    float(value)
-                    for value in totals
-                    if isinstance(value, (int, float)) and value > 0
-                ]
-                if len(totals) == sessions:
-                    average = sum(totals) / sessions
-                    comparison[f"{prefix}_average_amount_cny"] = round(
-                        average, 2
-                    )
-                    comparison[
-                        f"change_vs_{prefix}_average_pct"
-                    ] = self._relative_change_pct(current_total, average)
+            magnitude_ratio = self._magnitude_ratio(current_total, previous_total)
+            if magnitude_ratio is not None and magnitude_ratio > 10:
+                comparison.update(
+                    {
+                        "status": "anomaly",
+                        "anomaly_reason": "order_of_magnitude_mismatch",
+                        "candidate_previous_market_date": previous.get("market_date"),
+                        "candidate_previous_total_amount_cny": previous_total,
+                        "magnitude_ratio": round(magnitude_ratio, 4),
+                    }
+                )
+            else:
+                comparison.update(
+                    {
+                        "status": "available",
+                        "previous_market_date": previous.get("market_date"),
+                        "previous_total_amount_cny": previous_total,
+                        "change_vs_previous_pct": self._relative_change_pct(
+                            current_total, previous_total
+                        ),
+                    }
+                )
+                for sessions, prefix in ((5, "previous_5d"), (20, "previous_20d")):
+                    totals = [
+                        (item.get("turnover") or {}).get("total_amount_cny")
+                        for item in prior[:sessions]
+                    ]
+                    totals = [
+                        float(value)
+                        for value in totals
+                        if isinstance(value, (int, float)) and value > 0
+                    ]
+                    if len(totals) == sessions:
+                        average = sum(totals) / sessions
+                        comparison[f"{prefix}_average_amount_cny"] = round(
+                            average, 2
+                        )
+                        comparison[
+                            f"change_vs_{prefix}_average_pct"
+                        ] = self._relative_change_pct(current_total, average)
         turnover["history_comparison"] = comparison
-        self.database.upsert_market_breadth_snapshot(payload)
+        if current_is_complete:
+            self.database.upsert_market_breadth_snapshot(payload)
         return payload
+
+    @staticmethod
+    def _tick_seconds(value: Any) -> int | None:
+        try:
+            parsed = datetime.strptime(str(value), "%H:%M:%S")
+        except (TypeError, ValueError):
+            return None
+        return parsed.hour * 3600 + parsed.minute * 60 + parsed.second
+
+    @classmethod
+    def _is_completed_turnover_snapshot(cls, payload: dict[str, Any]) -> bool:
+        if not cls._is_usable_completed_snapshot(payload):
+            return False
+        tick_seconds = cls._tick_seconds(
+            (payload.get("coverage") or {}).get("latest_tick_time")
+        )
+        return tick_seconds is not None and tick_seconds >= 14 * 3600 + 55 * 60
+
+    @classmethod
+    def _turnover_history_compatible(
+        cls,
+        current: dict[str, Any],
+        previous: dict[str, Any],
+    ) -> tuple[bool, str | None]:
+        if not cls._is_completed_turnover_snapshot(previous):
+            return False, "incomplete_market_session"
+        if current.get("scope") != previous.get("scope"):
+            return False, "scope_mismatch"
+        current_turnover = current.get("turnover") or {}
+        previous_turnover = previous.get("turnover") or {}
+        if current_turnover.get("currency") != previous_turnover.get("currency"):
+            return False, "currency_mismatch"
+        if current_turnover.get("unit") != previous_turnover.get("unit"):
+            return False, "unit_mismatch"
+        for item in (current_turnover, previous_turnover):
+            coverage = item.get("coverage") or {}
+            if coverage.get("coverage_ratio") != 1.0:
+                return False, "turnover_coverage_mismatch"
+            total = item.get("total_amount_cny")
+            if not isinstance(total, (int, float)) or total <= 0:
+                return False, "invalid_total_amount"
+        return True, None
+
+    @staticmethod
+    def _magnitude_ratio(first: Any, second: Any) -> float | None:
+        if not isinstance(first, (int, float)) or not isinstance(
+            second, (int, float)
+        ):
+            return None
+        if first <= 0 or second <= 0:
+            return None
+        return max(float(first) / float(second), float(second) / float(first))
 
     @staticmethod
     def _relative_change_pct(current: Any, previous: Any) -> float | None:
@@ -2131,6 +2313,18 @@ class SinaMarketBreadthProvider:
                 "unit": "yuan",
                 "total_amount_cny": int(round(total_amount)),
                 "total_amount_100m_cny": round(total_amount / 100_000_000, 2),
+                "amount_basis": {
+                    "raw_field": "amount",
+                    "raw_unit": "CNY_yuan_per_security",
+                    "raw_total": int(round(total_amount)),
+                    "normalized_unit": "CNY_yuan",
+                    "normalized_total": int(round(total_amount)),
+                    "display_unit": "CNY_100m_yuan",
+                    "display_total": round(total_amount / 100_000_000, 2),
+                    "scope": "all_a_shares_including_beijing",
+                    "market_date": market_date,
+                    "aggregation": "sum_unique_security_turnover_v1",
+                },
                 "coverage": {
                     "expected": total_expected,
                     "valid_amount": valid_amount,

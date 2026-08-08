@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime
 import hashlib
 import json
+import math
 import re
 from typing import Any, Mapping, Sequence
 from zoneinfo import ZoneInfo
@@ -65,17 +67,38 @@ INSTITUTION_MARKERS = (
 
 
 class LiZongStrategyService:
-    """Run and persist Li Zong v1 against published Tushare snapshots only."""
+    """Run Li Zong v1 on published snapshots with traceable data fallbacks."""
+
+    ROE_FALLBACK_VERSION = "eastmoney_reported_roe_v1"
+    PRICE_HISTORY_WINDOW_VERSION = "market_days_1150_v1"
+    INCOMPLETE_BOUNDARY_VERSION = "data_incomplete_v2"
+    MAX_DEEP_SYNC_WORKERS = 2
+    MAX_TRANSIENT_SYNC_RETRIES = 3
+    PRICE_HISTORY_RULE_IDS = {
+        "LZ-C-01",
+        "LZ-C-02",
+        "LZ-C-03",
+        "LZ-C-04",
+        "LZ-VP-01",
+        "LZ-VP-02",
+    }
 
     SUBSCRIPTION_BOUNDARY = (
         "用户策略订阅、通知偏好和提醒渠道暂未在本服务持久化；"
         "当前只发布公共候选与触发事实，后续由独立用户订阅层关联。"
     )
 
-    def __init__(self, database: Database, snapshot_service: Any):
+    def __init__(
+        self,
+        database: Database,
+        snapshot_service: Any,
+        fundamentals_provider: Any | None = None,
+    ):
         self.database = database
         self.snapshot_service = snapshot_service
+        self.fundamentals_provider = fundamentals_provider
         self._ensure_definition()
+        self.database.repair_unstable_strategy_prefilter_runs(STRATEGY_ID)
 
     def list_strategies(self) -> list[dict[str, Any]]:
         return [
@@ -110,6 +133,11 @@ class LiZongStrategyService:
         symbols: Sequence[str],
         *,
         parameters: Mapping[str, Any] | LiZongParameters | None = None,
+        run_scope: str = "symbol_batch",
+        universe_count: int = 0,
+        prefiltered_count: int = 0,
+        coverage_ratio: float = 0.0,
+        warnings: list[str] | None = None,
     ) -> dict[str, Any]:
         canonical_symbols = self._canonical_symbols(symbols)
         params = LiZongParameters.from_value(parameters)
@@ -128,10 +156,76 @@ class LiZongStrategyService:
                 }
                 packet_errors[symbol] = type(exc).__name__
 
-        data_versions = {
-            symbol: self._packet_data_version(symbol, packet)
-            for symbol, packet in packets.items()
-        }
+        supplemental_roe: dict[str, list[dict[str, Any]]] = {}
+        roe_fallback_attempted: dict[str, bool] = {}
+        for symbol, packet in packets.items():
+            rows, attempted = self._supplemental_roe_rows(symbol, packet, params)
+            supplemental_roe[symbol] = rows
+            roe_fallback_attempted[symbol] = attempted
+
+        retry_metadata: dict[str, dict[str, Any]] = {}
+        for symbol, packet in packets.items():
+            current_state = self.database.latest_strategy_candidate_snapshot(
+                strategy_id=STRATEGY_ID,
+                strategy_version=STRATEGY_VERSION,
+                parameter_version=params.parameter_version,
+                symbol=symbol,
+            )
+            retryable_sync_issue = self._packet_has_retryable_sync_issue(packet)
+            packet_as_of = self._packet_as_of(packet)
+            same_market_date = bool(
+                current_state
+                and packet_as_of
+                and str(current_state.get("as_of_date") or "") == packet_as_of
+            )
+            previous_retry_count = (
+                int(
+                    ((current_state or {}).get("result") or {}).get(
+                        "sync_retry_count"
+                    )
+                    or 0
+                )
+                if same_market_date
+                else 0
+            )
+            sync_retry_count = (
+                previous_retry_count + 1 if retryable_sync_issue else 0
+            )
+            retry_metadata[symbol] = {
+                "current_state": current_state,
+                "retryable": retryable_sync_issue,
+                "retry_count": sync_retry_count,
+                "retry_exhausted": bool(
+                    retryable_sync_issue
+                    and sync_retry_count >= self.MAX_TRANSIENT_SYNC_RETRIES
+                ),
+                "as_of_date": packet_as_of,
+            }
+
+        data_versions: dict[str, str] = {}
+        for symbol, packet in packets.items():
+            packet_version = self._packet_data_version(symbol, packet)
+            retry = retry_metadata[symbol]
+            version_payload: dict[str, Any] = {
+                "packet_data_version": packet_version,
+                "price_history_window_version": self.PRICE_HISTORY_WINDOW_VERSION,
+                "incomplete_boundary_version": self.INCOMPLETE_BOUNDARY_VERSION,
+            }
+            if retry["retryable"]:
+                version_payload.update(
+                    {
+                        "sync_retry_attempt": retry["retry_count"],
+                        "sync_retry_as_of_date": retry["as_of_date"],
+                    }
+                )
+            if roe_fallback_attempted[symbol]:
+                version_payload.update(
+                    {
+                        "roe_fallback_version": self.ROE_FALLBACK_VERSION,
+                        "supplemental_roe": supplemental_roe[symbol],
+                    }
+                )
+            data_versions[symbol] = self._fingerprint(version_payload)
         as_of_dates = [
             value
             for value in (self._packet_as_of(packet) for packet in packets.values())
@@ -150,6 +244,11 @@ class LiZongStrategyService:
             data_versions=data_versions,
             as_of_date=max(as_of_dates) if as_of_dates else self._today(),
             requested_count=len(canonical_symbols),
+            run_scope=run_scope,
+            universe_count=universe_count,
+            prefiltered_count=prefiltered_count,
+            coverage_ratio=coverage_ratio,
+            warnings=warnings,
         )
 
         items: list[dict[str, Any]] = []
@@ -165,9 +264,16 @@ class LiZongStrategyService:
             packet = packets[symbol]
             data_version = data_versions[symbol]
             stock_basic = self._packet_stock_basic(packet)
+            retry = retry_metadata[symbol]
+            current_state = retry["current_state"]
             try:
                 evaluation = deterministic_li_zong_v1(
-                    self._build_input(symbol, packet), parameters=params
+                    self._build_input(
+                        symbol,
+                        packet,
+                        supplemental_roe_rows=supplemental_roe[symbol],
+                    ),
+                    parameters=params,
                 )
                 evaluation = self._enforce_incomplete_boundary(evaluation, packet)
             except Exception as exc:
@@ -179,6 +285,41 @@ class LiZongStrategyService:
                 evaluation = self._force_incomplete(
                     evaluation,
                     "策略输入转换失败，已按 data_incomplete 保存，未进入候选或触发池。",
+                )
+            if roe_fallback_attempted[symbol]:
+                evaluation["roe_fallback_version"] = self.ROE_FALLBACK_VERSION
+                evaluation["roe_fallback_rows"] = len(supplemental_roe[symbol])
+            evaluation["price_history_window_version"] = (
+                self.PRICE_HISTORY_WINDOW_VERSION
+            )
+            evaluation["incomplete_boundary_version"] = (
+                self.INCOMPLETE_BOUNDARY_VERSION
+            )
+            retryable_sync_issue = bool(retry["retryable"])
+            if retryable_sync_issue:
+                evaluation = self._force_incomplete(
+                    evaluation,
+                    "本轮必要数据接口未完整返回；既有稳定快照仅作历史参考，"
+                    "本轮不会进入候选或触发池。",
+                )
+                if retry["as_of_date"]:
+                    evaluation["as_of_date"] = retry["as_of_date"]
+            evaluation["evaluation_depth"] = (
+                "sync_incomplete" if retryable_sync_issue else "full_rules"
+            )
+            evaluation["sync_retry_count"] = int(retry["retry_count"])
+            evaluation["sync_retry_exhausted"] = bool(
+                retry["retry_exhausted"]
+            )
+            if retry["retry_exhausted"]:
+                limitation = (
+                    "必要数据接口连续多次未完成，本交易日停止自动重试；"
+                    "下一个交易日将重新核验。"
+                )
+                evaluation["limitations"] = list(
+                    dict.fromkeys(
+                        [*(evaluation.get("limitations") or []), limitation]
+                    )
                 )
             evaluation["stock_basic"] = stock_basic
 
@@ -216,6 +357,8 @@ class LiZongStrategyService:
             status=run_status,
             counts=counts,
             error=json.dumps(errors, ensure_ascii=False, sort_keys=True) if errors else None,
+            coverage_ratio=coverage_ratio,
+            warnings=warnings,
         )
         return {
             "run": finished,
@@ -227,6 +370,924 @@ class LiZongStrategyService:
                 "本服务不创建持仓、交易、订单或收益承诺。"
             ),
         }
+
+    def run_universe_batch(
+        self,
+        *,
+        batch_size: int = 5,
+        as_of_date: str | None = None,
+        parameters: Mapping[str, Any] | LiZongParameters | None = None,
+    ) -> dict[str, Any]:
+        """Incrementally cover the full A-share universe in background batches."""
+
+        params = LiZongParameters.from_value(parameters)
+        self._save_parameter_version(params)
+        size = max(1, min(int(batch_size), 200))
+        universe_sync = self.snapshot_service.sync_a_share_universe(
+            as_of_date=as_of_date
+        )
+        universe_packet = self.snapshot_service.get_a_share_universe()
+        snapshot = universe_packet.get("snapshot")
+        universe_items = list((snapshot or {}).get("items") or [])
+        universe_as_of = str((snapshot or {}).get("as_of_date") or self._today())
+        if universe_packet.get("status") != "stable" or not universe_items:
+            return {
+                "status": "not_ready",
+                "universe_sync": universe_sync,
+                "coverage": self.coverage_packet(universe_packet),
+                "boundary": (
+                    "全市场名单与最近完整交易日市值尚未达到稳定发布门槛；"
+                    "本轮不会生成预筛结果，也不会逐股拉取多年数据。"
+                ),
+            }
+
+        universe_count = len(universe_items)
+        eligible_items: list[dict[str, Any]] = []
+        prefilter_items: list[dict[str, Any]] = []
+        for item in universe_items:
+            market_cap = item.get("total_mv_yi")
+            target = (
+                eligible_items
+                if market_cap is not None
+                and float(market_cap) > params.market_cap_min_yi
+                else prefilter_items
+            )
+            target.append(item)
+        previous_states = self.database.latest_strategy_candidate_states(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=params.parameter_version,
+        )
+        deep_eligible_items: list[dict[str, Any]] = []
+        history_insufficient_items: list[dict[str, Any]] = []
+        for item in eligible_items:
+            enriched = dict(item)
+            enriched["history_precheck"] = self._history_precheck(
+                item, as_of_date=universe_as_of, parameters=params
+            )
+            if enriched["history_precheck"]["status"] == "insufficient":
+                history_insufficient_items.append(enriched)
+            else:
+                deep_eligible_items.append(enriched)
+        current_dates = self.database.latest_strategy_candidate_dates(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=params.parameter_version,
+        )
+        prefilter_pending = [
+            item
+            for item in prefilter_items
+            if current_dates.get(str(item.get("symbol"))) != universe_as_of
+        ]
+        prefilter_result = self._publish_universe_prefilter(
+            prefilter_pending,
+            universe_data_version=str(universe_packet.get("data_version") or "unknown"),
+            as_of_date=universe_as_of,
+            parameters=params,
+            universe_count=universe_count,
+            prefiltered_count=len(eligible_items),
+        )
+
+        current_dates = self.database.latest_strategy_candidate_dates(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=params.parameter_version,
+        )
+        history_pending = [
+            item
+            for item in history_insufficient_items
+            if current_dates.get(str(item.get("symbol"))) != universe_as_of
+            or self._evaluation_depth(
+                (
+                    previous_states.get(str(item.get("symbol"))) or {}
+                ).get("result")
+                or {}
+            )
+            != "history_precheck"
+            or (
+                (
+                    (
+                        previous_states.get(str(item.get("symbol"))) or {}
+                    ).get("result")
+                    or {}
+                ).get("history_precheck")
+                or {}
+            )
+            != (item.get("history_precheck") or {})
+        ]
+        history_result = self._publish_universe_history_incomplete(
+            history_pending,
+            universe_data_version=str(
+                universe_packet.get("data_version") or "unknown"
+            ),
+            as_of_date=universe_as_of,
+            parameters=params,
+            universe_count=universe_count,
+            prefiltered_count=len(eligible_items),
+        )
+
+        current_dates = self.database.latest_strategy_candidate_dates(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=params.parameter_version,
+        )
+        def needs_deep_processing(item: Mapping[str, Any]) -> bool:
+            symbol = str(item.get("symbol") or "")
+            if current_dates.get(symbol) != universe_as_of:
+                return True
+            state = previous_states.get(symbol) or {}
+            result = state.get("result") or {}
+            depth = self._evaluation_depth(result)
+            retry_exhausted = bool(result.get("sync_retry_exhausted"))
+            if depth == "sync_incomplete":
+                return bool(
+                    not retry_exhausted
+                    and self._latest_snapshot_has_retryable_sync_issue(symbol)
+                )
+            if depth != "full_rules":
+                return True
+            if (
+                self.fundamentals_provider is not None
+                and self._roe_rule_incomplete(result)
+                and str(result.get("roe_fallback_version") or "")
+                != self.ROE_FALLBACK_VERSION
+            ):
+                return True
+            if (
+                self._price_history_rule_incomplete(result)
+                and str(result.get("price_history_window_version") or "")
+                != self.PRICE_HISTORY_WINDOW_VERSION
+            ):
+                return True
+            if (
+                str(state.get("status") or "") == "data_incomplete"
+                and str(result.get("incomplete_boundary_version") or "")
+                != self.INCOMPLETE_BOUNDARY_VERSION
+            ):
+                return True
+            return bool(
+                not retry_exhausted
+                and self._latest_snapshot_has_retryable_sync_issue(symbol)
+            )
+
+        pending_eligible = [
+            item for item in deep_eligible_items if needs_deep_processing(item)
+        ]
+        pending_eligible.sort(
+            key=lambda item: (
+                0
+                if (item.get("history_precheck") or {}).get("status")
+                == "eligible"
+                else 1,
+                self._deep_data_availability_score(
+                    previous_states.get(str(item.get("symbol")))
+                ),
+                -float(item.get("total_mv_yi") or 0),
+                str(item.get("symbol") or ""),
+            )
+        )
+        selected = pending_eligible[:size]
+        def sync_selected_item(item: dict[str, Any]) -> dict[str, Any]:
+            symbol = str(item["symbol"])
+            try:
+                strategy_sync = getattr(
+                    self.snapshot_service, "sync_strategy_symbol", None
+                )
+                if callable(strategy_sync):
+                    result = strategy_sync(
+                        symbol,
+                        as_of_date=universe_as_of,
+                        universe_item=item,
+                    )
+                else:
+                    result = self.snapshot_service.sync_symbol(
+                        symbol, as_of_date=universe_as_of
+                    )
+                return {
+                    "symbol": symbol,
+                    "status": (result.get("run") or {}).get("status"),
+                    "published": bool(result.get("published")),
+                    "previous_stable_retained": bool(
+                        result.get("previous_stable_retained")
+                    ),
+                }
+            except Exception as exc:
+                return {
+                    "symbol": symbol,
+                    "status": "unavailable",
+                    "error_type": type(exc).__name__,
+                }
+
+        sync_workers = min(self.MAX_DEEP_SYNC_WORKERS, len(selected))
+        if sync_workers > 1:
+            with ThreadPoolExecutor(max_workers=sync_workers) as executor:
+                sync_results = list(executor.map(sync_selected_item, selected))
+        else:
+            sync_results = [sync_selected_item(item) for item in selected]
+
+        batch_result: dict[str, Any] | None = None
+        if selected:
+            coverage_before = self.coverage_packet(universe_packet)
+            warnings = self._universe_warnings(
+                universe_packet, pending_eligible=len(pending_eligible)
+            )
+            batch_result = self.run_symbols(
+                [str(item["symbol"]) for item in selected],
+                parameters=params,
+                run_scope="universe_batch",
+                universe_count=universe_count,
+                prefiltered_count=len(eligible_items),
+                coverage_ratio=float(coverage_before.get("coverage_ratio") or 0),
+                warnings=warnings,
+            )
+
+        coverage = self.coverage_packet(universe_packet)
+        active_run = (
+            batch_result or history_result or prefilter_result or {}
+        ).get("run")
+        if active_run:
+            counts = (
+                batch_result or history_result or prefilter_result or {}
+            ).get("counts") or {}
+            active_run = self.database.finish_strategy_screen_run(
+                str(active_run["id"]),
+                status=(
+                    "completed"
+                    if coverage.get("full_market_coverage")
+                    and coverage.get("deep_check_complete")
+                    else "partial"
+                ),
+                counts=counts,
+                coverage_ratio=float(coverage.get("coverage_ratio") or 0),
+                warnings=self._universe_warnings(
+                    universe_packet,
+                    pending_eligible=int(
+                        coverage.get("deep_remaining_symbols") or 0
+                    ),
+                ),
+            )
+        return {
+            "status": (
+                "completed"
+                if coverage.get("full_market_coverage")
+                and coverage.get("deep_check_complete")
+                else "partial"
+            ),
+            "run": active_run,
+            "universe_sync": universe_sync,
+            "prefilter": prefilter_result,
+            "history_precheck": history_result,
+            "batch": batch_result,
+            "sync_results": sync_results,
+            "selected_symbols": [str(item["symbol"]) for item in selected],
+            "coverage": coverage,
+            "boundary": (
+                "全市场名单与市值先批量发布；上市后量价历史明确不足的股票直接保存"
+                " data_incomplete，不请求逐股深度数据。其余市值规则通过的股票"
+                "按历史完整性、既有数据可得性和市值顺序分批补齐多年ROE、股东"
+                "与量价证据。页面始终读取已发布快照。"
+            ),
+        }
+
+    def coverage_packet(
+        self,
+        universe_packet: dict[str, Any] | None = None,
+        *,
+        candidate_states: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        getter = getattr(self.snapshot_service, "get_a_share_universe", None)
+        packet = (
+            universe_packet
+            if universe_packet is not None
+            else getter()
+            if callable(getter)
+            else {"status": "not_ready", "snapshot": None}
+        )
+        snapshot = packet.get("snapshot") or {}
+        items = list(snapshot.get("items") or [])
+        as_of_date = snapshot.get("as_of_date")
+        params = LiZongParameters()
+        universe_symbols = {str(item.get("symbol")) for item in items}
+        eligible_items = [
+            item
+            for item in items
+            if item.get("total_mv_yi") is not None
+            and float(item["total_mv_yi"]) > params.market_cap_min_yi
+        ]
+        eligible_count = len(eligible_items)
+        missing_market_cap = sum(
+            item.get("total_mv_yi") is None for item in items
+        )
+        history_checks = {
+            str(item.get("symbol")): self._history_precheck(
+                item, as_of_date=str(as_of_date or self._today()), parameters=params
+            )
+            for item in eligible_items
+        }
+        history_insufficient_symbols = {
+            symbol
+            for symbol, check in history_checks.items()
+            if check.get("status") == "insufficient"
+        }
+        history_unknown_symbols = {
+            symbol
+            for symbol, check in history_checks.items()
+            if check.get("status") == "unknown"
+        }
+        deep_check_symbols = {
+            str(item.get("symbol"))
+            for item in eligible_items
+            if str(item.get("symbol")) not in history_insufficient_symbols
+        }
+        resolved_candidate_states = (
+            candidate_states
+            if candidate_states is not None
+            else self.database.latest_strategy_candidate_states(
+                strategy_id=STRATEGY_ID,
+                strategy_version=STRATEGY_VERSION,
+                parameter_version=params.parameter_version,
+            )
+        )
+        evaluated_states = (
+            {
+                symbol: state
+                for symbol, state in resolved_candidate_states.items()
+                if symbol in universe_symbols
+                and (
+                    not as_of_date
+                    or state.get("as_of_date") == str(as_of_date)
+                )
+            }
+            if packet.get("status") == "stable"
+            else {}
+        )
+        universe_count = len(items)
+        evaluated_count = len(evaluated_states)
+        coverage_ratio = evaluated_count / universe_count if universe_count else 0.0
+        counts = {
+            "total": evaluated_count,
+            "qualified": 0,
+            "triggered": 0,
+            "not_qualified": 0,
+            "data_incomplete": 0,
+            "invalidated": 0,
+        }
+        for state in evaluated_states.values():
+            status = str(state.get("status") or "")
+            if status in counts and status != "total":
+                counts[status] += 1
+        evaluation_depths = {
+            symbol: self._evaluation_depth(state.get("result") or {})
+            for symbol, state in evaluated_states.items()
+        }
+        deep_processed_symbols = {
+            symbol
+            for symbol, depth in evaluation_depths.items()
+            if symbol in deep_check_symbols and depth == "full_rules"
+        }
+        deep_decisive_symbols = {
+            symbol
+            for symbol in deep_processed_symbols
+            if self._candidate_rules_complete(
+                (evaluated_states[symbol].get("result") or {}).get(
+                    "rule_results"
+                )
+                or []
+            )
+        }
+        deep_check_count = len(deep_check_symbols)
+        deep_processed_count = len(deep_processed_symbols)
+        deep_decisive_count = len(deep_decisive_symbols)
+        deep_processing_ratio = (
+            deep_processed_count / deep_check_count if deep_check_count else 1.0
+        )
+        market_cap_rejected_count = max(
+            0, universe_count - eligible_count - missing_market_cap
+        )
+        decisive_status_count = market_cap_rejected_count + deep_decisive_count
+        latest_run = self.database.latest_strategy_screen_run(
+            strategy_id=STRATEGY_ID,
+            parameter_version=params.parameter_version,
+        )
+        return {
+            "status": packet.get("status") or "not_ready",
+            "as_of_date": as_of_date,
+            "data_version": packet.get("data_version"),
+            "universe_count": universe_count,
+            "market_cap_eligible_count": eligible_count,
+            "market_cap_rejected_count": market_cap_rejected_count,
+            "missing_market_cap_count": missing_market_cap,
+            "deep_check_eligible_count": deep_check_count,
+            "history_insufficient_count": len(history_insufficient_symbols),
+            "history_unknown_count": len(history_unknown_symbols),
+            "deep_processed_symbols": deep_processed_count,
+            "deep_remaining_symbols": max(
+                0, deep_check_count - deep_processed_count
+            ),
+            "deep_processing_ratio": round(deep_processing_ratio, 6),
+            "deep_decisive_symbols": deep_decisive_count,
+            "deep_data_incomplete_symbols": max(
+                0, deep_processed_count - deep_decisive_count
+            ),
+            "decisive_status_count": decisive_status_count,
+            "decisive_coverage_ratio": round(
+                decisive_status_count / universe_count if universe_count else 0.0,
+                6,
+            ),
+            "evaluated_symbols": evaluated_count,
+            "remaining_symbols": max(0, universe_count - evaluated_count),
+            "coverage_ratio": round(coverage_ratio, 6),
+            "full_market_coverage": bool(
+                packet.get("status") == "stable"
+                and universe_count
+                and evaluated_count == universe_count
+            ),
+            "deep_check_complete": bool(
+                packet.get("status") == "stable"
+                and deep_processed_count == deep_check_count
+            ),
+            "counts": counts,
+            "latest_run": latest_run,
+            "scope": "full_market_incremental",
+            "boundary": (
+                "名单覆盖率表示当期股票已得到预筛或规则状态，不等于深度规则"
+                "已经完整运行。深度处理进度只统计具备历史核验条件并实际执行"
+                "多年ROE、股东和量价规则的股票；data_incomplete 不会进入候选"
+                "或触发池。"
+            ),
+        }
+
+    def resolve_universe_mentions(
+        self, message: str, *, limit: int = 5
+    ) -> list[str]:
+        """Resolve multiple A-share codes or company names from the stable universe."""
+
+        text = str(message or "").strip()
+        if not text:
+            return []
+        getter = getattr(self.snapshot_service, "get_a_share_universe", None)
+        if not callable(getter):
+            return []
+        packet = getter()
+        items = list(((packet.get("snapshot") or {}).get("items") or []))
+        known_symbols = {
+            str(item.get("symbol") or ""): item
+            for item in items
+            if item.get("symbol")
+        }
+        matches: list[tuple[int, int, str]] = []
+        for match in re.finditer(
+            r"(?<!\d)(\d{6})(?:\.(SH|SS|SZ|BJ))?(?!\d)",
+            text,
+            flags=re.IGNORECASE,
+        ):
+            raw = match.group(1)
+            suffix = str(match.group(2) or "").upper()
+            if suffix:
+                raw = f"{raw}.{suffix}"
+            try:
+                symbol = normalize_symbol(raw)
+            except ValueError:
+                continue
+            if symbol in known_symbols:
+                matches.append((match.start(), -len(match.group(0)), symbol))
+
+        folded = text.casefold()
+        for symbol, item in known_symbols.items():
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            position = folded.find(name.casefold())
+            if position >= 0:
+                matches.append((position, -len(name), symbol))
+
+        resolved: list[str] = []
+        for _, _, symbol in sorted(matches):
+            if symbol not in resolved:
+                resolved.append(symbol)
+            if len(resolved) >= max(1, min(int(limit), 10)):
+                break
+        return resolved
+
+    def _publish_universe_prefilter(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        universe_data_version: str,
+        as_of_date: str,
+        parameters: LiZongParameters,
+        universe_count: int,
+        prefiltered_count: int,
+    ) -> dict[str, Any] | None:
+        if not items:
+            return None
+        data_versions = {
+            str(item["symbol"]): self._fingerprint(
+                {
+                    "universe_data_version": universe_data_version,
+                    "symbol": item["symbol"],
+                    "total_mv_yi": item.get("total_mv_yi"),
+                }
+            )
+            for item in items
+        }
+        run = self.database.start_strategy_screen_run(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=parameters.parameter_version,
+            data_version=self._fingerprint(data_versions),
+            data_versions=data_versions,
+            as_of_date=as_of_date,
+            requested_count=len(items),
+            run_scope="universe_prefilter",
+            universe_count=universe_count,
+            prefiltered_count=prefiltered_count,
+        )
+        counts = {
+            "processed": 0,
+            "qualified": 0,
+            "triggered": 0,
+            "data_incomplete": 0,
+            "invalidated": 0,
+        }
+        stored_items: list[dict[str, Any]] = []
+        for item in items:
+            symbol = str(item["symbol"])
+            market_cap = item.get("total_mv_yi")
+            evaluation = deterministic_li_zong_v1(
+                {
+                    "symbol": symbol,
+                    "as_of_date": as_of_date,
+                    "daily": [],
+                    "roe_history": [],
+                    "shareholders": [],
+                    "daily_basic": {
+                        "trade_date": as_of_date,
+                        "total_mv_yi": market_cap,
+                        "source": "Tushare Pro:a_share_universe",
+                    },
+                },
+                parameters=parameters,
+            )
+            evaluation["evaluation_depth"] = "market_cap_prefilter"
+            evaluation["stock_basic"] = {
+                "name": item.get("name"),
+                "industry": item.get("industry"),
+                "market": item.get("market"),
+                "list_date": item.get("list_date"),
+            }
+            previous = self.database.latest_strategy_candidate_snapshot(
+                strategy_id=STRATEGY_ID,
+                strategy_version=STRATEGY_VERSION,
+                parameter_version=parameters.parameter_version,
+                symbol=symbol,
+                exclude_data_version=data_versions[symbol],
+            )
+            stored_status = self._stored_status(evaluation["status"], previous)
+            candidate, _ = self.database.save_strategy_candidate_snapshot(
+                run_id=str(run["id"]),
+                strategy_id=STRATEGY_ID,
+                strategy_version=STRATEGY_VERSION,
+                parameter_version=parameters.parameter_version,
+                data_version=data_versions[symbol],
+                symbol=symbol,
+                as_of_date=as_of_date,
+                status=stored_status,
+                evaluation=evaluation,
+                previous_status=previous.get("status") if previous else None,
+            )
+            stored_items.append(candidate)
+            counts["processed"] += 1
+            if candidate["status"] in counts:
+                counts[candidate["status"]] += 1
+        finished = self.database.finish_strategy_screen_run(
+            str(run["id"]), status="partial", counts=counts
+        )
+        return {"run": finished, "items": stored_items, "counts": counts}
+
+    def _publish_universe_history_incomplete(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        universe_data_version: str,
+        as_of_date: str,
+        parameters: LiZongParameters,
+        universe_count: int,
+        prefiltered_count: int,
+    ) -> dict[str, Any] | None:
+        """Persist obvious post-listing price-history gaps without symbol syncs."""
+
+        if not items:
+            return None
+        data_versions = {
+            str(item["symbol"]): self._fingerprint(
+                {
+                    "universe_data_version": universe_data_version,
+                    "symbol": item["symbol"],
+                    "total_mv_yi": item.get("total_mv_yi"),
+                    "list_date": item.get("list_date"),
+                    "history_precheck": item.get("history_precheck") or {},
+                }
+            )
+            for item in items
+        }
+        run = self.database.start_strategy_screen_run(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=parameters.parameter_version,
+            data_version=self._fingerprint(data_versions),
+            data_versions=data_versions,
+            as_of_date=as_of_date,
+            requested_count=len(items),
+            run_scope="universe_history_precheck",
+            universe_count=universe_count,
+            prefiltered_count=prefiltered_count,
+            warnings=[
+                f"{len(items)} 只股票上市后量价历史明确不足，未发起逐股深度数据请求。"
+            ],
+        )
+        counts = {
+            "processed": 0,
+            "qualified": 0,
+            "triggered": 0,
+            "data_incomplete": 0,
+            "invalidated": 0,
+        }
+        stored_items: list[dict[str, Any]] = []
+        for item in items:
+            symbol = str(item["symbol"])
+            history_precheck = dict(item.get("history_precheck") or {})
+            reasons = [str(value) for value in history_precheck.get("reasons") or []]
+            limitation = (
+                "上市后量价历史预判未达到策略最小窗口："
+                + "；".join(reasons)
+                + "。本轮未请求逐股ROE、股东、复权行情和涨跌停价；"
+                "达到历史门槛后会自动进入深度批次。"
+            )
+            evaluation = deterministic_li_zong_v1(
+                {
+                    "symbol": symbol,
+                    "as_of_date": as_of_date,
+                    "daily": [],
+                    "roe_history": [],
+                    "shareholders": [],
+                    "daily_basic": {
+                        "trade_date": as_of_date,
+                        "total_mv_yi": item.get("total_mv_yi"),
+                        "source": "Tushare Pro:a_share_universe",
+                    },
+                },
+                parameters=parameters,
+            )
+            evaluation = self._force_incomplete(evaluation, limitation)
+            evaluation["evaluation_depth"] = "history_precheck"
+            evaluation["history_precheck"] = history_precheck
+            evaluation["stock_basic"] = {
+                "name": item.get("name"),
+                "industry": item.get("industry"),
+                "market": item.get("market"),
+                "list_date": item.get("list_date"),
+            }
+            previous = self.database.latest_strategy_candidate_snapshot(
+                strategy_id=STRATEGY_ID,
+                strategy_version=STRATEGY_VERSION,
+                parameter_version=parameters.parameter_version,
+                symbol=symbol,
+                exclude_data_version=data_versions[symbol],
+            )
+            candidate, _ = self.database.save_strategy_candidate_snapshot(
+                run_id=str(run["id"]),
+                strategy_id=STRATEGY_ID,
+                strategy_version=STRATEGY_VERSION,
+                parameter_version=parameters.parameter_version,
+                data_version=data_versions[symbol],
+                symbol=symbol,
+                as_of_date=as_of_date,
+                status="data_incomplete",
+                evaluation=evaluation,
+                previous_status=previous.get("status") if previous else None,
+            )
+            stored_items.append(candidate)
+            counts["processed"] += 1
+            counts["data_incomplete"] += 1
+        finished = self.database.finish_strategy_screen_run(
+            str(run["id"]), status="partial", counts=counts
+        )
+        return {"run": finished, "items": stored_items, "counts": counts}
+
+    @classmethod
+    def _history_precheck(
+        cls,
+        item: Mapping[str, Any],
+        *,
+        as_of_date: str,
+        parameters: LiZongParameters,
+    ) -> dict[str, Any]:
+        required_trading_days = max(
+            parameters.character_window_days,
+            parameters.adjusted_high_window_days
+            + parameters.new_high_recent_days
+            - 1,
+            parameters.adjusted_high_window_days
+            + parameters.volume_baseline_days,
+        )
+        # A-share trading calendars average roughly 242 open days per year.
+        # Use that market-specific ratio plus a small holiday buffer instead
+        # of a weekday-only estimate, which let 377-row recent listings slip
+        # into an expensive deep sync that could never satisfy 380 rows.
+        required_trading_calendar_days = (
+            math.ceil(required_trading_days * 365.2425 / 242) + 7
+        )
+        required_roe_calendar_days = parameters.required_annual_roe_years * 365
+        listed = cls._parse_date(item.get("list_date"))
+        as_of = cls._parse_date(as_of_date)
+        base = {
+            "list_date": listed.isoformat() if listed else None,
+            "as_of_date": as_of.isoformat() if as_of else as_of_date,
+            "required_annual_roe_years": parameters.required_annual_roe_years,
+            "required_trading_days": required_trading_days,
+            "required_trading_calendar_days": required_trading_calendar_days,
+        }
+        if listed is None or as_of is None:
+            return {
+                **base,
+                "status": "unknown",
+                "listing_age_days": None,
+                "reasons": ["上市日期缺失或格式异常，不能提前判定历史不足"],
+            }
+        age_days = (as_of - listed).days
+        reasons: list[str] = []
+        if age_days < required_trading_calendar_days:
+            reasons.append(
+                f"{required_trading_days}个交易日量价窗口按日历缓冲至少需要约"
+                f"{required_trading_calendar_days}天，当前上市{max(age_days, 0)}天"
+            )
+        if reasons:
+            status = "insufficient"
+        elif age_days < required_roe_calendar_days:
+            status = "unknown"
+            reasons.append(
+                "上市日期不能证明上市前年度ROE不可得，"
+                "需实际查询连续五个完整年度的财务指标"
+            )
+        else:
+            status = "eligible"
+        return {
+            **base,
+            "status": status,
+            "listing_age_days": age_days,
+            "reasons": reasons,
+        }
+
+    @classmethod
+    def _deep_data_availability_score(
+        cls, state: Mapping[str, Any] | None
+    ) -> int:
+        if not state:
+            return 2
+        result = state.get("result") or {}
+        if cls._evaluation_depth(result) == "sync_incomplete":
+            return 3
+        if cls._evaluation_depth(result) != "full_rules":
+            return 2
+        return 0 if cls._candidate_rules_complete(
+            result.get("rule_results") or []
+        ) else 1
+
+    @staticmethod
+    def _evaluation_depth(result: Mapping[str, Any]) -> str:
+        explicit = str(result.get("evaluation_depth") or "").strip()
+        if explicit:
+            return explicit
+        if result.get("history_precheck"):
+            return "history_precheck"
+        rules = {
+            str(rule.get("rule_id")): str(rule.get("status") or "")
+            for rule in result.get("rule_results") or []
+        }
+        if not rules:
+            return "unknown"
+        market_status = rules.get("LZ-F-01")
+        other_statuses = [
+            rules.get(rule_id) for rule_id in CANDIDATE_RULE_IDS if rule_id != "LZ-F-01"
+        ]
+        if market_status in {"failed", "data_incomplete"} and all(
+            status in {None, "data_incomplete"} for status in other_statuses
+        ):
+            return "market_cap_prefilter"
+        return "full_rules"
+
+    @staticmethod
+    def _candidate_rules_complete(rule_results: Sequence[Mapping[str, Any]]) -> bool:
+        statuses = {
+            str(rule.get("rule_id")): str(rule.get("status") or "")
+            for rule in rule_results
+            if rule.get("rule_id") in CANDIDATE_RULE_IDS
+        }
+        return set(statuses) == set(CANDIDATE_RULE_IDS) and all(
+            status in {"passed", "failed"} for status in statuses.values()
+        )
+
+    @classmethod
+    def _price_history_rule_incomplete(cls, result: Mapping[str, Any]) -> bool:
+        return any(
+            str(rule.get("rule_id") or "") in cls.PRICE_HISTORY_RULE_IDS
+            and str(rule.get("status") or "") == "data_incomplete"
+            for rule in result.get("rule_results") or []
+        )
+
+    @staticmethod
+    def _snapshot_has_retryable_sync_issue(snapshot: Mapping[str, Any]) -> bool:
+        missing = set((snapshot.get("coverage") or {}).get("missing") or [])
+        return any(
+            str(issue.get("dataset") or "") in missing
+            and bool(issue.get("error_type"))
+            for issue in snapshot.get("issues") or []
+        )
+
+    @staticmethod
+    def _snapshot_is_newer(
+        candidate: Mapping[str, Any], baseline: Mapping[str, Any]
+    ) -> bool:
+        candidate_time = str(candidate.get("generated_at") or "")
+        baseline_time = str(baseline.get("generated_at") or "")
+        return bool(candidate_time and baseline_time and candidate_time > baseline_time)
+
+    @classmethod
+    def _retryable_sync_snapshot(
+        cls, packet: Mapping[str, Any]
+    ) -> Mapping[str, Any] | None:
+        snapshot = packet.get("snapshot") or {}
+        latest_incomplete = packet.get("latest_incomplete") or {}
+        if str(packet.get("status") or "") != "stable":
+            for candidate in (latest_incomplete, snapshot):
+                if cls._snapshot_has_retryable_sync_issue(candidate):
+                    return candidate
+            return None
+        if (
+            cls._snapshot_has_retryable_sync_issue(latest_incomplete)
+            and cls._snapshot_is_newer(latest_incomplete, snapshot)
+        ):
+            return latest_incomplete
+        return None
+
+    @classmethod
+    def _packet_has_retryable_sync_issue(cls, packet: Mapping[str, Any]) -> bool:
+        return cls._retryable_sync_snapshot(packet) is not None
+
+    def _latest_snapshot_has_retryable_sync_issue(self, symbol: str) -> bool:
+        try:
+            packet = self.snapshot_service.get_symbol_snapshot(symbol)
+        except Exception:
+            return False
+        return self._packet_has_retryable_sync_issue(packet)
+
+    @staticmethod
+    def _parse_date(value: Any) -> date | None:
+        text = str(value or "").strip().replace("-", "")
+        if len(text) != 8 or not text.isdigit():
+            return None
+        try:
+            return datetime.strptime(text, "%Y%m%d").date()
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _universe_warnings(
+        universe_packet: dict[str, Any], *, pending_eligible: int
+    ) -> list[str]:
+        snapshot = universe_packet.get("snapshot") or {}
+        coverage = snapshot.get("coverage") or {}
+        warnings: list[str] = []
+        if universe_packet.get("status") != "stable":
+            warnings.append("全市场名单或市值覆盖尚未达到稳定发布门槛。")
+        if coverage.get("missing_market_cap"):
+            warnings.append(
+                f"{coverage['missing_market_cap']} 只股票缺少当日总市值，按 data_incomplete 保存。"
+            )
+        as_of_date = str(snapshot.get("as_of_date") or "")
+        history_insufficient = sum(
+            LiZongStrategyService._history_precheck(
+                item,
+                as_of_date=as_of_date,
+                parameters=LiZongParameters(),
+            ).get("status")
+            == "insufficient"
+            for item in snapshot.get("items") or []
+            if item.get("total_mv_yi") is not None
+            and float(item.get("total_mv_yi") or 0)
+            > LiZongParameters().market_cap_min_yi
+        )
+        if history_insufficient:
+            warnings.append(
+                f"{history_insufficient} 只市值达标股票上市后量价历史不足，"
+                "已直接标记 data_incomplete，未发起逐股深度请求。"
+            )
+        if pending_eligible:
+            warnings.append(
+                f"仍有 {pending_eligible} 只可深度核验股票等待补齐多年ROE、股东与量价数据。"
+            )
+        return warnings
 
     def list_candidates(
         self,
@@ -253,6 +1314,214 @@ class LiZongStrategyService:
             limit=limit,
         )
         return [self._with_stock_basic(item) for item in items]
+
+    def list_actionable_candidates(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Return only actual candidate-pool members, with triggers first."""
+
+        size = max(1, min(int(limit), 200))
+        triggered = self.list_candidates(status="triggered", limit=size)
+        remaining = max(0, size - len(triggered))
+        qualified = (
+            self.list_candidates(status="qualified", limit=remaining)
+            if remaining
+            else []
+        )
+        return [*triggered, *qualified]
+
+    def observation_pool_packet(
+        self,
+        *,
+        band: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """Derive non-candidate research pools without changing strict rules."""
+
+        allowed_bands = {"near_8_of_9", "watch_6_7_of_9"}
+        if band is not None and band not in allowed_bands:
+            raise ValueError("unsupported observation band")
+        size = max(1, min(int(limit), 1000))
+        coverage = self.coverage_packet()
+        states = self.database.latest_strategy_candidate_states(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=LiZongParameters().parameter_version,
+        )
+        as_of_date = str(coverage.get("as_of_date") or "")
+        if not as_of_date:
+            as_of_date = max(
+                (
+                    str(state.get("as_of_date") or "")
+                    for state in states.values()
+                    if state.get("as_of_date")
+                ),
+                default="",
+            )
+        observations: list[dict[str, Any]] = []
+        complete_rule_states = 0
+        counts = {
+            "near_8_of_9": 0,
+            "watch_6_7_of_9": 0,
+        }
+        for state_symbol, state in states.items():
+            if as_of_date and str(state.get("as_of_date") or "") != as_of_date:
+                continue
+            result = state.get("result") or {}
+            rules = {
+                str(item.get("rule_id")): item
+                for item in result.get("rule_results") or []
+                if item.get("rule_id") in CANDIDATE_RULE_IDS
+            }
+            if (
+                self._evaluation_depth(result) != "full_rules"
+                or set(rules) != set(CANDIDATE_RULE_IDS)
+                or any(
+                    str(item.get("status") or "") not in {"passed", "failed"}
+                    for item in rules.values()
+                )
+            ):
+                continue
+            complete_rule_states += 1
+            passed_rule_ids = [
+                rule_id
+                for rule_id in CANDIDATE_RULE_IDS
+                if str(rules[rule_id].get("status") or "") == "passed"
+            ]
+            failed_rule_ids = [
+                rule_id
+                for rule_id in CANDIDATE_RULE_IDS
+                if str(rules[rule_id].get("status") or "") == "failed"
+            ]
+            passed_count = len(passed_rule_ids)
+            observation_band = (
+                "near_8_of_9"
+                if passed_count == 8
+                else "watch_6_7_of_9"
+                if passed_count in {6, 7}
+                else None
+            )
+            if observation_band is None:
+                continue
+            counts[observation_band] += 1
+            enriched = self._with_stock_basic(state)
+            enriched.setdefault("symbol", state_symbol)
+            enriched["observation_band"] = observation_band
+            enriched["candidate_rule_pass_count"] = passed_count
+            enriched["candidate_rule_total"] = len(CANDIDATE_RULE_IDS)
+            enriched["passed_candidate_rule_ids"] = passed_rule_ids
+            enriched["failed_candidate_rule_ids"] = failed_rule_ids
+            observations.append(enriched)
+        observations.sort(
+            key=lambda item: (
+                -int(item.get("candidate_rule_pass_count") or 0),
+                str(item.get("symbol") or ""),
+            )
+        )
+        visible = [
+            item
+            for item in observations
+            if band is None or item.get("observation_band") == band
+        ][:size]
+        return {
+            "strategy_id": STRATEGY_ID,
+            "strategy_version": STRATEGY_VERSION,
+            "status": (
+                "ready"
+                if observations or coverage.get("status") == "stable" or states
+                else "preparing"
+            ),
+            "as_of_date": as_of_date or None,
+            "band": band,
+            "items": visible,
+            "counts": counts,
+            "complete_rule_states": complete_rule_states,
+            "coverage": coverage,
+            "boundary": (
+                "观察池只从当期已完成全部9条候选规则、且不存在数据缺口的股票"
+                "派生：8/9为接近满足，6至7/9为研究观察。它们都不是候选，"
+                "不会进入触发池；李总策略9条候选规则和3条触发规则没有放宽。"
+            ),
+        }
+
+    def coverage_and_funnel_packet(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Build user-facing coverage and funnel from one candidate-state read."""
+
+        states = self.database.latest_strategy_candidate_states(
+            strategy_id=STRATEGY_ID,
+            strategy_version=STRATEGY_VERSION,
+            parameter_version=LiZongParameters().parameter_version,
+        )
+        coverage = self.coverage_packet(candidate_states=states)
+        funnel = self.funnel_packet(coverage=coverage, candidate_states=states)
+        return coverage, funnel
+
+    def funnel_packet(
+        self,
+        *,
+        coverage: Mapping[str, Any] | None = None,
+        candidate_states: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Explain how the current full-market intersection narrows by rule."""
+
+        states = (
+            candidate_states
+            if candidate_states is not None
+            else self.database.latest_strategy_candidate_states(
+                strategy_id=STRATEGY_ID,
+                strategy_version=STRATEGY_VERSION,
+                parameter_version=LiZongParameters().parameter_version,
+            )
+        )
+        resolved_coverage = (
+            coverage
+            if coverage is not None
+            else self.coverage_packet(candidate_states=states)
+        )
+        as_of_date = str(resolved_coverage.get("as_of_date") or "")
+        current = [
+            state
+            for state in states.values()
+            if not as_of_date or str(state.get("as_of_date") or "") == as_of_date
+        ]
+        status_maps = [
+            {
+                str(rule.get("rule_id")): str(rule.get("status") or "")
+                for rule in (state.get("result") or {}).get("rule_results") or []
+            }
+            for state in current
+        ]
+        labels = {
+            str(item.get("rule_id")): str(item.get("label") or item.get("rule_id"))
+            for item in RULE_DEFINITIONS
+        }
+        steps: list[dict[str, Any]] = []
+        required: list[str] = []
+        previous = len(current)
+        for rule_id in CANDIDATE_RULE_IDS:
+            required.append(rule_id)
+            count = sum(
+                all(statuses.get(value) == "passed" for value in required)
+                for statuses in status_maps
+            )
+            steps.append(
+                {
+                    "rule_id": rule_id,
+                    "label": labels.get(rule_id, rule_id),
+                    "remaining_count": count,
+                    "removed_at_step": max(0, previous - count),
+                }
+            )
+            previous = count
+        return {
+            "as_of_date": as_of_date or None,
+            "starting_count": len(current),
+            "steps": steps,
+            "final_candidate_count": steps[-1]["remaining_count"] if steps else 0,
+            "scope": "sequential_rule_intersection",
+            "boundary": (
+                "漏斗按固定规则顺序展示逐步交集，只说明当前截面为何收窄，"
+                "不代表单条规则的长期预测能力。"
+            ),
+        }
 
     def get_candidate(
         self,
@@ -356,7 +1625,13 @@ class LiZongStrategyService:
                 "parameter_version 已存在且参数不同；请创建新的参数版本，不能覆盖历史口径"
             )
 
-    def _build_input(self, symbol: str, packet: dict[str, Any]) -> dict[str, Any]:
+    def _build_input(
+        self,
+        symbol: str,
+        packet: dict[str, Any],
+        *,
+        supplemental_roe_rows: Sequence[Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         snapshot = packet.get("snapshot") or {}
         datasets = snapshot.get("datasets") or {}
         daily = self._dataset_frame(datasets, "daily")
@@ -412,6 +1687,11 @@ class LiZongStrategyService:
         roe = self._dataset_frame(datasets, "fina_indicator")
         if not roe.empty:
             roe["source"] = self._dataset_source(datasets, "fina_indicator")
+        if supplemental_roe_rows:
+            roe = pd.concat(
+                [roe, pd.DataFrame(list(supplemental_roe_rows))],
+                ignore_index=True,
+            )
         daily_basic = self._dataset_frame(datasets, "daily_basic")
         if not daily_basic.empty:
             daily_basic["source"] = self._dataset_source(datasets, "daily_basic")
@@ -424,6 +1704,118 @@ class LiZongStrategyService:
             "shareholders": shareholders,
             "daily_basic": daily_basic,
         }
+
+    def _supplemental_roe_rows(
+        self,
+        symbol: str,
+        packet: dict[str, Any],
+        parameters: LiZongParameters,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        if self.fundamentals_provider is None:
+            return [], False
+        snapshot = packet.get("snapshot") or {}
+        datasets = snapshot.get("datasets") or {}
+        direct = self._dataset_frame(datasets, "fina_indicator")
+        missing_periods = self._missing_roe_periods(
+            direct,
+            as_of_date=str(snapshot.get("as_of_date") or self._today()),
+            required_years=parameters.required_annual_roe_years,
+        )
+        if not missing_periods:
+            return [], False
+        try:
+            payload = self.fundamentals_provider.fetch_financial_periods(
+                symbol, limit=20
+            )
+        except Exception:
+            return [], True
+        rows: list[dict[str, Any]] = []
+        as_of = self._parse_date(snapshot.get("as_of_date"))
+        for period in payload.get("periods") or []:
+            report_date = self._parse_date(period.get("report_date"))
+            notice_date = self._parse_date(period.get("notice_date"))
+            roe = pd.to_numeric(period.get("roe_weighted_pct"), errors="coerce")
+            if (
+                report_date is None
+                or report_date.isoformat() not in missing_periods
+                or notice_date is None
+                or (as_of is not None and notice_date > as_of)
+                or pd.isna(roe)
+            ):
+                continue
+            rows.append(
+                {
+                    "ts_code": symbol,
+                    "ann_date": notice_date.isoformat(),
+                    "end_date": report_date.isoformat(),
+                    "roe": float(roe),
+                    "roe_waa": float(roe),
+                    "source": period.get("source")
+                    or payload.get("source")
+                    or "Eastmoney F10 Main Financial Data",
+                    "source_url": period.get("source_url"),
+                    "fallback_reason": "Tushare fina_indicator 缺少该年度ROE",
+                }
+            )
+        rows.sort(key=lambda item: str(item.get("end_date") or ""), reverse=True)
+        return rows, True
+
+    @classmethod
+    def _missing_roe_periods(
+        cls,
+        frame: pd.DataFrame,
+        *,
+        as_of_date: str,
+        required_years: int,
+    ) -> set[str]:
+        if frame.empty or required_years <= 0:
+            return set()
+        period_column = next(
+            (column for column in ("end_date", "report_period") if column in frame),
+            None,
+        )
+        announcement_column = next(
+            (column for column in ("ann_date", "announcement_date") if column in frame),
+            None,
+        )
+        roe_column = next(
+            (column for column in ("roe", "roe_pct") if column in frame), None
+        )
+        if not period_column or not announcement_column or not roe_column:
+            return set()
+        as_of = cls._parse_date(as_of_date)
+        annual: dict[str, float] = {}
+        annual_years: set[int] = set()
+        for _, row in frame.iterrows():
+            period = cls._parse_date(row.get(period_column))
+            announced = cls._parse_date(row.get(announcement_column))
+            if (
+                period is None
+                or (period.month, period.day) != (12, 31)
+                or announced is None
+                or (as_of is not None and announced > as_of)
+            ):
+                continue
+            annual_years.add(period.year)
+            number = pd.to_numeric(row.get(roe_column), errors="coerce")
+            if pd.notna(number):
+                annual[period.isoformat()] = float(number)
+        if not annual_years:
+            return set()
+        latest_year = max(annual_years)
+        required = {
+            f"{year}-12-31"
+            for year in range(latest_year, latest_year - required_years, -1)
+        }
+        return required - set(annual)
+
+    @staticmethod
+    def _roe_rule_incomplete(result: Mapping[str, Any]) -> bool:
+        return any(
+            rule.get("rule_id") == "LZ-F-02"
+            and rule.get("status") == "data_incomplete"
+            for rule in result.get("rule_results") or []
+        )
 
     def _enforce_incomplete_boundary(
         self, evaluation: dict[str, Any], packet: dict[str, Any]
@@ -445,7 +1837,7 @@ class LiZongStrategyService:
         if missing_rule_data or snapshot_incomplete:
             return self._force_incomplete(
                 evaluation,
-                "关键数据集或规则窗口不完整，服务层强制保持 data_incomplete。",
+                "关键数据集或规则窗口不完整，当前暂不能形成完整判断。",
             )
         return evaluation
 
@@ -457,7 +1849,23 @@ class LiZongStrategyService:
         result["status"] = "data_incomplete"
         result["candidate_qualified"] = False
         result["triggered_rule_ids"] = []
-        result["limitations"] = [*(result.get("limitations") or []), limitation]
+        limitations = []
+        rewrote_conflicting_status = False
+        for value in result.get("limitations") or []:
+            text = str(value)
+            if "当前状态按 not_qualified 处理" in text:
+                text = (
+                    "已存在明确不通过规则，同时仍有数据缺口；"
+                    "在关键缺口补齐前按数据不完整处理。"
+                )
+                rewrote_conflicting_status = True
+            limitations.append(text)
+        if not (
+            rewrote_conflicting_status
+            and limitation.startswith("关键数据集或规则窗口不完整")
+        ):
+            limitations.append(limitation)
+        result["limitations"] = list(dict.fromkeys(limitations))
         return result
 
     @staticmethod
@@ -549,9 +1957,9 @@ class LiZongStrategyService:
             {"symbol": symbol, "status": packet.get("status")}
         )[:24]
 
-    @staticmethod
-    def _packet_as_of(packet: dict[str, Any]) -> str | None:
-        snapshot = packet.get("snapshot") or {}
+    @classmethod
+    def _packet_as_of(cls, packet: dict[str, Any]) -> str | None:
+        snapshot = cls._retryable_sync_snapshot(packet) or packet.get("snapshot") or {}
         value = snapshot.get("as_of_date")
         return str(value) if value else None
 
@@ -561,7 +1969,12 @@ class LiZongStrategyService:
         datasets = snapshot.get("datasets") or {}
         frame = cls._dataset_frame(datasets, "stock_basic")
         if frame.empty:
-            return {"name": None, "industry": None, "market": None}
+            return {
+                "name": None,
+                "industry": None,
+                "market": None,
+                "list_date": None,
+            }
         row = frame.iloc[0]
 
         def clean(column: str) -> str | None:
@@ -571,10 +1984,12 @@ class LiZongStrategyService:
             text = str(value).strip()
             return text or None
 
+        list_date = cls._parse_date(row.get("list_date"))
         return {
             "name": clean("name"),
             "industry": clean("industry"),
             "market": clean("market"),
+            "list_date": list_date.isoformat() if list_date else None,
         }
 
     @staticmethod
@@ -606,7 +2021,7 @@ class LiZongStrategyService:
         seen: set[str] = set()
         for raw in symbols:
             canonical = normalize_symbol(str(raw))
-            if not re.fullmatch(r"\d{6}\.(?:SZ|SS)", canonical):
+            if not re.fullmatch(r"\d{6}\.(?:SZ|SS|BJ)", canonical):
                 raise ValueError("李总策略首版仅支持A股股票")
             if canonical not in seen:
                 seen.add(canonical)

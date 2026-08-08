@@ -4,17 +4,69 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(PROJECT_ROOT / ".env")
+DEFAULT_DATA_DIR = Path.home() / ".qingshu"
+
+
+_INITIAL_ENV_KEYS = frozenset(os.environ)
+_ENV_SOURCE_DIRS: dict[str, Path] = {}
+_LOADED_ENV_VALUES: dict[str, str] = {}
+
+
+def load_environment() -> tuple[Path, ...]:
+    """Load portable configuration files without overriding process variables."""
+
+    candidates: list[Path] = []
+    explicit = str(os.getenv("QINGSHU_ENV_FILE") or "").strip()
+    if explicit:
+        candidates.append(Path(explicit).expanduser().resolve())
+    candidates.extend(
+        [
+            (Path.cwd() / ".env").resolve(),
+            (PROJECT_ROOT / ".env").resolve(),
+        ]
+    )
+    loaded: list[Path] = []
+    for path in candidates:
+        if path in loaded:
+            continue
+        values = dotenv_values(path) if path.is_file() else {}
+        load_dotenv(path, override=False)
+        for key in values:
+            if key in _INITIAL_ENV_KEYS or key in _ENV_SOURCE_DIRS:
+                continue
+            _ENV_SOURCE_DIRS[key] = path.parent
+            if key in os.environ:
+                _LOADED_ENV_VALUES[key] = os.environ[key]
+        loaded.append(path)
+    return tuple(loaded)
+
+
+LOADED_ENV_FILES = load_environment()
+
+
+def _path_from_env(name: str, default: Path | str, *, command: bool = False) -> Path:
+    raw = str(os.getenv(name, default)).strip()
+    path = Path(raw).expanduser()
+    if command and not path.is_absolute() and path.parent == Path("."):
+        return path
+    if path.is_absolute():
+        return path.resolve()
+    loaded_value = _LOADED_ENV_VALUES.get(name)
+    base = (
+        _ENV_SOURCE_DIRS.get(name, Path.cwd())
+        if loaded_value is not None and raw == loaded_value
+        else Path.cwd()
+    )
+    return (base / path).resolve()
 
 
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
-    database_path: Path
     workspace_root: Path
     hermes_bin: Path
     hermes_enabled: bool
@@ -34,6 +86,15 @@ class Settings:
     background_use_hermes: bool
     default_a_share_symbols: tuple[str, ...]
     default_research_symbols: tuple[str, ...]
+    default_fund_product_codes: tuple[str, ...] = (
+        "510300",
+        "510500",
+        "159915",
+        "110022",
+        "000011",
+        "000198",
+    )
+    background_fund_product_refresh_seconds: int = 1800
     sec_user_agent: str = "QingshuFinancialResearch/0.1 research@example.com"
     background_data_quality_seconds: int = 60
     session_ttl_days: int = 365
@@ -46,22 +107,49 @@ class Settings:
     tushare_api_url: str = "https://teajoin.com"
     tushare_enabled: bool = False
     tushare_timeout_seconds: int = 20
+    li_zong_universe_batch_size: int = 10
+    li_zong_refresh_seconds: int = 30
+    admin_api_token: str = ""
+    database_url: str = ""
+    background_worker_mode: str = "embedded"
+    job_queue_poll_seconds: float = 1.0
+    job_lease_seconds: int = 300
+    job_max_attempts: int = 3
+    job_retry_base_seconds: int = 10
+    job_retry_max_seconds: int = 600
+    job_worker_concurrency: int = 2
+    job_worker_heartbeat_seconds: int = 10
+    job_worker_stale_seconds: int = 45
+    backup_dir: Path = Path("./backups")
+    backup_max_age_seconds: int = 93600
+    job_succeeded_retention_hours: int = 168
+    job_failed_retention_hours: int = 720
+    job_cancelled_retention_hours: int = 168
+    background_run_completed_retention_hours: int = 720
+    background_run_failed_retention_hours: int = 2160
+    data_health_retention_hours: int = 720
 
     @classmethod
     def from_env(cls) -> "Settings":
-        data_dir = Path(os.getenv("QINGSHU_DATA_DIR", PROJECT_ROOT / "data")).expanduser().resolve()
+        data_dir = _path_from_env("QINGSHU_DATA_DIR", DEFAULT_DATA_DIR)
+        database_url = os.getenv("QINGSHU_DATABASE_URL", "").strip()
+        if not database_url.startswith(
+            ("postgresql://", "postgres://", "postgresql+psycopg://")
+        ):
+            raise ValueError(
+                "QINGSHU_DATABASE_URL is required and must use PostgreSQL"
+            )
+        worker_mode = os.getenv("BACKGROUND_WORKER_MODE", "embedded").strip().lower()
+        if worker_mode not in {"embedded", "external", "disabled"}:
+            raise ValueError(
+                "BACKGROUND_WORKER_MODE must be embedded, external, or disabled"
+            )
         return cls(
             data_dir=data_dir,
-            database_path=Path(os.getenv("QINGSHU_DB_PATH", data_dir / "qingshu.db")).expanduser().resolve(),
-            workspace_root=Path(
-                os.getenv("QINGSHU_WORKSPACE_ROOT", data_dir / "workspaces")
-            ).expanduser().resolve(),
-            hermes_bin=Path(
-                os.getenv(
-                    "HERMES_BIN",
-                    "/Users/chr/.hermes/hermes-agent/venv/bin/hermes",
-                )
-            ).expanduser(),
+            workspace_root=_path_from_env(
+                "QINGSHU_WORKSPACE_ROOT", data_dir / "workspaces"
+            ),
+            hermes_bin=_path_from_env("HERMES_BIN", "hermes", command=True),
             hermes_enabled=os.getenv("HERMES_ENABLED", "false").lower() in {"1", "true", "yes"},
             hermes_timeout_seconds=int(os.getenv("HERMES_TIMEOUT_SECONDS", "120")),
             market_cache_seconds=int(os.getenv("MARKET_CACHE_SECONDS", "300")),
@@ -101,9 +189,22 @@ class Settings:
             default_research_symbols=tuple(
                 symbol.strip().upper()
                 for symbol in os.getenv(
-                    "DEFAULT_RESEARCH_SYMBOLS", "000063.SZ,300308.SZ,NVDA"
+                    "DEFAULT_RESEARCH_SYMBOLS",
+                    "000063.SZ,300308.SZ,300750.SZ,NVDA",
                 ).split(",")
                 if symbol.strip()
+            ),
+            default_fund_product_codes=tuple(
+                code.strip()
+                for code in os.getenv(
+                    "DEFAULT_FUND_PRODUCT_CODES",
+                    "510300,510500,159915,110022,000011,000198",
+                ).split(",")
+                if code.strip()
+            ),
+            background_fund_product_refresh_seconds=max(
+                300,
+                int(os.getenv("BACKGROUND_FUND_PRODUCT_REFRESH_SECONDS", "1800")),
             ),
             sec_user_agent=os.getenv(
                 "SEC_USER_AGENT",
@@ -133,9 +234,82 @@ class Settings:
             ).lower()
             in {"1", "true", "yes"},
             tushare_timeout_seconds=int(os.getenv("TUSHARE_TIMEOUT_SECONDS", "20")),
+            li_zong_universe_batch_size=max(
+                1, int(os.getenv("LI_ZONG_UNIVERSE_BATCH_SIZE", "10"))
+            ),
+            li_zong_refresh_seconds=max(
+                10, int(os.getenv("LI_ZONG_REFRESH_SECONDS", "30"))
+            ),
+            admin_api_token=os.getenv("QINGSHU_ADMIN_API_TOKEN", "").strip(),
+            database_url=database_url,
+            background_worker_mode=worker_mode,
+            job_queue_poll_seconds=max(
+                0.1, float(os.getenv("JOB_QUEUE_POLL_SECONDS", "1"))
+            ),
+            job_lease_seconds=max(10, int(os.getenv("JOB_LEASE_SECONDS", "300"))),
+            job_max_attempts=max(1, int(os.getenv("JOB_MAX_ATTEMPTS", "3"))),
+            job_retry_base_seconds=max(
+                1, int(os.getenv("JOB_RETRY_BASE_SECONDS", "10"))
+            ),
+            job_retry_max_seconds=max(
+                1, int(os.getenv("JOB_RETRY_MAX_SECONDS", "600"))
+            ),
+            job_worker_concurrency=max(
+                1, int(os.getenv("JOB_WORKER_CONCURRENCY", "2"))
+            ),
+            job_worker_heartbeat_seconds=max(
+                1, int(os.getenv("JOB_WORKER_HEARTBEAT_SECONDS", "10"))
+            ),
+            job_worker_stale_seconds=max(
+                5, int(os.getenv("JOB_WORKER_STALE_SECONDS", "45"))
+            ),
+            backup_dir=_path_from_env(
+                "QINGSHU_BACKUP_DIR", data_dir / "backups"
+            ),
+            backup_max_age_seconds=max(
+                60, int(os.getenv("QINGSHU_BACKUP_MAX_AGE_SECONDS", "93600"))
+            ),
+            job_succeeded_retention_hours=max(
+                1, int(os.getenv("JOB_SUCCEEDED_RETENTION_HOURS", "168"))
+            ),
+            job_failed_retention_hours=max(
+                1, int(os.getenv("JOB_FAILED_RETENTION_HOURS", "720"))
+            ),
+            job_cancelled_retention_hours=max(
+                1, int(os.getenv("JOB_CANCELLED_RETENTION_HOURS", "168"))
+            ),
+            background_run_completed_retention_hours=max(
+                1,
+                int(
+                    os.getenv(
+                        "BACKGROUND_RUN_COMPLETED_RETENTION_HOURS", "720"
+                    )
+                ),
+            ),
+            background_run_failed_retention_hours=max(
+                1,
+                int(
+                    os.getenv(
+                        "BACKGROUND_RUN_FAILED_RETENTION_HOURS", "2160"
+                    )
+                ),
+            ),
+            data_health_retention_hours=max(
+                1, int(os.getenv("DATA_HEALTH_RETENTION_HOURS", "720"))
+            ),
         )
+
+    @property
+    def operational_database_url(self) -> str:
+        if not self.database_url.startswith(
+            ("postgresql://", "postgres://", "postgresql+psycopg://")
+        ):
+            raise ValueError(
+                "QINGSHU_DATABASE_URL is required and must use PostgreSQL"
+            )
+        return self.database_url
 
     def ensure_directories(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.workspace_root.mkdir(parents=True, exist_ok=True)
-        self.database_path.parent.mkdir(parents=True, exist_ok=True)
+        self.backup_dir.mkdir(parents=True, exist_ok=True)

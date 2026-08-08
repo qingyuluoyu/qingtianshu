@@ -7,6 +7,7 @@ from app.catalog import RESEARCH_TARGETS, normalize_symbol
 from app.db import Database
 from app.providers.us_fundamentals import USEquityFundamentalsProvider
 from app.services.fundamentals import summarize_fundamentals
+from app.services.live_market import market_quote_semantics
 from app.utils import utc_now
 
 
@@ -39,6 +40,7 @@ class USEquityFundamentalsService:
             raise ValueError("美股官方财务服务不支持 A 股证券")
         cik = self._cik(canonical)
         warnings = []
+        source_status: dict[str, dict[str, Any]] = {}
         valuation_saved = False
         periods_saved = 0
         filings_saved = 0
@@ -51,23 +53,38 @@ class USEquityFundamentalsService:
             warnings.append(f"美股估值刷新未完成：{type(exc).__name__}")
         try:
             financials = self.provider.fetch_financial_periods(canonical, cik)
-            periods_saved = self.database.upsert_financial_periods(financials["periods"])
+            periods_saved = self.database.upsert_financial_periods(
+                financials["periods"]
+            )
         except Exception as exc:
             warnings.append(f"SEC 财务刷新未完成：{type(exc).__name__}")
         fetch_details = getattr(self.provider, "fetch_statement_details", None)
         if callable(fetch_details):
             try:
                 details = fetch_details(canonical, cik)
-                statement_details_saved = self.database.upsert_financial_statement_details(
-                    details["statements"]
+                statement_details_saved = (
+                    self.database.upsert_financial_statement_details(
+                        details["statements"]
+                    )
                 )
             except Exception as exc:
                 warnings.append(f"SEC 详细三表刷新未完成：{type(exc).__name__}")
         try:
             filings = self.provider.fetch_filings(canonical, cik)
             filings_saved = self.database.upsert_news_items(filings)
+            source_status["regulatory_filing"] = {
+                "status": "ok",
+                "items": len(filings),
+                "polled_at": utc_now(),
+            }
         except Exception as exc:
             warnings.append(f"SEC 监管文件刷新未完成：{type(exc).__name__}")
+            source_status["regulatory_filing"] = {
+                "status": "failed",
+                "items": 0,
+                "polled_at": utc_now(),
+                "error_type": type(exc).__name__,
+            }
         return {
             "symbol": canonical,
             "refreshed_at": utc_now(),
@@ -75,7 +92,34 @@ class USEquityFundamentalsService:
             "financial_periods_saved": periods_saved,
             "financial_statement_details_saved": statement_details_saved,
             "regulatory_filings_saved": filings_saved,
+            "sources": source_status,
             "warnings": warnings,
+        }
+
+    def get_quote(
+        self, symbol: str, refresh_max_age_seconds: int = 900
+    ) -> dict[str, Any] | None:
+        """Return a fresh US quote without loading SEC statements or filings."""
+        canonical = normalize_symbol(symbol)
+        if canonical.endswith((".SS", ".SZ")):
+            raise ValueError("美股报价服务不支持 A 股证券")
+        valuation = self.database.latest_valuation_snapshot(canonical)
+        if valuation is None or _is_older_than(
+            valuation.get("fetched_at") if valuation else None,
+            refresh_max_age_seconds,
+        ):
+            try:
+                self.database.save_valuation_snapshot(
+                    self.provider.fetch_valuation(canonical)
+                )
+            except Exception:
+                pass
+            valuation = self.database.latest_valuation_snapshot(canonical)
+        if valuation is None:
+            return None
+        return {
+            **valuation,
+            **market_quote_semantics("us", valuation.get("market_timestamp")),
         }
 
     def get_packet(

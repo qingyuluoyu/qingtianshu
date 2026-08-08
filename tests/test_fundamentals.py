@@ -92,11 +92,46 @@ def test_eastmoney_financial_periods_are_structured_and_persisted(tmp_path: Path
     assert period["revenue_yoy_pct"] == 6.336
     assert period["period_basis"] == "year_to_date_cumulative"
 
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     assert database.upsert_financial_periods(result["periods"]) == 1
     stored = database.list_financial_periods("600519.SS")
     assert stored[0]["parent_net_profit"] == 27_242_512_886.45
+
+
+def test_lightweight_quote_does_not_load_financial_statements(tmp_path: Path):
+    class QuoteOnlyProvider:
+        def fetch_valuation(self, symbol: str):
+            return {
+                "symbol": symbol,
+                "name": "中兴通讯",
+                "currency": "CNY",
+                "price": 35.25,
+                "previous_close": 35.0,
+                "pct_change": 0.71,
+                "market_timestamp": "2026-07-27T15:06:00+08:00",
+                "source": "测试报价",
+                "source_url": "https://example.invalid/quote",
+                "fetched_at": "2026-07-27T07:00:00+00:00",
+                "warnings": [],
+            }
+
+        def fetch_financial_periods(self, *args, **kwargs):
+            raise AssertionError("lightweight quote must not load financial periods")
+
+        def fetch_statement_details(self, *args, **kwargs):
+            raise AssertionError("lightweight quote must not load statements")
+
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    quote = FundamentalsService(database, QuoteOnlyProvider()).get_quote(
+        "000063.SZ",
+        refresh_max_age_seconds=0,
+    )
+
+    assert quote is not None
+    assert quote["price"] == 35.25
+    assert quote["quote_basis"] == "post_close_snapshot"
 
 
 def test_eastmoney_detailed_three_statements_map_profit_working_capital_and_cash():
@@ -142,13 +177,13 @@ def test_eastmoney_detailed_three_statements_map_profit_working_capital_and_cash
     assert statements["income"]["report_date_name"] == "2026一季报"
     assert statements["income"]["fields"]["sales_expense"] == 2_018_281_000.0
     assert statements["balance"]["fields"]["inventory"] == 51_959_114_000.0
-    assert statements["cashflow"]["fields"][
-        "operating_cashflow"
-    ] == -1_978_648_000.0
+    assert statements["cashflow"]["fields"]["operating_cashflow"] == -1_978_648_000.0
 
 
-def test_fundamentals_service_uses_stored_data_when_refresh_sources_fail(tmp_path: Path):
-    database = Database(tmp_path / "db.sqlite", tmp_path / "workspaces")
+def test_fundamentals_service_uses_stored_data_when_refresh_sources_fail(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "workspaces")
     database.initialize()
     database.save_valuation_snapshot(
         {

@@ -166,6 +166,35 @@ class FundamentalsService:
             "warnings": warnings,
         }
 
+    def get_quote(
+        self, symbol: str, refresh_max_age_seconds: int = 600
+    ) -> dict[str, Any] | None:
+        """Return a fresh quote without loading financial statements."""
+        canonical = normalize_symbol(symbol)
+        if not canonical.endswith((".SS", ".SZ")):
+            raise ValueError("A股报价服务只支持 A 股证券")
+        valuation = self.database.latest_valuation_snapshot(canonical)
+        if valuation is None or _is_older_than(
+            valuation.get("fetched_at") if valuation else None,
+            refresh_max_age_seconds,
+        ):
+            try:
+                self.database.save_valuation_snapshot(
+                    self.provider.fetch_valuation(canonical)
+                )
+            except Exception:
+                # A persisted timestamped quote is still preferable to losing
+                # the quote field entirely when a live refresh is transiently
+                # unavailable. The prompt preserves its original data time.
+                pass
+            valuation = self.database.latest_valuation_snapshot(canonical)
+        if valuation is None:
+            return None
+        return {
+            **valuation,
+            **market_quote_semantics("china", valuation.get("market_timestamp")),
+        }
+
     def get_packet(
         self, symbol: str, refresh_max_age_seconds: int = 600
     ) -> dict[str, Any]:
