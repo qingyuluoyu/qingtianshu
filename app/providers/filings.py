@@ -42,69 +42,79 @@ class AShareFilingProvider:
         http_get: Callable[..., Any] = requests.get,
         *,
         max_content_pages: int = 300,
+        max_announcement_pages: int = 8,
     ):
         self.http_get = http_get
         self.max_content_pages = max(1, max_content_pages)
+        self.max_announcement_pages = max(1, max_announcement_pages)
 
     def list_financial_reports(
         self, symbol: str, limit: int = 3
     ) -> list[dict[str, Any]]:
         canonical, code = _a_share_identity(symbol)
-        response = self.http_get(
-            self.ANNOUNCEMENT_URL,
-            params={
-                "sr": -1,
-                "page_size": 50,
-                "page_index": 1,
-                "ann_type": "A",
-                "client_source": "web",
-                "stock_list": code,
-            },
-            headers={"User-Agent": _UA, "Referer": "https://data.eastmoney.com/"},
-            timeout=20,
-        )
-        response.raise_for_status()
-        payload = response.json()
+        requested_limit = max(1, limit)
         reports = []
-        for row in (payload.get("data") or {}).get("list") or []:
-            title = _clean(row.get("title_ch") or row.get("title"))
-            article_code = str(row.get("art_code") or "").strip()
-            columns = {
-                _clean(item.get("column_name"))
-                for item in (row.get("columns") or [])
-                if item.get("column_name")
-            }
-            parsed = _parse_report_identity(title)
-            if (
-                not article_code
-                or not title
-                or _EXCLUDED_TITLE_RE.search(title)
-                or (not columns.intersection(_REPORT_COLUMNS) and parsed is None)
-            ):
-                continue
-            document_type, report_period = parsed or _identity_from_columns(columns)
-            if document_type is None:
-                continue
-            published_at = _datetime_iso(
-                row.get("display_time") or row.get("notice_date")
+        seen_article_codes = set()
+        for page_index in range(1, self.max_announcement_pages + 1):
+            response = self.http_get(
+                self.ANNOUNCEMENT_URL,
+                params={
+                    "sr": -1,
+                    "page_size": 50,
+                    "page_index": page_index,
+                    "ann_type": "A",
+                    "client_source": "web",
+                    "stock_list": code,
+                },
+                headers={"User-Agent": _UA, "Referer": "https://data.eastmoney.com/"},
+                timeout=20,
             )
-            reports.append(
-                {
-                    "symbol": canonical,
-                    "article_code": article_code,
-                    "title": title,
-                    "document_type": document_type,
-                    "report_period": report_period,
-                    "notice_date": published_at[:10] if published_at else None,
-                    "published_at": published_at,
-                    "source": "company_filing",
-                    "source_url": (
-                        f"https://data.eastmoney.com/notices/detail/"
-                        f"{code}/{article_code}.html"
-                    ),
+            response.raise_for_status()
+            payload = response.json()
+            rows = (payload.get("data") or {}).get("list") or []
+            for row in rows:
+                title = _clean(row.get("title_ch") or row.get("title"))
+                article_code = str(row.get("art_code") or "").strip()
+                columns = {
+                    _clean(item.get("column_name"))
+                    for item in (row.get("columns") or [])
+                    if item.get("column_name")
                 }
-            )
-            if len(reports) >= max(1, limit):
+                parsed = _parse_report_identity(title)
+                if (
+                    not article_code
+                    or article_code in seen_article_codes
+                    or not title
+                    or _EXCLUDED_TITLE_RE.search(title)
+                    or (not columns.intersection(_REPORT_COLUMNS) and parsed is None)
+                ):
+                    continue
+                document_type, report_period = parsed or _identity_from_columns(columns)
+                if document_type is None:
+                    continue
+                published_at = _datetime_iso(
+                    row.get("display_time") or row.get("notice_date")
+                )
+                reports.append(
+                    {
+                        "symbol": canonical,
+                        "article_code": article_code,
+                        "title": title,
+                        "document_type": document_type,
+                        "report_period": report_period,
+                        "notice_date": published_at[:10] if published_at else None,
+                        "published_at": published_at,
+                        "source": "company_filing",
+                        "source_url": (
+                            f"https://data.eastmoney.com/notices/detail/"
+                            f"{code}/{article_code}.html"
+                        ),
+                    }
+                )
+                seen_article_codes.add(article_code)
+                if len(reports) >= requested_limit:
+                    return reports
+            if not rows:
                 break
         return reports
 

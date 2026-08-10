@@ -90,6 +90,41 @@ def test_provider_discovers_financial_report_and_fetches_all_text_pages():
     ]
 
 
+def test_provider_scans_later_announcement_page_for_financial_report():
+    requested_pages = []
+
+    def http_get(url, **kwargs):
+        page = kwargs["params"]["page_index"]
+        requested_pages.append(page)
+        rows = (
+            [
+                {
+                    "art_code": "AN-OTHER",
+                    "title_ch": "中际旭创:关于股东减持的公告",
+                    "display_time": "2026-08-05 18:40:15:607",
+                    "columns": [{"column_name": "其他"}],
+                }
+            ]
+            if page == 1
+            else [
+                {
+                    "art_code": "AN2026Q1",
+                    "title_ch": "中际旭创:2026年一季度报告",
+                    "display_time": "2026-04-16 18:49:14:385",
+                    "columns": [{"column_name": "一季度报告全文"}],
+                }
+            ]
+        )
+        return FakeResponse({"data": {"list": rows}})
+
+    reports = AShareFilingProvider(http_get=http_get).list_financial_reports(
+        "300308.SZ", limit=1
+    )
+
+    assert [report["article_code"] for report in reports] == ["AN2026Q1"]
+    assert requested_pages == [1, 2]
+
+
 def test_filing_cause_extractor_rejects_inventory_table_and_policy_templates():
     assert not _is_explicit_company_explanation(
         "存货种类 确定可变现净值/剩余对价与将要发生的成本的具体依据 "
