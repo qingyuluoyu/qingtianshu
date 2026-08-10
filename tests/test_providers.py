@@ -1124,6 +1124,43 @@ def test_sina_market_breadth_rejects_zero_placeholder_without_fallback(
     assert database.list_market_breadth_snapshots() == []
 
 
+def test_sina_market_breadth_rejects_exchange_with_all_zero_turnover(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    provider = SinaMarketBreadthProvider(database)
+    result = provider._parse(
+        [
+            {
+                "symbol": "sh600000",
+                "changepercent": 1.0,
+                "amount": 100_000_000,
+                "ticktime": "15:00:00",
+            },
+            {
+                "symbol": "sz000001",
+                "changepercent": -1.0,
+                "amount": 0,
+                "ticktime": "15:00:00",
+            },
+            {
+                "symbol": "bj920001",
+                "changepercent": 0.0,
+                "amount": 10_000_000,
+                "ticktime": "15:00:00",
+            },
+        ],
+        total_expected=3,
+    )
+
+    provider._attach_history_comparison(result)
+
+    assert result["turnover"]["status"] == "incomplete"
+    assert result["turnover"]["coverage"]["complete_exchanges"] is False
+    assert database.list_market_breadth_snapshots() == []
+
+
 def test_market_breadth_history_ignores_future_dated_snapshot(tmp_path: Path):
     database = Database(tmp_path / "workspaces")
     database.initialize()

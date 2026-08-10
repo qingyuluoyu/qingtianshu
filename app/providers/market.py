@@ -2340,9 +2340,15 @@ class SinaMarketBreadthProvider:
         exchange_amount_total = sum(
             item["amount_cny"] for item in exchanges.values()
         )
+        exchange_turnover_complete = all(
+            item["valid_amount"] == item["total"] and item["amount_cny"] > 0
+            for item in exchanges.values()
+            if item["total"] > 0
+        )
         turnover_complete = (
             valid_amount == total_expected
             and abs(total_amount - exchange_amount_total) <= 1
+            and exchange_turnover_complete
         )
         return {
             "source": "Sina Finance all A-share snapshot",
@@ -2405,6 +2411,7 @@ class SinaMarketBreadthProvider:
                     "coverage_ratio": round(valid_amount / total_expected, 4),
                     "exchange_sum_matches": abs(total_amount - exchange_amount_total)
                     <= 1,
+                    "complete_exchanges": exchange_turnover_complete,
                 },
                 "exchanges": {
                     key: {
