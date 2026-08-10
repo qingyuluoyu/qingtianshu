@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from queue import Empty, Queue
 import subprocess
+import tempfile
 import threading
 import time
 from typing import Any, Callable
@@ -24,8 +25,8 @@ def resolve_hermes_route(model_tier: str) -> tuple[str | None, str | None]:
     provider = os.getenv(f"HERMES_{model_tier.upper()}_PROVIDER") or None
     model = os.getenv(f"HERMES_{model_tier.upper()}_MODEL") or None
     if model_tier in {"economy", "deep"}:
-        provider = provider or "deepseek"
-        model = model or "deepseek-v4-pro"
+        provider = provider or "custom"
+        model = model or "step-3.7-flash"
     return provider, model
 
 
@@ -183,17 +184,29 @@ def execute_hermes_oneshot(
     if model:
         command.extend(["-m", model])
 
-    result = subprocess.run(
-        command,
-        cwd=user_workspace,
-        text=True,
-        capture_output=True,
-        timeout=settings.hermes_timeout_seconds,
-        check=False,
-    )
+    # A Windows service or hidden background process can have no inherited
+    # console streams. Capture through temporary files so Hermes output remains
+    # available even when PIPE-based capture would produce ``stdout=None``.
+    with (
+        tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stdout_file,
+        tempfile.TemporaryFile(mode="w+", encoding="utf-8") as stderr_file,
+    ):
+        result = subprocess.run(
+            command,
+            cwd=user_workspace,
+            text=True,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            timeout=settings.hermes_timeout_seconds,
+            check=False,
+        )
+        stdout_file.seek(0)
+        captured_stdout = stdout_file.read()
     if result.returncode != 0:
         raise RuntimeError(f"Hermes 退出码 {result.returncode}")
-    raw_answer = result.stdout.strip()
+    raw_answer = (
+        result.stdout if isinstance(result.stdout, str) else captured_stdout
+    ).strip()
     answer = extract_chat_answer(raw_answer) if image_path else raw_answer
     if not answer:
         raise RuntimeError("Hermes 未返回文本")

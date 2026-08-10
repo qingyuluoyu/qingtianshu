@@ -1,3 +1,22 @@
+FROM python:3.11-slim-bookworm AS hermes-runtime
+
+ARG HERMES_COMMIT=ab158e8088a847890057b75a63a951155ea93004
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates git \
+    && python -m venv /opt/hermes \
+    && /opt/hermes/bin/pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && mkdir -p /opt/hermes-agent \
+    && git -C /opt/hermes-agent init \
+    && git -C /opt/hermes-agent remote add origin https://github.com/NousResearch/hermes-agent.git \
+    && git -C /opt/hermes-agent -c http.version=HTTP/1.1 \
+        fetch --depth 1 origin "${HERMES_COMMIT}" \
+    && git -C /opt/hermes-agent checkout --detach FETCH_HEAD \
+    && /opt/hermes/bin/pip install --no-cache-dir --editable /opt/hermes-agent \
+    && rm -rf /opt/hermes-agent/.git /var/lib/apt/lists/* \
+    && /opt/hermes/bin/hermes --version
+
+
 FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -5,9 +24,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     QINGSHU_DATA_DIR=/data \
     BACKGROUND_JOBS_ENABLED=true \
     BACKGROUND_WORKER_MODE=external \
+    HERMES_HOME=/data/hermes \
+    HERMES_BIN=/opt/hermes/bin/hermes \
+    HERMES_PYTHON_BIN=/opt/hermes/bin/python \
     HERMES_ENABLED=false
 
 WORKDIR /app
+
+COPY --from=hermes-runtime /opt/hermes /opt/hermes
+COPY --from=hermes-runtime /opt/hermes-agent /opt/hermes-agent
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends ca-certificates curl \
@@ -24,7 +49,8 @@ RUN apt-get update \
 
 COPY pyproject.toml ./
 COPY app ./app
-RUN pip install --no-cache-dir .
+ARG PIP_INDEX_URL=https://mirrors.cloud.tencent.com/pypi/simple
+RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" .
 
 COPY scripts ./scripts
 

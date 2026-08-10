@@ -42,6 +42,7 @@ class ChatResponsePersistence:
                 "document_id": item.get("document_id"),
                 "title": item.get("title"),
                 "scope": item.get("scope"),
+                "attached": bool(item.get("attached")),
             }
             for item in knowledge_context.get("items", [])
         ]

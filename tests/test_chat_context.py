@@ -7,6 +7,7 @@ import pytest
 
 from app.services.chat_context import (
     ChatConversationNotFound,
+    ChatDocumentNotFound,
     ChatRequestContextService,
     ChatUploadExpired,
     ChatUploadNotFound,
@@ -21,6 +22,7 @@ class FakeDatabase:
         self.history: list[dict[str, Any]] = []
         self.messages: list[dict[str, Any]] = []
         self.upload: dict[str, Any] | None = None
+        self.document: dict[str, Any] | None = None
         self.used_uploads: list[str] = []
         self.deep_stock: dict[str, Any] | None = None
         self.universe_items: list[dict[str, Any]] = []
@@ -66,6 +68,10 @@ class FakeDatabase:
     def mark_user_upload_used(self, user_id: str, image_id: str) -> None:
         del user_id
         self.used_uploads.append(image_id)
+
+    def get_knowledge_document(self, user_id: str, document_id: str):
+        del user_id, document_id
+        return self.document
 
     def add_conversation_message(self, **payload: Any) -> dict[str, Any]:
         self.messages.append(payload)
@@ -746,3 +752,65 @@ def test_prepare_validates_conversation_and_upload_lifecycle(tmp_path: Path) -> 
     assert prepared.model_tier == "vision"
     assert prepared.image_path == str(image)
     assert database.used_uploads == ["current"]
+
+
+def test_prepare_forces_attached_private_document_into_knowledge_request() -> None:
+    service, database, knowledge = build_service()
+    database.document = {
+        "id": "document-1",
+        "owner_user_id": "user-document",
+        "scope": "user",
+        "source_key": "upload:document-sha256",
+        "title": "年度经营报告",
+        "original_name": "annual-report.docx",
+        "mime_type": (
+            "application/vnd.openxmlformats-officedocument."
+            "wordprocessingml.document"
+        ),
+    }
+
+    prepared = service.prepare(
+        user_id="user-document",
+        message="总结这份附件",
+        conversation_id=None,
+        quality_scope="product",
+        requested_symbol=None,
+        image_id=None,
+        model_tier="deep",
+        document_id="document-1",
+    )
+
+    assert prepared.attached_document == database.document
+    assert knowledge.calls[0]["required_source_keys"][0] == "upload:document-sha256"
+    assert database.messages[0]["metadata"]["document_id"] == "document-1"
+
+    database.document = None
+    with pytest.raises(ChatDocumentNotFound):
+        service.prepare(
+            user_id="user-document",
+            message="总结这份附件",
+            conversation_id=None,
+            quality_scope="product",
+            requested_symbol=None,
+            image_id=None,
+            model_tier="deep",
+            document_id="missing-document",
+        )
+
+    database.document = {
+        "id": "document-2",
+        "owner_user_id": "another-user",
+        "scope": "user",
+        "source_key": "upload:other-user-document",
+    }
+    with pytest.raises(ChatDocumentNotFound):
+        service.prepare(
+            user_id="user-document",
+            message="总结这份附件",
+            conversation_id=None,
+            quality_scope="product",
+            requested_symbol=None,
+            image_id=None,
+            model_tier="deep",
+            document_id="document-2",
+        )

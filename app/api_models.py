@@ -36,6 +36,7 @@ class ChatRequest(BaseModel):
     execute_agent: bool = True
     prefer_precomputed: bool = False
     image_id: str | None = Field(default=None, max_length=36)
+    document_id: str | None = Field(default=None, max_length=36)
     conversation_id: str | None = Field(default=None, max_length=36)
     request_id: str | None = Field(default=None, min_length=8, max_length=64)
     quality_scope: Literal["user", "evaluation"] = "user"

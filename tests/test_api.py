@@ -1093,7 +1093,8 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "error?.status === 503" in frontend
     assert "完整股票范围正在同步" in frontend
     assert "页面不会用不完整范围冒充全市场结论" in frontend
-    assert "⊕ 添加图片" in frontend
+    assert "⊕ 添加附件" in frontend
+    assert ".pdf,.docx,.xlsx" in frontend
     assert "AI 图像研究" in frontend
     assert 'api("/me/uploads/images"' in frontend
     assert 'api("/me/conversations?limit=100")' in frontend
@@ -1285,6 +1286,9 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'id="eventTimelineAction"' in frontend
     assert "AI 实时研究" in frontend
     assert "image_id" in frontend
+    assert "document_id" in frontend
+    assert "!directHermes && !attachedDocument" in frontend
+    assert '$("attachImage").disabled = attachmentBusy;' in frontend
     assert "localStorage.setItem" not in frontend
     assert 'event.key === "Enter"' in frontend
     assert "!event.shiftKey" in frontend
@@ -1504,7 +1508,7 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "系统不会用预存文案" in frontend
     assert "本轮仅展示已核验事实" in frontend
     assert "sendChat(question, {reuseUserMessage: true})" in frontend
-    assert "if (!directHermes) {" in frontend
+    assert "if (!directHermes && !attachedDocument) {" in frontend
     assert "function renderMarkdown(text)" in frontend
     assert "navigator.clipboard.writeText(text)" in frontend
     assert "AI 正在补充深度解读" in frontend

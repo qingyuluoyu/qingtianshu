@@ -11,6 +11,7 @@ from app.api_models import ChatRequest
 from app.providers.market import ProviderError
 from app.services.chat_context import (
     ChatConversationNotFound,
+    ChatDocumentNotFound,
     ChatUploadExpired,
     ChatUploadNotFound,
     build_financial_advisor_context,
@@ -103,6 +104,7 @@ class ChatOrchestrationService:
                 requested_symbol=payload.symbol,
                 image_id=payload.image_id,
                 model_tier=payload.model_tier,
+                document_id=payload.document_id,
             )
         except ChatConversationNotFound as exc:
             raise HTTPException(status_code=404, detail="研究对话不存在") from exc
@@ -113,6 +115,10 @@ class ChatOrchestrationService:
         except ChatUploadExpired as exc:
             raise HTTPException(
                 status_code=410, detail="图片文件已失效，请重新上传"
+            ) from exc
+        except ChatDocumentNotFound as exc:
+            raise HTTPException(
+                status_code=404, detail="文档不存在或不属于当前用户"
             ) from exc
 
         message = prepared.message
@@ -169,6 +175,7 @@ class ChatOrchestrationService:
                 # price evidence even though the research plan requested it.
                 company_evidence_intent = None
         upload = prepared.upload
+        attached_document = prepared.attached_document
         image_path = prepared.image_path
         model_tier = prepared.model_tier
         knowledge_context = prepared.knowledge_context
@@ -441,8 +448,12 @@ class ChatOrchestrationService:
             )
         else:
             if symbol is None:
-                if upload is None and _needs_research_object_clarification(
-                    message, history
+                if (
+                    upload is None
+                    and attached_document is None
+                    and _needs_research_object_clarification(
+                        message, history
+                    )
                 ):
                     clarification = {
                         "run_id": None,
@@ -490,6 +501,13 @@ class ChatOrchestrationService:
                             "金融研究工具",
                         ],
                     }
+                    if attached_document is not None:
+                        evidence["attached_document"] = {
+                            "id": attached_document["id"],
+                            "title": attached_document.get("title"),
+                            "original_name": attached_document.get("original_name"),
+                            "mime_type": attached_document.get("mime_type"),
+                        }
                     if financial_advisor_context:
                         evidence["financial_advisor_context"] = (
                             financial_advisor_context

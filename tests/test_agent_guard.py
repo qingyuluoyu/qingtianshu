@@ -1558,18 +1558,18 @@ class _FakeStreamingProcess:
         self.terminated = True
 
 
-def test_hermes_text_routes_default_to_deepseek_v4_pro(monkeypatch):
+def test_hermes_text_routes_default_to_step_3_7_flash(monkeypatch):
     for tier in ("ECONOMY", "DEEP"):
         monkeypatch.delenv(f"HERMES_{tier}_PROVIDER", raising=False)
         monkeypatch.delenv(f"HERMES_{tier}_MODEL", raising=False)
 
     assert agent_module._resolve_hermes_route("economy") == (
-        "deepseek",
-        "deepseek-v4-pro",
+        "custom",
+        "step-3.7-flash",
     )
     assert agent_module._resolve_hermes_route("deep") == (
-        "deepseek",
-        "deepseek-v4-pro",
+        "custom",
+        "step-3.7-flash",
     )
 
 
@@ -1681,10 +1681,11 @@ def test_hermes_oneshot_fallback_disables_all_tools(
 
     class Result:
         returncode = 0
-        stdout = "只返回研究文本"
+        stdout = None
 
     def fake_run(command, **kwargs):
         captured["command"] = command
+        kwargs["stdout"].write("只返回研究文本")
         return Result()
 
     monkeypatch.setattr("app.services.agent_hermes_execution.subprocess.run", fake_run)

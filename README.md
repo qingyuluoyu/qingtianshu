@@ -50,7 +50,7 @@
 - 研究行动与观察条件：吸收 Rongxian `ResearchItem` 的生命周期思路，把自选股报告、证据变化、回撤波动、MA20、量能、用户关注理由和资料缺口转换成“已达到复核条件 / 待补证 / 继续观察”，持久化快照并同步进用户资料库；该功能只决定下一步核验什么，不生成买卖信号；
 - 用户观察任务：与后台 EvidenceTask 和系统 ResearchAction 分开保存，只有用户确认后才创建；支持待处理、处理中、等待数据、完成、忽略、取消和重开，完成必须填写结果或引用证据，编辑与状态变化均保留版本历史并按用户隔离；
 - A股分析师一致预期与研报跟踪：保存券商评级分布、A/E 每股收益预测和近期研报元数据；只有存在历史快照时才计算同财年 EPS 上修或下修，并同步报告覆盖机构变化；预测不是公司指引，评级不是交易建议，目标价不进入证据包；
-- 独立“资料库”页面：右侧集中查看全部通用/个人资料，支持 TXT/Markdown/CSV/JSON 入库、删除、中英文相关性检索、个人工作区副本和 Hermes Prompt 引用；左侧不再常驻资料卡片；
+- 独立“资料库”页面：右侧集中查看全部通用/个人资料，支持 PDF/DOCX/XLSX/TXT/Markdown/CSV/JSON 入库、删除、中英文相关性检索、个人工作区副本和 Hermes Prompt 引用；左侧不再常驻资料卡片；
 - 每用户独立工作区、确认记忆文件和自选股文件；
 - HttpOnly、SameSite=Strict 的匿名个人会话；原始令牌不落库，PostgreSQL 只保存 SHA-256 哈希，私有 API 强制校验会话归属；
 - 网页记忆确认闭环：对话提取的偏好以卡片展示，用户可确认保存或暂不保存；待确认卡片在刷新后会恢复，只有 confirmed 记忆会进入后续 Agent Prompt；
@@ -228,13 +228,13 @@ Agent 失败、守卫未完成或只返回 preview 时不会创建候选。确�
 | `HERMES_ENABLED` | `false` | 是否调用 Hermes 生成深度回答 |
 | `HERMES_BIN` | `hermes` | Hermes 命令名或可执行文件路径 |
 | `HERMES_PYTHON_BIN` | 自动识别 | 可选；Hermes 流式桥接所用虚拟环境 Python，自动识别失败时再配置 |
-| `HERMES_ECONOMY_PROVIDER` | `deepseek` | 普通文字对话的 Hermes Provider |
-| `HERMES_ECONOMY_MODEL` | `deepseek-v4-pro` | 普通文字对话模型 |
+| `HERMES_ECONOMY_PROVIDER` | `custom` | 普通文字对话的 Hermes Provider |
+| `HERMES_ECONOMY_MODEL` | `step-3.7-flash` | 普通文字对话模型 |
 | `HERMES_ECONOMY_MAX_TOKENS` | 按意图 900—1800 | 普通文字回答的输出上限；未设置时按大盘、个股、文章等场景自动选择 |
 | `HERMES_ECONOMY_MAX_ITERATIONS` | `4` | 标准对话单轮迭代预算；避免一轮即被截断，同时限制无工具长循环 |
-| `HERMES_ECONOMY_REASONING_EFFORT` | 按意图选择 | 标准大盘使用 `low`，标准个股使用 `none`；保持 DeepSeek v4 Pro 不变，环境变量可统一覆盖 |
-| `HERMES_DEEP_PROVIDER` | `deepseek` | 深度研究文字对话的 Hermes Provider |
-| `HERMES_DEEP_MODEL` | `deepseek-v4-pro` | 深度研究文字模型 |
+| `HERMES_ECONOMY_REASONING_EFFORT` | 按意图选择 | 标准大盘使用 `low`，标准个股使用 `none`；环境变量可统一覆盖 |
+| `HERMES_DEEP_PROVIDER` | `custom` | 深度研究文字对话的 Hermes Provider |
+| `HERMES_DEEP_MODEL` | `step-3.7-flash` | 深度研究文字模型 |
 | `HERMES_DEEP_MAX_TOKENS` | `2200` | 深度研究回答的输出上限 |
 | `HERMES_DEEP_MAX_ITERATIONS` | `6` | 深入研究单轮迭代预算 |
 | `HERMES_DEEP_REASONING_EFFORT` | `medium` | 深入研究的推理档 |
@@ -510,9 +510,9 @@ export HERMES_ENABLED=true
 - `HERMES_DEEP_PROVIDER` / `HERMES_DEEP_MODEL`
 - `HERMES_VISION_PROVIDER` / `HERMES_VISION_MODEL`
 
-文字对话未设置路由时默认使用 `deepseek / deepseek-v4-pro`，避免受用户 Hermes 全局默认模型影响；显式环境变量仍可覆盖。视觉路由不自动套用 `deepseek-v4-pro`，未设置时由 Hermes 的多模态配置决定。密钥由 Hermes 或进程环境管理，本项目不会读取、打印或复制密钥。
+文字对话未设置路由时默认使用 `custom / step-3.7-flash`，通过 `CUSTOM_BASE_URL=https://api.stepfun.com/v1` 连接阶跃星辰的 OpenAI 兼容接口；显式环境变量仍可覆盖。视觉路由未设置时由 Hermes 的多模态配置决定。阶跃密钥使用 `STEPFUN_API_KEY`，只由 Hermes 或进程环境读取，不写入仓库。
 
-一键启动检测到 `HERMES_BIN` 后会启用 Hermes，文字对话默认路由到 DeepSeek；如需其他模型，可用上述环境变量覆盖。密钥只由 Hermes 或进程环境读取，不写入项目。
+一键启动检测到 `HERMES_BIN` 后会启用 Hermes，文字对话默认路由到 StepFun；如需其他模型，可用上述环境变量覆盖。密钥只由 Hermes 或进程环境读取，不写入项目。
 
 `HERMES_BIN=hermes` 会按当前进程的 `PATH` 解析，不要求写本机绝对路径。流式回答会从 Hermes 控制台脚本或启动包装器识别其虚拟环境 Python，并保留虚拟环境入口；只有非标准安装无法自动识别时，才需要设置 `HERMES_PYTHON_BIN`。应用不会读取或复制 Hermes 密钥。
 
@@ -521,6 +521,8 @@ Hermes 返回后会经过 `deterministic_numeric_and_policy_guard_v2`：守卫�
 “诊大盘”会直接执行 Hermes，而不是先把固定市场模板当成最终回答。后端按当前问题区分趋势反转、量能资金、板块轮动、涨跌原因和市场风险五类焦点，只保留该问题需要的指标、板块、实时资讯、已确认用户记忆和 `market-brief` Skill。大盘 Prompt 固定带入“证据层级、市场因果、趋势风险”三份通用资料；连续追问只保留最近用户问题并继承市场范围，不把上一轮模型回答重新当作写作模板。若模型超时，确定性摘要也会按本次问题焦点回答，不再退回同一份全景模板。
 
 多模态请求使用 Hermes 的 `chat -q --image` 路径。网页先通过 `POST /me/uploads/images` 上传图片，对话只传服务器生成的 `image_id`；客户端不能传本机路径。后端会验证图片归属，Hermes 只能读取当前用户专属工作区内的已消毒副本。图像回答通过显式最终答案协议去除 CLI 推理文本，然后再进入金融数字和策略守卫。
+
+文档研究通过 `POST /me/knowledge` 上传 PDF、DOCX 或 XLSX。服务端使用 MarkItDown 的内存流接口转换为 Markdown，不启用插件、不读取远程 URL；原文件保存在当前用户工作区，转换文本进入个人资料库检索链路。默认单文件上限为 20 MiB。当前版本不对扫描版 PDF 启用 OCR，未提取到可读文字时会明确拒绝入库。
 
 ## 2026-07-26 当前体验修复与验收
 

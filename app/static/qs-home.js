@@ -27,45 +27,86 @@ async function ensureUser() {
 
     function renderImageAttachment() {
       const container = $("imageAttachment");
-      if (state.imageUploading) {
+      if (state.imageUploading || state.documentUploading) {
         container.hidden = false;
-        $("imageAttachmentName").textContent = "正在安全处理图片…";
+        $("imageAttachmentName").textContent = state.imageUploading
+          ? "正在安全处理图片…"
+          : "正在解析文档并加入个人资料库…";
         $("removeImage").hidden = true;
       } else if (state.pendingImage) {
         container.hidden = false;
         $("imageAttachmentName").textContent = `已附加：${state.pendingImage.original_name}`;
         $("removeImage").hidden = false;
+      } else if (state.pendingDocument) {
+        container.hidden = false;
+        $("imageAttachmentName").textContent = `已加入资料库并附加：${state.pendingDocument.original_name}`;
+        $("removeImage").hidden = false;
       } else {
         container.hidden = true;
         $("imageAttachmentName").textContent = "";
       }
-      $("attachImage").disabled = state.imageUploading || !state.health?.hermes_enabled;
-      if (state.pendingImage) $("useHermes").checked = true;
-      $("useHermes").disabled = !state.health?.hermes_enabled || state.imageUploading || Boolean(state.pendingImage);
+      const attachmentBusy = state.imageUploading || state.documentUploading;
+      const hasAttachment = Boolean(state.pendingImage || state.pendingDocument);
+      $("attachImage").disabled = attachmentBusy;
+      if (hasAttachment) $("useHermes").checked = true;
+      $("useHermes").disabled = !state.health?.hermes_enabled || attachmentBusy || hasAttachment;
       updateAgentMode();
     }
 
     function clearImageAttachment() {
       state.pendingImage = null;
+      state.pendingDocument = null;
       state.imageUploading = false;
+      state.documentUploading = false;
       $("imageInput").value = "";
       renderImageAttachment();
     }
 
     async function uploadSelectedImage(file) {
-      if (!file || !state.health?.hermes_enabled) return;
-      state.imageUploading = true;
+      if (!file) return;
+      const suffix = `.${String(file.name || "").split(".").pop()}`.toLowerCase();
+      const isDocument = [".pdf", ".docx", ".xlsx"].includes(suffix);
+      if (!isDocument && !["image/png", "image/jpeg", "image/webp"].includes(file.type)) {
+        addMessage("agent", "仅支持 PNG、JPEG、WebP、PDF、DOCX 和 XLSX 附件。");
+        $("imageInput").value = "";
+        return;
+      }
+      if (!isDocument && !state.health?.hermes_enabled) {
+        addMessage("agent", "图片研究需要先启用多模态 AI；你仍可上传 PDF、DOCX 或 XLSX 文档进入资料库。");
+        $("imageInput").value = "";
+        return;
+      }
+      state.pendingImage = null;
+      state.pendingDocument = null;
+      state.imageUploading = !isDocument;
+      state.documentUploading = isDocument;
       renderImageAttachment();
       const form = new FormData();
       form.append("file", file, file.name);
       try {
-        state.pendingImage = await api("/me/uploads/images", { method: "POST", body: form });
+        if (isDocument) {
+          state.pendingDocument = await api("/me/knowledge", { method: "POST", body: form });
+          state.pendingImage = null;
+          await loadKnowledge();
+        } else {
+          state.pendingImage = await api("/me/uploads/images", { method: "POST", body: form });
+          state.pendingDocument = null;
+        }
         $("useHermes").checked = true;
-      } catch {
-        state.pendingImage = null;
-        addMessage("agent", "这张图片未能安全读取，请使用 PNG、JPEG 或 WebP，并确认文件大小合适。");
+      } catch (error) {
+        if (isDocument) state.pendingDocument = null;
+        else state.pendingImage = null;
+        addMessage(
+          "agent",
+          error?.message || (
+            isDocument
+              ? "这份文档未能解析，请确认文件未损坏、未加密且不超过大小限制。"
+              : "这张图片未能安全读取，请使用 PNG、JPEG 或 WebP，并确认文件大小合适。"
+          )
+        );
       } finally {
         state.imageUploading = false;
+        state.documentUploading = false;
         renderImageAttachment();
       }
     }
@@ -296,6 +337,10 @@ async function ensureUser() {
       }
       if (state.pendingImage) {
         $("agentMode").textContent = `AI 图像研究${evaluationSuffix}`;
+        return;
+      }
+      if (state.pendingDocument) {
+        $("agentMode").textContent = `AI 文档研究${evaluationSuffix}`;
         return;
       }
       if (state.workspacePage === "agent") {
