@@ -1091,6 +1091,51 @@ def test_sina_market_breadth_reuses_last_completed_session_for_zero_placeholder(
     assert database.list_market_breadth_snapshots() == []
 
 
+def test_sina_market_breadth_reuses_last_completed_session_for_preopen_snapshot(
+    tmp_path: Path,
+):
+    database = Database(tmp_path / "workspaces")
+    database.initialize()
+    provider = SinaMarketBreadthProvider(database)
+    usable = provider._parse(
+        [
+            {
+                "symbol": "sh600000",
+                "changepercent": 1.2,
+                "amount": 100_000_000,
+                "ticktime": "15:00:00",
+            },
+            {
+                "symbol": "sz000001",
+                "changepercent": -0.5,
+                "amount": 200_000_000,
+                "ticktime": "15:00:01",
+            },
+            {
+                "symbol": "bj920001",
+                "changepercent": 0,
+                "amount": 30_000_000,
+                "ticktime": "15:30:00",
+            },
+        ],
+        total_expected=3,
+    )
+    preopen = deepcopy(usable)
+    preopen["coverage"]["latest_tick_time"] = "09:29:05"
+    preopen["turnover"]["total_amount_cny"] = 24_647_475_780
+    preopen["turnover"]["total_amount_100m_cny"] = 246.47
+    database.put_cache(provider.LAST_USABLE_CACHE_KEY, usable, 3600)
+    database.put_cache(provider.CACHE_KEY, preopen, 3600)
+
+    result = provider.fetch_breadth()
+
+    assert result["status"] == "available"
+    assert result["served_as_previous_close"] is True
+    assert result["snapshot_mode"] == "previous_completed_session"
+    assert result["coverage"]["latest_tick_time"] == "15:30:00"
+    assert result["turnover"]["total_amount_cny"] == 330_000_000
+
+
 def test_sina_market_breadth_rejects_zero_placeholder_without_fallback(
     tmp_path: Path,
 ):

@@ -12,6 +12,10 @@ import requests
 
 from app.catalog import normalize_symbol
 from app.providers.market import ProviderError
+from app.services.document_conversion import (
+    DocumentConversionError,
+    DocumentConversionService,
+)
 from app.utils import utc_now
 
 
@@ -37,6 +41,7 @@ class AShareFilingProvider:
 
     ANNOUNCEMENT_URL = "https://np-anotice-stock.eastmoney.com/api/security/ann"
     CONTENT_URL = "https://np-cnotice-stock.eastmoney.com/api/content/ann"
+    PDF_URL_TEMPLATE = "https://pdf.dfcfw.com/pdf/H2_{article_code}_1.pdf"
 
     def __init__(
         self,
@@ -129,7 +134,10 @@ class AShareFilingProvider:
         article_code = str(report.get("article_code") or "").strip()
         if not article_code:
             raise ValueError("财报候选缺少 article_code")
-        first = self._fetch_content_page(article_code, 1)
+        try:
+            first = self._fetch_content_page(article_code, 1)
+        except (requests.RequestException, ProviderError):
+            return self._fetch_pdf_document(report)
         total_pages = _integer(first.get("page_size")) or 1
         requested_pages = min(total_pages, self.max_content_pages)
         parts = [str(first.get("notice_content") or "")]
@@ -187,6 +195,37 @@ class AShareFilingProvider:
             ).hexdigest(),
             "source": "company_filing",
             "warnings": warnings,
+            "fetched_at": utc_now(),
+        }
+
+    def _fetch_pdf_document(self, report: dict[str, Any]) -> dict[str, Any]:
+        article_code = str(report.get("article_code") or "").strip()
+        pdf_url = self.PDF_URL_TEMPLATE.format(article_code=article_code)
+        response = self.http_get(
+            pdf_url,
+            headers={"User-Agent": _UA, "Referer": "https://data.eastmoney.com/"},
+            timeout=30,
+        )
+        response.raise_for_status()
+        try:
+            converted = DocumentConversionService().convert(
+                raw=bytes(response.content),
+                original_name=f"{article_code}.pdf",
+            )
+        except DocumentConversionError as exc:
+            raise ProviderError("financial report PDF conversion failed") from exc
+        content_text = _clean_content(converted.markdown)
+        if len(content_text) < 100:
+            raise ProviderError("financial report PDF content is empty or too short")
+        return {
+            **report,
+            "content_text": content_text,
+            "attach_url": pdf_url,
+            "content_hash": hashlib.sha256(
+                content_text.encode("utf-8")
+            ).hexdigest(),
+            "source": "company_filing",
+            "warnings": ["正文 API 不可用，已从官方 PDF 提取财报全文"],
             "fetched_at": utc_now(),
         }
 

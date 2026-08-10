@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from types import SimpleNamespace
+
+from requests.exceptions import ProxyError
 
 from app.db import Database
 from app.providers.filings import AShareFilingProvider
@@ -154,6 +157,57 @@ def test_provider_excludes_financial_report_disclosure_notice():
     )
 
     assert [report["article_code"] for report in reports] == ["AN2026Q1"]
+
+
+def test_provider_falls_back_to_official_pdf_when_content_api_is_unreachable(
+    monkeypatch,
+):
+    calls = []
+
+    class PdfResponse:
+        content = b"%PDF-1.7 test document"
+
+        def raise_for_status(self):
+            return None
+
+    class StubConverter:
+        def convert(self, *, raw, original_name):
+            assert raw == PdfResponse.content
+            assert original_name == "AN2026Q1.pdf"
+            return SimpleNamespace(markdown="财报正文" * 40)
+
+    def http_get(url, **kwargs):
+        calls.append((url, kwargs.get("params")))
+        if url == AShareFilingProvider.CONTENT_URL:
+            raise ProxyError("content API is unavailable")
+        return PdfResponse()
+
+    monkeypatch.setattr(
+        "app.providers.filings.DocumentConversionService",
+        StubConverter,
+        raising=False,
+    )
+    provider = AShareFilingProvider(http_get=http_get)
+
+    document = provider.fetch_document(
+        {
+            "symbol": "300308.SZ",
+            "article_code": "AN2026Q1",
+            "title": "中际旭创:2026年一季度报告",
+            "document_type": "first_quarter",
+            "report_period": "2026-03-31",
+            "notice_date": "2026-04-16",
+            "published_at": "2026-04-16T18:49:14+08:00",
+            "source": "company_filing",
+            "source_url": "https://data.eastmoney.com/notices/detail/300308/AN2026Q1.html",
+        }
+    )
+
+    assert calls[0][0] == AShareFilingProvider.CONTENT_URL
+    assert calls[1][0] == "https://pdf.dfcfw.com/pdf/H2_AN2026Q1_1.pdf"
+    assert document["content_text"] == "财报正文" * 40
+    assert document["attach_url"] == "https://pdf.dfcfw.com/pdf/H2_AN2026Q1_1.pdf"
+    assert document["warnings"] == ["正文 API 不可用，已从官方 PDF 提取财报全文"]
 
 
 def test_filing_cause_extractor_rejects_inventory_table_and_policy_templates():

@@ -1846,25 +1846,27 @@ class SinaMarketBreadthProvider:
             ) from exc
 
     def _resolve_zero_placeholder(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if self._is_usable_completed_snapshot(payload):
+        if self._is_completed_turnover_snapshot(payload):
             self.database.put_cache(
                 self.LAST_USABLE_CACHE_KEY,
                 payload,
                 self.LAST_USABLE_TTL_SECONDS,
             )
             return payload
-        if not self._is_zero_placeholder(payload):
+        is_zero_snapshot = self._is_zero_placeholder(payload)
+        is_preopen_snapshot = self._is_preopen_placeholder(payload)
+        if not is_zero_snapshot and not is_preopen_snapshot:
             return payload
 
         fallback = self.database.get_cache(
             self.LAST_USABLE_CACHE_KEY, allow_stale=True
         )
-        if not self._is_usable_completed_snapshot(fallback):
+        if not self._is_completed_turnover_snapshot(fallback):
             fallback = next(
                 (
                     item
                     for item in self.database.list_market_breadth_snapshots(limit=21)
-                    if self._is_usable_completed_snapshot(item)
+                    if self._is_completed_turnover_snapshot(item)
                 ),
                 None,
             )
@@ -1873,6 +1875,10 @@ class SinaMarketBreadthProvider:
             resolved["cache_hit"] = True
             resolved["served_as_previous_close"] = True
             resolved["snapshot_mode"] = "previous_completed_session"
+            if is_preopen_snapshot:
+                resolved.setdefault("warnings", []).append(
+                    "pre-open snapshot rejected; served the previous completed market session"
+                )
             resolved.setdefault("warnings", []).append(
                 "盘前或上游占位快照全部为零，已保留上一完整交易日的全市场广度、成交额与涨跌分布。"
             )
@@ -1880,7 +1886,11 @@ class SinaMarketBreadthProvider:
 
         unavailable = deepcopy(payload)
         unavailable["status"] = "unavailable"
-        unavailable["snapshot_mode"] = "zero_placeholder_rejected"
+        unavailable["snapshot_mode"] = (
+            "preopen_snapshot_rejected"
+            if is_preopen_snapshot and not is_zero_snapshot
+            else "zero_placeholder_rejected"
+        )
         unavailable["breadth"] = {}
         unavailable["turnover"] = {"status": "unavailable"}
         unavailable["distribution"] = {"status": "unavailable"}
@@ -1889,6 +1899,15 @@ class SinaMarketBreadthProvider:
             "盘前或上游占位快照全部为零，且尚无上一完整交易日快照；当前拒绝确认全市场广度。"
         )
         return unavailable
+
+    @classmethod
+    def _is_preopen_placeholder(cls, payload: dict[str, Any] | None) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        tick_seconds = cls._tick_seconds(
+            (payload.get("coverage") or {}).get("latest_tick_time")
+        )
+        return tick_seconds is not None and tick_seconds < 9 * 3600 + 30 * 60
 
     @staticmethod
     def _is_zero_placeholder(payload: dict[str, Any] | None) -> bool:
