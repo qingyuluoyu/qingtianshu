@@ -42,14 +42,17 @@ describe("advisor adapters", () => {
     const structured = assistant.metadata?.structuredAnswer;
     expect(structured?.status).toBe("partial");
     expect(structured?.confirmedFacts).toEqual(["三季度经营性现金流为正"]);
-    expect(structured?.citations[0].dataTime).toBe("2026-09-30");
+    expect(structured?.citations?.[0]?.dataTime).toBe("2026-09-30");
     // 用户消息 metadata 为 null 时不崩溃。
     expect(detail.messages[0].metadata).toBeNull();
   });
 
   it("throws ContractError on wrong structured_answer contract version", () => {
     const payload = conversationDetailPayload();
-    payload.messages[1].metadata.structured_answer.contract_version = "other_v9";
+    const metadata = payload.messages[1].metadata;
+    expect(metadata).not.toBeNull();
+    if (!metadata) throw new Error("fixture requires assistant metadata");
+    metadata.structured_answer.contract_version = "other_v9";
     expect(() => parseConversationDetail(payload)).toThrow(ContractError);
   });
 

@@ -57,6 +57,8 @@ export type IndexCard = {
   latestClose: number | null;
   change1d: number | null;
   return1dPct: number | null;
+  source: string | null;
+  fetchedAt: string | null;
   marketTimestamp: string | null;
   isStale: boolean | null;
 };
@@ -65,6 +67,8 @@ export type Indices = { generatedAt: string | null; items: IndexCard[]; warnings
 
 export type Breadth = {
   status: string;
+  source: string | null;
+  fetchedAt: string | null;
   marketDate: string | null;
   marketTimestamp: string | null;
   isStale: boolean | null;
@@ -200,6 +204,16 @@ function strings(value: unknown): string[] {
   return list(value).filter((item): item is string => typeof item === "string");
 }
 
+function sourceNames(value: unknown): string | null {
+  const names = list(value).flatMap((raw) => {
+    if (typeof raw === "string" && raw.length > 0) return [raw];
+    const item = optionalRecord(raw);
+    const name = optionalString(item?.name) ?? optionalString(item?.source);
+    return name ? [name] : [];
+  });
+  return names.length > 0 ? [...new Set(names)].join(" / ") : null;
+}
+
 export function parseOverview(value: unknown): Overview {
   const root = record(value);
   if (root.contract_version !== "today_overview_v1") {
@@ -292,6 +306,8 @@ export function parseIndices(value: unknown): Indices {
         // change_1d 与 return_1d_pct 均为后端已计算好的点位/百分数，直通不缩放。
         change1d: optionalNumber(metrics?.change_1d),
         return1dPct: optionalNumber(metrics?.return_1d_pct),
+        source: optionalString(item?.source),
+        fetchedAt: optionalString(item?.fetched_at),
         marketTimestamp: optionalString(item?.market_timestamp),
         isStale: optionalBoolean(item?.is_stale),
       };
@@ -329,6 +345,8 @@ export function parseBreadth(value: unknown): Breadth {
   const activeSpec = bins7 !== null ? binSpec7 : binSpec5;
   return {
     status: optionalString(root.status) ?? "unavailable",
+    source: optionalString(root.source),
+    fetchedAt: optionalString(root.fetched_at),
     marketDate: optionalString(root.market_date),
     marketTimestamp: optionalString(root.market_timestamp),
     isStale: optionalBoolean(root.is_stale),
@@ -359,7 +377,8 @@ export function parseBreadth(value: unknown): Breadth {
     turnoverHistory: (() => {
       // 优先读取 market_breadth() enrichment 写入的顶层 turnover_history；
       // 防御性回退到 provider 的 turnover.history_comparison（仅单点百分比，非时间序列）。
-      const raw = root.turnover_history ?? root.turnover?.history_comparison;
+      const turnover = optionalRecord(root.turnover);
+      const raw = root.turnover_history ?? turnover?.history_comparison;
       return list(raw).flatMap((entry) => {
         const record = optionalRecord(entry);
         const date = optionalString(record?.date);
@@ -546,6 +565,8 @@ export type LatestResearchReport = {
   forecastEps: number | null;
   reportUrl: string | null;
   summary: string | null;
+  source: string | null;
+  fetchedAt: string | null;
 };
 
 export type LatestResearchReports = { status: string; items: LatestResearchReport[] };
@@ -570,6 +591,8 @@ export function parseLatestResearchReports(value: unknown): LatestResearchReport
         forecastEps: optionalNumber(item.forecast_eps),
         reportUrl: optionalString(item.report_url),
         summary: optionalString(item.summary),
+        source: sourceNames(item.sources),
+        fetchedAt: optionalString(item.source_fetched_at),
       }];
     }),
   };
@@ -582,6 +605,8 @@ export type GlobalIndex = {
   latestClose: number | null;
   change1d: number | null;
   return1dPct: number | null;
+  source: string | null;
+  fetchedAt: string | null;
   marketTimestamp: string | null;
   isStale: boolean | null;
 };
@@ -605,6 +630,8 @@ export function parseGlobalIndices(value: unknown): GlobalIndices {
         change1d: optionalNumber(metrics?.change_1d),
         // return_1d_pct 后端已是百分数，直通不缩放。
         return1dPct: optionalNumber(metrics?.return_1d_pct),
+        source: optionalString(item.source),
+        fetchedAt: optionalString(item.fetched_at),
         marketTimestamp: optionalString(item.market_timestamp),
         isStale: optionalBoolean(item.is_stale),
       }];
@@ -619,6 +646,8 @@ export type LiveMarket = {
   latestPrice: number | null;
   pctChange: number | null;
   currency: string | null;
+  source: string | null;
+  fetchedAt: string | null;
   marketTimestamp: string | null;
   isStale: boolean | null;
 };
@@ -641,6 +670,8 @@ export function parseLiveMarkets(value: unknown): LiveMarkets {
         // pct_change 后端已是百分数，直通不缩放。
         pctChange: optionalNumber(item.pct_change),
         currency: optionalString(item.currency),
+        source: optionalString(item.source),
+        fetchedAt: optionalString(item.fetched_at),
         marketTimestamp: optionalString(item.market_timestamp),
         isStale: optionalBoolean(item.is_stale),
       }];
@@ -659,6 +690,7 @@ export type MarketAnomaly = {
 
 export type MarketAnomalies = {
   status: string;
+  source: string | null;
   marketTimestamp: string | null;
   items: MarketAnomaly[];
 };
@@ -667,6 +699,7 @@ export function parseMarketAnomalies(value: unknown): MarketAnomalies {
   const root = record(value);
   return {
     status: optionalString(root.status) ?? "unavailable",
+    source: optionalString(root.source),
     marketTimestamp: optionalString(root.market_timestamp),
     items: list(root.items).flatMap((raw) => {
       const item = optionalRecord(raw);
@@ -689,6 +722,8 @@ export type CapitalFlowPoint = { time: string; value100mCny: number };
 
 export type CapitalFlow = {
   status: string;
+  source: string | null;
+  fetchedAt: string | null;
   marketTimestamp: string | null;
   isStale: boolean | null;
   mainNetInflow100mCny: number | null;
@@ -703,6 +738,8 @@ export function parseCapitalFlow(value: unknown): CapitalFlow {
   const summary = optionalRecord(root.summary);
   return {
     status: optionalString(root.status) ?? "unavailable",
+    source: optionalString(root.source),
+    fetchedAt: optionalString(root.fetched_at),
     marketTimestamp: optionalString(root.market_timestamp),
     isStale: optionalBoolean(root.is_stale),
     // main_net_inflow_100m_cny 后端已换算为亿元，直通不缩放。

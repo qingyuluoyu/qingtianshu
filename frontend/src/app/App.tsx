@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { getSession, isFormalAccount, signOut } from "../api/session";
@@ -8,11 +8,7 @@ import { AuthModal } from "../features/auth/AuthModal";
 import { useUnauthorizedBoundary } from "../features/auth/useUnauthorizedBoundary";
 import { TodayPage } from "../features/today/TodayPage";
 import { usePublicEvents } from "../features/today/events";
-import { StockResearchPage } from "../features/stock-research/StockResearchPage";
 import { WatchlistPage } from "../features/watchlist/WatchlistPage";
-import { ScreeningPage } from "../features/screening/ScreeningPage";
-import { ResearchCenterPage } from "../features/research-center/ResearchCenterPage";
-import { AdvisorPage } from "../features/advisor/AdvisorPage";
 import { MarketDataPage } from "../features/market-data/MarketDataPage";
 import { NotFoundPage } from "../pages/NotFoundPage";
 import { SearchPage } from "../features/search/SearchPage";
@@ -23,8 +19,17 @@ import { ArticlesPage } from "../features/articles/ArticlesPage";
 import { StrategiesPage } from "../features/strategies/StrategiesPage";
 import "../styles/global.css";
 
+const ScreeningPage = lazy(() => import("../features/screening/ScreeningPage").then(({ ScreeningPage: Component }) => ({ default: Component })));
+const StockResearchPage = lazy(() => import("../features/stock-research/StockResearchPage").then(({ StockResearchPage: Component }) => ({ default: Component })));
+const ResearchCenterPage = lazy(() => import("../features/research-center/ResearchCenterPage").then(({ ResearchCenterPage: Component }) => ({ default: Component })));
+const AdvisorPage = lazy(() => import("../features/advisor/AdvisorPage").then(({ AdvisorPage: Component }) => ({ default: Component })));
+
+export function RouteLoadingFallback() {
+  return <div role="status">页面加载中…</div>;
+}
+
 function isProtectedPath(pathname: string): boolean {
-  return ["/today", "/screening", "/watchlist", "/market-data", "/research-center", "/risk-profile", "/knowledge", "/articles", "/strategies"].includes(pathname)
+  return ["/screening", "/watchlist", "/market-data", "/research-center", "/risk-profile", "/knowledge", "/articles", "/strategies"].includes(pathname)
     || /^\/stocks\/[^/]+$/.test(pathname)
     || /^\/advisor(?:\/[^/]+)?$/.test(pathname);
 }
@@ -40,11 +45,7 @@ function ProductApp() {
   const eventState = usePublicEvents(formal);
 
   useEffect(() => {
-    if (session.isLoading || formal || !isProtectedPath(location.pathname)) return;
-    if (session.isError) {
-      // 会话查询出错时（端点 404 / 网络异常），清除错误状态并触发登录。
-      queryClient.setQueryData(["session"], null);
-    }
+    if (session.isLoading || session.isError || formal || !isProtectedPath(location.pathname)) return;
     if (promptedLocationRef.current === location.key) return;
     promptedLocationRef.current = location.key;
     setAuthOpen(true);
@@ -70,7 +71,8 @@ function ProductApp() {
     setAuthOpen(true);
   };
   return <>
-    <Routes>
+    {session.isError ? <div role="alert">会话状态暂不可用，请刷新后重试。</div> : null}
+    <Suspense fallback={<RouteLoadingFallback />}><Routes>
       <Route element={<AppShell authTriggerRef={authTriggerRef} onOpenAuth={() => setAuthOpen(true)} onSignOut={() => void logout()} session={formal ? session.data ?? null : null} />}>
         <Route index element={<Navigate replace to="/today" />} />
         <Route element={<TodayPage authenticated={formal} eventState={eventState} />} path="/today" />
@@ -82,13 +84,13 @@ function ProductApp() {
         <Route element={<MarketDataPage authenticated={formal} />} path="/market-data" />
         <Route element={<SearchPage authenticated={formal} />} path="/search" />
         <Route element={<FundsPage authenticated={formal} />} path="/funds" />
-        <Route element={<RiskProfilePage authenticated={formal} />} path="/risk-profile" />
+        <Route element={<RiskProfilePage authenticated={formal} session={formal ? session.data ?? null : null} />} path="/risk-profile" />
         <Route element={<KnowledgePage authenticated={formal} />} path="/knowledge" />
         <Route element={<ArticlesPage authenticated={formal} />} path="/articles" />
         <Route element={<StrategiesPage authenticated={formal} />} path="/strategies" />
         <Route element={<NotFoundPage />} path="*" />
       </Route>
-    </Routes>
+    </Routes></Suspense>
     {authOpen && !formal ? <AuthModal onClose={() => setAuthOpen(false)} returnFocusRef={authTriggerRef} /> : null}
   </>;
 }

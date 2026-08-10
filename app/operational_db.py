@@ -717,7 +717,7 @@ class OperationalDatabase:
                             if isinstance(row["payload_json"], dict)
                             else row["payload_json"],
                             int(row["priority"]),
-                            due,
+                            now,
                             int(row["max_attempts"]),
                             f"schedule:{row['name']}:{due.isoformat()}",
                             now,

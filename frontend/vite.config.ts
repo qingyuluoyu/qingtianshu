@@ -1,6 +1,6 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
-import { resolveProxyTarget } from "./vite.proxy";
+import { resolveProxyTarget, sessionProxyPaths } from "./vite.proxy";
 
 const backend = resolveProxyTarget();
 const apiProxy = { target: backend, changeOrigin: true };
@@ -23,7 +23,8 @@ export default defineConfig({
   server: {
     proxy: {
       "/auth": apiProxy,
-      "/session/*": apiProxy,
+      [sessionProxyPaths[0]]: apiProxy,
+      [sessionProxyPaths[1]]: apiProxy,
       "/sessions": apiProxy,
       "/users": apiProxy,
       "/v1": apiProxy,

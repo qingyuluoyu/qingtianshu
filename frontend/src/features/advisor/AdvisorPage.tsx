@@ -636,6 +636,11 @@ export function AdvisorPage({ authenticated }: Props) {
         </p>
       ) : null}
 
+      <section aria-label="顾问研究工作台" className={styles.workflowSection}>
+        <div className={styles.sectionLead}>
+          <div><p>研究对话</p><h2>提出问题，核对证据，再决定是否写入</h2></div>
+          <span>会话保留推理过程；证据与候选写回只在有真实记录时出现。</span>
+        </div>
       <div className={`${styles.layout} ${showDrawer ? "" : styles.layoutNoDrawer}`}>
         <aside className={`${styles.card} ${styles.sidebar}`} aria-label="会话列表与上下文">
           <ConversationSidebar
@@ -652,7 +657,7 @@ export function AdvisorPage({ authenticated }: Props) {
           <ContextBar context={context} />
         </aside>
 
-        <main className={styles.mainColumn}>
+        <section aria-label="研究对话工作区" className={styles.mainColumn}>
           <ModuleCard
             error={conversationId !== null && conversationQuery.isError}
             meta={detail ? `${detail.messages.length} 条消息` : undefined}
@@ -670,8 +675,9 @@ export function AdvisorPage({ authenticated }: Props) {
             {sendMutation.data?.status === "clarification" ? (
               <ClarifyingQuestionFlow requiredFields={sendMutation.data.requiredFields} />
             ) : null}
-            <div className={styles.composer}>
-              <textarea
+            <section aria-label="提出研究问题" className={styles.composerPanel}>
+              <div className={styles.composer}>
+                <textarea
                 aria-label="向顾问提问"
                 disabled={sendMutation.isPending}
                 onChange={(event) => setDraft(event.target.value)}
@@ -686,22 +692,23 @@ export function AdvisorPage({ authenticated }: Props) {
                 rows={3}
                 value={draft}
               />
-              <div className={styles.composerBar}>
-                <span className={styles.meta}>
-                  {context.symbol ? `将携带标的 ${context.symbol} 与页面上下文一并发送。` : "未携带页面上下文。"}
-                </span>
-                <button
-                  className={styles.sendButton}
-                  disabled={sendMutation.isPending || draft.trim().length === 0}
-                  onClick={send}
-                  type="button"
-                >
-                  {sendMutation.isPending ? "生成中…" : "发送"}
-                </button>
+                <div className={styles.composerBar}>
+                  <span className={styles.meta}>
+                    {context.symbol ? `将携带标的 ${context.symbol} 与页面上下文一并发送。` : "未携带页面上下文。"}
+                  </span>
+                  <button
+                    className={styles.sendButton}
+                    disabled={sendMutation.isPending || draft.trim().length === 0}
+                    onClick={send}
+                    type="button"
+                  >
+                    {sendMutation.isPending ? "生成中…" : "发送"}
+                  </button>
+                </div>
               </div>
-            </div>
+            </section>
           </ModuleCard>
-        </main>
+        </section>
 
         {showDrawer ? (
           <aside className={styles.drawerColumn} aria-label="证据与候选写回">
@@ -759,6 +766,7 @@ export function AdvisorPage({ authenticated }: Props) {
           </aside>
         ) : null}
       </div>
+      </section>
 
       {confirmCandidate ? (
         <ConfirmCandidateDialog

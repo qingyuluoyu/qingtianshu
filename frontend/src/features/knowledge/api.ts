@@ -1,4 +1,5 @@
 import { api } from "../../api/client";
+import { requestError } from "../../api/requestError";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -29,7 +30,7 @@ export type KnowledgeDocument = {
 
 export async function listKnowledgeDocuments(): Promise<KnowledgeDocument[]> {
   const { data, error, response } = await api.GET("/me/knowledge");
-  if (!response.ok || error || data === undefined) return [];
+  if (!response.ok || error || data === undefined) throw requestError("知识库列表", response.status);
   const root = asRecord(data);
   const items = Array.isArray(root?.items) ? root.items : [];
   return items.flatMap((raw) => {
@@ -52,7 +53,7 @@ export async function getKnowledgeDocument(id: string): Promise<KnowledgeDocumen
   const { data, error, response } = await api.GET("/me/knowledge/{document_id}", {
     params: { path: { document_id: id } },
   });
-  if (!response.ok || error || data === undefined) return null;
+  if (!response.ok || error || data === undefined) throw requestError("知识库详情", response.status);
   const root = asRecord(data);
   if (!root) return null;
   return {
@@ -71,12 +72,13 @@ export async function uploadKnowledgeDocument(title: string, file: File): Promis
   const form = new FormData();
   form.append("title", title);
   form.append("file", file);
-  const { data, error, response } = await api.POST("/me/knowledge", {
+  const response = await fetch("/me/knowledge", {
     body: form,
-    headers: {}, // openapi-fetch will set Content-Type with boundary automatically for FormData
+    credentials: "same-origin",
+    method: "POST",
   });
-  if (!response.ok || error || data === undefined) return null;
-  const root = asRecord(data);
+  if (!response.ok) throw new Error(`个人资料上传请求失败 (${response.status})`);
+  const root = asRecord(await response.json());
   const doc = asRecord(root?.document ?? root);
   if (!doc) return null;
   return {
@@ -95,5 +97,6 @@ export async function deleteKnowledgeDocument(id: string): Promise<boolean> {
   const { response, error } = await api.DELETE("/me/knowledge/{document_id}", {
     params: { path: { document_id: id } },
   });
-  return response.ok && !error;
+  if (!response.ok || error) throw requestError("删除知识库资料", response.status);
+  return true;
 }

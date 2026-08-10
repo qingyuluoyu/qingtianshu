@@ -1546,6 +1546,10 @@ def test_today_overview_requires_session_and_returns_independent_components(clie
 
     assert response.status_code == 200
     payload = response.json()
+    assert (
+        payload["market"]["breadth"]["source"]
+        == "A-share breadth provider not configured"
+    )
     assert payload["contract_version"] == "today_overview_v1"
     assert payload["session"]["key"] in {
         "pre_market",
@@ -2090,6 +2094,14 @@ def test_broker_research_report_market_list_aggregates_ingested_snapshots(
     assert first["published_at"] == "2026-07-18"
     assert first["rating"] == "买入"
     assert first["previous_rating"] == "增持"
+    assert first["sources"] == [
+        {
+            "name": "Fake analyst expectations",
+            "url": "https://example.invalid/expectations",
+            "scope": "券商研报统计与盈利预测汇总",
+        }
+    ]
+    assert first["source_fetched_at"] == "2026-07-21T08:00:00+00:00"
     # EPS 直通锁：券商预测值（元/股）原样透出，不做任何缩放。
     assert first["forecast_eps"] == [
         {"year": 2026, "value": 1.4},
@@ -2643,6 +2655,7 @@ def test_market_anomalies_returns_ranked_items(client, app):
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "available"
+    assert payload["source"] == "Fake A-share breadth"
     assert payload["market_date"] == "2026-08-05"
     assert payload["is_stale"] is False
     assert [item["symbol"] for item in payload["items"]] == [

@@ -5,6 +5,8 @@
 .searchInput { width: min(100%, 420px); padding: 10px 14px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); font-size: 14px; }
 .searchInput:focus { border-color: #84adff; outline: none; }
 .loading { padding: 24px; text-align: center; color: var(--ink-muted); font-size: 13px; }
+.error { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; border: 1px solid #f3b8b4; border-radius: 12px; background: #fff5f4; color: #9d2b21; font-size: 13px; }
+.error button { border: 1px solid currentcolor; border-radius: 7px; background: transparent; color: inherit; cursor: pointer; padding: 6px 10px; white-space: nowrap; }
 .empty { padding: 40px 20px; text-align: center; color: var(--ink-muted); font-size: 13px; border: 1px dashed var(--border); border-radius: 12px; background: var(--surface); }
 .hint { margin-top: 8px; font-size: 11px; color: #98a2b3; }
 .results { display: grid; gap: 18px; }

@@ -913,7 +913,7 @@ def _normalize_stock_current_quote_ma20_relation(
 def _current_quote_is_at_common_a_share_limit(evidence: dict[str, Any]) -> bool:
     symbol = str(evidence.get("symbol") or "")
     quote_change = (evidence.get("current_quote") or {}).get("pct_change")
-    if not symbol.endswith((".SS", ".SZ")) or not isinstance(
+    if not symbol.endswith((".SS", ".SZ", ".BJ")) or not isinstance(
         quote_change, (int, float)
     ):
         return True

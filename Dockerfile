@@ -60,14 +60,15 @@ RUN apt-get update \
     && apt-get purge --yes --auto-remove curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
+COPY pyproject.toml uv.lock ./
 COPY app ./app
 COPY --from=frontend-build /frontend/dist /app/frontend/dist
-ARG PIP_INDEX_URL=https://mirrors.cloud.tencent.com/pypi/simple
-RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" .
+RUN pip install --no-cache-dir "uv==0.7.12" \
+    && uv sync --frozen --no-dev
+ENV PATH="/app/.venv/bin:${PATH}"
 
 COPY scripts ./scripts
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-access-log"]

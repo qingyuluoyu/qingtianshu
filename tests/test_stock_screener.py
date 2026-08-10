@@ -100,7 +100,18 @@ class FakeTushareClient:
                         "grossprofit_margin": 30.0,
                         "netprofit_margin": 8.0,
                         "debt_to_assets": 55.0,
-                    }
+                    },
+                    {
+                        "ts_code": params["ts_code"],
+                        "ann_date": "20260328",
+                        "end_date": "20251231",
+                        "tr_yoy": revenue - 1.0,
+                        "netprofit_yoy": profit - 1.0,
+                        "roe": roe - 1.0,
+                        "grossprofit_margin": 30.0,
+                        "netprofit_margin": 8.0,
+                        "debt_to_assets": 55.0,
+                    },
                 ]
             )
         raise AssertionError(f"unexpected API: {api_name}")
@@ -249,7 +260,13 @@ class FakePersistedSnapshotDatabase:
                             "ann_date": "20260429",
                             "end_date": "20260331",
                             "roe": 8.0 + index,
-                        }
+                        },
+                        {
+                            "ts_code": code,
+                            "ann_date": "20260328",
+                            "end_date": "20251231",
+                            "roe": 7.0 + index,
+                        },
                     ],
                 )
                 for index, code in enumerate(self.codes)
@@ -288,7 +305,8 @@ def test_quality_screen_is_transparent_and_has_separate_data_dates():
     assert result["status"] == "ready"
     assert result["profile"]["key"] == "quality"
     assert result["data_meta"]["latest_completed_trade_date"] == "2026-07-21"
-    assert result["data_meta"]["financial_report_periods"] == ["2026-03-31"]
+    assert result["data_meta"]["financial_report_periods"] == ["2025-12-31"]
+    assert result["data_meta"]["financial_period_basis"] == "latest_announced_full_year"
     assert result["data_contract"]["contract_version"] == "stock_screen_data_v1"
     assert result["data_contract"]["data_version"].startswith("stock-screen-v1-")
     assert result["data_contract"]["as_of"]["market_date"] == "2026-07-21"
@@ -311,8 +329,8 @@ def test_quality_screen_is_transparent_and_has_separate_data_dates():
     assert result["items"][0]["name"] == "中际旭创"
     assert result["items"][0]["evidence_times"] == {
         "market_date": "2026-07-21",
-        "financial_report_period": "2026-03-31",
-        "financial_announcement_date": "2026-04-29",
+        "financial_report_period": "2025-12-31",
+        "financial_announcement_date": "2026-03-28",
     }
     assert result["items"][0]["source_contract"]["valuation"] == (
         "Tushare Pro:daily_basic"
@@ -326,6 +344,21 @@ def test_quality_screen_is_transparent_and_has_separate_data_dates():
     assert cached["data_meta"]["cache_hit"] is True
     assert fake.calls["trade_cal"] == 1
 
+
+def test_financial_packet_uses_latest_announced_full_year_for_quality_metrics():
+    packet = StockScreenerService._financial_packet(
+        pd.DataFrame(
+            [
+                {"end_date": "20260331", "ann_date": "20260430", "roe": 2.0},
+                {"end_date": "20251231", "ann_date": "20260328", "roe": 12.0},
+            ]
+        ),
+        period_basis="latest_announced_full_year",
+    )
+
+    assert packet["report_period"] == "2025-12-31"
+    assert packet["roe"] == 12.0
+    assert packet["period_basis"] == "latest_announced_full_year"
 
 def test_persisted_database_snapshot_keeps_screener_usable_without_live_provider():
     service = StockScreenerService(
@@ -349,7 +382,7 @@ def test_persisted_database_snapshot_keeps_screener_usable_without_live_provider
     }
     assert {item["name"] for item in result["items"]} == {"中兴通讯", "浦发银行"}
     assert all(
-        item["financials"]["report_period"] == "2026-03-31" for item in result["items"]
+        item["financials"]["report_period"] == "2025-12-31" for item in result["items"]
     )
     assert "生产数据库" in result["warnings"][0]
 
@@ -552,7 +585,7 @@ def test_agent_routes_product_screening_language_to_stock_screen(app):
     assert "股票池覆盖 5/5 只（100.0%）" in payload["answer"]
     assert "数据版本 stock-screen-v1-" in payload["answer"]
     assert "行情日 2026-07-21" in payload["answer"]
-    assert "财务报告期 2026-03-31" in payload["answer"]
+    assert "财务报告期 2025-12-31" in payload["answer"]
 
 
 def test_stock_screen_product_terms_route_to_expected_profiles():
@@ -576,7 +609,7 @@ def test_transient_financial_failure_is_retried_instead_of_becoming_a_gap():
 
     item = next(value for value in result["items"] if value["name"] == "中际旭创")
     assert item["financials"]["status"] == "available"
-    assert item["financials"]["report_period"] == "2026-03-31"
+    assert item["financials"]["report_period"] == "2025-12-31"
     assert "revenue_yoy" not in item["missing_fields"]
 
 
@@ -612,8 +645,8 @@ def test_stock_screen_agent_contract_keeps_scope_dates_and_readable_gaps():
     assert "股票池覆盖 5/5 只（100.0%）" in preview
     assert "数据版本 stock-screen-v1-" in preview
     assert "行情日 2026-07-21" in preview
-    assert "财务报告期 2026-03-31" in preview
-    assert "财报公告日 2026-04-29" in preview
+    assert "财务报告期 2025-12-31" in preview
+    assert "财报公告日 2026-03-28" in preview
     assert "最近完整交易日的估值或市值截面未返回该字段" in preview
     assert sources[0]["kind"] == "选股范围"
     assert "股票池覆盖 5/5 只" in sources[0]["summary"]

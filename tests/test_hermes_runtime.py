@@ -5,6 +5,8 @@ import json
 import subprocess
 import sys
 
+import pytest
+
 from app.hermes_runtime import (
     resolve_hermes_executable,
     resolve_hermes_python,
@@ -90,7 +92,12 @@ def test_resolve_hermes_python_preserves_virtualenv_symlink(tmp_path: Path):
     hermes = tmp_path / "venv" / "bin" / "hermes"
     _make_executable(base_python)
     venv_python.parent.mkdir(parents=True, exist_ok=True)
-    venv_python.symlink_to(base_python)
+    try:
+        venv_python.symlink_to(base_python)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink privilege is unavailable")
+        raise
     _make_executable(hermes, f"#!{venv_python}\nprint('hermes')\n")
 
     resolved = resolve_hermes_python(hermes)

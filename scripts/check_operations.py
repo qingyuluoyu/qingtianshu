@@ -18,6 +18,8 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--max-queue-lag-seconds", type=float, default=600)
     value.add_argument("--max-failure-rate-24h", type=float, default=0.2)
     value.add_argument("--skip-backup", action="store_true")
+    value.add_argument("--check-data-health", action="store_true")
+    value.add_argument("--max-data-health-age-seconds", type=float, default=300)
     return value
 
 
@@ -39,6 +41,10 @@ def main(argv: list[str] | None = None) -> None:
             max_queue_lag_seconds=max(0, args.max_queue_lag_seconds),
             max_failure_rate_24h=max(0, args.max_failure_rate_24h),
             check_backup=not args.skip_backup,
+            check_data_health=args.check_data_health,
+            max_data_health_age_seconds=max(
+                0, args.max_data_health_age_seconds
+            ),
         )
     finally:
         database.close()

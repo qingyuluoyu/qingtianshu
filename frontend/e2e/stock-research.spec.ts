@@ -164,6 +164,10 @@ async function mockStockResearch(page: Page) {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
+    if (path === "/session/status" && request.method() === "GET") {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ authenticated: true, session: accountSession }) });
+      return;
+    }
     if (path === "/session" && request.method() === "GET") {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(accountSession) });
       return;
@@ -198,6 +202,11 @@ async function mockStockResearch(page: Page) {
 }
 
 test("simulated overview renders header, research status and module states; tabs switch via URL", async ({ page }) => {
+  const runtimeErrors: string[] = [];
+  page.on("pageerror", (error) => runtimeErrors.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error" && !message.text().includes("404 (Not Found)")) runtimeErrors.push(message.text());
+  });
   await mockStockResearch(page);
   await page.goto("/stocks/000063");
   await expect(page.getByRole("heading", { name: /中兴通讯/ })).toBeVisible();
@@ -212,7 +221,16 @@ test("simulated overview renders header, research status and module states; tabs
 
   await page.getByRole("link", { name: "行情技术" }).click();
   await expect(page).toHaveURL(/tab=technical/);
-  await expect(page.getByRole("img", { name: "日 K 蜡烛与成交量图" })).toBeVisible();
+  const chart = page.getByRole("img", { name: "日 K 蜡烛与成交量图" });
+  await expect(chart).toBeVisible();
+  await expect(chart).toHaveAttribute("data-visible-count", "60");
+  await chart.dispatchEvent("wheel", { deltaY: -100 });
+  await expect(chart).not.toHaveAttribute("data-visible-count", "60");
+  await chart.dblclick();
+  await expect(chart).toHaveAttribute("data-visible-count", "60");
+  await chart.focus();
+  await chart.press("ArrowLeft");
+  await expect(page.getByTestId("kline-crosshair")).toBeVisible();
   await expect(page.getByText(/频率：日线/)).toBeVisible();
   await expect(page.getByText("-17.84%")).toBeVisible();
 
@@ -237,6 +255,7 @@ test("simulated overview renders header, research status and module states; tabs
   await expect(page.getByText(/暂无观察任务/)).toBeVisible();
   await expect(page.getByText("暂无该股票的持仓记录")).toBeVisible();
   await expect(page.getByText("深度研究会话尚未建立。")).toBeVisible();
+  expect(runtimeErrors).toEqual([]);
 });
 
 test("simulated module failure keeps other modules readable", async ({ page }) => {

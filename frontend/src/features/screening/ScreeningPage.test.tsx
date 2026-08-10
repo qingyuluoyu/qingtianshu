@@ -65,6 +65,13 @@ afterEach(() => {
 });
 
 describe("ScreeningPage 通用筛选模式", () => {
+  it("exposes method selection and candidate research as named workflow regions", async () => {
+    renderPage();
+    expect(within(screen.getByRole("region", { name: "选择方法" })).getByRole("group", { name: "选股模式" })).toBeInTheDocument();
+    const candidateRegion = screen.getByRole("region", { name: "候选研究" });
+    expect(await within(candidateRegion).findByRole("region", { name: "筛选候选" })).toBeInTheDocument();
+  });
+
   it("renders mode cards, filter builder, summary and candidate table with passthrough values", async () => {
     renderPage();
     // 三模式互斥卡片。
@@ -75,6 +82,7 @@ describe("ScreeningPage 通用筛选模式", () => {
     // 条件面板（档案来自 profiles）。
     expect(await screen.findByLabelText("筛选档案")).toBeInTheDocument();
     expect(screen.getByLabelText("ROE 下限（%）")).toBeInTheDocument();
+    expect(await screen.findByRole("columnheader", { name: "近 5 日价格涨跌" })).toBeInTheDocument();
     // 摘要：真实命中总数 + 不代表全市场（§5.2 禁全市场伪装）。
     expect(await screen.findByText("命中候选（真实总数）")).toBeInTheDocument();
     expect(screen.getByText("不代表全市场")).toBeInTheDocument();
@@ -185,6 +193,7 @@ describe("ScreeningPage 回测模式", () => {
     // 纯 SVG 净值图 + 口径说明。
     expect(screen.getByRole("img", { name: "回测净值与基准净值曲线" })).toBeInTheDocument();
     expect(screen.getAllByText(/沪深300/).length).toBeGreaterThan(0);
+    expect(screen.getByText("研究基线，不可用于执行或绩效宣传")).toBeInTheDocument();
     expect(mockBacktest).toHaveBeenCalledWith("1y");
   });
 

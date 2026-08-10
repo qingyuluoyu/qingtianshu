@@ -52,8 +52,12 @@ export async function postChat(body: ChatRequestBody): Promise<ChatResponse> {
     body: {
       message: body.message,
       symbol: body.symbol ?? null,
+      model_tier: "economy",
+      execute_agent: true,
+      prefer_precomputed: false,
       conversation_id: body.conversationId ?? null,
       request_id: body.requestId ?? null,
+      quality_scope: "user",
     },
   });
   return unwrap(response, data, error, parseChatResponse);

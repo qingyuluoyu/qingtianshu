@@ -64,5 +64,6 @@ def main(argv: list[str] | None = None) -> None:
         "app.main:app",
         host=args.host,
         port=args.port,
+        access_log=False,
         timeout_graceful_shutdown=3,
     )

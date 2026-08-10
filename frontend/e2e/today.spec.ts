@@ -166,10 +166,13 @@ async function mockToday(page: Page, overrides: Record<string, Override> = {}) {
 }
 
 test("simulated normal state renders real-contract modules on desktop and mobile", async ({ page }) => {
+  const runtimeErrors: string[] = [];
+  page.on("pageerror", (error) => runtimeErrors.push(error.message));
+  page.on("console", (message) => { if (message.type() === "error") runtimeErrors.push(message.text()); });
   await mockToday(page);
   await page.goto("/today");
   await expect(page.getByRole("heading", { name: "今日观察" })).toBeVisible();
-  await expect(page.getByText("今天市场发生了什么？你应该关注哪些重点信号？")).toBeVisible();
+  await expect(page.getByText("先处理你的研究事项，再核对市场事实与新增线索。")).toBeVisible();
   await expect(page.getByText("沪深300")).toBeVisible();
   await expect(page.getByText("+9.31")).toBeVisible();
   await expect(page.getByText("中科曙光")).toBeVisible();
@@ -194,13 +197,17 @@ test("simulated normal state renders real-contract modules on desktop and mobile
   await page.getByRole("tab", { name: "全部" }).click();
   await expect(page.getByText("暂无研究变化")).toBeVisible();
   await expect(page.getByText("缓存 / 延迟数据")).toBeVisible();
-  await expect(page.getByRole("button", { name: "刷新" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "刷新数据" })).toBeVisible();
   await expect(page.getByRole("link", { name: "核验正式披露" })).toHaveAttribute("href", "/stocks/000063.SZ");
   await expect(page.getByText(/不构成买卖、仓位或收益建议/)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  expect(await page.locator("main article").evaluateAll((cards) => cards.slice(0, 5).every((card) => card.scrollWidth <= card.clientWidth))).toBe(true);
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole("region", { name: "主要指数" })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   await page.getByRole("link", { name: "核验正式披露" }).click();
   await expect(page).toHaveURL(/\/stocks\/000063\.SZ$/);
+  expect(runtimeErrors).toEqual([]);
 });
 
 test("simulated loading state is per-module and resolves without a page-wide blocker", async ({ page }) => {
@@ -296,6 +303,10 @@ test("simulated private 401 returns control to the existing authentication gate"
     }
     if (url.pathname === "/events") {
       await route.fulfill({ status: 200, contentType: "text/event-stream", body: "" });
+      return;
+    }
+    if (/^\/indices\/[^/]+\/history$/.test(url.pathname)) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(indexHistory) });
       return;
     }
     if (defaults[url.pathname] !== undefined) {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from app.config import Settings
@@ -19,6 +20,8 @@ def build_operations_report(
     max_queue_lag_seconds: float = 600,
     max_failure_rate_24h: float = 0.2,
     check_backup: bool = True,
+    check_data_health: bool = False,
+    max_data_health_age_seconds: float = 300,
 ) -> dict[str, Any]:
     queue = job_store.health(
         worker_stale_seconds=settings.job_worker_stale_seconds
@@ -37,6 +40,12 @@ def build_operations_report(
     )
     failures: list[str] = []
     warnings: list[str] = []
+    data_health: dict[str, Any] = {
+        "status": "skipped",
+        "snapshot_status": None,
+        "created_at": None,
+        "age_seconds": None,
+    }
     if domain["schema_version"] < Database.SCHEMA_VERSION:
         failures.append("domain_schema_outdated")
     if queue["schema_version"] < OperationalDatabase.SCHEMA_VERSION:
@@ -59,6 +68,52 @@ def build_operations_report(
         warnings.append("recent_failed_jobs_present")
     if check_backup and backups["status"] != "ok":
         failures.append("postgres_backup_not_healthy")
+    if check_data_health:
+        snapshot = database.latest_data_health_snapshot()
+        if snapshot is None:
+            data_health["status"] = "missing"
+            failures.append("data_health_snapshot_missing")
+        else:
+            snapshot_status = str(snapshot.get("status") or "").strip().lower()
+            created_at = str(snapshot.get("created_at") or "").strip() or None
+            age_seconds: float | None = None
+            if created_at is not None:
+                try:
+                    parsed = datetime.fromisoformat(created_at)
+                    if parsed.tzinfo is None:
+                        parsed = parsed.replace(tzinfo=UTC)
+                    age_seconds = max(
+                        0.0,
+                        (datetime.now(UTC) - parsed).total_seconds(),
+                    )
+                except ValueError:
+                    pass
+            data_health.update(
+                {
+                    "snapshot_status": snapshot_status or None,
+                    "created_at": created_at,
+                    "age_seconds": (
+                        round(age_seconds, 3) if age_seconds is not None else None
+                    ),
+                }
+            )
+            if age_seconds is None:
+                data_health["status"] = "invalid"
+                failures.append("data_health_snapshot_timestamp_invalid")
+            elif age_seconds > max(0.0, max_data_health_age_seconds):
+                data_health["status"] = "stale"
+                failures.append("data_health_snapshot_stale")
+            elif snapshot_status == "degraded":
+                data_health["status"] = "degraded"
+                failures.append("data_health_degraded")
+            elif snapshot_status == "attention":
+                data_health["status"] = "attention"
+                warnings.append("data_health_attention")
+            elif snapshot_status == "healthy":
+                data_health["status"] = "ok"
+            else:
+                data_health["status"] = "invalid"
+                failures.append("data_health_status_unknown")
     return {
         "status": "degraded" if failures else "ok",
         "checked_at": utc_now(),
@@ -70,6 +125,10 @@ def build_operations_report(
             "max_queue_lag_seconds": max(0.0, max_queue_lag_seconds),
             "max_failure_rate_24h": max(0.0, max_failure_rate_24h),
             "backup_checked": bool(check_backup),
+            "data_health_checked": bool(check_data_health),
+            "max_data_health_age_seconds": max(
+                0.0, max_data_health_age_seconds
+            ),
         },
         "storage": {
             "domain_database": {
@@ -84,6 +143,7 @@ def build_operations_report(
         "queue": queue,
         "workers": workers,
         "backups": backups,
+        "data_health": data_health,
     }
 
 

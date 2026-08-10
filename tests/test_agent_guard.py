@@ -6665,6 +6665,17 @@ def test_current_limit_status_is_rewritten_after_price_falls_off_limit():
     assert accepted["passed"] is True
 
 
+def test_current_limit_status_guard_validates_beijing_quote():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "920185.BJ",
+        "current_quote": {"pct_change": 12.0},
+    }
+
+    assert agent_module._current_quote_is_at_common_a_share_limit(evidence) is False
+    assert agent_module._stock_current_limit_status_conflict("目前涨停。", evidence)
+
+
 def test_relative_event_date_normalizer_prefers_absolute_dates():
     normalized = agent_module._normalize_relative_event_dates(
         "公告为2026-07-20（昨日）发布。昨日（7月21日）还有媒体报道；"

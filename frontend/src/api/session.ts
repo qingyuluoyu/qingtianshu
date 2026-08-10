@@ -11,14 +11,14 @@ export function isFormalAccount(session: AuthSession | null): boolean {
 export async function getSession(): Promise<AuthSession | null> {
   try {
     const response = await fetch("/session/status", { credentials: "same-origin" });
-    if (!response.ok) return null;
+    if (!response.ok) throw new Error(`会话状态请求失败 (${response.status})`);
     const payload = await response.json() as { authenticated?: unknown; session?: AuthSession };
     if (payload.authenticated === false) return null;
     if (payload.authenticated === true && payload.session) return payload.session;
-    return null;
-  } catch {
+    throw new Error("会话状态响应不符合契约");
+  } catch (error) {
     // 网络错误、JSON 解析失败、端点不存在等情况统一视为未登录。
-    return null;
+    throw error;
   }
 }
 

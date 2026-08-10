@@ -25,12 +25,17 @@ export type FundItem = {
   category: string | null;
 };
 
+function requestError(operation: string, status: number | undefined): Error {
+  return new Error(`${operation}请求失败 (${status ?? "网络错误"})`);
+}
+
 export async function searchFunds(query: string, limit = 20): Promise<FundItem[]> {
   const { data, error, response } = await api.GET("/fund-products/search", {
     params: { query: { q: query, limit } },
   });
-  if (!response.ok || error || data === undefined) return [];
+  if (!response.ok || error || data === undefined) throw requestError("基金搜索", response.status);
   const root = asRecord(data);
+  if (!root) throw new Error("基金搜索响应不符合契约");
   const items = Array.isArray(root?.items) ? root.items : [];
   return items.flatMap((raw) => {
     const item = asRecord(raw);
@@ -50,9 +55,9 @@ export async function getFundDetail(code: string): Promise<FundItem | null> {
   const { data, error, response } = await api.GET("/fund-products/{code}", {
     params: { path: { code } },
   });
-  if (!response.ok || error || data === undefined) return null;
+  if (!response.ok || error || data === undefined) throw requestError("基金详情", response.status);
   const root = asRecord(data);
-  if (!root) return null;
+  if (!root) throw new Error("基金详情响应不符合契约");
   return {
     code: asString(root.code) ?? code,
     name: asString(root.name) ?? "",
@@ -63,23 +68,9 @@ export async function getFundDetail(code: string): Promise<FundItem | null> {
   };
 }
 
-export async function listFunds(limit = 50): Promise<FundItem[]> {
-  const { data, error, response } = await api.GET("/fund-products", {
-    params: { query: { limit } },
-  });
-  if (!response.ok || error || data === undefined) return [];
-  const root = asRecord(data);
-  const items = Array.isArray(root?.items) ? root.items : [];
-  return items.flatMap((raw) => {
-    const item = asRecord(raw);
-    if (!item) return [];
-    return [{
-      code: asString(item.code) ?? "",
-      name: asString(item.name) ?? "",
-      nav: asNumber(item.nav),
-      navDate: asString(item.nav_date ?? item.navDate),
-      pctChange: asNumber(item.pct_change ?? item.pctChange),
-      category: asString(item.category),
-    }];
-  });
+export async function listFunds(_limit = 50): Promise<FundItem[]> {
+  // /fund-products is a comparison endpoint and requires two explicit codes.
+  // The current backend deliberately exposes no unbounded fund catalogue; show
+  // an empty initial state and fetch only after the user supplies a search term.
+  return [];
 }

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import shlex
 import shutil
+from pathlib import Path
 
 
 def resolve_hermes_stream_bridge() -> Path:
@@ -23,6 +23,17 @@ def resolve_hermes_executable(configured: Path) -> Path:
         return candidate.resolve()
 
     resolved = shutil.which(str(candidate))
+    if resolved is None and candidate.parent == Path("."):
+        # Windows shutil.which() ignores extensionless commands even when the
+        # exact executable file is present on PATH. Hermes distributions and
+        # test/runtime wrappers may intentionally use that POSIX-style name.
+        for directory in os.getenv("PATH", "").split(os.pathsep):
+            if not directory:
+                continue
+            exact = Path(directory).expanduser() / candidate.name
+            if exact.is_file():
+                resolved = str(exact)
+                break
     if resolved:
         path = Path(resolved).expanduser().resolve()
         if path.is_file() and os.access(path, os.X_OK):

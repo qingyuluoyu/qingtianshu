@@ -70,6 +70,24 @@ afterEach(() => {
 });
 
 describe("AdvisorPage", () => {
+  it("gives the question action and evidence drawer distinct landmarks without nesting a page main", async () => {
+    renderPage("/advisor/conv-1?symbol=000063.SZ");
+
+    const questionAction = await screen.findByRole("region", { name: "提出研究问题" });
+    expect(within(questionAction).getByLabelText("向顾问提问")).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "证据与候选写回" })).toBeInTheDocument();
+    expect(screen.queryAllByRole("main")).toHaveLength(0);
+  });
+
+  it("groups the conversation, evidence and writeback flow into a named research workspace", async () => {
+    renderPage("/advisor/conv-1?symbol=000063.SZ");
+
+    const workspace = await screen.findByRole("region", { name: "顾问研究工作台" });
+    expect(within(workspace).getByRole("heading", { name: "提出问题，核对证据，再决定是否写入" })).toBeInTheDocument();
+    expect(within(workspace).getByText("会话保留推理过程；证据与候选写回只在有真实记录时出现。")).toBeInTheDocument();
+    expect(within(workspace).getByLabelText("会话列表与上下文")).toBeInTheDocument();
+  });
+
   it("locks content when unauthenticated", () => {
     renderPage("/advisor", false);
     expect(screen.getByText(/业务内容已锁定/)).toBeInTheDocument();

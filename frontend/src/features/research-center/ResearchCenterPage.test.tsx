@@ -81,6 +81,24 @@ afterEach(() => {
 });
 
 describe("ResearchCenterPage", () => {
+  it("separates traceable market facts from the personal review and action area", async () => {
+    renderPage();
+
+    const facts = await screen.findByRole("region", { name: "市场事实与研究结果" });
+    expect(within(facts).getByRole("heading", { name: /报告变化/ })).toBeInTheDocument();
+    expect(within(facts).getByRole("heading", { name: "历史结果" })).toBeInTheDocument();
+
+    const review = screen.getByRole("complementary", { name: "个人复盘与下一步" });
+    expect(within(review).getByRole("heading", { name: "下一步" })).toBeInTheDocument();
+    expect(within(review).getByRole("heading", { name: "交易复盘中心" })).toBeInTheDocument();
+  });
+
+  it("exposes overview and workspace as named research workflow regions", async () => {
+    renderPage();
+    expect(await screen.findByRole("region", { name: "研究概览" })).toHaveTextContent("待复盘");
+    expect(await screen.findByRole("region", { name: "研究工作区" })).toHaveTextContent("判断-变化-处理链");
+  });
+
   it("renders summary cards, stock list and decision-change timeline with passthrough values", async () => {
     renderPage();
     // 等所有聚合查询落定后再断言概览卡计数。

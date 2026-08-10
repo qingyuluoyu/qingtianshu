@@ -60,6 +60,11 @@ export function SearchPage({ authenticated }: Props) {
         </div>
       ) : search.isPending ? (
         <div className={styles.loading}>搜索中…</div>
+      ) : search.isError ? (
+        <div className={styles.error} role="status">
+          <span>搜索暂时不可用，无法判断是否存在匹配结果。</span>
+          <button onClick={() => void search.refetch()} type="button">重新搜索</button>
+        </div>
       ) : groups.length === 0 ? (
         <div className={styles.empty}>
           <p>没有匹配「{debounced}」的结果。</p>

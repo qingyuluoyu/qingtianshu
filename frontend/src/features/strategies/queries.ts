@@ -37,7 +37,7 @@ export const strategiesQueries = {
       staleTime: 30_000,
       retry: false,
     }),
-  backtest: (period = "1y") =>
+  backtest: (period: "3m" | "1y" | "3y" = "1y") =>
     queryOptions({
       queryKey: ["strategies", "li-zong", "backtest", period],
       queryFn: () => getBacktestResult(period),

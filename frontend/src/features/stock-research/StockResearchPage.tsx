@@ -3,6 +3,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { HISTORY_RANGES, type HistoryRange } from "./api";
 import { stockResearchQueries, stockResearchQueryKeys } from "./queries";
+import { StockResearchHeader } from "./StockResearchHeader";
+import { StockResearchEvidence } from "./StockResearchEvidence";
 import { CandlestickChart } from "./charts";
 import type {
   EventTimeline,
@@ -441,6 +443,7 @@ function TechnicalTab({ symbol, range }: { symbol: string; range: HistoryRange }
             <div className={styles.chartFrame}>
               <CandlestickChart points={data.points} />
             </div>
+            <p className={styles.klineHelp}>滚轮缩放 · 拖动平移 · 双击重置 · 方向键检查单根 K 线；MA5 / MA10 / MA20 仅由真实收盘价计算。</p>
             <div className={styles.klineMeta}>
               <span>日线截至：{data.coverage.lastTimestamp ? formatDate(data.coverage.lastTimestamp) : "待确认"}</span>
               <span>频率：{data.dataGranularity === "1d" ? "日线" : data.dataGranularity ?? "待确认"}</span>
@@ -975,25 +978,16 @@ export function StockResearchPage({ authenticated }: Props) {
 
   return (
     <div className={styles.page}>
-      <header className={styles.header}>
-        <div className={styles.headerTitle}>
-          <h1>
-            {pageData ? (workspaceModule?.name ?? historyModule?.displayName ?? pageData.symbol) : "个股研究"}
-            <small>{pageData?.symbol ?? symbol}{pageData?.market ? ` · ${pageData.market === "a_share" ? "A股" : pageData.market}` : ""}</small>
-          </h1>
-          <div className={styles.headerMeta}>
-            {page.isPending ? <span>页面数据读取中…</span> : null}
-            {pageData ? (
-              <>
-                <span>页面状态：<span className={`${styles.badge} ${statusTone(pageData.status)}`}>{statusLabel(pageData.status)}</span></span>
-                {pageData.modules.workspace.data?.dataMeta.quoteAsOf ? <span>行情时间：{formatDateTime(pageData.modules.workspace.data.dataMeta.quoteAsOf)}</span> : null}
-                {pageData.modules.workspace.data?.dataMeta.financialReportPeriod ? <span>报告期：{pageData.modules.workspace.data.dataMeta.financialReportPeriod}</span> : null}
-              </>
-            ) : null}
-          </div>
-        </div>
-        <QuoteHeader history={historyModule} workspace={workspaceModule} />
-      </header>
+      <StockResearchHeader
+        financialReportPeriod={pageData?.modules.workspace.data?.dataMeta.financialReportPeriod ?? null}
+        marketLabel={pageData?.market ? (pageData.market === "a_share" ? "A股" : pageData.market) : null}
+        pending={page.isPending}
+        quote={<QuoteHeader history={historyModule} workspace={workspaceModule} />}
+        quoteAsOf={pageData?.modules.workspace.data?.dataMeta.quoteAsOf ? formatDateTime(pageData.modules.workspace.data.dataMeta.quoteAsOf) : null}
+        status={pageData ? { label: statusLabel(pageData.status), tone: statusTone(pageData.status) } : null}
+        symbol={pageData?.symbol ?? symbol}
+        title={pageData ? (workspaceModule?.name ?? historyModule?.displayName ?? pageData.symbol) : "个股研究"}
+      />
 
       {page.isError ? (
         <div className={styles.moduleError} role="status">
@@ -1032,9 +1026,7 @@ export function StockResearchPage({ authenticated }: Props) {
       {pageData && tab === "financial_drivers" ? <FinancialDriversTab onRetryPage={retryPage} page={pageData} /> : null}
       {pageData && tab === "analyst_expectations" ? <AnalystExpectationsTab onRetryPage={retryPage} page={pageData} /> : null}
 
-      <footer className={styles.footer}>
-        {pageData?.modules.workspace.data?.boundary ?? "页面只呈现已确认事实、证据与个人研究状态，不生成买卖、目标价或收益建议。"}
-      </footer>
+      <StockResearchEvidence boundary={pageData?.modules.workspace.data?.boundary ?? "页面只呈现已确认事实、证据与个人研究状态，不生成买卖、目标价或收益建议。"} />
     </div>
   );
 }

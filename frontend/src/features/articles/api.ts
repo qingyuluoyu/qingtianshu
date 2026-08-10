@@ -31,7 +31,9 @@ export async function listArticles(limit = 20): Promise<ArticleItem[]> {
   const { data, error, response } = await api.GET("/articles", {
     params: { query: { limit } },
   });
-  if (!response.ok || error || data === undefined) return [];
+  if (!response.ok || error || data === undefined) {
+    throw new Error(`文章列表请求失败 (${response.status})`);
+  }
   const root = asRecord(data);
   const items = Array.isArray(root?.items) ? root.items : [];
   return items.flatMap((raw) => {

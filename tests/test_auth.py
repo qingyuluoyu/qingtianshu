@@ -232,6 +232,16 @@ def test_legacy_anonymous_mode_controls_legacy_endpoints(settings):
     assert disabled.post("/sessions/claim", json={"user_id": "00000000-0000-0000-0000-000000000000"}).status_code == 403
 
 
+def test_environment_default_disables_legacy_anonymous_mode(monkeypatch, tmp_path):
+    from app.config import Settings
+
+    monkeypatch.delenv("QINGSHU_LEGACY_ANONYMOUS_MODE", raising=False)
+    monkeypatch.setenv("QINGSHU_DATABASE_URL", "postgresql://test:test@localhost/qingshu_test")
+    monkeypatch.setenv("QINGSHU_DATA_DIR", str(tmp_path))
+
+    assert Settings.from_env().legacy_anonymous_mode is False
+
+
 def test_schema_6_user_is_upgraded_to_schema_7_without_losing_anonymous_user(
     isolated_postgres_schema, tmp_path
 ):

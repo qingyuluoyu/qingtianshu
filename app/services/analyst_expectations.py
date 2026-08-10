@@ -128,6 +128,8 @@ class AnalystExpectationsService:
                         "previous_rating": report.get("previous_rating"),
                         "forecast_eps": forecast_eps,
                         "report_url": report.get("report_url"),
+                        "sources": payload.get("sources") or [],
+                        "source_fetched_at": payload.get("source_fetched_at"),
                         "summary": _report_view_summary(
                             institution=report.get("institution"),
                             rating=report.get("rating"),

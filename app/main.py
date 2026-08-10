@@ -7,12 +7,13 @@ from io import BytesIO
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -264,8 +265,9 @@ from app.utils import utc_now
 
 
 SESSION_COOKIE_NAME = "qingshu_session"
+REQUEST_ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{8,64}")
 Image.MAX_IMAGE_PIXELS = 25_000_000
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 
 def _public_strategy_screen_run(run: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -691,6 +693,41 @@ def create_app(
         description="后端优先的金融研究 Agent：确定性行情分析 + Hermes 解释 + 用户确认记忆。",
         lifespan=lifespan,
     )
+
+    @app.middleware("http")
+    async def correlate_http_request(request: Request, call_next: Any) -> Response:
+        supplied_request_id = str(request.headers.get("X-Request-ID") or "")
+        request_id = (
+            supplied_request_id
+            if REQUEST_ID_PATTERN.fullmatch(supplied_request_id)
+            else uuid4().hex
+        )
+        request.state.request_id = request_id
+        started = time.perf_counter()
+        try:
+            response = await call_next(request)
+        except Exception:
+            duration_ms = (time.perf_counter() - started) * 1000
+            logger.exception(
+                "http_request_failed request_id=%s method=%s path=%s duration_ms=%.2f",
+                request_id,
+                request.method,
+                request.url.path,
+                duration_ms,
+            )
+            raise
+        duration_ms = (time.perf_counter() - started) * 1000
+        response.headers["X-Request-ID"] = request_id
+        logger.info(
+            "http_request request_id=%s method=%s path=%s status=%s duration_ms=%.2f",
+            request_id,
+            request.method,
+            request.url.path,
+            response.status_code,
+            duration_ms,
+        )
+        return response
+
     app.state.settings = settings
     auth_rate_limiter = AuthRateLimiter(
         per_source_limit=settings.auth_rate_limit_per_source,
@@ -1120,6 +1157,11 @@ def create_app(
                 and settings.background_worker_mode != "disabled"
                 else 0
             ),
+            check_data_health=True,
+            max_data_health_age_seconds=max(
+                300,
+                settings.background_data_quality_seconds * 3,
+            ),
         )
 
     @app.post("/admin/job-queue/enqueue", status_code=202)
@@ -1334,7 +1376,8 @@ def create_app(
 
     @app.post("/me/uploads/images", status_code=201)
     async def upload_my_image(
-        request: Request, file: UploadFile = File(...)
+        request: Request,
+        file: UploadFile = File(...),
     ) -> dict[str, Any]:
         user = require_session_user(request)
         raw = await file.read(settings.max_image_upload_bytes + 1)
@@ -2688,7 +2731,9 @@ def create_app(
 
     @app.post("/me/knowledge", status_code=201)
     async def upload_my_knowledge(
-        request: Request, file: UploadFile = File(...)
+        request: Request,
+        file: UploadFile = File(...),
+        title: str = Form(default="", max_length=180),
     ) -> dict[str, Any]:
         user = require_session_user(request)
         original_name = Path(file.filename or "research-note.txt").name[:180]
@@ -2717,6 +2762,7 @@ def create_app(
                 original_name=original_name,
                 mime_type=file.content_type or "text/plain",
                 raw=raw,
+                title=title,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

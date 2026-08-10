@@ -1,4 +1,51 @@
-:root { font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; color: #182230; background: #f6f8fb; --surface: #fff; --surface-subtle: #f6f8fb; --ink: #182230; --ink-muted: #667085; --border: #e4e7ec; --brand: #2164d8; --brand-soft: #edf4ff; --danger: #b42318; --shadow: 0 4px 18px rgb(16 24 40 / 6%); }
+:root {
+  font-family: Inter, "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: #18263a;
+  background: #f4f7fb;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --color-canvas: #f4f7fb;
+  --color-surface: #fff;
+  --color-surface-subtle: #f7f9fc;
+  --color-ink: #18263a;
+  --color-ink-muted: #5f7089;
+  --color-ink-subtle: #8a99af;
+  --color-border: #dfe7f1;
+  --color-border-strong: #c7d4e5;
+  --color-brand: #2164d8;
+  --color-brand-strong: #1556c0;
+  --color-brand-soft: #edf4ff;
+  --color-brand-border: #84adff;
+  --color-up: #d92d20;
+  --color-down: #039855;
+  --color-warning: #b54708;
+  --color-danger: #b42318;
+  --surface: var(--color-surface);
+  --surface-subtle: var(--color-canvas);
+  --ink: var(--color-ink);
+  --ink-muted: var(--color-ink-muted);
+  --border: var(--color-border);
+  --brand: var(--color-brand);
+  --brand-soft: var(--color-brand-soft);
+  --danger: var(--color-danger);
+  --shadow: 0 4px 18px rgb(16 37 68 / 6%);
+  --shadow-sm: 0 1px 3px rgb(16 37 68 / 5%);
+  --shadow-md: 0 8px 24px rgb(16 37 68 / 8%);
+  --shadow-lg: 0 16px 46px rgb(16 37 68 / 13%);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --shell-sidebar: 218px;
+  --shell-header: 66px;
+}
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; }
-button, input { font: inherit; }
+html { min-width: 320px; color-scheme: light; }
+body { min-width: 320px; min-height: 100vh; margin: 0; background: var(--color-canvas); }
+button, input, textarea, select { font: inherit; }
+button, a { -webkit-tap-highlight-color: transparent; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid rgb(33 100 216 / 22%); outline-offset: 2px; }
+a { color: inherit; }
+::selection { color: #102544; background: #cfe2ff; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

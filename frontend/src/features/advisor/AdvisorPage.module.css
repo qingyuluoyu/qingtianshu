@@ -4,6 +4,11 @@
 .headerTitle h1 { margin: 0; font-size: clamp(24px, 3vw, 30px); letter-spacing: -.03em; }
 .headerTitle p { margin: 8px 0 0; color: var(--ink-muted); font-size: 13px; }
 .headerMeta { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; color: var(--ink-muted); font-size: 12px; }
+.workflowSection { display: grid; gap: 14px; }
+.sectionLead { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 0 2px; }
+.sectionLead p { margin: 0; color: var(--brand); font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+.sectionLead h2 { margin: 2px 0 0; font-size: 20px; letter-spacing: -.025em; }
+.sectionLead > span { max-width: 440px; color: var(--ink-muted); font-size: 13px; line-height: 1.55; text-align: right; }
 .badge { display: inline-flex; width: fit-content; padding: 4px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
 .badgeReady { color: #067647; background: #dcfae6; }
 .badgePartial { color: #b54708; background: #fef0c7; }
@@ -18,7 +23,7 @@
 .layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) 370px; gap: 18px; align-items: start; }
 .layoutNoDrawer { grid-template-columns: 280px minmax(0, 1fr); }
 .mainColumn { min-width: 0; display: grid; gap: 18px; }
-.drawerColumn { min-width: 0; display: grid; gap: 18px; }
+.drawerColumn { min-width: 0; display: grid; gap: 18px; align-content: start; }
 
 .card { min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 1px 2px rgb(16 24 40 / 3%); }
 .cardHeader { display: flex; min-height: 30px; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
@@ -70,7 +75,8 @@
 .clarify li { margin: 3px 0; }
 
 /* 提问输入区 */
-.composer { display: grid; gap: 10px; margin-top: 16px; }
+.composerPanel { margin-top: 18px; padding: 14px; border: 1px solid #d0d5dd; border-radius: 10px; background: #f8fafc; }
+.composer { display: grid; gap: 10px; }
 .composer textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; color: var(--ink); background: var(--surface); font: inherit; font-size: 14px; line-height: 1.6; resize: vertical; }
 .composer textarea:focus { border-color: #84adff; outline: none; }
 .composerBar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 14px; }
@@ -121,13 +127,15 @@
 .footer { color: #98a2b3; font-size: 11px; text-align: center; }
 
 /* 响应式：820-1279 抽屉降到主列下方；<820 全部单列，页面根不横向溢出。 */
-@media (max-width: 1279px) {
+@media (max-width: 1420px) {
   .layout { grid-template-columns: 240px minmax(0, 1fr); }
   .drawerColumn { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-@media (max-width: 819px) {
+@media (max-width: 980px) {
   .layout, .layoutNoDrawer { grid-template-columns: minmax(0, 1fr); }
   .drawerColumn { grid-template-columns: minmax(0, 1fr); }
   .messageBubble { max-width: 94%; }
   .conversationList { max-height: 220px; }
+  .sectionLead { align-items: flex-start; flex-direction: column; gap: 7px; }
+  .sectionLead > span { max-width: none; text-align: left; }
 }

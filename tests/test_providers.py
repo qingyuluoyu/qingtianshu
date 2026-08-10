@@ -654,6 +654,9 @@ def test_csi_industry_components_fall_back_to_sina_for_bse_history(
     assert analysis["components"][0]["source"].startswith("Sina")
     assert analysis["components"][0]["adjustment"] == "unadjusted"
     assert analysis["components"][0]["pct_change"] == -3.7583
+    assert analysis["contribution"]["status"] == "incomplete_adjustment_basis"
+    assert analysis["contribution"]["estimated_total_contribution_pp"] is None
+    assert analysis["contribution"]["top_positive"] == []
     assert "未复权日线降级" in analysis["contribution"]["boundary"]
 
 
@@ -812,13 +815,11 @@ def test_sina_market_breadth_provider_fetches_complete_snapshot_and_caches(
         "advance_ratio": 0.3333,
         "decline_ratio": 0.3333,
         "unchanged_ratio": 0.3333,
-        "limit_up_count": 0,
-        "limit_down_count": 0,
+        "limit_up_count": None,
+        "limit_down_count": None,
         "limit_method": (
-            "涨停近似口径：主板(sh60/sz00)涨跌幅≥9.8%、创业板(sz30)/"
-            "科创板(sh68)≥19.8%、北交所(bj)≥29.8%计为涨停，跌停对称；"
-            "阈值较交易所±10%/±20%/±30%限制留0.2个百分点余量；"
-            "ST股(±5%)无法从快照字段区分，为近似统计。"
+            "当前全市场快照不提供证券级涨跌停价格、ST/新股规则与停复牌状态，"
+            "不提供精确涨跌停家数。"
         ),
         "state": "涨跌均衡",
         "classification_method": (
@@ -973,9 +974,9 @@ def test_sina_market_breadth_counts_limits_bins_7_and_anomaly_candidates(
     )
     result = provider.fetch_breadth()
 
-    assert result["breadth"]["limit_up_count"] == 2
-    assert result["breadth"]["limit_down_count"] == 1
-    assert "0.2个百分点余量" in result["breadth"]["limit_method"]
+    assert result["breadth"]["limit_up_count"] is None
+    assert result["breadth"]["limit_down_count"] is None
+    assert "不提供精确涨跌停家数" in result["breadth"]["limit_method"]
     assert result["distribution"]["bins_7"] == {
         "le_neg7": 2,
         "gt_neg7_le_neg3": 1,
@@ -1086,7 +1087,8 @@ def test_sina_market_breadth_reuses_last_completed_session_for_zero_placeholder(
     assert result["turnover"]["total_amount_cny"] == 6_000_000
     cached = database.get_cache(provider.CACHE_KEY)
     assert cached["breadth"]["advancers"] == 1
-    assert len(database.list_market_breadth_snapshots()) == 1
+    # Cache reads do not manufacture a new historical market snapshot.
+    assert database.list_market_breadth_snapshots() == []
 
 
 def test_sina_market_breadth_rejects_zero_placeholder_without_fallback(

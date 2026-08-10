@@ -65,7 +65,8 @@ export function GlobalSearch() {
       {showPanel ? (
         <div className={styles.searchPanel} role="listbox">
           {search.isPending ? <div className={styles.searchHint}>搜索中…</div> : null}
-          {!search.isPending && groups.length === 0 ? <div className={styles.searchHint}>没有匹配结果</div> : null}
+          {search.isError ? <div className={styles.searchHint} role="status">搜索暂时不可用，请重试。</div> : null}
+          {!search.isPending && !search.isError && groups.length === 0 ? <div className={styles.searchHint}>没有匹配结果</div> : null}
           {groups.map((group) => (
             <div key={group.key}>
               <div className={styles.searchGroupLabel}>{group.label}</div>

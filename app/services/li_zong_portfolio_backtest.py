@@ -45,7 +45,7 @@ class LiZongPortfolioBacktestService:
     MARKET_CAP_MIN_YI = LiZongParameters().market_cap_min_yi
     COST_BPS_PER_SIDE = 0.0
     MIN_REBALANCE_TRADING_DAYS = 10
-    PORTFOLIO_VERSION = "li_zong_2w_no_cost_full_benchmark_v5"
+    PORTFOLIO_VERSION = "li_zong_2w_no_cost_research_baseline_v6"
     COMPATIBLE_BENCHMARK_MIGRATION_SOURCES = {
         "li_zong_2w_no_cost_same_exposure_v4"
     }
@@ -2109,6 +2109,11 @@ class LiZongPortfolioBacktestService:
             ),
             "weighting": "每次换仓后对可成交候选等资金配置。",
             "cost_bps_per_side": cls.COST_BPS_PER_SIDE,
+            "execution_readiness": "research_baseline_not_execution_ready",
+            "execution_boundary": (
+                "Zero transaction cost baseline; do not use for execution, performance "
+                "marketing, or investment suitability assessment."
+            ),
             "benchmark": (
                 f"{cls.BENCHMARK_NAME}（按完整回测区间连续计算；"
                 "策略空仓期指数仍继续变化）"

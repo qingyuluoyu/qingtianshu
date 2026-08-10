@@ -250,18 +250,14 @@ function AssetTable({ items, selectedSymbol, pendingSymbol, onSelect, onAction }
 }) {
   return (
     <div className={styles.tableWrap}>
-      <table className={styles.table}>
+      <table className={styles.table} aria-label="关注资产表">
         <thead>
           <tr>
-            <th>代码</th>
-            <th>名称</th>
-            <th>价格</th>
-            <th>涨跌</th>
-            <th>判断</th>
-            <th>变化</th>
-            <th>任务</th>
-            <th>研究状态</th>
-            <th>报告时间</th>
+            <th>标的</th>
+            <th>行情</th>
+            <th>研究判断</th>
+            <th>最新变化</th>
+            <th>待办与状态</th>
             <th>操作</th>
           </tr>
         </thead>
@@ -282,19 +278,16 @@ function AssetTable({ items, selectedSymbol, pendingSymbol, onSelect, onAction }
                 }}
                 tabIndex={0}
               >
-                <td className={styles.symbolCell}>
-                  <strong>{asset.symbol}</strong>
-                  <small>{asset.market ?? "市场待确认"}</small>
-                </td>
-                <td className={styles.nameCell}>
-                  <span>{asset.name ?? "名称待确认"}</span>
+                <td className={styles.assetCell}>
+                  <strong>{asset.name ?? asset.symbol}</strong>
+                  <small><span>{asset.symbol}</span> · {asset.market ?? "市场待确认"}</small>
                   <small>{relationLabel(asset)}{asset.priority === "high" && asset.relationType === "watching" ? " · 重点" : ""}</small>
                 </td>
-                <td>
-                  {quoteUnavailable ? "--" : formatNumber(asset.quote.price)}
-                  {quoteUnavailable ? <small className={styles.flat} style={{ display: "block" }}>行情不可用</small> : null}
+                <td className={styles.quoteCell}>
+                  <strong>{quoteUnavailable ? "--" : formatNumber(asset.quote.price)}</strong>
+                  <span className={tone(asset.quote.pctChange)}>{percent(asset.quote.pctChange)}</span>
+                  <small className={quoteUnavailable ? styles.flat : undefined}>{quoteUnavailable ? "行情不可用" : "最新行情"}</small>
                 </td>
-                <td className={tone(asset.quote.pctChange)}>{percent(asset.quote.pctChange)}</td>
                 <td className={styles.thesisCell}>
                   <span>{asset.activeThesis?.summary ?? "尚未保存当前判断"}</span>
                 </td>
@@ -306,13 +299,15 @@ function AssetTable({ items, selectedSymbol, pendingSymbol, onSelect, onAction }
                     </>
                   ) : "暂无变化"}
                 </td>
-                <td>{asset.openTaskCount ?? "--"}</td>
-                <td>
-                  <span className={`${styles.badge} ${statusTone(asset.dataStatus ?? "unavailable")}`}>
-                    {researchStateLabel(asset)}
-                  </span>
+                <td className={styles.taskCell}>
+                  <div>
+                    <strong>{asset.openTaskCount ?? "--"}</strong>
+                    <span className={`${styles.badge} ${statusTone(asset.dataStatus ?? "unavailable")}`}>
+                      {researchStateLabel(asset)}
+                    </span>
+                  </div>
+                  <small>{asset.reportMeta?.generatedAt ? `报告 ${formatDateTime(asset.reportMeta.generatedAt)}` : "暂无研究报告"}</small>
                 </td>
-                <td>{asset.reportMeta?.generatedAt ? formatDateTime(asset.reportMeta.generatedAt) : "暂无报告"}</td>
                 <td>
                   <div className={styles.rowActions} onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
                     {relationActions(asset).map((action) => (
@@ -693,7 +688,11 @@ export function WatchlistPage({ authenticated }: Props) {
       ) : null}
 
       {assets && assets.items.length > 0 ? (
-        <>
+        <section aria-label="关注研究工作台" className={styles.workflowSection}>
+          <div className={styles.sectionLead}>
+            <div><p>研究分诊</p><h2>先处理重点和变化</h2></div>
+            <span>概览卡只改变当前列表视图，不会修改关注关系或发起额外请求。</span>
+          </div>
           <WatchlistSummaryCards
             active={filter}
             assets={assets}
@@ -733,13 +732,16 @@ export function WatchlistPage({ authenticated }: Props) {
               </ModuleCard>
               <RecentSection items={assets.items} />
             </div>
-            <div className={styles.mainColumn}>
+            <aside
+              aria-label={selectedAsset ? `${selectedAsset.name ?? selectedAsset.symbol} 快速预览` : "快速预览"}
+              className={styles.previewColumn}
+            >
               {selectedAsset ? <StockQuickPreview asset={selectedAsset} /> : (
                 <div className={styles.card}><div className={styles.empty}>选择左侧一行查看快速预览。</div></div>
               )}
-            </div>
+            </aside>
           </div>
-        </>
+        </section>
       ) : null}
 
       {confirmEnd ? (

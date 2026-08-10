@@ -25,6 +25,9 @@ def isolated_postgres_schema(monkeypatch):
 
     import psycopg
 
+    # Local operator paths must not change the deterministic Hermes runtime
+    # selected by individual tests.
+    monkeypatch.setenv("HERMES_PYTHON_BIN", "")
     base_url = os.getenv(
         "QINGSHU_TEST_POSTGRES_URL",
         "postgresql://chr@localhost/qingshu_test",
@@ -931,6 +934,7 @@ def settings(tmp_path: Path) -> Settings:
         background_research_refresh_seconds=1800,
         background_calibration_refresh_seconds=21600,
         background_use_hermes=False,
+        legacy_anonymous_mode=True,
         default_a_share_symbols=("600519.SS",),
         default_research_symbols=("000063.SZ", "300308.SZ", "NVDA"),
     )

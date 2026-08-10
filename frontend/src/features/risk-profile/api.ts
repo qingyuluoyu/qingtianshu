@@ -10,6 +10,10 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 // ---------- 风险档案 ----------
 
 export type RiskProfile = {
@@ -26,7 +30,9 @@ export type RiskProfile = {
 
 export async function getRiskProfile(): Promise<RiskProfile | null> {
   const { data, error, response } = await api.GET("/me/risk-profile");
-  if (!response.ok || error || data === undefined) return null;
+  if (!response.ok || error || data === undefined) {
+    throw new Error(`风险档案请求失败 (${response.status})`);
+  }
   const root = asRecord(data);
   const profile = asRecord(root?.profile);
   if (!profile) return null;

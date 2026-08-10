@@ -32,15 +32,15 @@ const mockGetIndexHistory = vi.mocked(getIndexHistory);
 
 const chinaIndices: GlobalIndices = {
   items: [
-    { symbol: "000001.SS", name: "上证综指", status: "available", latestClose: 3809.66, change1d: 9.31, return1dPct: -0.59, marketTimestamp: "2026-08-03T01:30:00+00:00", isStale: false },
-    { symbol: "399001.SZ", name: "深证成指", status: "available", latestClose: 13448.29, change1d: -33.08, return1dPct: -0.96, marketTimestamp: "2026-08-03T01:30:00+00:00", isStale: false },
-    { symbol: "000300.SS", name: "沪深300", status: "available", latestClose: 4543.18, change1d: 8.61, return1dPct: -0.98, marketTimestamp: "2026-08-03T01:30:00+00:00", isStale: null },
+    { symbol: "000001.SS", name: "上证综指", status: "available", latestClose: 3809.66, change1d: 9.31, return1dPct: -0.59, source: null, fetchedAt: null, marketTimestamp: "2026-08-03T01:30:00+00:00", isStale: false },
+    { symbol: "399001.SZ", name: "深证成指", status: "available", latestClose: 13448.29, change1d: -33.08, return1dPct: -0.96, source: null, fetchedAt: null, marketTimestamp: "2026-08-03T01:30:00+00:00", isStale: false },
+    { symbol: "000300.SS", name: "沪深300", status: "available", latestClose: 4543.18, change1d: 8.61, return1dPct: -0.98, source: null, fetchedAt: null, marketTimestamp: "2026-08-03T01:30:00+00:00", isStale: null },
   ],
 };
 
 const usIndices: GlobalIndices = {
   items: [
-    { symbol: "^GSPC", name: "标普500", status: "available", latestClose: 6234.6, change1d: 39.1, return1dPct: 0.63, marketTimestamp: "2026-08-04T20:00:00+00:00", isStale: false },
+    { symbol: "^GSPC", name: "标普500", status: "available", latestClose: 6234.6, change1d: 39.1, return1dPct: 0.63, source: null, fetchedAt: null, marketTimestamp: "2026-08-04T20:00:00+00:00", isStale: false },
   ],
 };
 
@@ -62,6 +62,8 @@ const sectors: Sectors = {
 
 const breadth: Breadth = {
   status: "available",
+  source: null,
+  fetchedAt: null,
   marketDate: "2026-08-04",
   marketTimestamp: null,
   isStale: false,
@@ -95,6 +97,8 @@ const breadth: Breadth = {
 
 const capitalFlow: CapitalFlow = {
   status: "available",
+  source: null,
+  fetchedAt: null,
   marketTimestamp: "2026-08-04T07:00:00+00:00",
   isStale: false,
   mainNetInflow100mCny: -128.45,
@@ -110,14 +114,14 @@ const capitalFlow: CapitalFlow = {
 
 const liveMarkets: LiveMarkets = {
   items: [
-    { key: "china", name: "中国A股", status: "available", latestPrice: 3809.66, pctChange: 0.24, currency: "CNY", marketTimestamp: "2026-08-04T07:00:00+00:00", isStale: false },
-    { key: "japan", name: "日本股市", status: "available", latestPrice: 40210.5, pctChange: -0.31, currency: "JPY", marketTimestamp: "2026-08-04T06:00:00+00:00", isStale: false },
-    { key: "korea", name: "韩国股市", status: "available", latestPrice: 3120.4, pctChange: 0.12, currency: "KRW", marketTimestamp: "2026-08-04T06:00:00+00:00", isStale: false },
-    { key: "us", name: "美国股市", status: "available", latestPrice: 6234.6, pctChange: 0.63, currency: "USD", marketTimestamp: "2026-08-04T20:00:00+00:00", isStale: false },
-    { key: "london_gold", name: "伦敦金", status: "available", latestPrice: 2358.6, pctChange: 0.78, currency: "USD", marketTimestamp: "2026-08-04T12:00:00+00:00", isStale: false },
-    { key: "dollar_index", name: "美元指数", status: "available", latestPrice: 98.42, pctChange: -0.21, currency: "USD", marketTimestamp: "2026-08-04T12:00:00+00:00", isStale: false },
-    { key: "brent_crude", name: "布伦特原油", status: "available", latestPrice: 69.85, pctChange: 1.12, currency: "USD", marketTimestamp: "2026-08-04T12:00:00+00:00", isStale: false },
-    { key: "us10y_yield", name: "美债十年期", status: "available", latestPrice: 4.25, pctChange: 0.03, currency: "PCT", marketTimestamp: "2026-08-04T12:00:00+00:00", isStale: false },
+    { key: "china", name: "中国A股", status: "available", latestPrice: 3809.66, pctChange: 0.24, currency: "CNY", source: null, fetchedAt: null, marketTimestamp: "2026-08-04T07:00:00+00:00", isStale: false },
+    { key: "japan", name: "日本股市", status: "available", latestPrice: 40210.5, pctChange: -0.31, currency: "JPY", source: null, fetchedAt: null, marketTimestamp: "2026-08-04T06:00:00+00:00", isStale: false },
+    { key: "korea", name: "韩国股市", status: "available", latestPrice: 3120.4, pctChange: 0.12, currency: "KRW", source: null, fetchedAt: null, marketTimestamp: "2026-08-04T06:00:00+00:00", isStale: false },
+    { key: "us", name: "美国股市", status: "available", latestPrice: 6234.6, pctChange: 0.63, currency: "USD", source: null, fetchedAt: null, marketTimestamp: "2026-08-04T20:00:00+00:00", isStale: false },
+    { key: "london_gold", name: "伦敦金", status: "available", latestPrice: 2358.6, pctChange: 0.78, currency: "USD", source: null, fetchedAt: null, marketTimestamp: "2026-08-04T12:00:00+00:00", isStale: false },
+    { key: "dollar_index", name: "美元指数", status: "available", latestPrice: 98.42, pctChange: -0.21, currency: "USD", source: null, fetchedAt: null, marketTimestamp: "2026-08-04T12:00:00+00:00", isStale: false },
+    { key: "brent_crude", name: "布伦特原油", status: "available", latestPrice: 69.85, pctChange: 1.12, currency: "USD", source: null, fetchedAt: null, marketTimestamp: "2026-08-04T12:00:00+00:00", isStale: false },
+    { key: "us10y_yield", name: "美债十年期", status: "available", latestPrice: 4.25, pctChange: 0.03, currency: "PCT", source: null, fetchedAt: null, marketTimestamp: "2026-08-04T12:00:00+00:00", isStale: false },
   ],
 };
 

@@ -72,6 +72,7 @@ from app.services.agent_output_guard_stock import (
     _STOCK_CURRENT_QUOTE_REQUIRED_LABEL,
     _STOCK_CONTRIBUTION_REQUIRED_LABEL,
     _STOCK_INDUSTRY_COUNTS_REQUIRED_LABEL,
+    _current_quote_is_at_common_a_share_limit,
     _has_unsupported_stock_failure_threshold,
     _stock_current_quote_required_but_missing,
     _normalize_current_quote_semantics,
@@ -82,6 +83,7 @@ from app.services.agent_output_guard_stock import (
     _normalize_current_limit_status,
     _normalize_relative_event_dates,
     _is_evidence_security_entity_clause,
+    _stock_current_limit_status_conflict,
 )
 from app.utils import write_json
 
@@ -90,6 +92,7 @@ __all__ = (
     "AgentService",
     "_LI_ZONG_RULE_BOTTLENECK_LABEL",
     "_STOCK_OBSERVATION_WINDOW_LABEL",
+    "_current_quote_is_at_common_a_share_limit",
     "_has_unsupported_stock_failure_threshold",
     "_has_wrong_index_return_extreme_claim",
     "_normalize_current_limit_status",
@@ -99,6 +102,7 @@ __all__ = (
     "_normalize_relative_event_dates",
     "_normalize_stock_current_quote_ma20_relation",
     "_normalize_stock_research_number_precision",
+    "_stock_current_limit_status_conflict",
 )
 
 

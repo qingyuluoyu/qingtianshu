@@ -67,7 +67,7 @@ describe("StockResearchPage", () => {
     }));
     renderPage(client);
     expect(screen.getByText(/部分模块暂不可用（失败 1\/9）/)).toBeInTheDocument();
-    expect(screen.getByText("股东结构")).toBeInTheDocument();
+    expect(screen.getAllByText("股东结构").length).toBeGreaterThan(0);
     expect(screen.getAllByText("当前不可用").length).toBeGreaterThan(0);
     expect(screen.getAllByText("数据完整").length).toBeGreaterThanOrEqual(8);
   });
@@ -79,6 +79,7 @@ describe("StockResearchPage", () => {
     expect(screen.getAllByText(/日线截至：2026-08-05/).length).toBeGreaterThan(0);
     expect(screen.getByText(/频率：日线/)).toBeInTheDocument();
     expect(screen.getByText(/adjusted_close 复权收盘参考列/)).toBeInTheDocument();
+    expect(screen.getByText(/滚轮缩放.*拖动平移.*双击重置/)).toBeInTheDocument();
     expect(screen.getByText("33.85")).toBeInTheDocument();
     expect(screen.getByText("-17.84%")).toBeInTheDocument();
     expect(screen.getByText(/不生成买卖信号/)).toBeInTheDocument();

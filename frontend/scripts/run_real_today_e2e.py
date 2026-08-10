@@ -86,6 +86,9 @@ def main() -> int:
             "QINGSHU_DATA_DIR": str(runtime_dir / "data"),
             "QINGSHU_WORKSPACE_ROOT": str(runtime_dir / "workspaces"),
             "QINGSHU_LEGACY_ANONYMOUS_MODE": "false",
+            # This runner serves plain HTTP on loopback. Production Compose keeps
+            # secure cookies enabled behind HTTPS ingress.
+            "SESSION_COOKIE_SECURE": "false",
             "BACKGROUND_JOBS_ENABLED": "false",
             "BACKGROUND_WORKER_MODE": "disabled",
             "HERMES_ENABLED": "false",

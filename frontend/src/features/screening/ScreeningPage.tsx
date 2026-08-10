@@ -11,6 +11,8 @@ import type {
 } from "./adapters";
 import type { BacktestPeriod, LiZongStatusFilter, ScreenParams } from "./api";
 import { screeningQueries } from "./queries";
+import { ScreeningFilters } from "./ScreeningFilters";
+import { ScreeningResults } from "./ScreeningResults";
 import styles from "./ScreeningPage.module.css";
 
 type Props = { authenticated: boolean };
@@ -155,25 +157,6 @@ const MODES = [
 ] as const;
 
 type ModeKey = (typeof MODES)[number]["key"];
-
-function ScreeningModeCards({ active, onSelect }: { active: ModeKey; onSelect: (mode: ModeKey) => void }) {
-  return (
-    <div className={styles.modeGrid} role="group" aria-label="选股模式">
-      {MODES.map(({ key, label, hint }) => (
-        <button
-          aria-pressed={active === key}
-          className={styles.modeCard}
-          key={key}
-          onClick={() => onSelect(key)}
-          type="button"
-        >
-          <span>{label}</span>
-          <small>{hint}</small>
-        </button>
-      ))}
-    </div>
-  );
-}
 
 // ---------- 通用筛选：条件面板 ----------
 
@@ -809,6 +792,7 @@ function BacktestSection({ period, onSelectPeriod }: { period: BacktestPeriod; o
   const result = data?.result ?? null;
   // §5.2：仅在实际任务完成且数据可用时展示完整指标；其余状态显示真实进度/空态。
   const ready = data !== null && data.status === "ready" && result !== null && result.status === "ready";
+  const isResearchBaseline = data?.assumptions.executionReadiness === "research_baseline_not_execution_ready";
   return (
     <>
       <div className={styles.chipRow} role="group" aria-label="回测区间">
@@ -833,6 +817,7 @@ function BacktestSection({ period, onSelectPeriod }: { period: BacktestPeriod; o
       >
         {ready && result ? (
           <>
+            {isResearchBaseline ? <p className={styles.boundaryNote} role="alert"><strong>研究基线，不可用于执行或绩效宣传</strong>{data.assumptions.executionBoundary ? `：${data.assumptions.executionBoundary}` : "：未建模涨跌停、停牌、T+1、交易单位、费用、税费、滑点和成交量约束。"}</p> : null}
             <div className={styles.metricGrid}>
               <div className={styles.metric}><span>区间收益</span><strong className={signedTone(result.periodReturnPct)}>{percent(result.periodReturnPct)}</strong><small>{formatDate(result.startDate)} ~ {formatDate(result.endDate)}</small></div>
               <div className={styles.metric}><span>年化收益</span><strong className={signedTone(result.annualizedReturnPct)}>{percent(result.annualizedReturnPct)}</strong><small>基准年化 {percent(result.benchmarkAnnualizedReturnPct)}</small></div>
@@ -984,15 +969,27 @@ export function ScreeningPage({ authenticated }: Props) {
         </div>
       </header>
 
-      <ScreeningModeCards
-        active={mode}
-        onSelect={(next) => {
-          // 模式互斥：切换时只保留 mode 参数，其余筛选状态不跨模式共享。
-          const params = new URLSearchParams();
-          if (next !== "screen") params.set("mode", next);
-          setSearchParams(params);
-        }}
-      />
+      <section aria-label="选择方法" className={styles.workflowSection}>
+        <div className={styles.sectionLead}>
+          <div><p>筛选入口</p><h2>选择方法</h2></div>
+          <span>三种模式互斥，切换后使用各自独立的数据口径。</span>
+        </div>
+        <ScreeningFilters
+          active={mode}
+          onSelect={(next) => {
+            // 模式互斥：切换时只保留 mode 参数，其余筛选状态不跨模式共享。
+            const params = new URLSearchParams();
+            if (next !== "screen") params.set("mode", next);
+            setSearchParams(params);
+          }}
+        />
+      </section>
+
+      <section aria-label="候选研究" className={styles.workflowSection}>
+        <div className={styles.sectionLead}>
+          <div><p>证据工作区</p><h2>候选研究</h2></div>
+          <span>先核对条件和数据状态，再进入个股研究。</span>
+        </div>
 
       {mode === "screen" ? (
         <>
@@ -1046,7 +1043,7 @@ export function ScreeningPage({ authenticated }: Props) {
                 <div className={styles.layout}>
                   <div className={styles.mainColumn}>
                     <ModuleCard meta={`${screen.items.length} / ${screen.universe.matched ?? "--"} 条`} title="筛选候选">
-                      <ScreenCandidateTable
+                      <ScreeningResults
                         items={screen.items}
                         onSelect={(symbol) => updateParams({ symbol })}
                         selectedSymbol={selectedScreenItem?.symbol ?? null}
@@ -1144,6 +1141,7 @@ export function ScreeningPage({ authenticated }: Props) {
       {mode === "backtest" ? (
         <BacktestSection onSelectPeriod={(next) => updateParams({ period: next === "1y" ? null : next })} period={period} />
       ) : null}
+      </section>
 
       <footer className={styles.footer}>
         红绿仅表示事实涨跌方向，不构成买卖建议；候选、规则核验与回测指标均为服务端口径直通，本页不触发新筛选或回测任务。

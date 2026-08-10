@@ -19,6 +19,7 @@ services:
     ports:
       - "${QINGSHU_HTTP_BIND:-0.0.0.0}:${QINGSHU_HTTP_PORT:-8000}:8000"
     environment: &qingshu-environment
+      QINGSHU_DEPLOYMENT_ENV: "${QINGSHU_DEPLOYMENT_ENV:-production}"
       QINGSHU_DATA_DIR: /data
       QINGSHU_FRONTEND_DIST_DIR: /app/frontend/dist
       QINGSHU_DATABASE_URL: "postgresql://qingshu:${POSTGRES_PASSWORD:-qingshu-local-only}@postgres:5432/qingshu"

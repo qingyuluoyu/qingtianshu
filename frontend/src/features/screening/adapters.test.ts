@@ -136,6 +136,7 @@ describe("parseLiZongBacktest", () => {
     expect(result.points).toHaveLength(5);
     expect(result.points[4]!.nav).toBe(1.281);
     expect(parsed.assumptions.benchmark).toContain("沪深300");
+    expect(parsed.assumptions.executionReadiness).toBe("research_baseline_not_execution_ready");
   });
 
   it("keeps an unfinished backtest as null result with progress status", () => {

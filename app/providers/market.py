@@ -1307,11 +1307,20 @@ class CSIIndustryIndexProvider:
         fallback_unadjusted_returns = sum(
             item.get("adjustment") == "unadjusted" for item in rows
         )
-        contribution_rows = [
+        raw_contribution_rows = [
             item
             for item in rows
             if isinstance(item.get("estimated_contribution_pp"), (int, float))
         ]
+        contribution_basis_complete = fallback_unadjusted_returns == 0
+        contribution_rows = (
+            raw_contribution_rows if contribution_basis_complete else []
+        )
+        contribution_status = (
+            analysis_status
+            if contribution_basis_complete
+            else "incomplete_adjustment_basis"
+        )
         estimated_total = round(
             sum(float(item["estimated_contribution_pp"]) for item in contribution_rows),
             4,
@@ -1359,7 +1368,7 @@ class CSIIndustryIndexProvider:
                 "available_returns": available,
                 "missing_returns": total - available,
                 "coverage_ratio": coverage_ratio,
-                "weights_available": len(contribution_rows),
+                "weights_available": len(raw_contribution_rows),
                 "primary_adjusted_returns": primary_adjusted_returns,
                 "fallback_unadjusted_returns": fallback_unadjusted_returns,
             },
@@ -1383,7 +1392,7 @@ class CSIIndustryIndexProvider:
                 ),
             },
             "contribution": {
-                "status": analysis_status,
+                "status": contribution_status,
                 "market_date": market_date,
                 "weights_as_of": payload.get("weights_as_of"),
                 "estimated_total_contribution_pp": (
@@ -1398,7 +1407,7 @@ class CSIIndustryIndexProvider:
                     "不是中证官方逐日归因；权重漂移、公司行动和样本调整会形成对账差。"
                     + (
                         f"其中 {fallback_unadjusted_returns} 只成分使用新浪未复权日线降级；"
-                        "若目标日前后存在除权除息，其单日收益与贡献可能偏离复权口径。"
+                        "为避免混合复权口径，系统不计算汇总贡献、贡献排行或对账差。"
                         if fallback_unadjusted_returns
                         else ""
                     )
@@ -2196,23 +2205,6 @@ class SinaMarketBreadthProvider:
         return round((float(current) / float(previous) - 1) * 100, 4)
 
     @staticmethod
-    def _limit_threshold_pct(symbol: str) -> float | None:
-        """按板块返回每日涨跌停幅度（百分数）。
-
-        口径：主板(sh60/sz00) ±10%、创业板(sz30)/科创板(sh68) ±20%、
-        北交所(bj) ±30%。ST 股(±5%)无法从新浪快照字段区分，
-        按所属板块普通口径近似；无法识别板块前缀时返回 None，
-        不计入涨跌停统计。
-        """
-        if symbol.startswith(("sh60", "sz00")):
-            return 10.0
-        if symbol.startswith(("sz30", "sh68")):
-            return 20.0
-        if symbol.startswith("bj"):
-            return 30.0
-        return None
-
-    @staticmethod
     def _parse(
         rows: list[dict[str, Any]], *, total_expected: int
     ) -> dict[str, Any]:
@@ -2237,8 +2229,6 @@ class SinaMarketBreadthProvider:
         valid_amount = 0
         total_amount = 0.0
         changes: list[float] = []
-        limit_up_count = 0
-        limit_down_count = 0
         anomaly_candidates: list[dict[str, Any]] = []
         for symbol, row in unique_rows.items():
             change = _number(row.get("changepercent"))
@@ -2250,14 +2240,6 @@ class SinaMarketBreadthProvider:
                 "advancers" if change > 0 else "decliners" if change < 0 else "unchanged"
             )
             counts[direction] += 1
-            # 涨跌停近似判定：阈值较交易所限制留 0.2 个百分点余量
-            # （如主板 ≥9.8 计涨停、≤-9.8 计跌停），避免浮点/四舍五入边界漏计。
-            limit_threshold = SinaMarketBreadthProvider._limit_threshold_pct(symbol)
-            if limit_threshold is not None:
-                if change >= limit_threshold - 0.2:
-                    limit_up_count += 1
-                elif change <= -(limit_threshold - 0.2):
-                    limit_down_count += 1
             exchange = (
                 "shanghai"
                 if symbol.startswith("sh")
@@ -2387,13 +2369,11 @@ class SinaMarketBreadthProvider:
                 "advance_ratio": round(advance_ratio, 4),
                 "decline_ratio": round(decline_ratio, 4),
                 "unchanged_ratio": round(unchanged_ratio, 4),
-                "limit_up_count": limit_up_count,
-                "limit_down_count": limit_down_count,
+                "limit_up_count": None,
+                "limit_down_count": None,
                 "limit_method": (
-                    "涨停近似口径：主板(sh60/sz00)涨跌幅≥9.8%、创业板(sz30)/"
-                    "科创板(sh68)≥19.8%、北交所(bj)≥29.8%计为涨停，跌停对称；"
-                    "阈值较交易所±10%/±20%/±30%限制留0.2个百分点余量；"
-                    "ST股(±5%)无法从快照字段区分，为近似统计。"
+                    "当前全市场快照不提供证券级涨跌停价格、ST/新股规则与停复牌状态，"
+                    "不提供精确涨跌停家数。"
                 ),
                 "state": breadth_state,
                 "classification_method": (

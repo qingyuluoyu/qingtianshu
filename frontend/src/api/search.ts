@@ -38,7 +38,9 @@ export async function getGlobalSearch(query: string): Promise<GlobalSearchGroup[
   const { data, error, response } = await api.GET("/v1/search", {
     params: { query: { q: query, limit: 8 } },
   });
-  if (!response.ok || error || data === undefined) return [];
+  if (!response.ok || error || data === undefined) {
+    throw new Error(`全局搜索请求失败 (${response.status})`);
+  }
   const root = asRecord(data);
   const groups = Array.isArray(root?.groups) ? root.groups : [];
   return groups.flatMap((rawGroup) => {

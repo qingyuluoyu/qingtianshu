@@ -54,6 +54,7 @@ class KnowledgeService:
         original_name: str,
         mime_type: str,
         raw: bytes,
+        title: str = "",
     ) -> dict[str, Any]:
         suffix = Path(original_name).suffix.casefold()
         if suffix in SUPPORTED_DOCUMENT_MIME_TYPES:
@@ -73,7 +74,7 @@ class KnowledgeService:
             document_id=document_id,
             owner_user_id=user_id,
             scope="user",
-            title=self._title_from_content(content, Path(original_name).stem),
+            title=title.strip() or self._title_from_content(content, Path(original_name).stem),
             original_name=Path(original_name).name[:180],
             mime_type=mime_type,
             content=content,

@@ -245,6 +245,7 @@ Agent 失败、守卫未完成或只返回 preview 时不会创建候选。确�
 | `LI_ZONG_REFRESH_SECONDS` | `30` | 独立策略后台线程完成一批后等待多久再处理下一批 |
 | `QINGSHU_ADMIN_API_TOKEN` | 空 | 内部手工刷新接口令牌；未配置时所有手工重算均关闭 |
 | `SEC_USER_AGENT` | 示例值 | SEC 要求的应用名称和联系邮箱 |
+| `QINGSHU_DEPLOYMENT_ENV` | `development` | `development`、`test`、`staging` 或 `production`；后两者启用生产安全门禁 |
 
 `.env`、`data/`、数据库、缓存和本地工作区已经被 `.gitignore` 排除。
 
@@ -302,6 +303,7 @@ Docker 方式：
 ```bash
 export POSTGRES_PASSWORD='<use-a-long-random-password>'
 export QINGSHU_ADMIN_API_TOKEN='<use-another-long-random-value>'
+export SEC_USER_AGENT='QingshuFinancialResearch/1.0 ops@your-company.cn'
 docker compose up --build -d
 ```
 
@@ -319,7 +321,8 @@ advisory lock 串行执行 Schema 初始化，避免并发 `CREATE/ALTER` 竞态
 
 ### Staging 验证
 
-仓库提供不含真实凭据的 `staging.env.example`。复制后替换密码和管理员 Token；
+仓库提供不含真实凭据的 `staging.env.example`。复制后必须替换数据库密码、管理员 Token
+和 `SEC_USER_AGENT` 联系邮箱；
 `COMPOSE_PROJECT_NAME=qingshu-staging` 会让数据库、工作区和备份卷与生产完全隔离：
 
 ```bash
@@ -331,6 +334,8 @@ docker compose --env-file .env.staging exec qingshu-worker \
   python scripts/check_operations.py \
   --require-postgres \
   --minimum-active-workers 1 \
+  --check-data-health \
+  --max-data-health-age-seconds 300 \
   --skip-backup
 
 docker compose --env-file .env.staging exec qingshu-backup \
@@ -344,7 +349,8 @@ docker compose --env-file .env.staging exec qingshu-backup \
 
 用户工作区文件仍保存在 `qingshu-data` volume；生产多机部署应再迁移到共享文件系统或对象存储。容器默认使用无需模型费用的确定性 preview；生产 Hermes Provider 应通过云端密钥管理接入。
 
-本地和生产运行都必须设置 `QINGSHU_DATABASE_URL`；未配置或不是 PostgreSQL 地址时应用会拒绝启动，不会静默创建 SQLite。开发环境可以使用
+本地和生产运行都必须设置 `QINGSHU_DATABASE_URL`；未配置或不是 PostgreSQL 地址时应用会拒绝启动，不会静默创建 SQLite。`QINGSHU_DEPLOYMENT_ENV=staging` 或
+`production` 时，应用还会拒绝占位数据库密码、非安全 Cookie、默认 SEC 联系方式，以及已配置但过短或仍为占位值的管理员 Token；错误日志只列配置字段名，不输出凭据。管理员 Token 留空会安全关闭管理接口。开发环境可以使用
 `BACKGROUND_WORKER_MODE=embedded` 在 Web 进程内运行同一套 PostgreSQL 持久化队列；生产建议使用独立 Worker：
 
 ```bash
@@ -352,7 +358,7 @@ export QINGSHU_DATABASE_URL='postgresql://qingshu:***@db-host:5432/qingshu'
 export BACKGROUND_WORKER_MODE=external
 
 # Web
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000
+uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log
 
 # 独立 Worker
 uv run qingshu-worker
@@ -662,7 +668,9 @@ uv run python scripts/check_operations.py \
   --require-postgres \
   --minimum-active-workers 1 \
   --max-queue-lag-seconds 600 \
-  --max-failure-rate-24h 0.2
+  --max-failure-rate-24h 0.2 \
+  --check-data-health \
+  --max-data-health-age-seconds 300
 ```
 
 Worker 容器健康检查使用该脚本的无备份模式；备份容器单独检查最新备份年龄。

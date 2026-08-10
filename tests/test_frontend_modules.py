@@ -18,8 +18,18 @@ def test_demo_loads_only_registered_local_assets() -> None:
     html = (STATIC / "demo.html").read_text(encoding="utf-8")
     sources = set(re.findall(r'<script src="/static/([^"]+)"', html))
     styles = set(re.findall(r'<link rel="stylesheet" href="/static/([^"]+)"', html))
+    advisor_html = (STATIC / "advisor-lab.html").read_text(encoding="utf-8")
+    advisor_sources = set(
+        re.findall(r'<script src="/static/([^"]+)"', advisor_html)
+    )
+    advisor_styles = set(
+        re.findall(r'<link rel="stylesheet" href="/static/([^"]+)"', advisor_html)
+    )
 
-    assert sources | styles == set(STATIC_ASSET_MEDIA_TYPES)
+    assert (sources | styles) & (advisor_sources | advisor_styles) == set()
+    assert sources | styles | advisor_sources | advisor_styles == set(
+        STATIC_ASSET_MEDIA_TYPES
+    )
     assert "<style>" not in html
     assert "<script>" not in html
 

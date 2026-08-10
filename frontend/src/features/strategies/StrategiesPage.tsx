@@ -42,11 +42,15 @@ export function StrategiesPage({ authenticated }: Props) {
 
   const handleRun = useCallback(async () => {
     setMessage(null);
-    const result = await runStrategy();
-    if (result?.runId) {
+    try {
+      const result = await runStrategy();
+      if (!result?.runId) {
+        setMessage("启动失败，请重试");
+        return;
+      }
       setMessage(`策略运行已启动：${result.runId}`);
       await queryClient.invalidateQueries({ queryKey: ["strategies"] });
-    } else {
+    } catch {
       setMessage("启动失败，请重试");
     }
   }, [queryClient]);

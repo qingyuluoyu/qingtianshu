@@ -1,9 +1,14 @@
-.page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; max-width: 1480px; margin: 0 auto; color: var(--ink); }
-.header { min-width: 0; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 28px; padding: 22px 26px; border: 1px solid #d9e2ef; border-radius: 14px; background: linear-gradient(135deg, #f9fbff 0%, #eef4fc 100%); }
+.page { display: grid; grid-template-columns: minmax(0, 1fr); gap: 26px; max-width: 1480px; margin: 0 auto; color: var(--ink); }
+.header { min-width: 0; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 28px; padding: 22px 26px; border: 1px solid #d9e2ef; border-left: 4px solid var(--brand); border-radius: 14px; background: var(--surface); }
 .headerTitle { min-width: 0; }
 .headerTitle h1 { margin: 0; font-size: clamp(24px, 3vw, 30px); letter-spacing: -.03em; }
 .headerTitle p { margin: 8px 0 0; color: var(--ink-muted); font-size: 13px; }
 .headerMeta { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; color: var(--ink-muted); font-size: 12px; }
+.workflowSection { display: grid; gap: 14px; }
+.sectionLead { display: flex; align-items: end; justify-content: space-between; gap: 20px; padding: 0 2px; }
+.sectionLead p { margin: 0; color: var(--brand); font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+.sectionLead h2 { margin: 2px 0 0; font-size: 20px; letter-spacing: -.025em; }
+.sectionLead > span { max-width: 440px; color: var(--ink-muted); font-size: 13px; line-height: 1.55; text-align: right; }
 .up { color: #d92d20; }
 .down { color: #039855; }
 .flat { color: #475467; }
@@ -90,4 +95,4 @@
 .actionLink:hover { background: #dbe9ff; }
 .footer { padding: 3px 6px 16px; color: #667085; font-size: 11px; line-height: 1.6; text-align: center; }
 @media (max-width: 1279px) { .layout { grid-template-columns: minmax(0, 1fr); } .modeGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 620px) { .modeGrid { grid-template-columns: minmax(0, 1fr); } .header { padding: 18px; } .filterGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 620px) { .modeGrid { grid-template-columns: minmax(0, 1fr); } .header { padding: 18px; } .sectionLead { align-items: flex-start; flex-direction: column; gap: 7px; } .sectionLead > span { max-width: none; text-align: left; } .filterGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

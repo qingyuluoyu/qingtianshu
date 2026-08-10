@@ -645,6 +645,8 @@ export type LiZongBacktest = {
     priceBasis: string | null;
     cashPolicy: string | null;
     selection: string | null;
+    executionReadiness: string | null;
+    executionBoundary: string | null;
   };
   /** 仅当服务端返回完成的回测结果时非空；前端不自行推算。 */
   result: BacktestResult | null;
@@ -682,6 +684,8 @@ export function parseLiZongBacktest(value: unknown): LiZongBacktest {
       priceBasis: optionalString(assumptions?.price_basis),
       cashPolicy: optionalString(assumptions?.cash_policy),
       selection: optionalString(assumptions?.selection),
+      executionReadiness: optionalString(assumptions?.execution_readiness),
+      executionBoundary: optionalString(assumptions?.execution_boundary),
     },
     result: result === null ? null : {
       status: optionalString(result.status),

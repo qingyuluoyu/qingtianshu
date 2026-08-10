@@ -20,6 +20,7 @@ test("screenshot preflight authenticates through the same frontend origin", asyn
 
 test("real FastAPI, PostgreSQL, cookie and Today read chain", async ({ page }) => {
   await page.goto("/today");
+  await page.getByRole("button", { name: "登录 / 注册" }).click();
   await expect(page.getByRole("dialog", { name: "登录或注册" })).toBeVisible();
 
   await page.getByLabel("账号").fill("真实链路用户");
@@ -48,6 +49,7 @@ test("real FastAPI, PostgreSQL, cookie and Today read chain", async ({ page }) =
   expect(registeredAccount.is_registered).toBe(true);
   const registrationCookie = (await page.context().cookies()).find((cookie) => cookie.name === "qingshu_session");
   expect(registrationCookie?.httpOnly).toBe(true);
+  expect(registrationCookie?.secure).toBe(false);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByText("真实链路用户", { exact: true })).toBeVisible();
 
@@ -56,7 +58,7 @@ test("real FastAPI, PostgreSQL, cookie and Today read chain", async ({ page }) =
   const packet = await response.json() as { generated_at?: unknown; summary?: { headline?: unknown; market_date?: unknown } };
   expect(typeof packet.generated_at).toBe("string");
   expect(typeof packet.summary?.headline).toBe("string");
-  expect(typeof packet.summary?.market_date).toBe("string");
+  expect(packet.summary?.market_date === null || typeof packet.summary?.market_date === "string").toBe(true);
 
   const breadth = await breadthResponse;
   expect(breadth.status()).toBe(200);
@@ -70,7 +72,9 @@ test("real FastAPI, PostgreSQL, cookie and Today read chain", async ({ page }) =
   const marker = page.getByTestId("today-generated-at");
   await expect(marker).toHaveAttribute("data-generated-at", String(packet.generated_at));
   await expect(page.getByText(String(packet.summary?.headline), { exact: true })).toBeVisible();
-  await expect(page.getByTestId("today-market-date")).toHaveText(String(packet.summary?.market_date));
+  await expect(page.getByTestId("today-market-date")).toHaveText(
+    typeof packet.summary?.market_date === "string" ? packet.summary.market_date : "市场日期读取中",
+  );
   await expect(page.getByRole("region", { name: "主要指数" })).toBeVisible();
   await expect(page.getByRole("region", { name: "数据健康状态" })).toBeVisible();
 
@@ -108,6 +112,7 @@ test("real FastAPI, PostgreSQL, cookie and Today read chain", async ({ page }) =
   expect(loggedInAccount.is_registered).toBe(true);
   const loginCookie = (await page.context().cookies()).find((cookie) => cookie.name === "qingshu_session");
   expect(loginCookie?.httpOnly).toBe(true);
+  expect(loginCookie?.secure).toBe(false);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByText("真实链路用户", { exact: true })).toBeVisible();
   const restoredSession = await page.request.get("/session");

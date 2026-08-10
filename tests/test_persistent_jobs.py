@@ -307,6 +307,23 @@ def test_persistent_schedule_coalesces_overlapping_runs(tmp_path: Path):
     assert store.health()["counts"]["queued"] == 1
 
 
+def test_schedule_catchup_uses_current_enqueue_time_for_queue_lag(tmp_path: Path):
+    store = store_for(tmp_path)
+    store.register_schedule("market", "market_refresh", 30)
+    overdue = datetime.now(timezone.utc) - timedelta(hours=2)
+    execute_raw(
+        store,
+        "UPDATE persistent_schedules SET next_run_at = %s WHERE name = 'market'",
+        (overdue,),
+    )
+
+    started = datetime.now(timezone.utc)
+    assert store.enqueue_due_schedules() == 1
+    queued = store.list_jobs(status="queued", limit=1)[0]
+
+    assert datetime.fromisoformat(queued["available_at"]) >= started - timedelta(seconds=1)
+
+
 def test_manual_schedule_pause_survives_registration_and_resume(tmp_path: Path):
     store = store_for(tmp_path)
     store.register_schedule("market", "market_refresh", 30)
@@ -393,6 +410,8 @@ def test_admin_api_can_enqueue_inspect_and_cancel_jobs(client):
     assert operations.status_code == 200
     assert operations.json()["queue"]["schema_version"] == 4
     assert operations.json()["backups"]["status"] == "ok"
+    assert operations.json()["thresholds"]["data_health_checked"] is True
+    assert "checks" not in operations.json()["data_health"]
     schedules = client.get("/admin/job-schedules", headers=headers)
     assert schedules.status_code == 200
     assert any(

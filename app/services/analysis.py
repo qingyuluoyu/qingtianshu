@@ -1383,6 +1383,7 @@ class MarketAnalysisService:
         )
         unavailable = {
             "status": "unavailable",
+            "source": None,
             "market_timestamp": None,
             "market_date": None,
             "is_stale": False,
@@ -1414,6 +1415,7 @@ class MarketAnalysisService:
             warnings.append("当前快照未包含异动候选数据，等待下次快照刷新。")
         return {
             "status": "available",
+            "source": payload.get("source"),
             "market_timestamp": payload.get("market_timestamp"),
             "market_date": payload.get("market_date"),
             "is_stale": bool(payload.get("is_stale")),

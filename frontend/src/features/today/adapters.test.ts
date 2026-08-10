@@ -31,6 +31,8 @@ describe("today runtime contract adapters", () => {
         name,
         status: "available",
         metrics: { latest_close: close, change_1d: 9.31, return_1d_pct: change },
+        source: "Fake index daily history",
+        fetched_at: "2026-08-04T02:35:00+00:00",
         market_timestamp: "2026-08-03T01:30:00+00:00",
         is_stale: false,
       })),
@@ -47,12 +49,16 @@ describe("today runtime contract adapters", () => {
     // change_1d and return_1d_pct are already point/percentage values from the backend; the adapter must not rescale them.
     expect(result.items[0]?.change1d).toBe(9.31);
     expect(result.items[0]?.return1dPct).toBe(-0.5897);
+    expect(result.items[0]?.source).toBe("Fake index daily history");
+    expect(result.items[0]?.fetchedAt).toBe("2026-08-04T02:35:00+00:00");
     expect(result.items).toHaveLength(5);
   });
 
   it("does not turn nullable or missing breadth values into zero", () => {
     const result = parseBreadth({
       status: "available",
+      source: "Sina Finance all A-share snapshot",
+      fetched_at: "2026-08-04T02:00:05+00:00",
       market_timestamp: null,
       market_date: "2026-08-04",
       is_stale: false,
@@ -86,6 +92,8 @@ describe("today runtime contract adapters", () => {
     });
 
     expect(result.marketTimestamp).toBeNull();
+    expect(result.source).toBe("Sina Finance all A-share snapshot");
+    expect(result.fetchedAt).toBe("2026-08-04T02:00:05+00:00");
     expect(result.turnover100mCny).toBeNull();
     // median_pct_change and change_vs_previous_pct are percentages; ratios are 0-1 fractions. None may be rescaled.
     expect(result.medianPctChange).toBe(0.679);
@@ -160,6 +168,7 @@ describe("today runtime contract adapters", () => {
   it("parses market anomalies with percentage passthrough", () => {
     const result = parseMarketAnomalies({
       status: "available",
+      source: "Sina Finance all A-share snapshot",
       market_timestamp: "2026-08-04T02:00:00+00:00",
       items: [
         { symbol: "sh603019", name: "中科曙光", kind: "快速拉升", pct_change: 8.65, amount_100m_cny: 125.62, tick_time: "10:36:00" },
@@ -168,6 +177,7 @@ describe("today runtime contract adapters", () => {
     });
 
     expect(result.items).toHaveLength(2);
+    expect(result.source).toBe("Sina Finance all A-share snapshot");
     expect(result.items[0]?.pctChange).toBe(8.65);
     expect(result.items[0]?.amount100mCny).toBe(125.62);
     expect(result.items[1]?.name).toBeNull();
@@ -306,6 +316,8 @@ describe("today runtime contract adapters", () => {
   it("parses capital flow with 100m CNY passthrough and keeps the northbound method note", () => {
     const result = parseCapitalFlow({
       status: "available",
+      source: "Eastmoney market-wide capital flow minute",
+      fetched_at: "2026-08-04T07:00:05+00:00",
       market_timestamp: "2026-08-04T07:00:00+00:00",
       is_stale: false,
       summary: { main_net_inflow_100m_cny: -128.45, unit: "CNY_100m_yuan" },
@@ -320,6 +332,8 @@ describe("today runtime contract adapters", () => {
 
     // 金额为后端已换算的亿元，直通不缩放。
     expect(result.mainNetInflow100mCny).toBe(-128.45);
+    expect(result.source).toBe("Eastmoney market-wide capital flow minute");
+    expect(result.fetchedAt).toBe("2026-08-04T07:00:05+00:00");
     expect(result.unit).toBe("CNY_100m_yuan");
     expect(result.points.map((point) => point.value100mCny)).toEqual([-12.5, -60.2, -128.45]);
     expect(result.method).toContain("北向");
@@ -369,7 +383,7 @@ describe("today runtime contract adapters", () => {
   it("parses global indices without the china display-order filter", () => {
     const result = parseGlobalIndices({
       indices: [
-        { symbol: "^GSPC", name: "标普500", status: "available", metrics: { latest_close: 2348.6, change_1d: 14.8, return_1d_pct: 0.63 }, market_timestamp: "2026-08-04T20:00:00+00:00", is_stale: false },
+        { symbol: "^GSPC", name: "标普500", status: "available", metrics: { latest_close: 2348.6, change_1d: 14.8, return_1d_pct: 0.63 }, source: "Yahoo Finance chart", fetched_at: "2026-08-04T20:01:00+00:00", market_timestamp: "2026-08-04T20:00:00+00:00", is_stale: false },
         { symbol: "^IXIC", name: "纳斯达克综合", status: "unavailable", metrics: null, market_timestamp: null, is_stale: null },
       ],
     });
@@ -377,19 +391,38 @@ describe("today runtime contract adapters", () => {
     expect(result.items.map((item) => item.symbol)).toEqual(["^GSPC", "^IXIC"]);
     expect(result.items[0]?.change1d).toBe(14.8);
     expect(result.items[0]?.return1dPct).toBe(0.63);
+    expect(result.items[0]?.source).toBe("Yahoo Finance chart");
+    expect(result.items[0]?.fetchedAt).toBe("2026-08-04T20:01:00+00:00");
     expect(result.items[1]?.latestClose).toBeNull();
   });
 
   it("parses live markets and keeps gold pct_change unscaled", () => {
     const result = parseLiveMarkets({
       markets: [
-        { key: "london_gold", name: "伦敦金（现货黄金）", status: "available", latest_price: 2358.6, pct_change: 0.78, currency: "USD", market_timestamp: "2026-08-04T12:00:00+00:00", is_stale: false },
+        { key: "london_gold", name: "伦敦金（现货黄金）", status: "available", latest_price: 2358.6, pct_change: 0.78, currency: "USD", source: "Sina global futures", fetched_at: "2026-08-04T12:01:00+00:00", market_timestamp: "2026-08-04T12:00:00+00:00", is_stale: false },
         { key: "china_a", name: "A股", status: "degraded", latest_price: null, pct_change: null },
       ],
     });
 
     expect(result.items).toHaveLength(2);
     expect(result.items[0]?.pctChange).toBe(0.78);
+    expect(result.items[0]?.source).toBe("Sina global futures");
+    expect(result.items[0]?.fetchedAt).toBe("2026-08-04T12:01:00+00:00");
     expect(result.items[1]?.status).toBe("degraded");
+  });
+
+  it("keeps report snapshot provenance without inventing a provider", () => {
+    const result = parseLatestResearchReports({
+      status: "ready",
+      items: [{
+        symbol: "000063.SZ",
+        title: "算力业务打开新空间",
+        sources: [{ name: "Eastmoney analyst expectations", url: "https://example.invalid/report" }],
+        source_fetched_at: "2026-08-04T01:30:00+00:00",
+      }],
+    });
+
+    expect(result.items[0]?.source).toBe("Eastmoney analyst expectations");
+    expect(result.items[0]?.fetchedAt).toBe("2026-08-04T01:30:00+00:00");
   });
 });

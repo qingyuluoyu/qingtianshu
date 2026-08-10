@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-from pathlib import Path
 import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
-from app.config import DEFAULT_DATA_DIR, PROJECT_ROOT, Settings
 from app.cli import build_parser
-
+from app.config import (
+    DEFAULT_DATA_DIR,
+    PROJECT_ROOT,
+    Settings,
+    validate_deployment_environment,
+)
 
 PORTABLE_FILES = (
     ".env.example",
@@ -56,6 +60,84 @@ def test_default_configuration_uses_writable_user_data_directory(monkeypatch):
     assert PROJECT_ROOT not in settings.data_dir.parents
 
 
+def test_development_configuration_allows_loopback_security_defaults():
+    validate_deployment_environment(
+        "development",
+        database_url="postgresql://qingshu:change-me@127.0.0.1/qingshu",
+        session_cookie_secure=False,
+        sec_user_agent="QingshuFinancialResearch/0.1 research@example.com",
+        admin_api_token="",
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_field"),
+    [
+        (
+            {"database_url": "postgresql://qingshu:change-me@postgres/qingshu"},
+            "QINGSHU_DATABASE_URL",
+        ),
+        ({"session_cookie_secure": False}, "SESSION_COOKIE_SECURE"),
+        (
+            {
+                "sec_user_agent": (
+                    "QingshuFinancialResearch/0.1 research@example.com"
+                )
+            },
+            "SEC_USER_AGENT",
+        ),
+        ({"admin_api_token": "replace-with-token"}, "QINGSHU_ADMIN_API_TOKEN"),
+    ],
+)
+def test_staging_and_production_reject_unsafe_configuration(
+    overrides, expected_field
+):
+    values = {
+        "database_url": (
+            "postgresql://qingshu:correct-horse-battery-staple@postgres/qingshu"
+        ),
+        "session_cookie_secure": True,
+        "sec_user_agent": "QingshuFinancialResearch/1.0 ops@qingshu.example.cn",
+        "admin_api_token": "",
+    }
+    values.update(overrides)
+
+    with pytest.raises(ValueError, match=expected_field) as exc_info:
+        validate_deployment_environment("staging", **values)
+
+    assert "correct-horse-battery-staple" not in str(exc_info.value)
+    assert "replace-with-token" not in str(exc_info.value)
+
+
+def test_production_configuration_accepts_rotated_credentials():
+    validate_deployment_environment(
+        "production",
+        database_url=(
+            "postgresql://qingshu:correct-horse-battery-staple@postgres/qingshu"
+        ),
+        session_cookie_secure=True,
+        sec_user_agent="QingshuFinancialResearch/1.0 ops@qingshu.example.cn",
+        admin_api_token="4f633ee9b3da4a3b9078d4f4cf59d134",
+    )
+
+
+def test_settings_from_env_applies_production_gate(monkeypatch):
+    monkeypatch.setenv("QINGSHU_DEPLOYMENT_ENV", "production")
+    monkeypatch.setenv(
+        "QINGSHU_DATABASE_URL",
+        "postgresql://qingshu:change-me@postgres/qingshu",
+    )
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    monkeypatch.setenv(
+        "SEC_USER_AGENT",
+        "QingshuFinancialResearch/1.0 ops@qingshu.example.cn",
+    )
+    monkeypatch.delenv("QINGSHU_ADMIN_API_TOKEN", raising=False)
+
+    with pytest.raises(ValueError, match="QINGSHU_DATABASE_URL"):
+        Settings.from_env()
+
+
 @pytest.mark.skipif(shutil.which("zsh") is None, reason="macOS launcher uses zsh")
 def test_macos_launcher_has_valid_shell_syntax():
     result = subprocess.run(
@@ -94,7 +176,16 @@ def test_current_directory_and_explicit_env_files_are_portable(tmp_path: Path):
     env = os.environ.copy()
     env.pop("QINGSHU_DATA_DIR", None)
     env.pop("QINGSHU_ENV_FILE", None)
-    env["PYTHONPATH"] = str(PROJECT_ROOT)
+    dependency_paths = [
+        value
+        for value in sys.path
+        if value and Path(value).name.casefold() == "site-packages"
+    ]
+    env["PYTHONPATH"] = os.pathsep.join(
+        dict.fromkeys(
+            [str(PROJECT_ROOT), *dependency_paths, env.get("PYTHONPATH", "")]
+        )
+    ).rstrip(os.pathsep)
 
     cwd_result = subprocess.run(
         command,

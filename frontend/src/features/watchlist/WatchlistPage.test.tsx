@@ -64,6 +64,24 @@ afterEach(() => {
 });
 
 describe("WatchlistPage", () => {
+  it("groups overview controls and research assets into a named triage workspace", async () => {
+    renderPage();
+
+    const workspace = await screen.findByRole("region", { name: "关注研究工作台" });
+    expect(within(workspace).getByRole("heading", { name: "先处理重点和变化" })).toBeInTheDocument();
+    expect(within(workspace).getByText("概览卡只改变当前列表视图，不会修改关注关系或发起额外请求。")).toBeInTheDocument();
+    expect(within(workspace).getByRole("group", { name: "关注概览筛选" })).toBeInTheDocument();
+  });
+
+  it("keeps the selected asset preview beside a compact, named research table", async () => {
+    renderPage();
+
+    const table = await screen.findByRole("table", { name: "关注资产表" });
+    expect(within(table).getByRole("columnheader", { name: "标的" })).toBeInTheDocument();
+    expect(within(table).getByRole("columnheader", { name: "待办与状态" })).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "中兴通讯 快速预览" })).toBeInTheDocument();
+  });
+
   it("renders summary cards, asset table and quick preview with passthrough values", async () => {
     renderPage();
     // 概览筛选卡（总数直通 summary.total=3）。

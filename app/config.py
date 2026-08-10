@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
+from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 from dotenv import dotenv_values, load_dotenv
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = Path.home() / ".qingshu"
@@ -46,6 +46,77 @@ def load_environment() -> tuple[Path, ...]:
 
 
 LOADED_ENV_FILES = load_environment()
+
+
+_DEPLOYMENT_ENVIRONMENTS = frozenset(
+    {"development", "test", "staging", "production"}
+)
+_PLACEHOLDER_DATABASE_PASSWORDS = frozenset(
+    {
+        "change-me",
+        "password",
+        "postgres",
+        "qingshu-local-only",
+        "replace-with-a-long-random-password",
+    }
+)
+
+
+def validate_deployment_environment(
+    deployment_environment: str,
+    *,
+    database_url: str,
+    session_cookie_secure: bool,
+    sec_user_agent: str,
+    admin_api_token: str,
+) -> None:
+    """Fail closed on unsafe staging/production configuration.
+
+    Error messages intentionally contain configuration field names only. They
+    must remain safe to emit during process startup without leaking secrets.
+    """
+
+    mode = str(deployment_environment or "").strip().lower()
+    if mode not in _DEPLOYMENT_ENVIRONMENTS:
+        raise ValueError(
+            "QINGSHU_DEPLOYMENT_ENV must be development, test, staging, or production"
+        )
+    if mode in {"development", "test"}:
+        return
+
+    failures: list[str] = []
+    normalized_url = database_url.replace(
+        "postgresql+psycopg://", "postgresql://", 1
+    )
+    try:
+        password = unquote(urlsplit(normalized_url).password or "").strip()
+    except ValueError:
+        password = ""
+    normalized_password = password.casefold()
+    if (
+        not password
+        or normalized_password in _PLACEHOLDER_DATABASE_PASSWORDS
+        or "replace-with" in normalized_password
+    ):
+        failures.append("QINGSHU_DATABASE_URL")
+    if not session_cookie_secure:
+        failures.append("SESSION_COOKIE_SECURE")
+    contact = str(sec_user_agent or "").strip().casefold()
+    if (
+        not contact
+        or "research@example.com" in contact
+        or "your-email" in contact
+        or "@example." in contact
+    ):
+        failures.append("SEC_USER_AGENT")
+    token = str(admin_api_token or "").strip()
+    token_lower = token.casefold()
+    if token and (len(token) < 32 or "replace-with" in token_lower):
+        failures.append("QINGSHU_ADMIN_API_TOKEN")
+    if failures:
+        raise ValueError(
+            f"unsafe {mode} configuration: {', '.join(failures)}"
+        )
 
 
 def _path_from_env(name: str, default: Path | str, *, command: bool = False) -> Path:
@@ -104,7 +175,7 @@ class Settings:
     auth_rate_limit_window_seconds: int = 60
     auth_rate_limit_max_keys: int = 4096
     auth_password_hash_concurrency: int = 2
-    legacy_anonymous_mode: bool = True
+    legacy_anonymous_mode: bool = False
     max_image_upload_bytes: int = 10 * 1024 * 1024
     max_image_pixels: int = 25_000_000
     max_document_upload_bytes: int = 20 * 1024 * 1024
@@ -135,6 +206,7 @@ class Settings:
     background_run_failed_retention_hours: int = 2160
     data_health_retention_hours: int = 720
     frontend_dist_dir: Path = PROJECT_ROOT / "frontend" / "dist"
+    deployment_environment: str = "development"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -146,12 +218,15 @@ class Settings:
             raise ValueError(
                 "QINGSHU_DATABASE_URL is required and must use PostgreSQL"
             )
+        deployment_environment = os.getenv(
+            "QINGSHU_DEPLOYMENT_ENV", "development"
+        ).strip().lower()
         worker_mode = os.getenv("BACKGROUND_WORKER_MODE", "embedded").strip().lower()
         if worker_mode not in {"embedded", "external", "disabled"}:
             raise ValueError(
                 "BACKGROUND_WORKER_MODE must be embedded, external, or disabled"
             )
-        return cls(
+        settings = cls(
             data_dir=data_dir,
             workspace_root=_path_from_env(
                 "QINGSHU_WORKSPACE_ROOT", data_dir / "workspaces"
@@ -239,7 +314,7 @@ class Settings:
                 1, int(os.getenv("AUTH_PASSWORD_HASH_CONCURRENCY", "2"))
             ),
             legacy_anonymous_mode=os.getenv(
-                "QINGSHU_LEGACY_ANONYMOUS_MODE", "true"
+                "QINGSHU_LEGACY_ANONYMOUS_MODE", "false"
             ).lower()
             in {"1", "true", "yes"},
             max_image_upload_bytes=int(
@@ -326,7 +401,16 @@ class Settings:
             frontend_dist_dir=_path_from_env(
                 "QINGSHU_FRONTEND_DIST_DIR", PROJECT_ROOT / "frontend" / "dist"
             ),
+            deployment_environment=deployment_environment,
         )
+        validate_deployment_environment(
+            settings.deployment_environment,
+            database_url=settings.database_url,
+            session_cookie_secure=settings.session_cookie_secure,
+            sec_user_agent=settings.sec_user_agent,
+            admin_api_token=settings.admin_api_token,
+        )
+        return settings
 
     @property
     def operational_database_url(self) -> str:

@@ -1,4 +1,5 @@
 import { api } from "../../api/client";
+import { requestError } from "../../api/requestError";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -58,7 +59,7 @@ export type TriggerItem = {
 // 策略列表
 export async function listStrategies(): Promise<StrategyInfo[]> {
   const { data, error, response } = await api.GET("/v1/stock-strategies");
-  if (!response.ok || error || data === undefined) return [];
+  if (!response.ok || error || data === undefined) throw requestError("策略列表", response.status);
   const root = asRecord(data);
   const items = Array.isArray(root?.strategies) ? root.strategies : [];
   return items.flatMap((raw) => {
@@ -78,7 +79,7 @@ export async function listStrategies(): Promise<StrategyInfo[]> {
 // 李总策略详情
 export async function getLiZongStrategy(): Promise<StrategyInfo | null> {
   const { data, error, response } = await api.GET("/v1/stock-strategies/li-zong");
-  if (!response.ok || error || data === undefined) return null;
+  if (!response.ok || error || data === undefined) throw requestError("策略详情", response.status);
   const root = asRecord(data);
   const s = asRecord(root?.strategy ?? root);
   if (!s) return null;
@@ -97,7 +98,7 @@ export async function runStrategy(): Promise<{ runId: string } | null> {
   const { data, error, response } = await api.POST("/v1/stock-strategies/li-zong/runs", {
     body: {} as unknown as never,
   });
-  if (!response.ok || error || data === undefined) return null;
+  if (!response.ok || error || data === undefined) throw requestError("启动策略", response.status);
   const root = asRecord(data);
   return { runId: asString(root?.run_id ?? root?.runId) ?? "" };
 }
@@ -107,7 +108,7 @@ export async function getStrategyCandidates(limit = 30): Promise<Array<{ symbol:
   const { data, error, response } = await api.GET("/v1/stock-strategies/li-zong/candidates", {
     params: { query: { limit } },
   });
-  if (!response.ok || error || data === undefined) return [];
+  if (!response.ok || error || data === undefined) throw requestError("策略候选", response.status);
   const root = asRecord(data);
   const items = Array.isArray(root?.candidates) ? root.candidates : [];
   return items.flatMap((raw) => {
@@ -127,7 +128,7 @@ export async function getObservationPool(limit = 50): Promise<Array<{ symbol: st
   const { data, error, response } = await api.GET("/v1/stock-strategies/li-zong/observation-pool", {
     params: { query: { limit } },
   });
-  if (!response.ok || error || data === undefined) return [];
+  if (!response.ok || error || data === undefined) throw requestError("观察池", response.status);
   const root = asRecord(data);
   const items = Array.isArray(root?.items) ? root.items : [];
   return items.flatMap((raw) => {
@@ -146,7 +147,7 @@ export async function getStrategyHistory(limit = 20): Promise<StrategyRun[]> {
   const { data, error, response } = await api.GET("/v1/stock-strategies/li-zong/history", {
     params: { query: { limit } },
   });
-  if (!response.ok || error || data === undefined) return [];
+  if (!response.ok || error || data === undefined) throw requestError("策略历史", response.status);
   const root = asRecord(data);
   const runs = Array.isArray(root?.runs) ? root.runs : [];
   return runs.flatMap((raw) => {
@@ -166,11 +167,11 @@ export async function getStrategyHistory(limit = 20): Promise<StrategyRun[]> {
 }
 
 // 回测结果
-export async function getBacktestResult(period = "1y"): Promise<BacktestResult | null> {
+export async function getBacktestResult(period: "3m" | "1y" | "3y" = "1y"): Promise<BacktestResult | null> {
   const { data, error, response } = await api.GET("/v1/stock-strategies/li-zong/backtest", {
     params: { query: { period } },
   });
-  if (!response.ok || error || data === undefined) return null;
+  if (!response.ok || error || data === undefined) throw requestError("策略回测", response.status);
   const root = asRecord(data);
   const bt = asRecord(root?.backtest ?? root);
   if (!bt) return null;
@@ -190,7 +191,7 @@ export async function getStrategyTriggers(limit = 20): Promise<TriggerItem[]> {
   const { data, error, response } = await api.GET("/v1/stock-strategies/li-zong/triggers", {
     params: { query: { limit } },
   });
-  if (!response.ok || error || data === undefined) return [];
+  if (!response.ok || error || data === undefined) throw requestError("策略触发记录", response.status);
   const root = asRecord(data);
   const items = Array.isArray(root?.triggers) ? root.triggers : [];
   return items.flatMap((raw) => {

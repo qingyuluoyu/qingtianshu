@@ -80,7 +80,7 @@ def test_equal_weight_backtest_rebalances_on_next_open_without_lookahead():
     assert result["benchmark_policy"] == "continuous_full_period"
     assert all(item["cost_pct_of_nav"] == 0.0 for item in result["rebalances"])
     assert result["benchmark_return_pct"] == 0.0
-    assert result["portfolio_version"] == "li_zong_2w_no_cost_full_benchmark_v5"
+    assert result["portfolio_version"] == "li_zong_2w_no_cost_research_baseline_v6"
 
 
 def test_backtest_holds_cash_when_strategy_never_selects_a_stock():
@@ -285,7 +285,7 @@ def test_compatible_v4_result_can_be_rebased_without_changing_strategy_nav():
     assert migrated["excess_return_pct"] == 3.0
     assert migrated["benchmark_policy"] == "continuous_full_period"
     assert migrated["benchmark_trading_days"] == 3
-    assert migrated["portfolio_version"] == "li_zong_2w_no_cost_full_benchmark_v5"
+    assert migrated["portfolio_version"] == "li_zong_2w_no_cost_research_baseline_v6"
     assert migrated["debug"]["benchmark_migrated_from"].endswith("v4")
 
 
@@ -915,6 +915,13 @@ def test_backtest_default_as_of_excludes_an_open_session_before_close():
     assert LiZongPortfolioBacktestService._default_as_of_date(
         datetime(2026, 7, 27, 16, 30, tzinfo=shanghai)
     ).isoformat() == "2026-07-27"
+
+
+def test_no_cost_backtest_is_explicitly_non_executable_research_baseline():
+    assumptions = LiZongPortfolioBacktestService._assumptions()
+
+    assert assumptions["execution_readiness"] == "research_baseline_not_execution_ready"
+    assert "zero" in assumptions["execution_boundary"].lower()
 
 
 def test_backtest_does_not_publish_empty_market_cap_cross_section():

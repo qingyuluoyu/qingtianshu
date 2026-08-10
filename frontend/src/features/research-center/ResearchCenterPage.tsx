@@ -724,6 +724,11 @@ export function ResearchCenterPage({ authenticated }: Props) {
         </p>
       ) : null}
 
+      <section aria-label="研究概览" className={styles.workflowSection}>
+        <div className={styles.sectionLead}>
+          <div><p>研究快照</p><h2>研究概览</h2></div>
+          <span>先定位待复盘、判断变化和已形成结果。</span>
+        </div>
       {aggregateError ? (
         <div className={styles.moduleError} role="status">
           <span>研究聚合暂时不可用。</span>
@@ -740,7 +745,13 @@ export function ResearchCenterPage({ authenticated }: Props) {
           onSelect={(next) => updateParams({ focus: next === "all" ? null : next })}
         />
       ) : null}
+      </section>
 
+      <section aria-label="研究工作区" className={styles.workflowSection}>
+        <div className={styles.sectionLead}>
+          <div><p>追溯与处理</p><h2>研究工作区</h2></div>
+          <span>按股票回看判断、变化、报告、结果与下一步。</span>
+        </div>
       {stockEntries.length === 0 && !aggregatePending && !aggregateError ? (
         <div className={styles.card}>
           <div className={styles.empty}>
@@ -769,7 +780,7 @@ export function ResearchCenterPage({ authenticated }: Props) {
             </ModuleCard>
           </div>
 
-          <div className={styles.column}>
+          <section aria-label="市场事实与研究结果" className={styles.column}>
             {selectedSymbol ? (
               <>
                 <ModuleCard
@@ -817,9 +828,9 @@ export function ResearchCenterPage({ authenticated }: Props) {
             ) : (
               <div className={styles.card}><div className={styles.empty}>选择左侧一只股票查看判断-变化-处理链。</div></div>
             )}
-          </div>
+          </section>
 
-          <div className={`${styles.column} ${styles.actionsColumn}`}>
+          <aside aria-label="个人复盘与下一步" className={`${styles.column} ${styles.actionsColumn}`}>
             {selectedSymbol ? (
               <ModuleCard
                 error={actionsQuery.isError}
@@ -846,12 +857,13 @@ export function ResearchCenterPage({ authenticated }: Props) {
                 />
               ) : null}
             </ModuleCard>
-          </div>
+          </aside>
         </div>
       ) : null}
 
       {changes?.boundary ? <p className={styles.boundaryNote}>{changes.boundary}</p> : null}
       {outcomes?.boundary ? <p className={styles.boundaryNote}>{outcomes.boundary}</p> : null}
+      </section>
 
       <footer className={styles.footer}>
         结果锚点只检验研究条件后来是否出现，不代表可实现收益；红绿仅表示事实涨跌方向，不构成买卖建议。

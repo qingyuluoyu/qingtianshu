@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 from uuid import uuid4
 
-
-UTC = timezone.utc
 CommandRunner = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -156,7 +155,9 @@ def create_backup(
         )
         if not temporary.is_file() or temporary.stat().st_size == 0:
             raise RuntimeError("pg_dump completed without producing a backup")
-        with temporary.open("rb") as created:
+        # Windows requires a writable descriptor for fsync/_commit even when
+        # pg_dump has already closed the archive. No bytes are modified here.
+        with temporary.open("rb+") as created:
             os.fsync(created.fileno())
         os.replace(temporary, backup)
         runner(
@@ -205,9 +206,7 @@ def backup_status(
         return {"status": "missing", "backup_dir": str(resolved)}
     try:
         manifest = json.loads(latest.read_text(encoding="utf-8"))
-        created_at = datetime.fromisoformat(
-            str(manifest["created_at"]).replace("Z", "+00:00")
-        )
+        created_at = datetime.fromisoformat(str(manifest["created_at"]))
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=UTC)
         backup = resolved / str(manifest["backup_file"])

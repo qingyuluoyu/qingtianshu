@@ -22,8 +22,8 @@ class StockScreenerUnavailable(RuntimeError):
 PROFILE_DEFINITIONS: dict[str, dict[str, Any]] = {
     "quality": {
         "label": "经营改善候选",
-        "description": "先约束市值和估值口径，再核验最新财报中的营收、净利润与 ROE 是否同时为正。",
-        "sort_rule": "按最新财报营收同比从高到低排列；不计算综合分。",
+        "description": "先约束市值和估值口径，再核验最近已公告完整年报中的营收、净利润与 ROE 是否同时为正。",
+        "sort_rule": "按最近已公告完整年报营收同比从高到低排列；不计算综合分。",
         "defaults": {
             "min_market_cap_yi": 50.0,
             "min_pe_ttm": 0.01,
@@ -87,9 +87,9 @@ FILTER_LABELS = {
     "min_turnover_rate": "换手率下限",
     "max_turnover_rate": "换手率上限",
     "min_volume_ratio": "量比下限",
-    "min_return_5d": "近 5 日收益下限",
-    "min_return_20d": "近 20 日收益下限",
-    "max_return_20d": "近 20 日收益上限",
+    "min_return_5d": "近 5 日价格涨跌幅下限",
+    "min_return_20d": "近 20 日价格涨跌幅下限",
+    "max_return_20d": "近 20 日价格涨跌幅上限",
     "min_industry_excess_20d": "近 20 日行业超额下限",
     "min_revenue_yoy": "营收同比下限",
     "min_net_profit_yoy": "净利润同比下限",
@@ -284,7 +284,8 @@ class StockScreenerService:
             **snapshot_meta,
             "generated_at": utc_now(),
             "financial_report_periods": report_periods,
-            "financial_data_note": "财务指标按各公司最新已取得报告期展示，不与行情交易日混用。",
+            "financial_period_basis": "latest_announced_full_year",
+            "financial_data_note": "财务指标统一使用各公司最近已公告完整年报，不与行情交易日混用。",
             "financial_candidate_pool_note": (
                 "需要财务条件时，先使用生产数据库已有财务快照覆盖初筛池；"
                 "不足部分再按行业分散补充实时逐股核验。"
@@ -751,7 +752,7 @@ class StockScreenerService:
             "return_5d_base_date": self._iso_date(date_5d),
             "return_20d_base_date": self._iso_date(date_20d),
             "snapshot_built_at": utc_now(),
-            "price_basis": "生产数据库最近稳定完整日线",
+            "price_basis": "unadjusted_close_to_close_excluding_cash_dividends",
             "valuation_basis": "生产数据库同交易日 daily_basic 稳定截面",
             "market_coverage_ratio": round(len(frame) / listed_stock_count, 6)
             if listed_stock_count
@@ -957,7 +958,7 @@ class StockScreenerService:
             "return_5d_base_date": self._iso_date(date_5d),
             "return_20d_base_date": self._iso_date(date_20d),
             "snapshot_built_at": utc_now(),
-            "price_basis": "最近完整交易日日线",
+            "price_basis": "unadjusted_close_to_close_excluding_cash_dividends",
             "valuation_basis": "与最近完整交易日对齐的 daily_basic 截面",
             "market_coverage_ratio": round(len(frame) / listed_stock_count, 6)
             if listed_stock_count
@@ -1176,14 +1177,37 @@ class StockScreenerService:
         return packets
 
     @classmethod
-    def _financial_packet(cls, frame: pd.DataFrame) -> dict[str, Any]:
+    def _financial_packet(
+        cls,
+        frame: pd.DataFrame,
+        *,
+        period_basis: str = "latest_announced_full_year",
+    ) -> dict[str, Any]:
         if frame.empty:
             return {"status": "unavailable"}
+        if period_basis not in {"latest_announced_full_year", "latest_report"}:
+            raise ValueError(f"unsupported financial period basis: {period_basis}")
         data = frame.copy()
         for column in ("end_date", "ann_date"):
             if column not in data:
                 data[column] = ""
-        data = data.sort_values(["end_date", "ann_date"], ascending=False)
+        data["_report_period"] = data["end_date"].map(cls._iso_date)
+        data["_announcement_date"] = data["ann_date"].map(cls._iso_date)
+        data = data[data["_report_period"].notna()].copy()
+        if period_basis == "latest_announced_full_year":
+            data = data[
+                data["_report_period"].str.endswith("-12-31", na=False)
+                & data["_announcement_date"].notna()
+            ].copy()
+        if data.empty:
+            return {
+                "status": "unavailable",
+                "period_basis": period_basis,
+                "coverage_status": "unavailable",
+            }
+        data = data.sort_values(
+            ["_report_period", "_announcement_date"], ascending=False
+        )
         row = data.iloc[0]
 
         def first_number(*columns: str) -> float | None:
@@ -1197,8 +1221,9 @@ class StockScreenerService:
 
         packet = {
             "status": "available",
-            "report_period": cls._iso_date(row.get("end_date")),
-            "announcement_date": cls._iso_date(row.get("ann_date")),
+            "period_basis": period_basis,
+            "report_period": row.get("_report_period"),
+            "announcement_date": row.get("_announcement_date"),
             "revenue_yoy": first_number(
                 "tr_yoy", "or_yoy", "q_sales_yoy", "revenue_yoy"
             ),
@@ -1420,9 +1445,9 @@ class StockScreenerService:
             "missing_reasons": missing_reasons,
             "not_applicable_fields": not_applicable_fields,
             "limitations": [
-                "阶段收益基于完整日线，不是盘中信号。",
+                "阶段价格涨跌幅基于未复权完整日线收盘价，不含现金分红再投资，不是盘中信号。",
                 "行业相对表现使用同一 Tushare 行业标签下股票的简单均值，不代表官方行业指数。",
-                "最新财务指标可能来自不同报告期，比较前需核对报告期和公告日。",
+                "财务质量统一使用最近已公告完整年报；跨公司比较前仍需核对报告期和公告日。",
             ],
         }
 
@@ -1438,14 +1463,14 @@ class StockScreenerService:
 
         if profile == "quality":
             return [
-                f"最新财报营收同比 {fmt(financials.get('revenue_yoy'))}%",
-                f"最新财报净利润同比 {fmt(financials.get('net_profit_yoy'))}%",
-                f"最新财报 ROE {fmt(financials.get('roe'))}%",
+                f"最近已公告年报营收同比 {fmt(financials.get('revenue_yoy'))}%",
+                f"最近已公告年报净利润同比 {fmt(financials.get('net_profit_yoy'))}%",
+                f"最近已公告年报 ROE {fmt(financials.get('roe'))}%",
             ]
         if profile == "trend":
             return [
-                f"近 5 日收益 {fmt(metrics.get('return_5d_pct'))}%",
-                f"近 20 日收益 {fmt(metrics.get('return_20d_pct'))}%",
+                f"近 5 日价格涨跌幅 {fmt(metrics.get('return_5d_pct'))}%",
+                f"近 20 日价格涨跌幅 {fmt(metrics.get('return_20d_pct'))}%",
                 f"近 20 日相对所属行业样本均值 {fmt(metrics.get('industry_excess_20d_pct'))} 个百分点",
             ]
         if profile == "value":
@@ -1455,8 +1480,8 @@ class StockScreenerService:
                 f"总市值 {fmt(metrics.get('total_mv_yi'))} 亿元；命中估值约束不等于低估",
             ]
         return [
-            f"近 20 日收益 {fmt(metrics.get('return_20d_pct'))}%",
-            f"近 5 日收益 {fmt(metrics.get('return_5d_pct'))}%",
+            f"近 20 日价格涨跌幅 {fmt(metrics.get('return_20d_pct'))}%",
+            f"近 5 日价格涨跌幅 {fmt(metrics.get('return_5d_pct'))}%",
             f"量比 {fmt(metrics.get('volume_ratio'))}；仅表示活跃度，仍需复核回撤原因",
         ]
 
