@@ -125,6 +125,37 @@ def test_provider_scans_later_announcement_page_for_financial_report():
     assert requested_pages == [1, 2]
 
 
+def test_provider_excludes_financial_report_disclosure_notice():
+    def http_get(url, **kwargs):
+        del url, kwargs
+        return FakeResponse(
+            {
+                "data": {
+                    "list": [
+                        {
+                            "art_code": "AN-NOTICE",
+                            "title_ch": "中际旭创:关于变更2026年第一季度报告预约披露时间的公告",
+                            "display_time": "2026-04-16 18:49:14:418",
+                            "columns": [{"column_name": "其他"}],
+                        },
+                        {
+                            "art_code": "AN2026Q1",
+                            "title_ch": "中际旭创:2026年一季度报告",
+                            "display_time": "2026-04-16 18:49:14:385",
+                            "columns": [{"column_name": "一季度报告全文"}],
+                        },
+                    ]
+                }
+            }
+        )
+
+    reports = AShareFilingProvider(http_get=http_get).list_financial_reports(
+        "300308.SZ", limit=1
+    )
+
+    assert [report["article_code"] for report in reports] == ["AN2026Q1"]
+
+
 def test_filing_cause_extractor_rejects_inventory_table_and_policy_templates():
     assert not _is_explicit_company_explanation(
         "存货种类 确定可变现净值/剩余对价与将要发生的成本的具体依据 "

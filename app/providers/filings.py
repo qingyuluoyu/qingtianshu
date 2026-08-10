@@ -29,6 +29,7 @@ _REPORT_TITLE_RE = re.compile(
     r"(?P<year>20\d{2})\s*年\s*(?P<kind>第一季度|一季度|半年度|中期|第三季度|三季度|年度)报告"
 )
 _EXCLUDED_TITLE_RE = re.compile(r"(?:摘要|英文版|取消|提示性公告|审计报告)")
+_NON_REPORT_TITLE_RE = re.compile(r"(?:预约披露|披露时间)")
 
 
 class AShareFilingProvider:
@@ -86,7 +87,13 @@ class AShareFilingProvider:
                     or article_code in seen_article_codes
                     or not title
                     or _EXCLUDED_TITLE_RE.search(title)
-                    or (not columns.intersection(_REPORT_COLUMNS) and parsed is None)
+                    or (
+                        not columns.intersection(_REPORT_COLUMNS)
+                        and (
+                            parsed is None
+                            or _NON_REPORT_TITLE_RE.search(title) is not None
+                        )
+                    )
                 ):
                     continue
                 document_type, report_period = parsed or _identity_from_columns(columns)
