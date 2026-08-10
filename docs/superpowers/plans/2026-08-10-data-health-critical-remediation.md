@@ -97,8 +97,29 @@ Observed: returned `AN202604161821269635` for report period `2026-03-31`, plus 2
 - Modify: no additional source files.
 - Test: backend health endpoints, full backend suite, frontend tests and build.
 
-- [ ] **Step 1: Restart the local backend on port 8020 and wait for scheduled refreshes.**
-- [ ] **Step 2: Check `/system/data-health`, `/markets/breadth`, and `/a-share/300308/filings`.**
-- [ ] **Step 3: Run full backend, frontend, and build gates; record actual outcomes.**
+- [x] **Step 1: Restart the local backend on port 8020 and wait for scheduled refreshes.**
+- [x] **Step 2: Check `/system/data-health`, `/markets/breadth`, and `/a-share/300308/filings`.**
+- [x] **Step 3: Run full backend, frontend, and build gates; record actual outcomes.**
+
+Observed: `/health` returned `ok`; `/system/data-health` reported 0 critical and 5 attention. The 300308 endpoint returned the 2026-03-31 filing from `pdf.dfcfw.com` with a content hash and 38,374 extracted characters. `npm test -- --run` passed 34 files and 190 tests; `npm run build` passed. The complete backend suite was started but could not complete because the local PostgreSQL instance exhausted available connection slots while tests were using the same configured database as the running local backend. Focused provider, filing, and data-health tests passed after the code changes.
+
 - [ ] **Step 4: Push verified commits to `origin/react-04-chang`.**
 
+### Task 4: Recover official PDF text when the content API is unavailable
+
+**Files:**
+
+- Modify: `app/providers/filings.py`
+- Test: `tests/test_filings.py`
+
+- [x] **Step 1: Add a proxy-failure regression test.**
+
+The test forces `CONTENT_URL` to raise `ProxyError`, supplies a valid PDF response, and asserts a converted full-text document with the official PDF URL and an explicit fallback warning.
+
+- [x] **Step 2: Implement the bounded official-PDF fallback.**
+
+`fetch_document()` now tries `CONTENT_URL` first. On request or content-provider failure it fetches `https://pdf.dfcfw.com/pdf/H2_{article_code}_1.pdf`, passes bytes through `DocumentConversionService`, checks a 100-character minimum, and stores a SHA-256 content hash.
+
+- [x] **Step 3: Verify the real 300308 refresh.**
+
+Observed: three official reports were stored; the 2026-03-31 report contained 38,374 characters and five explicit company explanations. No fallback warning was lost and no synthetic filing was created.
