@@ -1,6 +1,8 @@
 .DS_Store
 .env
 .venv/
+*.egg-info/
+.qingshu-runtime/
 .pytest_cache/
 .ruff_cache/
 __pycache__/

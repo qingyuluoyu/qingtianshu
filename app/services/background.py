@@ -30,7 +30,6 @@ from app.services.research_reports import ResearchReportService
 from app.services.research_outcomes import ResearchOutcomeService
 from app.services.tushare_snapshots import TushareSnapshotService
 from app.services.li_zong_strategy_service import LiZongStrategyService
-from app.catalog import normalize_symbol
 from app.utils import utc_now
 
 
@@ -97,6 +96,8 @@ class BackgroundScheduler:
         settings: Settings,
         tushare_snapshots: TushareSnapshotService | None = None,
         li_zong_strategy: LiZongStrategyService | None = None,
+        trade_workflow: Any | None = None,
+        change_events: Any | None = None,
     ):
         self.database = database
         self.live_markets = live_markets
@@ -123,12 +124,16 @@ class BackgroundScheduler:
         self.settings = settings
         self.tushare_snapshots = tushare_snapshots
         self.li_zong_strategy = li_zong_strategy
+        self.trade_workflow = trade_workflow
+        self.change_events = change_events
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._li_zong_thread: threading.Thread | None = None
 
     def start(self) -> None:
         if not self.settings.background_jobs_enabled or self.is_running:
             return
+        self.database.repair_interrupted_background_runs()
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._loop,
@@ -136,11 +141,20 @@ class BackgroundScheduler:
             daemon=True,
         )
         self._thread.start()
+        if self._li_zong_enabled:
+            self._li_zong_thread = threading.Thread(
+                target=self._li_zong_loop,
+                name="qingshu-li-zong-worker",
+                daemon=True,
+            )
+            self._li_zong_thread.start()
 
     def stop(self) -> None:
         self._stop.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=10)
+        if self._li_zong_thread and self._li_zong_thread.is_alive():
+            self._li_zong_thread.join(timeout=10)
 
     @property
     def is_running(self) -> bool:
@@ -164,18 +178,19 @@ class BackgroundScheduler:
             "peer_valuation_refresh_seconds": self.settings.background_fundamentals_refresh_seconds,
             "research_refresh_seconds": self.settings.background_research_refresh_seconds,
             "research_outcome_refresh_seconds": self.settings.background_research_refresh_seconds,
+            "trade_review_refresh_seconds": self.settings.background_research_refresh_seconds,
+            "change_event_refresh_seconds": self.settings.background_research_refresh_seconds,
             "market_news_refresh_seconds": self.settings.background_market_news_refresh_seconds,
             "evidence_task_refresh_seconds": self.settings.background_research_refresh_seconds,
             "calibration_refresh_seconds": self.settings.background_calibration_refresh_seconds,
             "data_quality_seconds": self.settings.background_data_quality_seconds,
             "article_uses_hermes": self.settings.background_use_hermes
             and self.settings.hermes_enabled,
-            "li_zong_strategy_enabled": bool(
-                self.tushare_snapshots is not None
-                and self.tushare_snapshots.client is not None
-                and self.li_zong_strategy is not None
+            "li_zong_strategy_enabled": bool(self._li_zong_enabled),
+            "li_zong_worker_running": bool(
+                self._li_zong_thread and self._li_zong_thread.is_alive()
             ),
-            "li_zong_refresh_seconds": self.settings.background_fundamentals_refresh_seconds,
+            "li_zong_refresh_seconds": self.settings.li_zong_refresh_seconds,
             "latest_jobs": self.database.latest_background_jobs(),
         }
 
@@ -194,17 +209,11 @@ class BackgroundScheduler:
         next_peer_valuation = 0.0
         next_research = 0.0
         next_research_outcomes = 0.0
+        next_trade_reviews = 0.0
         next_market_news = 0.0
         next_evidence_tasks = 0.0
         next_calibration = 0.0
         next_data_quality = 0.0
-        next_li_zong = (
-            0.0
-            if self.tushare_snapshots is not None
-            and self.tushare_snapshots.client is not None
-            and self.li_zong_strategy is not None
-            else float("inf")
-        )
         while not self._stop.is_set():
             now = time.monotonic()
             if now >= next_market:
@@ -218,14 +227,14 @@ class BackgroundScheduler:
                     60, self.settings.background_article_check_seconds
                 )
             if now >= next_info:
-                self._run_job("a_share_information_refresh", self._refresh_a_share_information)
+                self._run_job(
+                    "a_share_information_refresh", self._refresh_a_share_information
+                )
                 next_info = time.monotonic() + max(
                     60, self.settings.background_info_refresh_seconds
                 )
             if now >= next_filings:
-                self._run_job(
-                    "a_share_filing_refresh", self._refresh_a_share_filings
-                )
+                self._run_job("a_share_filing_refresh", self._refresh_a_share_filings)
                 next_filings = time.monotonic() + max(
                     300, self.settings.background_fundamentals_refresh_seconds
                 )
@@ -283,9 +292,7 @@ class BackgroundScheduler:
                     300, self.settings.background_fundamentals_refresh_seconds
                 )
             if now >= next_peer_valuation:
-                self._run_job(
-                    "peer_valuation_refresh", self._refresh_peer_valuations
-                )
+                self._run_job("peer_valuation_refresh", self._refresh_peer_valuations)
                 next_peer_valuation = time.monotonic() + max(
                     300, self.settings.background_fundamentals_refresh_seconds
                 )
@@ -310,15 +317,21 @@ class BackgroundScheduler:
                 next_research_outcomes = time.monotonic() + max(
                     300, self.settings.background_research_refresh_seconds
                 )
+            if self.trade_workflow is not None and now >= next_trade_reviews:
+                self._run_job(
+                    "trade_reviews_readiness_refresh",
+                    self.trade_workflow.refresh_pending_reviews,
+                )
+                next_trade_reviews = time.monotonic() + max(
+                    60, self.settings.background_research_refresh_seconds
+                )
             if now >= next_market_news:
                 self._run_job("market_news_refresh", self._refresh_market_news)
                 next_market_news = time.monotonic() + max(
                     300, self.settings.background_market_news_refresh_seconds
                 )
             if now >= next_evidence_tasks:
-                self._run_job(
-                    "evidence_tasks_process", self._process_evidence_tasks
-                )
+                self._run_job("evidence_tasks_process", self._process_evidence_tasks)
                 next_evidence_tasks = time.monotonic() + max(
                     60, self.settings.background_research_refresh_seconds
                 )
@@ -326,18 +339,6 @@ class BackgroundScheduler:
                 self._run_job("data_quality_audit", self._refresh_data_health)
                 next_data_quality = time.monotonic() + max(
                     30, self.settings.background_data_quality_seconds
-                )
-            if (
-                now >= next_li_zong
-                and self.tushare_snapshots is not None
-                and self.tushare_snapshots.client is not None
-                and self.li_zong_strategy is not None
-            ):
-                self._run_job(
-                    "li_zong_strategy_refresh", self._refresh_li_zong_strategy
-                )
-                next_li_zong = time.monotonic() + max(
-                    1800, self.settings.background_fundamentals_refresh_seconds
                 )
             next_due = min(
                 next_market,
@@ -355,12 +356,25 @@ class BackgroundScheduler:
                 next_calibration,
                 next_research,
                 next_research_outcomes,
+                next_trade_reviews,
                 next_market_news,
                 next_evidence_tasks,
                 next_data_quality,
-                next_li_zong,
             )
             self._stop.wait(timeout=max(0.5, min(5.0, next_due - time.monotonic())))
+
+    @property
+    def _li_zong_enabled(self) -> bool:
+        return bool(
+            self.tushare_snapshots is not None
+            and self.tushare_snapshots.client is not None
+            and self.li_zong_strategy is not None
+        )
+
+    def _li_zong_loop(self) -> None:
+        while not self._stop.is_set():
+            self._run_job("li_zong_strategy_refresh", self._refresh_li_zong_strategy)
+            self._stop.wait(timeout=max(10, self.settings.li_zong_refresh_seconds))
 
     def _run_job(self, job_name: str, function: Callable[[], dict[str, Any]]) -> None:
         job_id = self.database.start_background_job(job_name)
@@ -395,55 +409,26 @@ class BackgroundScheduler:
     def _refresh_li_zong_strategy(self) -> dict[str, Any]:
         if self.tushare_snapshots is None or self.li_zong_strategy is None:
             return {"status": "disabled"}
-        symbols: list[str] = []
-        for raw in (
-            *self.settings.default_a_share_symbols,
-            *self.settings.default_research_symbols,
-        ):
-            try:
-                symbol = normalize_symbol(raw)
-            except ValueError:
-                continue
-            if symbol.endswith((".SS", ".SZ")) and symbol not in symbols:
-                symbols.append(symbol)
-        if not symbols:
-            return {"status": "empty", "processed": 0}
-        sync_results = []
-        for symbol in symbols:
-            try:
-                result = self.tushare_snapshots.sync_symbol(symbol)
-                sync_results.append(
-                    {
-                        "symbol": symbol,
-                        "status": (result.get("run") or {}).get("status"),
-                        "published": bool(result.get("published")),
-                        "previous_stable_retained": bool(
-                            result.get("previous_stable_retained")
-                        ),
-                    }
-                )
-            except Exception as exc:
-                sync_results.append(
-                    {
-                        "symbol": symbol,
-                        "status": "unavailable",
-                        "error_type": type(exc).__name__,
-                    }
-                )
-        strategy = self.li_zong_strategy.run_symbols(symbols)
+        strategy = self.li_zong_strategy.run_universe_batch(
+            batch_size=self.settings.li_zong_universe_batch_size
+        )
+        coverage = strategy.get("coverage") or {}
+        counts = coverage.get("counts") or {}
         self.broker.publish(
             {
                 "type": "stock_strategy_updated",
                 "strategy_id": "li_zong",
                 "time": utc_now(),
-                "counts": strategy.get("counts") or {},
+                "counts": counts,
+                "coverage": coverage,
             }
         )
         return {
-            "status": (strategy.get("run") or {}).get("status"),
-            "processed": (strategy.get("counts") or {}).get("processed", 0),
-            "counts": strategy.get("counts") or {},
-            "sync_results": sync_results,
+            "status": strategy.get("status"),
+            "processed": len(strategy.get("selected_symbols") or []),
+            "counts": counts,
+            "coverage": coverage,
+            "sync_results": strategy.get("sync_results") or [],
         }
 
     def _refresh_article(self) -> dict[str, Any]:
@@ -484,6 +469,11 @@ class BackgroundScheduler:
         timeline_result = self.event_timeline.refresh_symbols(
             symbols, refresh_sources=False
         )
+        change_result = (
+            self.change_events.refresh_all_users()
+            if self.change_events is not None
+            else None
+        )
         self.broker.publish(
             {
                 "type": "a_share_information_updated",
@@ -500,6 +490,14 @@ class BackgroundScheduler:
                 "requested": timeline_result["requested"],
                 "completed": timeline_result["completed"],
             },
+            "change_events": (
+                {
+                    "requested_users": change_result["requested_users"],
+                    "completed_users": change_result["completed_users"],
+                }
+                if change_result is not None
+                else {"status": "not_configured"}
+            ),
         }
 
     def _refresh_a_share_fundamentals(self) -> dict[str, Any]:
@@ -549,9 +547,7 @@ class BackgroundScheduler:
             "requested": result["requested"],
             "completed": result["completed"],
             "symbols": [item.get("symbol") for item in result["results"]],
-            "rows": sum(
-                int(item.get("rows_saved") or 0) for item in result["results"]
-            ),
+            "rows": sum(int(item.get("rows_saved") or 0) for item in result["results"]),
         }
 
     def _refresh_shareholders(self) -> dict[str, Any]:
@@ -606,8 +602,7 @@ class BackgroundScheduler:
         for industry in sorted(industries):
             snapshot = self.market_analysis.industry_snapshot(industry)
             latest_market_date = str(
-                ((snapshot.get("points") or [{}])[-1]).get("market_date")
-                or ""
+                ((snapshot.get("points") or [{}])[-1]).get("market_date") or ""
             ).strip()
             if snapshot.get("status") == "available" and latest_market_date:
                 snapshot = self.market_analysis.industry_snapshot(
@@ -629,25 +624,21 @@ class BackgroundScheduler:
             "industry_indices": {
                 "requested": len(industry_results),
                 "available": sum(
-                    item.get("status") == "available"
-                    for item in industry_results
+                    item.get("status") == "available" for item in industry_results
                 ),
                 "items": [
                     {
                         "industry_name": item.get("industry_name"),
                         "index_code": item.get("index_code"),
                         "status": item.get("status"),
-                        "mapping_type": (
-                            item.get("industry_mapping") or {}
-                        ).get("match_type"),
-                        "component_status": (
-                            item.get("component_analysis") or {}
-                        ).get("status"),
+                        "mapping_type": (item.get("industry_mapping") or {}).get(
+                            "match_type"
+                        ),
+                        "component_status": (item.get("component_analysis") or {}).get(
+                            "status"
+                        ),
                         "component_coverage": (
-                            (item.get("component_analysis") or {}).get(
-                                "coverage"
-                            )
-                            or {}
+                            (item.get("component_analysis") or {}).get("coverage") or {}
                         ),
                         "component_failures": [
                             {
@@ -657,9 +648,7 @@ class BackgroundScheduler:
                                 "reason": failure.get("reason"),
                             }
                             for failure in (
-                                (item.get("component_analysis") or {}).get(
-                                    "failures"
-                                )
+                                (item.get("component_analysis") or {}).get("failures")
                                 or []
                             )[:5]
                         ],
@@ -787,6 +776,11 @@ class BackgroundScheduler:
 
     def _refresh_research_reports(self) -> dict[str, Any]:
         result = self.research_reports.refresh_targets()
+        change_result = (
+            self.change_events.refresh_all_users()
+            if self.change_events is not None
+            else None
+        )
         self.broker.publish(
             {
                 "type": "research_reports_updated",
@@ -799,6 +793,14 @@ class BackgroundScheduler:
             "requested": result["requested"],
             "completed": result["completed"],
             "symbols": [item.get("symbol") for item in result["results"]],
+            "change_events": (
+                {
+                    "requested_users": change_result["requested_users"],
+                    "completed_users": change_result["completed_users"],
+                }
+                if change_result is not None
+                else {"status": "not_configured"}
+            ),
         }
 
     def _refresh_research_outcomes(self) -> dict[str, Any]:

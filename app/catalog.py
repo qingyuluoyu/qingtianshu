@@ -7,6 +7,7 @@ INDEX_CATALOG = [
     {"symbol": "000001.SS", "name": "上证综指", "region": "中国", "group": "china"},
     {"symbol": "399001.SZ", "name": "深证成指", "region": "中国", "group": "china"},
     {"symbol": "399006.SZ", "name": "创业板指", "region": "中国", "group": "china"},
+    {"symbol": "000688.SS", "name": "科创50", "region": "中国", "group": "china"},
     {"symbol": "000300.SS", "name": "沪深300", "region": "中国", "group": "china"},
     {"symbol": "000905.SS", "name": "中证500", "region": "中国", "group": "china"},
     {"symbol": "^HSI", "name": "恒生指数", "region": "中国香港", "group": "hong_kong"},
@@ -103,11 +104,13 @@ RESEARCH_TARGETS = {
     "000063.SZ": {
         "name": "中兴通讯",
         "market": "A股",
+        "industry": "通信设备",
         "thesis": "关注算力基础设施与通信设备订单、利润兑现和经营现金流变化",
     },
     "300308.SZ": {
         "name": "中际旭创",
         "market": "A股",
+        "industry": "通信设备",
         "thesis": "关注高速光模块需求、盈利兑现、客户集中度与估值消化",
     },
     "NVDA": {
@@ -119,6 +122,7 @@ RESEARCH_TARGETS = {
     "600519.SS": {
         "name": "贵州茅台",
         "market": "A股",
+        "industry": "白酒",
         "thesis": "关注高端白酒需求、渠道库存、批价与经营现金流变化",
     },
 }

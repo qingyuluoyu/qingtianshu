@@ -112,3 +112,31 @@ def test_claim_ledger_links_relations_sources_times_and_invalidations():
     ]
     assert "仓位" not in str(ledger["invalidation_conditions"])
     assert "未来涨跌概率" in ledger["boundary"]
+
+
+def test_focused_earnings_packet_builds_citable_claims_without_full_debate():
+    evidence = {
+        "type": "earnings_quality",
+        "symbol": "000063.SZ",
+        "name": "中兴通讯",
+        "generated_at": "2026-07-23T08:00:00+08:00",
+        "latest_report": {
+            "report_date": "2026-03-31",
+            "report_date_name": "2026年一季报",
+        },
+        "supports": ["最新报告期营收同比保持增长。"],
+        "contradictions": ["经营现金流对归母净利润覆盖低于 0.8。"],
+        "review_points": ["核验下一报告期经营现金流是否改善。"],
+    }
+
+    ledger = build_research_claim_ledger(evidence)
+
+    assert ledger["status"] == "available"
+    assert ledger["summary"]["supports"] == 1
+    assert ledger["summary"]["weakens"] == 1
+    assert ledger["summary"]["unresolved"] == 1
+    assert {item["source_key"] for item in ledger["claims"]} == {
+        "deterministic_earnings_quality"
+    }
+    assert all(item["report_period"] == "2026-03-31" for item in ledger["claims"])
+    assert ledger["strongest_counterevidence"]["claim"].startswith("经营现金流")

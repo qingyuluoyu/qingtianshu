@@ -175,6 +175,21 @@ def test_research_refresh_ignores_editor_pollution_but_keeps_user_targets(
         "CN",
         "普通用户真实关注",
     )
+    conversation = database.create_conversation(
+        user["id"], "宁德时代筛选线索继续研究"
+    )
+    database.save_deep_stock_session(
+        user_id=user["id"],
+        symbol="300750.SZ",
+        name="宁德时代",
+        conversation_id=conversation["id"],
+        workflow_version="deep_stock_v1",
+        status="active",
+        stages=[],
+        evidence_modules={},
+        unresolved_items=["核验最新经营现金流"],
+        next_question="继续核验筛选线索",
+    )
 
     requested: list[str] = []
 
@@ -190,6 +205,7 @@ def test_research_refresh_ignores_editor_pollution_but_keeps_user_targets(
 
     assert "T" not in requested
     assert "600000.SS" in requested
+    assert "300750.SZ" in requested
     assert set(app.state.settings.default_research_symbols).issubset(requested)
     assert result["requested"] == len(requested)
 

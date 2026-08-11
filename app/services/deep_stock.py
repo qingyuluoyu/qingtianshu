@@ -4,13 +4,19 @@ from typing import Any
 
 from app.catalog import RESEARCH_TARGETS, normalize_symbol
 from app.db import Database
+from app.services.research_claims import build_research_claim_ledger
 from app.utils import utc_now
+
+
+class DeepStockConversationConflict(ValueError):
+    """A stock workspace cannot silently replace or share its primary chat."""
 
 
 class DeepStockResearchService:
     """Persist one guided stock-research space per user and security."""
 
     WORKFLOW_VERSION = "guided_deep_stock_v1"
+    STAGE_COMPLETION_GATE_VERSION = "stage_completion_gate_v2"
     STAGES = (
         {
             "key": "original_thesis",
@@ -91,13 +97,27 @@ class DeepStockResearchService:
     }
     EVIDENCE_PERSISTED_RUN_STATUSES = {"completed", "preview"}
     STAGE_ADVANCING_RUN_STATUSES = {"completed"}
+    STAGE_CLAIM_SOURCE_KEYS = {
+        "company_industry": {"deterministic_business_structure"},
+        "financial_cashflow": {
+            "structured_fundamentals",
+            "deterministic_earnings_quality",
+            "deterministic_financial_driver",
+        },
+        "events_sentiment": {
+            "deterministic_event_timeline",
+            "eastmoney_guba_heuristic_weak",
+        },
+        "counterevidence": None,
+        "invalidation_next": None,
+    }
 
     def __init__(self, database: Database):
         self.database = database
 
     def list_sessions(self, user_id: str, limit: int = 50) -> dict[str, Any]:
         items = [
-            self._public_session(item)
+            self._public_session(self._reconcile_legacy_stages(user_id, item))
             for item in self.database.list_deep_stock_sessions(user_id, limit=limit)
         ]
         return {
@@ -115,11 +135,31 @@ class DeepStockResearchService:
         user_id: str,
         symbol: str,
         conversation_id: str | None = None,
+        entry_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         canonical = normalize_symbol(symbol)
+        research_entry = self._normalize_research_entry(entry_context)
         existing = self.database.get_deep_stock_session(user_id, canonical)
+        if existing is not None:
+            existing = self._reconcile_legacy_stages(user_id, existing)
+            if conversation_id and str(existing["conversation_id"]) != conversation_id:
+                raise DeepStockConversationConflict(
+                    "这只股票已经绑定长期研究对话，不能静默替换主会话"
+                )
         bound_conversation = None
         if conversation_id:
+            conversation_session = (
+                self.database.get_deep_stock_session_by_conversation(
+                    user_id, conversation_id
+                )
+            )
+            if (
+                conversation_session is not None
+                and str(conversation_session["symbol"]) != canonical
+            ):
+                raise DeepStockConversationConflict(
+                    "这个研究对话已经属于另一只股票，不能重复绑定"
+                )
             bound_conversation = self.database.get_conversation(
                 user_id, conversation_id
             )
@@ -135,13 +175,40 @@ class DeepStockResearchService:
             if bound_conversation and bound_conversation.get("status") != "active":
                 bound_conversation = None
         if bound_conversation is None:
-            display_name = self._display_name(user_id, canonical)
+            display_name = str(
+                (research_entry or {}).get("display_name")
+                or self._display_name(user_id, canonical)
+            )
             bound_conversation = self.database.create_conversation(
                 user_id, f"个股研究｜{display_name}"
             )
 
         report = self.database.latest_research_report(canonical)
-        name = self._display_name(user_id, canonical)
+        name = str(
+            (research_entry or {}).get("display_name")
+            or self._display_name(user_id, canonical)
+        )
+        current_title = str(bound_conversation.get("title") or "")
+        automatic_titles = {
+            f"个股研究｜{canonical}",
+            f"个股研究｜{canonical.split('.', 1)[0]}",
+        }
+        desired_title = f"个股研究｜{name}"
+        if (
+            current_title != desired_title
+            and (
+                conversation_id is not None
+                or (
+                    research_entry is not None
+                    and current_title in automatic_titles
+                )
+            )
+        ):
+            bound_conversation = self.database.rename_conversation(
+                user_id,
+                str(bound_conversation["id"]),
+                desired_title,
+            ) or bound_conversation
         if existing is None:
             watchlist = self.database.get_watchlist_item(user_id, canonical)
             thesis = str((watchlist or {}).get("thesis") or "").strip()
@@ -163,6 +230,17 @@ class DeepStockResearchService:
                     *self._report_unresolved(report),
                 ]
             )
+        if research_entry is not None:
+            evidence_modules["screening_entry"] = research_entry
+            unresolved = self._dedupe(
+                [
+                    *unresolved,
+                    *[
+                        f"筛选入口待核验：{item}"
+                        for item in research_entry.get("missing_fields") or []
+                    ],
+                ]
+            )
         stages = self._normalize_stage_statuses(stages)
         status = (
             "completed"
@@ -170,6 +248,20 @@ class DeepStockResearchService:
             else "active"
         )
         next_question = self._next_question(stages, name)
+        if research_entry is not None and (
+            next(
+                (
+                    item
+                    for item in stages
+                    if item.get("status") in {"in_progress", "needs_review"}
+                ),
+                {},
+            )
+        ).get("key") == "original_thesis":
+            next_question = (
+                f"请先核验{name}命中“{research_entry['source_label']}”的理由、"
+                "反方证据和缺失项，再形成自己的关注理由。"
+            )
         session = self.database.save_deep_stock_session(
             user_id=user_id,
             symbol=canonical,
@@ -208,9 +300,55 @@ class DeepStockResearchService:
                     return reconciled
         return self._public_session(session)
 
+    @staticmethod
+    def _normalize_research_entry(
+        entry_context: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        if not isinstance(entry_context, dict):
+            return None
+        source_kind = str(entry_context.get("source_kind") or "").strip()
+        if source_kind not in {"stock_screen", "li_zong_strategy"}:
+            return None
+
+        def clean_text(value: Any, limit: int) -> str | None:
+            text = " ".join(str(value or "").split()).strip()
+            return text[:limit] if text else None
+
+        def clean_items(value: Any, limit: int) -> list[str]:
+            if not isinstance(value, list):
+                return []
+            items = [clean_text(item, 160) for item in value]
+            return list(dict.fromkeys(item for item in items if item))[:limit]
+
+        source_label = clean_text(entry_context.get("source_label"), 80)
+        if source_label is None:
+            source_label = "研究候选筛选"
+        matched_reasons = clean_items(entry_context.get("matched_reasons"), 8)
+        missing_fields = clean_items(entry_context.get("missing_fields"), 8)
+        return {
+            "source_kind": source_kind,
+            "source_label": source_label,
+            "display_name": clean_text(entry_context.get("display_name"), 80),
+            "profile_key": clean_text(entry_context.get("profile_key"), 60),
+            "as_of_date": clean_text(entry_context.get("as_of_date"), 32),
+            "candidate_status": clean_text(
+                entry_context.get("candidate_status"), 40
+            ),
+            "matched_reasons": matched_reasons,
+            "missing_fields": missing_fields,
+            "status": "user_selected_context",
+            "limitations": [
+                "这是用户从筛选结果进入研究空间时保存的研究线索，"
+                "不会直接完成研究阶段，仍需用正式行情、财务和公告证据核验。"
+            ],
+            "updated_at": utc_now(),
+        }
+
     def get(self, user_id: str, symbol: str) -> dict[str, Any] | None:
         canonical = normalize_symbol(symbol)
         session = self.database.get_deep_stock_session(user_id, canonical)
+        if session is not None:
+            session = self._reconcile_legacy_stages(user_id, session)
         return self._public_session(session) if session else None
 
     def evidence_coverage_packet(
@@ -258,6 +396,7 @@ class DeepStockResearchService:
         )
         if session is None:
             return None
+        session = self._reconcile_legacy_stages(user_id, session)
         if symbol and normalize_symbol(symbol) != session["symbol"]:
             return self._public_session(session)
 
@@ -268,6 +407,10 @@ class DeepStockResearchService:
         run_id = run.get("id")
         now = utc_now()
         coverage_override = self._coverage_from_modules(evidence_modules)
+        stage_gate_allowed, stage_gate_reason = self._stage_advance_gate(
+            run,
+            evidence,
+        )
         if run_status not in self.EVIDENCE_PERSISTED_RUN_STATUSES:
             unresolved.append(
                 "最近一轮研究未通过完整模型与输出校验，因此没有推进研究阶段。"
@@ -280,35 +423,53 @@ class DeepStockResearchService:
                 != "最近一轮研究未通过完整模型与输出校验，因此没有推进研究阶段。"
             ]
             coverage = self._coverage_dimensions(evidence, intent=intent)
-            if run_status in self.STAGE_ADVANCING_RUN_STATUSES:
-                completed = self._completed_stage_modules(
+            if (
+                run_status in self.STAGE_ADVANCING_RUN_STATUSES
+                and stage_gate_allowed
+            ):
+                assessments = self._stage_assessments(
                     intent=intent,
                     message=message,
                     evidence=evidence,
                 )
                 for stage in stages:
                     key = str(stage.get("key"))
-                    modules = completed.get(key)
-                    if not modules or stage.get("status") == "completed":
+                    assessment = assessments.get(key)
+                    if assessment is None or stage.get("status") == "completed":
                         continue
-                    stage.update(
-                        {
-                            "status": "completed",
-                            "completed_at": now,
-                            "run_id": run_id,
-                            "evidence_modules": modules,
-                            "coverage_gate": {
-                                dimension: coverage[dimension]["coverage_status"]
-                                for dimension in self.STAGE_COVERAGE_GATES.get(key, ())
-                            },
-                        }
-                    )
+                    stage_status = str(assessment["status"])
+                    stage.update({
+                        "status": stage_status,
+                        "review_status": stage_status,
+                        "review_reasons": assessment["review_reasons"],
+                        "source_refs": assessment["source_refs"],
+                        "coverage_gate": assessment["coverage_gate"],
+                        "last_evaluated_at": now,
+                        "last_evaluated_run_id": run_id,
+                    })
+                    if stage_status == "completed":
+                        stage.update(
+                            {
+                                "completed_at": now,
+                                "run_id": run_id,
+                                "evidence_modules": assessment["modules"],
+                                "completion_gate_version": (
+                                    self.STAGE_COMPLETION_GATE_VERSION
+                                ),
+                            }
+                        )
                     evidence_modules[key] = {
                         "run_id": run_id,
                         "intent": intent,
-                        "modules": modules,
+                        "status": stage_status,
+                        "modules": assessment["modules"],
+                        "coverage_gate": assessment["coverage_gate"],
+                        "source_refs": assessment["source_refs"],
+                        "review_reasons": assessment["review_reasons"],
                         "updated_at": now,
                     }
+            elif run_status in self.STAGE_ADVANCING_RUN_STATUSES:
+                unresolved.append(stage_gate_reason)
             coverage_override = self._merge_coverage_snapshot(
                 previous=coverage_override,
                 current=coverage,
@@ -395,33 +556,72 @@ class DeepStockResearchService:
             )
         return self._normalize_stage_statuses(stages)
 
-    def _completed_stage_modules(
+    def _stage_assessments(
         self, *, intent: str, message: str, evidence: dict[str, Any]
-    ) -> dict[str, list[str]]:
-        completed: dict[str, list[str]] = {}
+    ) -> dict[str, dict[str, Any]]:
+        assessments: dict[str, dict[str, Any]] = {}
         coverage = self._coverage_dimensions(evidence, intent=intent)
 
-        def gate(stage_key: str) -> bool:
+        def assess(
+            stage_key: str,
+            *,
+            addressed: bool,
+            modules: list[str],
+            extra_reasons: list[str] | None = None,
+        ) -> None:
+            if not addressed:
+                return
             required = self.STAGE_COVERAGE_GATES.get(stage_key, ())
-            return all(
-                coverage[key]["coverage_status"] == "sufficient"
-                for key in required
+            coverage_gate = {
+                key: coverage[key]["coverage_status"] for key in required
+            }
+            reasons = list(extra_reasons or [])
+            if not modules:
+                reasons.append("本阶段核心证据包缺失或不可用。")
+            missing_dimensions = [
+                dict(self.COVERAGE_DIMENSIONS)[key]
+                for key, status in coverage_gate.items()
+                if status != "sufficient"
+            ]
+            if missing_dimensions:
+                reasons.append(
+                    f"证据覆盖尚未达到完成门槛：{'、'.join(missing_dimensions)}。"
+                )
+            source_refs = self._stage_source_refs(
+                evidence,
+                stage_key=stage_key,
+                modules=modules,
+                intent=intent,
             )
+            if modules and not source_refs:
+                reasons.append("本阶段尚缺可追溯来源或明确用户输入。")
+            assessments[stage_key] = {
+                "status": "completed" if not reasons else "needs_review",
+                "modules": modules,
+                "coverage_gate": coverage_gate,
+                "source_refs": source_refs,
+                "review_reasons": self._dedupe(reasons),
+            }
 
         if any(term in message for term in self._THESIS_TERMS):
-            completed["original_thesis"] = ["user_statement"]
+            assessments["original_thesis"] = {
+                "status": "completed",
+                "modules": ["user_statement"],
+                "coverage_gate": {},
+                "source_refs": ["用户输入"],
+                "review_reasons": [],
+            }
 
         company_modules = self._present_modules(
             evidence, ("business_structure", "research_frame")
         )
         if intent == "business_structure" and self._packet_available(evidence):
             company_modules = ["business_structure"]
-        if (
-            intent in {"stock_research", "business_structure"}
-            and company_modules
-            and gate("company_industry")
-        ):
-            completed["company_industry"] = company_modules
+        assess(
+            "company_industry",
+            addressed=intent in {"stock_research", "business_structure"},
+            modules=company_modules,
+        )
 
         financial_modules = self._present_modules(
             evidence, ("fundamentals", "earnings_quality", "financial_drivers")
@@ -430,24 +630,23 @@ class DeepStockResearchService:
             evidence
         ):
             financial_modules = [intent]
-        if intent in {
-            "stock_research",
-            "earnings_quality",
-            "financial_drivers",
-        } and financial_modules and gate("financial_cashflow"):
-            completed["financial_cashflow"] = financial_modules
+        assess(
+            "financial_cashflow",
+            addressed=intent
+            in {"stock_research", "earnings_quality", "financial_drivers"},
+            modules=financial_modules,
+        )
 
         valuation_modules = self._present_modules(
             evidence, ("peer_comparison", "analyst_expectations")
         )
         if intent == "analyst_expectations" and self._packet_available(evidence):
             valuation_modules = ["analyst_expectations"]
-        if (
-            intent in {"stock_research", "analyst_expectations"}
-            and valuation_modules
-            and gate("valuation_peers")
-        ):
-            completed["valuation_peers"] = valuation_modules
+        assess(
+            "valuation_peers",
+            addressed=intent in {"stock_research", "analyst_expectations"},
+            modules=valuation_modules,
+        )
 
         event_modules = self._present_modules(
             evidence,
@@ -455,23 +654,25 @@ class DeepStockResearchService:
         )
         if intent == "event_timeline" and self._packet_available(evidence):
             event_modules = ["event_timeline"]
-        if (
-            intent in {"stock_research", "event_timeline"}
-            and event_modules
-            and gate("events_sentiment")
-        ):
-            completed["events_sentiment"] = event_modules
+        assess(
+            "events_sentiment",
+            addressed=intent in {"stock_research", "event_timeline"},
+            modules=event_modules,
+        )
 
         counter_modules = self._present_modules(
             evidence, ("evidence_debate", "analysis_board")
         )
-        if (
-            intent == "stock_research"
-            and counter_modules
-            and self._counterevidence_sufficient(evidence)
-            and gate("counterevidence")
-        ):
-            completed["counterevidence"] = counter_modules
+        assess(
+            "counterevidence",
+            addressed=intent == "stock_research",
+            modules=counter_modules,
+            extra_reasons=(
+                []
+                if self._counterevidence_sufficient(evidence)
+                else ["尚未取得具体反方证据或待验证风险主张。"]
+            ),
+        )
 
         if any(term in message for term in self._INVALIDATION_TERMS):
             invalidation_modules = self._present_modules(
@@ -483,13 +684,102 @@ class DeepStockResearchService:
                     "evidence_debate",
                 ),
             )
+            assess(
+                "invalidation_next",
+                addressed=True,
+                modules=invalidation_modules,
+                extra_reasons=(
+                    []
+                    if self._invalidation_sufficient(evidence)
+                    else ["失效条件与下一证据尚未形成可核验闭环。"]
+                ),
+            )
+        return assessments
+
+    @staticmethod
+    def _stage_advance_gate(
+        run: dict[str, Any], evidence: dict[str, Any]
+    ) -> tuple[bool, str]:
+        if str(run.get("status") or "") != "completed":
+            return False, "最近一轮研究未完成，因此没有推进研究阶段。"
+        usage = run.get("usage") or {}
+        output_guard = usage.get("output_guard") if isinstance(usage, dict) else None
+        if not isinstance(output_guard, dict) or output_guard.get("passed") is not True:
+            return (
+                False,
+                "最近一轮研究缺少可验证的最终输出守卫通过记录，因此没有推进研究阶段。",
+            )
+        if not DeepStockResearchService._packet_available(evidence):
+            return (
+                False,
+                "最近一轮研究的核心证据包缺失或失败，因此没有推进研究阶段。",
+            )
+        return True, ""
+
+    def _stage_source_refs(
+        self,
+        evidence: dict[str, Any],
+        *,
+        stage_key: str,
+        modules: list[str],
+        intent: str,
+    ) -> list[str]:
+        refs: list[str] = []
+        for module_key in modules:
+            packet = evidence.get(module_key)
+            if packet in (None, {}, [], "") and module_key == intent:
+                packet = evidence
+            refs.extend(self._collect_source_refs(packet))
+
+        ledger = evidence.get("research_claims")
+        if not isinstance(ledger, dict):
+            ledger = build_research_claim_ledger(evidence)
+        allowed_source_keys = self.STAGE_CLAIM_SOURCE_KEYS.get(stage_key, set())
+        for claim in ledger.get("claims") or []:
+            source_key = str(claim.get("source_key") or "")
             if (
-                invalidation_modules
-                and self._invalidation_sufficient(evidence)
-                and gate("invalidation_next")
+                allowed_source_keys is not None
+                and source_key not in allowed_source_keys
             ):
-                completed["invalidation_next"] = invalidation_modules
-        return completed
+                continue
+            source_name = str(claim.get("source_name") or "").strip()
+            if source_name:
+                refs.append(source_name)
+            source_url = str(claim.get("source_url") or "").strip()
+            if source_url:
+                refs.append(source_url)
+        return self._dedupe(refs)[:8]
+
+    @classmethod
+    def _collect_source_refs(cls, value: Any, depth: int = 0) -> list[str]:
+        if depth > 5 or value in (None, "", [], {}):
+            return []
+        refs: list[str] = []
+        if isinstance(value, dict):
+            for key, child in value.items():
+                normalized = str(key).lower()
+                if normalized in {
+                    "source",
+                    "source_name",
+                    "source_url",
+                    "url",
+                    "provider",
+                } and isinstance(child, (str, int, float)):
+                    text = str(child).strip()
+                    if text:
+                        refs.append(text)
+                if normalized == "sources" and isinstance(child, list):
+                    for item in child:
+                        if isinstance(item, dict):
+                            for source_key in ("name", "source", "url", "source_url"):
+                                text = str(item.get(source_key) or "").strip()
+                                if text:
+                                    refs.append(text)
+                refs.extend(cls._collect_source_refs(child, depth + 1))
+        elif isinstance(value, list):
+            for item in value[:30]:
+                refs.extend(cls._collect_source_refs(item, depth + 1))
+        return cls._dedupe(refs)
 
     def _coverage_dimensions(
         self, evidence: dict[str, Any], *, intent: str | None = None
@@ -829,10 +1119,160 @@ class DeepStockResearchService:
                 "index": index,
             }
             if item.get("status") != "completed":
-                item["status"] = "in_progress" if not active_assigned else "pending"
+                if not active_assigned:
+                    item["status"] = (
+                        "needs_review"
+                        if item.get("review_status") == "needs_review"
+                        else "in_progress"
+                    )
+                else:
+                    item["status"] = "pending"
                 active_assigned = True
             normalized.append(item)
         return normalized
+
+    def _reconcile_legacy_stages(
+        self,
+        user_id: str,
+        session: dict[str, Any],
+    ) -> dict[str, Any]:
+        stages = list(session.get("stages") or [])
+        if not stages:
+            return session
+        evidence_modules = dict(session.get("evidence_modules") or {})
+        unresolved = list(session.get("unresolved_items") or [])
+        changed = False
+        run_cache: dict[str, dict[str, Any] | None] = {}
+
+        for stage in stages:
+            if stage.get("status") != "completed":
+                continue
+            if (
+                stage.get("completion_gate_version")
+                == self.STAGE_COMPLETION_GATE_VERSION
+            ):
+                continue
+            key = str(stage.get("key") or "")
+            if key == "original_thesis":
+                stage.update(
+                    {
+                        "completion_gate_version": self.STAGE_COMPLETION_GATE_VERSION,
+                        "review_status": "completed",
+                        "review_reasons": [],
+                        "source_refs": stage.get("source_refs") or ["用户输入"],
+                    }
+                )
+                changed = True
+                continue
+
+            run_id = str(stage.get("run_id") or "").strip()
+            run = None
+            if run_id:
+                if run_id not in run_cache:
+                    run_cache[run_id] = self.database.get_run(run_id, user_id)
+                run = run_cache[run_id]
+            reasons: list[str] = []
+            assessment: dict[str, Any] | None = None
+            if run is None:
+                reasons.append("历史阶段缺少可回溯的完成 Run。")
+            else:
+                run_evidence = run.get("evidence") or {}
+                gate_allowed, gate_reason = self._stage_advance_gate(
+                    run,
+                    run_evidence,
+                )
+                if not gate_allowed:
+                    reasons.append(gate_reason)
+                else:
+                    run_input = run.get("input") or {}
+                    assessments = self._stage_assessments(
+                        intent=str(run.get("intent") or ""),
+                        message=str(run_input.get("message") or ""),
+                        evidence=run_evidence,
+                    )
+                    assessment = assessments.get(key)
+                    if assessment is None:
+                        reasons.append("历史 Run 没有独立覆盖本阶段研究问题。")
+                    elif assessment.get("status") != "completed":
+                        reasons.extend(assessment.get("review_reasons") or [])
+
+            if assessment is not None and not reasons:
+                stage.update(
+                    {
+                        "completion_gate_version": self.STAGE_COMPLETION_GATE_VERSION,
+                        "review_status": "completed",
+                        "review_reasons": [],
+                        "coverage_gate": assessment["coverage_gate"],
+                        "source_refs": assessment["source_refs"],
+                        "evidence_modules": assessment["modules"],
+                    }
+                )
+                module = evidence_modules.get(key)
+                if isinstance(module, dict):
+                    module.update(
+                        {
+                            "status": "completed",
+                            "coverage_gate": assessment["coverage_gate"],
+                            "source_refs": assessment["source_refs"],
+                            "review_reasons": [],
+                        }
+                    )
+                changed = True
+                continue
+
+            stage.update(
+                {
+                    "status": "needs_review",
+                    "review_status": "needs_review",
+                    "review_reasons": self._dedupe(
+                        [
+                            "该阶段由旧版规则完成，需按当前证据门禁重新核验。",
+                            *reasons,
+                        ]
+                    ),
+                    "completed_at": None,
+                    "completion_gate_version": self.STAGE_COMPLETION_GATE_VERSION,
+                }
+            )
+            module = evidence_modules.get(key)
+            if isinstance(module, dict):
+                module.update(
+                    {
+                        "status": "needs_review",
+                        "review_reasons": stage["review_reasons"],
+                    }
+                )
+            changed = True
+
+        if not changed:
+            return session
+
+        stages = self._normalize_stage_statuses(stages)
+        status = (
+            "completed"
+            if stages and all(item.get("status") == "completed" for item in stages)
+            else "active"
+        )
+        if status != "completed":
+            unresolved.append("历史研究阶段已按更严格的证据门禁重新审计。")
+        saved = self.database.save_deep_stock_session(
+            user_id=user_id,
+            symbol=str(session["symbol"]),
+            name=str(session["name"]),
+            conversation_id=str(session["conversation_id"]),
+            workflow_version=str(
+                session.get("workflow_version") or self.WORKFLOW_VERSION
+            ),
+            status=status,
+            stages=stages,
+            evidence_modules=evidence_modules,
+            unresolved_items=self._dedupe(unresolved)[-12:],
+            next_question=self._next_question(stages, str(session["name"])),
+            latest_run_id=session.get("latest_run_id"),
+            latest_report_id=session.get("latest_report_id"),
+            completed_at=(session.get("completed_at") if status == "completed" else None),
+        )
+        return saved
 
     def _public_session(
         self,
@@ -846,7 +1286,12 @@ class DeepStockResearchService:
         stages = list(session.get("stages") or [])
         completed = sum(item.get("status") == "completed" for item in stages)
         current = next(
-            (item for item in stages if item.get("status") == "in_progress"), None
+            (
+                item
+                for item in stages
+                if item.get("status") in {"in_progress", "needs_review"}
+            ),
+            None,
         )
         report = self.database.latest_research_report(str(session["symbol"]))
         restored_coverage = self._coverage_from_modules(
@@ -877,6 +1322,9 @@ class DeepStockResearchService:
         coverage_tasks = self._coverage_tasks(coverage)
         coverage_history = list(
             (session.get("evidence_modules") or {}).get("_coverage_history") or []
+        )
+        research_entry = dict(
+            (session.get("evidence_modules") or {}).get("screening_entry") or {}
         )
         conversation = self.database.get_conversation(
             str(session["user_id"]), str(session["conversation_id"])
@@ -909,6 +1357,7 @@ class DeepStockResearchService:
             },
             "coverage_tasks": coverage_tasks,
             "coverage_history": coverage_history[-20:],
+            "research_entry": research_entry or None,
         }
 
     def _coverage_from_modules(

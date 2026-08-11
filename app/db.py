@@ -161,6 +161,367 @@ class Database:
                     UNIQUE(workspace_id, version_no)
                 );
 
+                CREATE TABLE IF NOT EXISTS ai_citations (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                    claim_id TEXT NOT NULL,
+                    source_name TEXT NOT NULL,
+                    source_key TEXT,
+                    source_url TEXT,
+                    evidence_type TEXT NOT NULL,
+                    data_time TEXT,
+                    report_period TEXT,
+                    excerpt TEXT NOT NULL,
+                    limitations_json TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, run_id, claim_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS ai_writeback_candidates (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                    conversation_id TEXT
+                        REFERENCES conversations(id) ON DELETE SET NULL,
+                    workspace_id TEXT NOT NULL
+                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                    symbol TEXT NOT NULL,
+                    candidate_type TEXT NOT NULL
+                        CHECK(candidate_type IN (
+                            'thesis', 'observation_task',
+                            'action_plan', 'review_draft'
+                        )),
+                    status TEXT NOT NULL CHECK(status IN (
+                        'pending_confirmation', 'confirmed', 'rejected', 'stale'
+                    )),
+                    payload_json TEXT NOT NULL,
+                    citation_ids_json TEXT NOT NULL DEFAULT '[]',
+                    base_version INTEGER NOT NULL,
+                    target_object_id TEXT,
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT,
+                    UNIQUE(user_id, run_id, candidate_type)
+                );
+
+                CREATE TABLE IF NOT EXISTS observation_tasks (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    workspace_id TEXT
+                        REFERENCES stock_workspaces(id) ON DELETE SET NULL,
+                    symbol TEXT NOT NULL,
+                    thesis_id TEXT REFERENCES thesis_versions(id) ON DELETE SET NULL,
+                    change_ref TEXT,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN (
+                        'pending', 'in_progress', 'waiting_data',
+                        'completed', 'ignored', 'cancelled'
+                    )),
+                    priority TEXT NOT NULL
+                        CHECK(priority IN ('high', 'normal', 'low')),
+                    source_type TEXT NOT NULL
+                        CHECK(source_type IN ('user', 'research_action')),
+                    source_ref_id TEXT,
+                    dedupe_key TEXT,
+                    due_at TEXT,
+                    result_text TEXT,
+                    completion_evidence_json TEXT NOT NULL DEFAULT '[]',
+                    version INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    ignored_at TEXT,
+                    cancelled_at TEXT,
+                    UNIQUE(user_id, dedupe_key)
+                );
+
+                CREATE TABLE IF NOT EXISTS observation_task_history (
+                    id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL
+                        REFERENCES observation_tasks(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    version INTEGER NOT NULL,
+                    event_type TEXT NOT NULL CHECK(event_type IN (
+                        'created', 'updated', 'status_changed', 'reopened'
+                    )),
+                    from_status TEXT,
+                    to_status TEXT NOT NULL,
+                    snapshot_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(task_id, version)
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_workspaces_scope
+                ON stock_workspaces(id, user_id);
+
+                CREATE TABLE IF NOT EXISTS action_plans (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    action_type TEXT NOT NULL CHECK(action_type IN (
+                        'buy', 'add', 'reduce', 'sell', 'hold'
+                    )),
+                    trigger_text TEXT NOT NULL,
+                    target_quantity TEXT,
+                    target_amount TEXT,
+                    target_position_percent TEXT,
+                    thesis_version_id TEXT
+                        REFERENCES thesis_versions(id) ON DELETE SET NULL,
+                    check_result_json TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN (
+                        'draft', 'checked', 'saved', 'partially_executed',
+                        'executed', 'cancelled', 'expired'
+                    )),
+                    expires_at TEXT,
+                    idempotency_key TEXT,
+                    version INTEGER NOT NULL DEFAULT 1 CHECK(version > 0),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(id, user_id, workspace_id),
+                    FOREIGN KEY(workspace_id, user_id)
+                        REFERENCES stock_workspaces(id, user_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS action_plan_history (
+                    id TEXT PRIMARY KEY,
+                    plan_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    version INTEGER NOT NULL CHECK(version > 0),
+                    event_type TEXT NOT NULL,
+                    from_status TEXT CHECK(
+                        from_status IS NULL OR from_status IN (
+                            'draft', 'checked', 'saved', 'partially_executed',
+                            'executed', 'cancelled', 'expired'
+                        )
+                    ),
+                    to_status TEXT NOT NULL CHECK(to_status IN (
+                        'draft', 'checked', 'saved', 'partially_executed',
+                        'executed', 'cancelled', 'expired'
+                    )),
+                    snapshot_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    UNIQUE(plan_id, version),
+                    FOREIGN KEY(plan_id, user_id, workspace_id)
+                        REFERENCES action_plans(id, user_id, workspace_id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS position_openings (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL UNIQUE
+                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    symbol TEXT NOT NULL,
+                    as_of_date TEXT NOT NULL,
+                    quantity TEXT NOT NULL,
+                    cost_price TEXT NOT NULL,
+                    fees TEXT,
+                    note TEXT,
+                    idempotency_key TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, idempotency_key)
+                );
+
+                CREATE TABLE IF NOT EXISTS position_operations (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL
+                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    symbol TEXT NOT NULL,
+                    operation_type TEXT NOT NULL CHECK(operation_type IN (
+                        'buy', 'add', 'reduce', 'sell'
+                    )),
+                    operated_at TEXT NOT NULL,
+                    price TEXT NOT NULL,
+                    quantity TEXT NOT NULL,
+                    fees TEXT,
+                    reason_text TEXT NOT NULL,
+                    plan_id TEXT,
+                    idempotency_key TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, idempotency_key)
+                );
+
+                CREATE TABLE IF NOT EXISTS operation_revisions (
+                    id TEXT PRIMARY KEY,
+                    operation_id TEXT NOT NULL
+                        REFERENCES position_operations(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL
+                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    revision_no INTEGER NOT NULL,
+                    price TEXT NOT NULL,
+                    quantity TEXT NOT NULL,
+                    fees TEXT,
+                    reason_text TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(operation_id, revision_no),
+                    UNIQUE(user_id, idempotency_key)
+                );
+
+                CREATE TABLE IF NOT EXISTS position_adjustments (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL
+                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    symbol TEXT NOT NULL,
+                    adjustment_type TEXT NOT NULL CHECK(adjustment_type IN (
+                        'quantity_correction', 'cost_correction',
+                        'corporate_action', 'other'
+                    )),
+                    effective_at TEXT NOT NULL,
+                    quantity_delta TEXT NOT NULL,
+                    cost_delta TEXT NOT NULL,
+                    reason_text TEXT NOT NULL,
+                    evidence_text TEXT,
+                    idempotency_key TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(user_id, idempotency_key)
+                );
+
+                CREATE TABLE IF NOT EXISTS position_snapshots (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL
+                        REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    symbol TEXT NOT NULL,
+                    snapshot_at TEXT NOT NULL,
+                    source_event_type TEXT NOT NULL CHECK(source_event_type IN (
+                        'opening', 'operation', 'operation_revision', 'adjustment'
+                    )),
+                    source_event_id TEXT NOT NULL,
+                    quantity TEXT NOT NULL,
+                    cost_basis TEXT NOT NULL,
+                    average_cost TEXT,
+                    realized_gross_pnl TEXT NOT NULL,
+                    realized_net_pnl TEXT,
+                    known_fees TEXT NOT NULL,
+                    fees_complete INTEGER NOT NULL CHECK(fees_complete IN (0, 1)),
+                    data_status TEXT NOT NULL CHECK(data_status IN (
+                        'complete', 'partial', 'conflict'
+                    )),
+                    warnings_json TEXT NOT NULL DEFAULT '[]',
+                    calculation_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(
+                        workspace_id, source_event_type, source_event_id,
+                        calculation_version
+                    )
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_position_operations_workspace_time
+                ON position_operations(workspace_id, operated_at, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_position_adjustments_workspace_time
+                ON position_adjustments(workspace_id, effective_at, created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_position_snapshots_workspace_time
+                ON position_snapshots(workspace_id, snapshot_at DESC, created_at DESC);
+
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_position_operations_scope
+                ON position_operations(id, user_id, workspace_id);
+
+                CREATE TABLE IF NOT EXISTS operation_context_snapshots (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    operation_id TEXT NOT NULL,
+                    plan_id TEXT,
+                    thesis_version_id TEXT
+                        REFERENCES thesis_versions(id) ON DELETE SET NULL,
+                    snapshot_json TEXT NOT NULL DEFAULT '{}',
+                    data_time TEXT NOT NULL,
+                    snapshot_version TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(operation_id),
+                    FOREIGN KEY(operation_id, user_id, workspace_id)
+                        REFERENCES position_operations(id, user_id, workspace_id),
+                    FOREIGN KEY(plan_id, user_id, workspace_id)
+                        REFERENCES action_plans(id, user_id, workspace_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS trade_reviews (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    operation_id TEXT,
+                    plan_id TEXT,
+                    status TEXT NOT NULL DEFAULT 'waiting_data' CHECK(status IN (
+                        'waiting_data', 'ready', 'draft', 'confirmed',
+                        'archived', 'revised'
+                    )),
+                    horizon_sessions INTEGER NOT NULL CHECK(horizon_sessions > 0),
+                    data_status TEXT NOT NULL DEFAULT 'missing' CHECK(data_status IN (
+                        'fresh', 'delayed', 'stale', 'missing', 'failed',
+                        'conflict', 'not_applicable'
+                    )),
+                    current_version_id TEXT
+                        REFERENCES trade_review_versions(id) ON DELETE SET NULL,
+                    ready_at TEXT,
+                    confirmed_at TEXT,
+                    archived_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(id, user_id, workspace_id),
+                    UNIQUE(user_id, workspace_id, operation_id, horizon_sessions),
+                    FOREIGN KEY(workspace_id, user_id)
+                        REFERENCES stock_workspaces(id, user_id) ON DELETE CASCADE,
+                    FOREIGN KEY(operation_id, user_id, workspace_id)
+                        REFERENCES position_operations(id, user_id, workspace_id),
+                    FOREIGN KEY(plan_id, user_id, workspace_id)
+                        REFERENCES action_plans(id, user_id, workspace_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS trade_review_versions (
+                    id TEXT PRIMARY KEY,
+                    review_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    workspace_id TEXT NOT NULL,
+                    version_no INTEGER NOT NULL CHECK(version_no > 0),
+                    price_result TEXT,
+                    logic_result TEXT,
+                    plan_deviation TEXT,
+                    bias_tags_json TEXT NOT NULL DEFAULT '[]',
+                    improvement_text TEXT,
+                    created_source TEXT NOT NULL CHECK(created_source IN ('ai', 'user')),
+                    source_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+                    status TEXT NOT NULL DEFAULT 'draft' CHECK(status IN (
+                        'draft', 'confirmed', 'revised'
+                    )),
+                    created_at TEXT NOT NULL,
+                    UNIQUE(review_id, version_no),
+                    FOREIGN KEY(review_id, user_id, workspace_id)
+                        REFERENCES trade_reviews(id, user_id, workspace_id)
+                        ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_action_plans_scope_status
+                ON action_plans(user_id, workspace_id, status, updated_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_action_plan_history_scope_version
+                ON action_plan_history(
+                    user_id, workspace_id, plan_id, version DESC
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_operation_context_scope_time
+                ON operation_context_snapshots(
+                    user_id, workspace_id, data_time DESC
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_trade_reviews_scope_status
+                ON trade_reviews(user_id, workspace_id, status, updated_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_trade_reviews_operation_horizon
+                ON trade_reviews(operation_id, horizon_sessions, updated_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_trade_review_versions_scope_version
+                ON trade_review_versions(
+                    user_id, workspace_id, review_id, version_no DESC
+                );
+
                 CREATE TABLE IF NOT EXISTS conversations (
                     id TEXT PRIMARY KEY,
                     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -340,6 +701,11 @@ class Database:
                     data_version TEXT NOT NULL,
                     data_versions_json TEXT NOT NULL,
                     as_of_date TEXT,
+                    run_scope TEXT NOT NULL DEFAULT 'symbol_batch',
+                    universe_count INTEGER NOT NULL DEFAULT 0,
+                    prefiltered_count INTEGER NOT NULL DEFAULT 0,
+                    coverage_ratio REAL NOT NULL DEFAULT 0,
+                    warnings_json TEXT NOT NULL DEFAULT '[]',
                     status TEXT NOT NULL
                         CHECK(status IN ('running', 'completed', 'partial', 'failed')),
                     requested_count INTEGER NOT NULL,
@@ -670,6 +1036,39 @@ class Database:
                     UNIQUE(symbol, fingerprint)
                 );
 
+                CREATE TABLE IF NOT EXISTS change_events (
+                    id TEXT PRIMARY KEY,
+                    symbol TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    fact_summary TEXT NOT NULL,
+                    occurred_at TEXT NOT NULL,
+                    detected_at TEXT NOT NULL,
+                    source_name TEXT NOT NULL,
+                    source_url TEXT,
+                    data_status TEXT NOT NULL,
+                    rule_version TEXT NOT NULL,
+                    dedupe_hash TEXT NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS user_change_links (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    change_event_id TEXT NOT NULL
+                        REFERENCES change_events(id) ON DELETE CASCADE,
+                    symbol TEXT NOT NULL,
+                    relevance_status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK(relevance_status IN ('pending', 'relevant', 'irrelevant')),
+                    read_at TEXT,
+                    handled_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(user_id, change_event_id)
+                );
+
                 CREATE TABLE IF NOT EXISTS research_reports (
                     id TEXT PRIMARY KEY,
                     symbol TEXT NOT NULL,
@@ -841,6 +1240,24 @@ class Database:
                     ON stock_relation_history(workspace_id, effective_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_thesis_versions_workspace_status
                     ON thesis_versions(workspace_id, status, version_no DESC);
+                CREATE INDEX IF NOT EXISTS idx_ai_citations_user_run
+                    ON ai_citations(user_id, run_id, created_at ASC);
+                CREATE INDEX IF NOT EXISTS idx_ai_writebacks_user_status
+                    ON ai_writeback_candidates(
+                        user_id, status, created_at DESC
+                    );
+                CREATE INDEX IF NOT EXISTS idx_ai_writebacks_workspace
+                    ON ai_writeback_candidates(
+                        workspace_id, status, created_at DESC
+                    );
+                CREATE INDEX IF NOT EXISTS idx_observation_tasks_user_status
+                    ON observation_tasks(
+                        user_id, status, priority, updated_at DESC
+                    );
+                CREATE INDEX IF NOT EXISTS idx_observation_tasks_user_symbol
+                    ON observation_tasks(user_id, symbol, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_observation_task_history_task
+                    ON observation_task_history(task_id, version DESC);
                 CREATE INDEX IF NOT EXISTS idx_conversations_user_updated
                     ON conversations(user_id, status, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_conversation_messages_conversation_created
@@ -909,6 +1326,14 @@ class Database:
                     ON analyst_expectation_snapshots(symbol, as_of_date DESC, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_event_timeline_symbol_time
                     ON event_timeline_snapshots(symbol, as_of_date DESC, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_change_events_symbol_time
+                    ON change_events(symbol, occurred_at DESC, detected_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_user_change_links_user_status
+                    ON user_change_links(
+                        user_id, relevance_status, read_at, handled_at, updated_at DESC
+                    );
+                CREATE INDEX IF NOT EXISTS idx_user_change_links_symbol
+                    ON user_change_links(user_id, symbol, updated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_research_reports_symbol_time
                     ON research_reports(symbol, generated_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_deep_stock_user_time
@@ -942,6 +1367,62 @@ class Database:
             self._ensure_column(
                 connection, "financial_periods", "total_liabilities", "REAL"
             )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "run_scope",
+                "TEXT NOT NULL DEFAULT 'symbol_batch'",
+            )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "universe_count",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "prefiltered_count",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "coverage_ratio",
+                "REAL NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                connection,
+                "strategy_screen_runs",
+                "warnings_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
+            self._ensure_column(
+                connection,
+                "trade_review_versions",
+                "source_run_id",
+                "TEXT REFERENCES runs(id) ON DELETE SET NULL",
+            )
+            self._ensure_column(
+                connection,
+                "action_plans",
+                "idempotency_key",
+                "TEXT",
+            )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_action_plans_idempotency
+                ON action_plans(user_id, idempotency_key)
+                WHERE idempotency_key IS NOT NULL
+                """
+            )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_deep_stock_user_conversation
+                ON deep_stock_sessions(user_id, conversation_id)
+                """
+            )
+            self._ensure_ai_writeback_candidate_types(connection)
             self._backfill_stock_domains(connection)
 
     @staticmethod
@@ -956,6 +1437,71 @@ class Database:
             connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     @staticmethod
+    def _ensure_ai_writeback_candidate_types(connection: sqlite3.Connection) -> None:
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+            ("ai_writeback_candidates",),
+        ).fetchone()
+        schema = str(row["sql"] or "") if row is not None else ""
+        if all(
+            candidate_type in schema
+            for candidate_type in (
+                "observation_task",
+                "action_plan",
+                "review_draft",
+            )
+        ):
+            return
+        connection.executescript(
+            """
+            DROP INDEX IF EXISTS idx_ai_writebacks_user_status;
+            DROP INDEX IF EXISTS idx_ai_writebacks_workspace;
+            ALTER TABLE ai_writeback_candidates
+                RENAME TO ai_writeback_candidates_legacy;
+            CREATE TABLE ai_writeback_candidates (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                conversation_id TEXT
+                    REFERENCES conversations(id) ON DELETE SET NULL,
+                workspace_id TEXT NOT NULL
+                    REFERENCES stock_workspaces(id) ON DELETE CASCADE,
+                symbol TEXT NOT NULL,
+                candidate_type TEXT NOT NULL
+                    CHECK(candidate_type IN (
+                        'thesis', 'observation_task',
+                        'action_plan', 'review_draft'
+                    )),
+                status TEXT NOT NULL CHECK(status IN (
+                    'pending_confirmation', 'confirmed', 'rejected', 'stale'
+                )),
+                payload_json TEXT NOT NULL,
+                citation_ids_json TEXT NOT NULL DEFAULT '[]',
+                base_version INTEGER NOT NULL,
+                target_object_id TEXT,
+                created_at TEXT NOT NULL,
+                resolved_at TEXT,
+                UNIQUE(user_id, run_id, candidate_type)
+            );
+            INSERT INTO ai_writeback_candidates(
+                id, user_id, run_id, conversation_id, workspace_id, symbol,
+                candidate_type, status, payload_json, citation_ids_json,
+                base_version, target_object_id, created_at, resolved_at
+            )
+            SELECT
+                id, user_id, run_id, conversation_id, workspace_id, symbol,
+                candidate_type, status, payload_json, citation_ids_json,
+                base_version, target_object_id, created_at, resolved_at
+            FROM ai_writeback_candidates_legacy;
+            DROP TABLE ai_writeback_candidates_legacy;
+            CREATE INDEX idx_ai_writebacks_user_status
+                ON ai_writeback_candidates(user_id, status, created_at DESC);
+            CREATE INDEX idx_ai_writebacks_workspace
+                ON ai_writeback_candidates(workspace_id, status, created_at DESC);
+            """
+        )
+
+    @staticmethod
     def _row(row: sqlite3.Row | None) -> dict[str, Any] | None:
         return dict(row) if row is not None else None
 
@@ -966,9 +1512,7 @@ class Database:
         if row is None:
             return None
         item = dict(row)
-        item["attention_tags"] = json.loads(
-            item.pop("attention_tags_json") or "[]"
-        )
+        item["attention_tags"] = json.loads(item.pop("attention_tags_json") or "[]")
         return item
 
     @staticmethod
@@ -1173,7 +1717,11 @@ class Database:
 
     def get_user(self, user_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
-            return self._row(connection.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
+            return self._row(
+                connection.execute(
+                    "SELECT * FROM users WHERE id = ?", (user_id,)
+                ).fetchone()
+            )
 
     @staticmethod
     def _session_token_hash(token: str) -> str:
@@ -1329,7 +1877,8 @@ class Database:
                 (user_id, symbol, name, market, thesis, now, now),
             )
             row = connection.execute(
-                "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?", (user_id, symbol)
+                "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?",
+                (user_id, symbol),
             ).fetchone()
             self._sync_stock_domain_from_watchlist(
                 connection,
@@ -1348,7 +1897,8 @@ class Database:
     def list_watchlist(self, user_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT * FROM watchlist WHERE user_id = ? ORDER BY updated_at DESC", (user_id,)
+                "SELECT * FROM watchlist WHERE user_id = ? ORDER BY updated_at DESC",
+                (user_id,),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -1376,7 +1926,8 @@ class Database:
         with self.connect() as connection:
             return self._row(
                 connection.execute(
-                    "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?", (user_id, symbol)
+                    "SELECT * FROM watchlist WHERE user_id = ? AND symbol = ?",
+                    (user_id, symbol),
                 ).fetchone()
             )
 
@@ -1430,9 +1981,7 @@ class Database:
             return True
         return False
 
-    def get_stock_workspace(
-        self, user_id: str, symbol: str
-    ) -> dict[str, Any] | None:
+    def get_stock_workspace(self, user_id: str, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -1486,9 +2035,7 @@ class Database:
             ).fetchone()
         return self._thesis_row(row)
 
-    def get_thesis_version(
-        self, user_id: str, thesis_id: str
-    ) -> dict[str, Any] | None:
+    def get_thesis_version(self, user_id: str, thesis_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM thesis_versions WHERE user_id = ? AND id = ?",
@@ -1529,7 +2076,8 @@ class Database:
         with self.connect() as connection:
             return self._row(
                 connection.execute(
-                    "SELECT * FROM memories WHERE user_id = ? AND id = ?", (user_id, memory_id)
+                    "SELECT * FROM memories WHERE user_id = ? AND id = ?",
+                    (user_id, memory_id),
                 ).fetchone()
             )
 
@@ -1561,7 +2109,9 @@ class Database:
                 return None
         return self.get_memory(user_id, memory_id)
 
-    def list_memories(self, user_id: str, status: str = "confirmed") -> list[dict[str, Any]]:
+    def list_memories(
+        self, user_id: str, status: str = "confirmed"
+    ) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM memories WHERE user_id = ? AND status = ? ORDER BY created_at DESC",
@@ -1573,7 +2123,10 @@ class Database:
         user = self.get_user(user_id)
         if user is None:
             return
-        write_json(Path(user["workspace_path"]) / "watchlist.json", self.list_watchlist(user_id))
+        write_json(
+            Path(user["workspace_path"]) / "watchlist.json",
+            self.list_watchlist(user_id),
+        )
 
     def _sync_confirmed_memory_file(self, user_id: str) -> None:
         user = self.get_user(user_id)
@@ -1637,7 +2190,9 @@ class Database:
     def list_conversations(
         self, user_id: str, include_archived: bool = False, limit: int = 100
     ) -> list[dict[str, Any]]:
-        status_clause = "" if include_archived else "AND conversations.status = 'active'"
+        status_clause = (
+            "" if include_archived else "AND conversations.status = 'active'"
+        )
         with self.connect() as connection:
             rows = connection.execute(
                 f"""
@@ -1824,6 +2379,54 @@ class Database:
             items.append(item)
         return items
 
+    def list_recent_conversation_messages(
+        self, user_id: str, conversation_id: str, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """Return the latest messages in chronological display order."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT conversation_messages.*
+                FROM conversation_messages
+                JOIN conversations ON conversations.id = conversation_messages.conversation_id
+                WHERE conversation_messages.conversation_id = ?
+                  AND conversations.user_id = ?
+                ORDER BY conversation_messages.created_at DESC,
+                    conversation_messages.rowid DESC LIMIT ?
+                """,
+                (conversation_id, user_id, limit),
+            ).fetchall()
+        items = []
+        for row in reversed(rows):
+            item = dict(row)
+            item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+            items.append(item)
+        return items
+
+    def list_recent_user_assistant_messages(
+        self, user_id: str, limit: int = 500
+    ) -> list[dict[str, Any]]:
+        """Return one user's latest assistant messages across research conversations."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT conversation_messages.*
+                FROM conversation_messages
+                JOIN conversations ON conversations.id = conversation_messages.conversation_id
+                WHERE conversations.user_id = ?
+                  AND conversation_messages.role = 'assistant'
+                ORDER BY conversation_messages.created_at DESC,
+                    conversation_messages.rowid DESC LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
+            items.append(item)
+        return items
+
     def save_deep_stock_session(
         self,
         *,
@@ -1945,6 +2548,18 @@ class Database:
             for row in rows
         ]
 
+    def list_distinct_deep_stock_symbols(self) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT symbol, MAX(updated_at) AS latest_updated_at
+                FROM deep_stock_sessions
+                GROUP BY symbol
+                ORDER BY latest_updated_at DESC, symbol ASC
+                """
+            ).fetchall()
+        return [str(row["symbol"]) for row in rows if row["symbol"]]
+
     @staticmethod
     def _deep_stock_session_row(
         row: sqlite3.Row | None,
@@ -1953,12 +2568,8 @@ class Database:
             return None
         item = dict(row)
         item["stages"] = json.loads(item.pop("stages_json") or "[]")
-        item["evidence_modules"] = json.loads(
-            item.pop("evidence_modules_json") or "{}"
-        )
-        item["unresolved_items"] = json.loads(
-            item.pop("unresolved_json") or "[]"
-        )
+        item["evidence_modules"] = json.loads(item.pop("evidence_modules_json") or "{}")
+        item["unresolved_items"] = json.loads(item.pop("unresolved_json") or "[]")
         return item
 
     def _sync_deep_stock_session_file(
@@ -2034,9 +2645,13 @@ class Database:
     def list_knowledge_documents(
         self, user_id: str | None, include_content: bool = False
     ) -> list[dict[str, Any]]:
-        fields = "*" if include_content else (
-            "id, owner_user_id, scope, title, original_name, mime_type, "
-            "source_key, length(content) AS content_chars, created_at, updated_at"
+        fields = (
+            "*"
+            if include_content
+            else (
+                "id, owner_user_id, scope, title, original_name, mime_type, "
+                "source_key, length(content) AS content_chars, created_at, updated_at"
+            )
         )
         with self.connect() as connection:
             rows = connection.execute(
@@ -2077,7 +2692,15 @@ class Database:
                     workspace_path, created_at
                 ) VALUES (?, ?, ?, ?, 'running', ?, ?, ?)
                 """,
-                (run_id, user_id, intent, model_tier, json_dumps(input_data), str(workspace_path), utc_now()),
+                (
+                    run_id,
+                    user_id,
+                    intent,
+                    model_tier,
+                    json_dumps(input_data),
+                    str(workspace_path),
+                    utc_now(),
+                ),
             )
         return self.get_run(run_id, user_id)  # type: ignore[return-value]
 
@@ -2123,9 +2746,7 @@ class Database:
             item[key.removesuffix("_json")] = json.loads(raw) if raw else None
         return item
 
-    def list_user_runs(
-        self, user_id: str, limit: int = 500
-    ) -> list[dict[str, Any]]:
+    def list_user_runs(self, user_id: str, limit: int = 500) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
                 """
@@ -2239,7 +2860,8 @@ class Database:
     def get_article(self, user_id: str, article_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT * FROM articles WHERE user_id = ? AND id = ?", (user_id, article_id)
+                "SELECT * FROM articles WHERE user_id = ? AND id = ?",
+                (user_id, article_id),
             ).fetchone()
         item = self._row(row)
         if item is not None:
@@ -2287,9 +2909,13 @@ class Database:
             ).fetchone()
         return int(row["count"])
 
-    def put_cache(self, cache_key: str, payload: dict[str, Any], ttl_seconds: int) -> None:
+    def put_cache(
+        self, cache_key: str, payload: dict[str, Any], ttl_seconds: int
+    ) -> None:
         fetched_at = payload.get("fetched_at") or utc_now()
-        expires_at = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat(timespec="seconds")
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+        ).isoformat(timespec="seconds")
         with self.connect() as connection:
             connection.execute(
                 """
@@ -2358,9 +2984,7 @@ class Database:
                 ),
             )
 
-    def list_market_breadth_snapshots(
-        self, limit: int = 21
-    ) -> list[dict[str, Any]]:
+    def list_market_breadth_snapshots(self, limit: int = 21) -> list[dict[str, Any]]:
         with self.connect() as connection:
             rows = connection.execute(
                 """
@@ -2380,21 +3004,27 @@ class Database:
             items.append(payload)
         return items
 
-    def get_cache(self, cache_key: str, allow_stale: bool = False) -> dict[str, Any] | None:
+    def get_cache(
+        self, cache_key: str, allow_stale: bool = False
+    ) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM market_cache WHERE cache_key = ?", (cache_key,)
             ).fetchone()
         if row is None:
             return None
-        expired = datetime.fromisoformat(row["expires_at"]) <= datetime.now(timezone.utc)
+        expired = datetime.fromisoformat(row["expires_at"]) <= datetime.now(
+            timezone.utc
+        )
         if expired and not allow_stale:
             return None
         payload = json.loads(row["payload_json"])
         payload["cache_hit"] = True
         payload["is_stale"] = expired
         if expired:
-            payload.setdefault("warnings", []).append("实时上游不可用，当前返回已过期缓存。")
+            payload.setdefault("warnings", []).append(
+                "实时上游不可用，当前返回已过期缓存。"
+            )
         return payload
 
     def upsert_market_bars(
@@ -2513,6 +3143,47 @@ class Database:
                     job_id,
                 ),
             )
+
+    def repair_interrupted_background_runs(self) -> dict[str, int]:
+        """Close runs left in `running` when a previous process stopped."""
+
+        finished_at = utc_now()
+        repaired: dict[str, int] = {}
+        with self.connect() as connection:
+            background = connection.execute(
+                """
+                UPDATE background_job_runs
+                SET status = 'failed',
+                    error = COALESCE(error, 'process_restarted_before_completion'),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE status = 'running'
+                """,
+                (finished_at,),
+            )
+            repaired["background_job_runs"] = background.rowcount
+            tushare = connection.execute(
+                """
+                UPDATE tushare_sync_runs
+                SET status = 'failed',
+                    error = COALESCE(error, 'process_restarted_before_completion'),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE status = 'running'
+                """,
+                (finished_at,),
+            )
+            repaired["tushare_sync_runs"] = tushare.rowcount
+            strategy = connection.execute(
+                """
+                UPDATE strategy_screen_runs
+                SET status = 'failed',
+                    error = COALESCE(error, 'process_restarted_before_completion'),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE status = 'running'
+                """,
+                (finished_at,),
+            )
+            repaired["strategy_screen_runs"] = strategy.rowcount
+        return repaired
 
     def latest_background_jobs(self) -> list[dict[str, Any]]:
         with self.connect() as connection:
@@ -2706,9 +3377,7 @@ class Database:
         item["payload"] = json.loads(item.pop("payload_json") or "{}")
         return item
 
-    def upsert_strategy_definition(
-        self, definition: dict[str, Any]
-    ) -> dict[str, Any]:
+    def upsert_strategy_definition(self, definition: dict[str, Any]) -> dict[str, Any]:
         now = utc_now()
         with self.connect() as connection:
             connection.execute(
@@ -2820,9 +3489,7 @@ class Database:
             ).fetchall()
         return [self._strategy_definition_row(row) for row in rows]  # type: ignore[misc]
 
-    def get_strategy_definition(
-        self, strategy_id: str
-    ) -> dict[str, Any] | None:
+    def get_strategy_definition(self, strategy_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM strategy_definitions WHERE strategy_id = ?",
@@ -2870,6 +3537,11 @@ class Database:
         data_versions: dict[str, str],
         as_of_date: str | None,
         requested_count: int,
+        run_scope: str = "symbol_batch",
+        universe_count: int = 0,
+        prefiltered_count: int = 0,
+        coverage_ratio: float = 0.0,
+        warnings: list[str] | None = None,
     ) -> dict[str, Any]:
         run_id = str(uuid4())
         started_at = utc_now()
@@ -2878,9 +3550,10 @@ class Database:
                 """
                 INSERT INTO strategy_screen_runs(
                     id, strategy_id, strategy_version, parameter_version,
-                    data_version, data_versions_json, as_of_date, status,
-                    requested_count, started_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
+                    data_version, data_versions_json, as_of_date, run_scope,
+                    universe_count, prefiltered_count, coverage_ratio,
+                    warnings_json, status, requested_count, started_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)
                 """,
                 (
                     run_id,
@@ -2890,6 +3563,11 @@ class Database:
                     data_version,
                     json_dumps(data_versions),
                     as_of_date,
+                    run_scope,
+                    max(0, int(universe_count)),
+                    max(0, int(prefiltered_count)),
+                    max(0.0, min(float(coverage_ratio), 1.0)),
+                    json_dumps(warnings or []),
                     requested_count,
                     started_at,
                 ),
@@ -2903,6 +3581,8 @@ class Database:
         status: str,
         counts: dict[str, int],
         error: str | None = None,
+        coverage_ratio: float | None = None,
+        warnings: list[str] | None = None,
     ) -> dict[str, Any] | None:
         with self.connect() as connection:
             connection.execute(
@@ -2910,7 +3590,8 @@ class Database:
                 UPDATE strategy_screen_runs
                 SET status = ?, processed_count = ?, qualified_count = ?,
                     triggered_count = ?, incomplete_count = ?,
-                    invalidated_count = ?, error = ?, finished_at = ?
+                    invalidated_count = ?, coverage_ratio = COALESCE(?, coverage_ratio),
+                    warnings_json = COALESCE(?, warnings_json), error = ?, finished_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -2920,6 +3601,12 @@ class Database:
                     counts.get("triggered", 0),
                     counts.get("data_incomplete", 0),
                     counts.get("invalidated", 0),
+                    (
+                        max(0.0, min(float(coverage_ratio), 1.0))
+                        if coverage_ratio is not None
+                        else None
+                    ),
+                    json_dumps(warnings) if warnings is not None else None,
                     error,
                     utc_now(),
                     run_id,
@@ -2933,6 +3620,54 @@ class Database:
                 "SELECT * FROM strategy_screen_runs WHERE id = ?", (run_id,)
             ).fetchone()
         return self._strategy_run_row(row)
+
+    def latest_strategy_screen_run(
+        self,
+        *,
+        strategy_id: str,
+        parameter_version: str | None = None,
+        run_scope: str | None = None,
+    ) -> dict[str, Any] | None:
+        clauses = ["strategy_id = ?"]
+        params: list[Any] = [strategy_id]
+        if parameter_version is not None:
+            clauses.append("parameter_version = ?")
+            params.append(parameter_version)
+        if run_scope is not None:
+            clauses.append("run_scope = ?")
+            params.append(run_scope)
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT * FROM strategy_screen_runs
+                WHERE {" AND ".join(clauses)}
+                ORDER BY started_at DESC, rowid DESC LIMIT 1
+                """,
+                tuple(params),
+            ).fetchone()
+        return self._strategy_run_row(row)
+
+    def repair_unstable_strategy_prefilter_runs(self, strategy_id: str) -> int:
+        """Quarantine prefilter runs produced without any usable market-cap row."""
+
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE strategy_screen_runs
+                SET status = 'failed',
+                    error = COALESCE(error, 'unstable_universe_market_cap_snapshot'),
+                    finished_at = COALESCE(finished_at, ?)
+                WHERE strategy_id = ?
+                    AND run_scope = 'universe_prefilter'
+                    AND status <> 'failed'
+                    AND universe_count > 0
+                    AND prefiltered_count = 0
+                    AND processed_count = universe_count
+                    AND incomplete_count = universe_count
+                """,
+                (utc_now(), strategy_id),
+            )
+        return cursor.rowcount
 
     def save_strategy_candidate_snapshot(
         self,
@@ -3040,7 +3775,9 @@ class Database:
         exclude_data_version: str | None = None,
     ) -> dict[str, Any] | None:
         exclude_clause = (
-            "AND data_version <> ?" if exclude_data_version is not None else ""
+            "AND candidates.data_version <> ?"
+            if exclude_data_version is not None
+            else ""
         )
         params: list[Any] = [
             strategy_id,
@@ -3053,11 +3790,16 @@ class Database:
         with self.connect() as connection:
             row = connection.execute(
                 f"""
-                SELECT * FROM strategy_candidate_snapshots
-                WHERE strategy_id = ? AND strategy_version = ?
-                    AND parameter_version = ? AND symbol = ?
+                SELECT candidates.*
+                FROM strategy_candidate_snapshots AS candidates
+                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
+                WHERE candidates.strategy_id = ?
+                    AND candidates.strategy_version = ?
+                    AND candidates.parameter_version = ?
+                    AND candidates.symbol = ?
+                    AND runs.status <> 'failed'
                     {exclude_clause}
-                ORDER BY created_at DESC, rowid DESC LIMIT 1
+                ORDER BY candidates.created_at DESC, candidates.rowid DESC LIMIT 1
                 """,
                 params,
             ).fetchone()
@@ -3085,17 +3827,22 @@ class Database:
                 f"""
                 SELECT candidates.*
                 FROM strategy_candidate_snapshots AS candidates
+                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
                 WHERE candidates.strategy_id = ?
                     AND candidates.strategy_version = ?
                     AND candidates.parameter_version = ?
+                    AND runs.status <> 'failed'
                     {status_clause}
                     AND candidates.id = (
                         SELECT current.id
                         FROM strategy_candidate_snapshots AS current
+                        JOIN strategy_screen_runs AS current_runs
+                            ON current_runs.id = current.run_id
                         WHERE current.strategy_id = candidates.strategy_id
                             AND current.strategy_version = candidates.strategy_version
                             AND current.parameter_version = candidates.parameter_version
                             AND current.symbol = candidates.symbol
+                            AND current_runs.status <> 'failed'
                         ORDER BY current.created_at DESC, current.rowid DESC
                         LIMIT 1
                     )
@@ -3105,6 +3852,120 @@ class Database:
                 params,
             ).fetchall()
         return [self._strategy_candidate_row(row) for row in rows]  # type: ignore[misc]
+
+    def latest_strategy_candidate_dates(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+    ) -> dict[str, str]:
+        states = self.latest_strategy_candidate_states(
+            strategy_id=strategy_id,
+            strategy_version=strategy_version,
+            parameter_version=parameter_version,
+        )
+        return {symbol: str(state["as_of_date"]) for symbol, state in states.items()}
+
+    def latest_strategy_candidate_states(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+    ) -> dict[str, dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT candidates.symbol, candidates.as_of_date, candidates.status,
+                       candidates.result_json
+                FROM strategy_candidate_snapshots AS candidates
+                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
+                WHERE candidates.strategy_id = ?
+                    AND candidates.strategy_version = ?
+                    AND candidates.parameter_version = ?
+                    AND runs.status <> 'failed'
+                    AND candidates.id = (
+                        SELECT current.id
+                        FROM strategy_candidate_snapshots AS current
+                        JOIN strategy_screen_runs AS current_runs
+                            ON current_runs.id = current.run_id
+                        WHERE current.strategy_id = candidates.strategy_id
+                            AND current.strategy_version = candidates.strategy_version
+                            AND current.parameter_version = candidates.parameter_version
+                            AND current.symbol = candidates.symbol
+                            AND current_runs.status <> 'failed'
+                        ORDER BY current.created_at DESC, current.rowid DESC
+                        LIMIT 1
+                    )
+                """,
+                (strategy_id, strategy_version, parameter_version),
+            ).fetchall()
+        return {
+            str(row["symbol"]): {
+                "as_of_date": str(row["as_of_date"]),
+                "status": str(row["status"]),
+                "result": json.loads(str(row["result_json"] or "{}")),
+            }
+            for row in rows
+        }
+
+    def strategy_candidate_summary(
+        self,
+        *,
+        strategy_id: str,
+        strategy_version: str,
+        parameter_version: str,
+        minimum_as_of_date: str | None = None,
+    ) -> dict[str, int]:
+        date_clause = "AND candidates.as_of_date >= ?" if minimum_as_of_date else ""
+        params: list[Any] = [strategy_id, strategy_version, parameter_version]
+        if minimum_as_of_date:
+            params.append(minimum_as_of_date)
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN candidates.status = 'qualified' THEN 1 ELSE 0 END) AS qualified,
+                    SUM(CASE WHEN candidates.status = 'triggered' THEN 1 ELSE 0 END) AS triggered,
+                    SUM(CASE WHEN candidates.status = 'not_qualified' THEN 1 ELSE 0 END) AS not_qualified,
+                    SUM(CASE WHEN candidates.status = 'data_incomplete' THEN 1 ELSE 0 END) AS data_incomplete,
+                    SUM(CASE WHEN candidates.status = 'invalidated' THEN 1 ELSE 0 END) AS invalidated
+                FROM strategy_candidate_snapshots AS candidates
+                JOIN strategy_screen_runs AS runs ON runs.id = candidates.run_id
+                WHERE candidates.strategy_id = ?
+                    AND candidates.strategy_version = ?
+                    AND candidates.parameter_version = ?
+                    AND runs.status <> 'failed'
+                    {date_clause}
+                    AND candidates.id = (
+                        SELECT current.id
+                        FROM strategy_candidate_snapshots AS current
+                        JOIN strategy_screen_runs AS current_runs
+                            ON current_runs.id = current.run_id
+                        WHERE current.strategy_id = candidates.strategy_id
+                            AND current.strategy_version = candidates.strategy_version
+                            AND current.parameter_version = candidates.parameter_version
+                            AND current.symbol = candidates.symbol
+                            AND current_runs.status <> 'failed'
+                        ORDER BY current.created_at DESC, current.rowid DESC
+                        LIMIT 1
+                    )
+                """,
+                tuple(params),
+            ).fetchone()
+        return {
+            key: int((row or {})[key] or 0)
+            for key in (
+                "total",
+                "qualified",
+                "triggered",
+                "not_qualified",
+                "data_incomplete",
+                "invalidated",
+            )
+        }
 
     def list_strategy_rule_results(
         self, candidate_snapshot_id: str
@@ -3231,6 +4092,7 @@ class Database:
             return None
         item = dict(row)
         item["data_versions"] = json.loads(item.pop("data_versions_json") or "{}")
+        item["warnings"] = json.loads(item.pop("warnings_json") or "[]")
         return item
 
     @staticmethod
@@ -3570,9 +4432,7 @@ class Database:
             )
         return self.latest_earnings_quality_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
-    def latest_earnings_quality_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_earnings_quality_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -3693,9 +4553,7 @@ class Database:
             )
         return self.latest_financial_driver_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
-    def latest_financial_driver_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_financial_driver_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -3750,9 +4608,7 @@ class Database:
                     document.get("fetched_at") or utc_now(),
                 ),
             )
-        return self.get_filing_document(
-            document["symbol"], document["article_code"]
-        )  # type: ignore[return-value]
+        return self.get_filing_document(document["symbol"], document["article_code"])  # type: ignore[return-value]
 
     def get_filing_document(
         self, symbol: str, article_code: str
@@ -3777,12 +4633,16 @@ class Database:
         *,
         include_content: bool = False,
     ) -> list[dict[str, Any]]:
-        fields = "*" if include_content else """
+        fields = (
+            "*"
+            if include_content
+            else """
             symbol, article_code, title, document_type, report_period,
             notice_date, published_at, attach_url, content_hash, source,
             source_url, warnings_json, fetched_at,
             LENGTH(content_text) AS content_chars
         """
+        )
         with self.connect() as connection:
             rows = connection.execute(
                 f"""
@@ -3854,7 +4714,7 @@ class Database:
             row = connection.execute(
                 f"""
                 SELECT * FROM filing_evidence_snapshots
-                WHERE {' AND '.join(clauses)}
+                WHERE {" AND ".join(clauses)}
                 ORDER BY COALESCE(report_period, created_at) DESC,
                     created_at DESC, rowid DESC LIMIT 1
                 """,
@@ -3962,13 +4822,9 @@ class Database:
                     created_at,
                 ),
             )
-        return self.latest_business_structure_snapshot(
-            snapshot["symbol"]
-        )  # type: ignore[return-value]
+        return self.latest_business_structure_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
-    def latest_business_structure_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_business_structure_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4011,13 +4867,9 @@ class Database:
                     created_at,
                 ),
             )
-        return self.latest_peer_operating_snapshot(
-            snapshot["symbol"]
-        )  # type: ignore[return-value]
+        return self.latest_peer_operating_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
-    def latest_peer_operating_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_peer_operating_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4090,9 +4942,7 @@ class Database:
                     created_at,
                 ),
             )
-        return self.latest_shareholder_structure_snapshot(
-            snapshot["symbol"]
-        )  # type: ignore[return-value]
+        return self.latest_shareholder_structure_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
     def latest_shareholder_structure_snapshot(
         self, symbol: str
@@ -4109,9 +4959,7 @@ class Database:
             ).fetchone()
         item = self._row(row)
         if item is not None:
-            item["top_holders"] = json.loads(
-                item.pop("top_holders_json") or "[]"
-            )
+            item["top_holders"] = json.loads(item.pop("top_holders_json") or "[]")
             item["payload"] = json.loads(item.pop("payload_json") or "{}")
         return item
 
@@ -4149,9 +4997,7 @@ class Database:
                     created_at,
                 ),
             )
-        return self.latest_analyst_expectation_snapshot(
-            snapshot["symbol"]
-        )  # type: ignore[return-value]
+        return self.latest_analyst_expectation_snapshot(snapshot["symbol"])  # type: ignore[return-value]
 
     def save_event_timeline_snapshot(
         self, snapshot: dict[str, Any], fingerprint: str
@@ -4186,9 +5032,7 @@ class Database:
             ).fetchone()
         return self._event_timeline_row(row)  # type: ignore[return-value]
 
-    def latest_event_timeline_snapshot(
-        self, symbol: str
-    ) -> dict[str, Any] | None:
+    def latest_event_timeline_snapshot(self, symbol: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4208,9 +5052,272 @@ class Database:
         item["payload"] = json.loads(item.pop("payload_json") or "{}")
         return item
 
-    def latest_analyst_expectation_snapshot(
-        self, symbol: str
+    def upsert_change_event(
+        self,
+        *,
+        symbol: str,
+        event_type: str,
+        title: str,
+        fact_summary: str,
+        occurred_at: str,
+        detected_at: str,
+        source_name: str,
+        source_url: str | None,
+        data_status: str,
+        rule_version: str,
+        dedupe_hash: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        event_id = str(uuid4())
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO change_events(
+                    id, symbol, event_type, title, fact_summary, occurred_at,
+                    detected_at, source_name, source_url, data_status,
+                    rule_version, dedupe_hash, payload_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(dedupe_hash) DO UPDATE SET
+                    title = excluded.title,
+                    fact_summary = excluded.fact_summary,
+                    detected_at = excluded.detected_at,
+                    source_name = excluded.source_name,
+                    source_url = excluded.source_url,
+                    data_status = excluded.data_status,
+                    payload_json = excluded.payload_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    event_id,
+                    symbol,
+                    event_type,
+                    title,
+                    fact_summary,
+                    occurred_at,
+                    detected_at,
+                    source_name,
+                    source_url,
+                    data_status,
+                    rule_version,
+                    dedupe_hash,
+                    json_dumps(payload),
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM change_events WHERE dedupe_hash = ?",
+                (dedupe_hash,),
+            ).fetchone()
+        return self._change_event_row(row)  # type: ignore[return-value]
+
+    def get_change_event(self, event_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM change_events WHERE id = ?", (event_id,)
+            ).fetchone()
+        return self._change_event_row(row)
+
+    def list_change_events(
+        self, *, symbol: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        parameters: list[Any] = []
+        if symbol:
+            clauses.append("symbol = ?")
+            parameters.append(symbol)
+        where = " WHERE " + " AND ".join(clauses) if clauses else ""
+        parameters.append(max(1, min(limit, 500)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT * FROM change_events{where}
+                ORDER BY occurred_at DESC, detected_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        return [
+            item for row in rows if (item := self._change_event_row(row)) is not None
+        ]
+
+    @staticmethod
+    def _change_event_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json") or "{}")
+        return item
+
+    def ensure_user_change_links(self, user_id: str, symbol: str) -> int:
+        now = utc_now()
+        with self.connect() as connection:
+            event_rows = connection.execute(
+                "SELECT id FROM change_events WHERE symbol = ?", (symbol,)
+            ).fetchall()
+            before = connection.total_changes
+            connection.executemany(
+                """
+                INSERT OR IGNORE INTO user_change_links(
+                    id, user_id, change_event_id, symbol, relevance_status,
+                    created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, 'pending', ?, ?)
+                """,
+                [
+                    (str(uuid4()), user_id, str(row["id"]), symbol, now, now)
+                    for row in event_rows
+                ],
+            )
+            inserted = connection.total_changes - before
+        return max(0, inserted)
+
+    def list_watchlist_user_ids(self) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT user_id
+                FROM watchlist
+                ORDER BY user_id
+                """
+            ).fetchall()
+        return [str(row["user_id"]) for row in rows]
+
+    def list_user_change_links(
+        self,
+        user_id: str,
+        *,
+        symbol: str | None = None,
+        relevance_status: str | None = None,
+        unread_only: bool = False,
+        pending_only: bool = False,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses = ["links.user_id = ?"]
+        parameters: list[Any] = [user_id]
+        if symbol:
+            clauses.append("links.symbol = ?")
+            parameters.append(symbol)
+        if relevance_status:
+            clauses.append("links.relevance_status = ?")
+            parameters.append(relevance_status)
+        if unread_only:
+            clauses.append("links.read_at IS NULL")
+        if pending_only:
+            clauses.append("links.relevance_status = 'pending'")
+            clauses.append("links.handled_at IS NULL")
+        parameters.append(max(1, min(limit, 500)))
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT
+                    links.id AS link_id,
+                    links.relevance_status,
+                    links.read_at,
+                    links.handled_at,
+                    links.created_at AS linked_at,
+                    links.updated_at AS link_updated_at,
+                    events.id AS event_id,
+                    events.symbol,
+                    events.event_type,
+                    events.title,
+                    events.fact_summary,
+                    events.occurred_at,
+                    events.detected_at,
+                    events.source_name,
+                    events.source_url,
+                    events.data_status,
+                    events.rule_version,
+                    events.payload_json,
+                    events.created_at,
+                    events.updated_at
+                FROM user_change_links AS links
+                JOIN change_events AS events ON events.id = links.change_event_id
+                WHERE {" AND ".join(clauses)}
+                ORDER BY events.occurred_at DESC, events.detected_at DESC, links.rowid DESC
+                LIMIT ?
+                """,
+                parameters,
+            ).fetchall()
+        return [self._user_change_link_row(row) for row in rows]
+
+    def get_user_change_link(self, user_id: str, link_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    links.id AS link_id,
+                    links.relevance_status,
+                    links.read_at,
+                    links.handled_at,
+                    links.created_at AS linked_at,
+                    links.updated_at AS link_updated_at,
+                    events.id AS event_id,
+                    events.symbol,
+                    events.event_type,
+                    events.title,
+                    events.fact_summary,
+                    events.occurred_at,
+                    events.detected_at,
+                    events.source_name,
+                    events.source_url,
+                    events.data_status,
+                    events.rule_version,
+                    events.payload_json,
+                    events.created_at,
+                    events.updated_at
+                FROM user_change_links AS links
+                JOIN change_events AS events ON events.id = links.change_event_id
+                WHERE links.id = ? AND links.user_id = ?
+                """,
+                (link_id, user_id),
+            ).fetchone()
+        return self._user_change_link_row(row) if row is not None else None
+
+    @staticmethod
+    def _user_change_link_row(row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["payload"] = json.loads(item.pop("payload_json") or "{}")
+        return item
+
+    def mark_user_change_read(
+        self, user_id: str, link_id: str
     ) -> dict[str, Any] | None:
+        now = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE user_change_links
+                SET read_at = COALESCE(read_at, ?), updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (now, now, link_id, user_id),
+            )
+        if cursor.rowcount == 0:
+            return None
+        return self.get_user_change_link(user_id, link_id)
+
+    def set_user_change_relevance(
+        self, user_id: str, link_id: str, relevance_status: str
+    ) -> dict[str, Any] | None:
+        if relevance_status not in {"relevant", "irrelevant"}:
+            raise ValueError("相关性状态只接受 relevant 或 irrelevant")
+        now = utc_now()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE user_change_links
+                SET relevance_status = ?, handled_at = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (relevance_status, now, now, link_id, user_id),
+            )
+        if cursor.rowcount == 0:
+            return None
+        return self.get_user_change_link(user_id, link_id)
+
+    def latest_analyst_expectation_snapshot(self, symbol: str) -> dict[str, Any] | None:
         items = self.list_analyst_expectation_snapshots(symbol, limit=1)
         return items[0] if items else None
 
@@ -4279,7 +5386,7 @@ class Database:
             row = connection.execute(
                 """
                 SELECT * FROM research_reports
-                WHERE symbol = ? ORDER BY generated_at DESC LIMIT 1
+                WHERE symbol = ? ORDER BY generated_at DESC, rowid DESC LIMIT 1
                 """,
                 (symbol,),
             ).fetchone()
@@ -4450,9 +5557,7 @@ class Database:
             ).fetchone()
         return self._research_priority_row(row)  # type: ignore[return-value]
 
-    def latest_research_priority_snapshot(
-        self, user_id: str
-    ) -> dict[str, Any] | None:
+    def latest_research_priority_snapshot(self, user_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4501,9 +5606,7 @@ class Database:
             ).fetchone()
         return self._research_action_row(row)  # type: ignore[return-value]
 
-    def latest_research_action_snapshot(
-        self, user_id: str
-    ) -> dict[str, Any] | None:
+    def latest_research_action_snapshot(self, user_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -4589,9 +5692,7 @@ class Database:
             ).fetchone()
         return self._evidence_task_row(row)  # type: ignore[return-value]
 
-    def get_evidence_task(
-        self, user_id: str, task_id: str
-    ) -> dict[str, Any] | None:
+    def get_evidence_task(self, user_id: str, task_id: str) -> dict[str, Any] | None:
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM evidence_tasks WHERE id = ? AND user_id = ?",

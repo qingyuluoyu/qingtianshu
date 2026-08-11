@@ -8,6 +8,7 @@ from app.services.analysis import (
     _current_quote_snapshot,
     _validated_index_metrics,
     MarketAnalysisService,
+    align_conditional_outlook_with_current_quote,
     analyze_history,
     annualized_volatility,
     build_conditional_outlook,
@@ -21,7 +22,9 @@ from app.services.analysis import (
 
 class _DatedMarketProvider:
     def fetch_history(self, symbol: str, range_name: str = "3mo"):
-        end_date = datetime(2026, 7, 20 if symbol == "399006.SZ" else 21, tzinfo=timezone.utc)
+        end_date = datetime(
+            2026, 7, 20 if symbol == "399006.SZ" else 21, tzinfo=timezone.utc
+        )
         points = []
         for index in range(70):
             close = 100 + index
@@ -232,6 +235,73 @@ def test_index_history_prefers_fresher_china_fallback():
     assert history["metrics"]["latest_close"] == 4739.23
 
 
+def test_index_history_prefers_complete_same_day_history_over_one_point_quote():
+    class OnePointProvider:
+        def fetch_history(self, symbol: str, range_name: str = "1y"):
+            return {
+                "symbol": symbol,
+                "points": [
+                    {
+                        "timestamp": "2026-07-22T07:00:00+00:00",
+                        "open": 1860.0,
+                        "high": 1861.0,
+                        "low": 1850.0,
+                        "close": 1860.0,
+                        "volume": 1,
+                    }
+                ],
+                "source": "single point quote",
+                "market_timestamp": "2026-07-22T07:00:00+00:00",
+                "fetched_at": "2026-07-22T07:01:00+00:00",
+                "coverage": {"points": 1},
+                "warnings": [],
+            }
+
+    class CompleteChinaProvider:
+        def supports(self, symbol: str) -> bool:
+            return symbol == "000688.SS"
+
+        def fetch_history(self, symbol: str, range_name: str = "1y"):
+            return {
+                "symbol": symbol,
+                "points": [
+                    {
+                        "timestamp": "2026-07-21T01:30:00+00:00",
+                        "open": 1800.0,
+                        "high": 1830.0,
+                        "low": 1790.0,
+                        "close": 1820.0,
+                        "volume": 1,
+                    },
+                    {
+                        "timestamp": "2026-07-22T01:30:00+00:00",
+                        "open": 1840.0,
+                        "high": 1870.0,
+                        "low": 1830.0,
+                        "close": 1860.0,
+                        "volume": 1,
+                    },
+                ],
+                "source": "complete daily history",
+                "market_timestamp": "2026-07-22T01:30:00+00:00",
+                "fetched_at": "2026-07-22T07:01:00+00:00",
+                "coverage": {"points": 2},
+                "warnings": [],
+            }
+
+    service = MarketAnalysisService(
+        None,
+        OnePointProvider(),
+        _NextDaySectorProvider(),
+        china_index_provider=CompleteChinaProvider(),
+    )
+
+    history = service.get_index_history("000688.SS", range_name="3mo")
+
+    assert history["source"] == "complete daily history"
+    assert history["metrics"]["return_1d_pct"] == 2.1978
+
+
 def test_current_quote_snapshot_uses_latest_complete_close_as_intraday_base():
     history = {
         "timezone": "Asia/Shanghai",
@@ -310,7 +380,7 @@ def test_market_brief_excludes_cross_date_indices_and_sectors_from_state():
         "market_key": "china",
     }
     assert brief["date_alignment"]["status"] == "partial_alignment"
-    assert brief["date_alignment"]["aligned_indices"] == 4
+    assert brief["date_alignment"]["aligned_indices"] == 5
     assert brief["date_alignment"]["sector_status"] == "cross_date_excluded"
     assert brief["hot_sectors"]["same_date_as_analysis_target"] is False
     mismatched = next(
@@ -319,7 +389,7 @@ def test_market_brief_excludes_cross_date_indices_and_sectors_from_state():
     assert mismatched["market_date"] == "2026-07-20"
     assert mismatched["analysis_eligibility"] == "cross_date_excluded"
     assert brief["market_state"]["label"] == "偏强"
-    assert brief["market_state"]["aligned_index_count"] == 4
+    assert brief["market_state"]["aligned_index_count"] == 5
     assert brief["market_state"]["whole_market_breadth_available"] is True
 
 
@@ -339,7 +409,7 @@ def test_market_brief_uses_newer_index_session_before_previous_day_breadth():
         "market_key": "china",
     }
     assert brief["date_alignment"]["status"] == "same_market_date"
-    assert brief["date_alignment"]["aligned_indices"] == 5
+    assert brief["date_alignment"]["aligned_indices"] == 6
     assert brief["date_alignment"]["sector_status"] == "same_market_date"
     assert brief["date_alignment"]["breadth_status"] == "cross_date_excluded"
     assert brief["hot_sectors"]["analysis_eligibility"] == "same_market_date"
@@ -368,6 +438,40 @@ def test_conditional_outlook_exposes_scenarios_without_fake_probability():
     assert "105.0" in outlook["scenarios"][2]["condition"]
 
 
+def test_current_quote_alignment_does_not_repeat_already_crossed_downside_level():
+    outlook = build_conditional_outlook(
+        {
+            "latest_close": 37.5,
+            "ma20": 37.28,
+            "ma60": 37.3,
+            "return_20d_pct": 0.2,
+            "volatility_20d_annualized_pct": 30.0,
+        },
+        {
+            "recent_20d_high": 43.0,
+            "recent_20d_low": 32.39,
+            "ma20": 37.28,
+            "ma60": 37.3,
+        },
+    )
+
+    aligned = align_conditional_outlook_with_current_quote(
+        outlook,
+        {
+            "price": 35.92,
+            "quote_label": "收盘后最新报价",
+            "market_timestamp": "2026-07-23T16:14:30+08:00",
+            "complete_daily_bar_confirmed": False,
+        },
+    )
+
+    downside = next(item for item in aligned["scenarios"] if item["name"] == "下行风险")
+    assert aligned["current_quote_alignment"]["status"] == ("below_downside_reference")
+    assert "已低于关键参考位 37.3" in downside["condition"]
+    assert "仍需等待同日完整日线确认" in downside["condition"]
+    assert "收盘跌破关键参考位 37.3" not in downside["condition"]
+
+
 def test_evidence_debate_keeps_bull_bear_and_risk_separate():
     debate = build_evidence_debate(
         {
@@ -380,7 +484,12 @@ def test_evidence_debate_keeps_bull_bear_and_risk_separate():
                 "volatility_20d_annualized_pct": 30,
             },
             "a_share_information": {
-                "sentiment": {"score": 0.3, "sample_size": 20, "band": "轻微偏多", "confidence": "low_to_medium"}
+                "sentiment": {
+                    "score": 0.3,
+                    "sample_size": 20,
+                    "band": "轻微偏多",
+                    "confidence": "low_to_medium",
+                }
             },
             "research_frame": {"missing_information": ["估值尚未接入"]},
         }
@@ -460,8 +569,7 @@ def test_business_concentration_is_a_review_need_not_a_proven_failure():
     assert fundamentals["status"] == "ready"
     assert fundamentals["evidence_count"] == 2
     assert any(
-        "主营收入、毛利来源" in item
-        for item in board["tracking_plan"][2]["checks"]
+        "主营收入、毛利来源" in item for item in board["tracking_plan"][2]["checks"]
     )
 
 
@@ -477,20 +585,15 @@ def test_optional_industry_gap_does_not_override_ready_core_evidence():
         "evidence_debate": {"bull_case": [{}], "bear_case": [{}], "risk_committee": []},
         "conditional_outlook": {"label": "震荡观察"},
         "price_levels": {"ma20": 98, "recent_20d_low": 90, "recent_20d_high": 110},
-        "research_frame": {
-            "missing_information": ["行业供需与一致预期尚未接入"]
-        },
+        "research_frame": {"missing_information": ["行业供需与一致预期尚未接入"]},
     }
 
     debate = build_evidence_debate(evidence)
     board = build_research_analysis_board(evidence)
 
     assert not any(
-        item["risk"] == "证据覆盖不完整"
-        for item in debate["risk_committee"]
+        item["risk"] == "证据覆盖不完整" for item in debate["risk_committee"]
     )
     assert board["readiness"]["status"] == "ready"
-    assert board["readiness"]["optional_gaps"] == [
-        "行业供需与一致预期尚未接入"
-    ]
+    assert board["readiness"]["optional_gaps"] == ["行业供需与一致预期尚未接入"]
     assert "直接回答" in board["readiness"]["response_policy"]

@@ -45,7 +45,16 @@ _EVENT_RULES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "shareholder_change",
         "股东与股权变化",
-        ("减持", "解禁", "股东权益变动", "股权变动", "股份变动", "股东总数", "质押", "股权激励"),
+        (
+            "减持",
+            "解禁",
+            "股东权益变动",
+            "股权变动",
+            "股份变动",
+            "股东总数",
+            "质押",
+            "股权激励",
+        ),
     ),
     (
         "regulatory_legal",
@@ -68,17 +77,51 @@ _EVENT_RULES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "financing_mna",
         "融资与并购重组",
-        ("定向增发", "定增", "可转债", "可转换债券", "转股价格调整", "收购", "并购", "重组", "出售资产", "acquisition", "merger"),
+        (
+            "定向增发",
+            "定增",
+            "可转债",
+            "可转换债券",
+            "转股价格调整",
+            "收购",
+            "并购",
+            "重组",
+            "出售资产",
+            "acquisition",
+            "merger",
+        ),
     ),
     (
         "operations_product",
         "经营、产品与产能",
-        ("产品发布", "新产品", "发布", "亮相", "获批", "投产", "产能", "项目建设", "战略合作", "合作协议", "调价", "launch"),
+        (
+            "产品发布",
+            "新产品",
+            "发布",
+            "亮相",
+            "获批",
+            "投产",
+            "产能",
+            "项目建设",
+            "战略合作",
+            "合作协议",
+            "调价",
+            "launch",
+        ),
     ),
     (
         "governance",
         "治理与管理层",
-        ("董事", "监事", "高级管理人员", "总经理", "辞职", "聘任", "任命", "chief executive"),
+        (
+            "董事",
+            "监事",
+            "高级管理人员",
+            "总经理",
+            "辞职",
+            "聘任",
+            "任命",
+            "chief executive",
+        ),
     ),
 )
 
@@ -226,6 +269,7 @@ class EventTimelineService:
                         "mixed": "双向事件",
                         "neutral": "中性事件",
                     }[relevance],
+                    "source": item.get("source"),
                     "url": item.get("url"),
                     "fetched_at": item.get("fetched_at"),
                 }
@@ -233,7 +277,8 @@ class EventTimelineService:
         events.sort(
             key=lambda item: (
                 str(item.get("event_date") or ""),
-                item.get("evidence_level") in {"official_disclosure", "regulatory_filing"},
+                item.get("evidence_level")
+                in {"official_disclosure", "regulatory_filing"},
                 str(item.get("published_at") or ""),
             ),
             reverse=True,
@@ -304,19 +349,26 @@ class EventTimelineService:
 
     def _index_common_knowledge(self, packet: dict[str, Any]) -> None:
         source_key = f"event-timeline:{packet['symbol']}"
-        document_id = "event-timeline-" + hashlib.sha256(
-            source_key.encode("utf-8")
-        ).hexdigest()[:24]
-        event_lines = "\n".join(
-            f"- {item.get('event_date') or '日期待确认'}｜"
-            f"{item.get('evidence_label')}｜{item.get('event_label')}｜"
-            f"{item.get('research_relevance_label')}｜{item.get('title')}"
-            for item in (packet.get("events") or [])[:24]
-        ) or "- 当前未形成可用的事件脉络。"
-        theme_lines = "\n".join(
-            f"- {item.get('label')}：{item.get('count')} 条"
-            for item in packet.get("themes") or []
-        ) or "- 尚未形成可分类事件。"
+        document_id = (
+            "event-timeline-"
+            + hashlib.sha256(source_key.encode("utf-8")).hexdigest()[:24]
+        )
+        event_lines = (
+            "\n".join(
+                f"- {item.get('event_date') or '日期待确认'}｜"
+                f"{item.get('evidence_label')}｜{item.get('event_label')}｜"
+                f"{item.get('research_relevance_label')}｜{item.get('title')}"
+                for item in (packet.get("events") or [])[:24]
+            )
+            or "- 当前未形成可用的事件脉络。"
+        )
+        theme_lines = (
+            "\n".join(
+                f"- {item.get('label')}：{item.get('count')} 条"
+                for item in packet.get("themes") or []
+            )
+            or "- 尚未形成可分类事件。"
+        )
         content = (
             f"# {packet['name']}重要事件脉络\n\n"
             f"证券代码：{packet['symbol']}\n\n"
@@ -381,10 +433,9 @@ def _normalized_title(title: str) -> str:
 
 
 def _same_event(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    if (
-        left.get("event_date") != right.get("event_date")
-        or left.get("event_type") != right.get("event_type")
-    ):
+    if left.get("event_date") != right.get("event_date") or left.get(
+        "event_type"
+    ) != right.get("event_type"):
         return False
     left_title = str(left.get("title") or "")
     right_title = str(right.get("title") or "")

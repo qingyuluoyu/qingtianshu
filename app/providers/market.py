@@ -321,6 +321,7 @@ class TencentChinaIndexProvider:
         "000001.SS": {"quote_symbol": "sh000001", "name": "上证综指", "exchange": "SSE"},
         "399001.SZ": {"quote_symbol": "sz399001", "name": "深证成指", "exchange": "SZSE"},
         "399006.SZ": {"quote_symbol": "sz399006", "name": "创业板指", "exchange": "SZSE"},
+        "000688.SS": {"quote_symbol": "sh000688", "name": "科创50", "exchange": "SSE"},
         "000300.SS": {"quote_symbol": "sh000300", "name": "沪深300", "exchange": "SSE"},
         "000905.SS": {"quote_symbol": "sh000905", "name": "中证500", "exchange": "SSE"},
     }
@@ -1362,7 +1363,10 @@ class CSIIndustryIndexProvider:
                 else str(row.get("Name") or "").strip() == industry_name
             )
             and row.get("SecurityTypeName") == "指数"
-            and re.fullmatch(r"\d{6}", str(row.get("Code") or ""))
+            and re.fullmatch(
+                r"(?:\d{6}|[A-Z]\d{5})",
+                str(row.get("Code") or "").strip().upper(),
+            )
             and str(row.get("QuoteID") or "").strip()
         ]
         if not exact:

@@ -15,6 +15,14 @@ def _stage(payload: dict, key: str) -> dict:
     return next(item for item in payload["stages"] if item["key"] == key)
 
 
+def _completed_run() -> dict:
+    return {
+        "id": None,
+        "status": "completed",
+        "usage": {"output_guard": {"passed": True}},
+    }
+
+
 def test_deep_stock_api_binds_existing_conversation_and_is_user_isolated(app):
     client = TestClient(app)
     user = _create_user(client, "Deep Stock User")
@@ -39,6 +47,8 @@ def test_deep_stock_api_binds_existing_conversation_and_is_user_isolated(app):
     assert created.status_code == 201
     payload = created.json()
     assert payload["symbol"] == "000063.SZ"
+    assert payload["name"] == "中兴通讯"
+    assert payload["conversation"]["title"] == "个股研究｜中兴通讯"
     assert payload["conversation_id"] == conversation["id"]
     assert payload["workflow_version"] == "guided_deep_stock_v1"
     assert payload["progress"] == {"completed": 1, "total": 7, "percent": 14}
@@ -80,6 +90,125 @@ def test_deep_stock_api_binds_existing_conversation_and_is_user_isolated(app):
     assert other.get("/me/deep-stock/000063").status_code == 404
 
 
+def test_deep_stock_rejects_silent_primary_conversation_rebinding(app):
+    client = TestClient(app)
+    _create_user(client, "Deep Stock Binding User")
+    first = client.post("/me/conversations", json={"title": "中兴主会话"}).json()
+    second = client.post("/me/conversations", json={"title": "另一条会话"}).json()
+
+    created = client.post(
+        "/me/deep-stock",
+        json={"symbol": "000063", "conversation_id": first["id"]},
+    )
+    assert created.status_code == 201
+
+    replaced = client.post(
+        "/me/deep-stock",
+        json={"symbol": "000063", "conversation_id": second["id"]},
+    )
+    assert replaced.status_code == 409
+    assert "不能静默替换" in replaced.json()["detail"]
+    assert client.get("/me/deep-stock/000063").json()["conversation_id"] == first["id"]
+
+
+def test_deep_stock_rejects_one_conversation_bound_to_two_stocks(app):
+    client = TestClient(app)
+    _create_user(client, "Deep Stock Shared Conversation User")
+    conversation = client.post(
+        "/me/conversations", json={"title": "单股主会话"}
+    ).json()
+
+    assert client.post(
+        "/me/deep-stock",
+        json={"symbol": "000063", "conversation_id": conversation["id"]},
+    ).status_code == 201
+    shared = client.post(
+        "/me/deep-stock",
+        json={"symbol": "300308", "conversation_id": conversation["id"]},
+    )
+
+    assert shared.status_code == 409
+    assert "另一只股票" in shared.json()["detail"]
+
+
+def test_screening_candidate_entry_is_saved_without_completing_research_stage(app):
+    client = TestClient(app)
+    _create_user(client, "Screening Entry User")
+
+    created = client.post(
+        "/me/deep-stock",
+        json={
+            "symbol": "000063",
+            "entry_context": {
+                "source_kind": "stock_screen",
+                "source_label": "经营改善候选",
+                "display_name": "中兴通讯",
+                "profile_key": "quality",
+                "as_of_date": "2026-07-22",
+                "candidate_status": "ready",
+                "matched_reasons": [
+                    "营收同比保持增长",
+                    "毛利率高于模板下限",
+                ],
+                "missing_fields": ["最新公告原文", "现金流变化原因"],
+            },
+        },
+    )
+
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["symbol"] == "000063.SZ"
+    assert payload["progress"]["completed"] == 0
+    assert payload["current_stage"]["key"] == "original_thesis"
+    assert payload["research_entry"] == {
+        "source_kind": "stock_screen",
+        "source_label": "经营改善候选",
+        "display_name": "中兴通讯",
+        "profile_key": "quality",
+        "as_of_date": "2026-07-22",
+        "candidate_status": "ready",
+        "matched_reasons": ["营收同比保持增长", "毛利率高于模板下限"],
+        "missing_fields": ["最新公告原文", "现金流变化原因"],
+        "status": "user_selected_context",
+        "limitations": [
+            "这是用户从筛选结果进入研究空间时保存的研究线索，"
+            "不会直接完成研究阶段，仍需用正式行情、财务和公告证据核验。"
+        ],
+        "updated_at": payload["research_entry"]["updated_at"],
+    }
+    assert "经营改善候选" in payload["next_question"]
+    assert "筛选入口待核验：最新公告原文" in payload["unresolved_items"]
+
+    workspace = client.get("/v1/stocks/000063/workspace")
+    assert workspace.status_code == 200
+    workspace_payload = workspace.json()
+    assert workspace_payload["name"] == "中兴通讯"
+    assert workspace_payload["research_entry"]["profile_key"] == "quality"
+    assert workspace_payload["pending_actions"][0]["source"] == "screening_entry"
+    assert "经营改善候选" in workspace_payload["pending_actions"][0]["title"]
+
+    repeated = client.post(
+        "/me/deep-stock",
+        json={
+            "symbol": "000063.SZ",
+            "entry_context": {
+                "source_kind": "li_zong_strategy",
+                "source_label": "李总策略",
+                "display_name": "中兴通讯",
+                "candidate_status": "qualified",
+                "matched_reasons": ["总市值严格大于150亿元"],
+            },
+        },
+    )
+    assert repeated.status_code == 201
+    assert repeated.json()["conversation_id"] == payload["conversation_id"]
+    assert repeated.json()["research_entry"]["source_kind"] == "li_zong_strategy"
+
+    other = TestClient(app)
+    _create_user(other, "Screening Entry Other User")
+    assert other.get("/me/deep-stock/000063").status_code == 404
+
+
 def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
     client = TestClient(app)
     user = _create_user(client, "Deep Workflow User")
@@ -103,9 +232,16 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
             "status": "available",
             "anchor_report_date": "2025-12-31",
             "dimensions": [{"classification": "product"}],
+            "sources": [
+                {
+                    "name": "测试主营结构源",
+                    "url": "https://example.invalid/business",
+                }
+            ],
         },
         "fundamentals": {
             "status": "available",
+            "source": "测试结构化财务源",
             "financial_periods": [{"report_period": "2026-03-31"}],
             "valuation": {"price": 40.0, "pe_ttm": 20.0},
         },
@@ -113,34 +249,54 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
             "status": "available",
             "report_period": "2026-03-31",
             "factors": [{"label": "利润质量"}],
+            "filing_evidence": {
+                "document": {"source": "测试财报原文源"}
+            },
         },
         "financial_drivers": {
             "status": "available",
+            "source": "测试三表计算源",
             "report_period": "2026-03-31",
             "confirmed_mechanical_drivers": [{"label": "毛利变化"}],
         },
         "peer_comparison": {
             "status": "available",
+            "sources": [{"name": "测试固定同行源"}],
             "metrics": [{"key": "pe_ttm"}],
             "peers": [{"symbol": "600498.SS"}],
         },
         "analyst_expectations": {
             "status": "available",
+            "sources": [{"name": "测试分析师预期源"}],
             "industry": "通信设备",
             "forecast_eps": [{"year": 2026, "value": 1.4}],
         },
         "event_timeline": {
             "status": "available",
-            "events": [{"title": "季度报告"}],
+            "events": [{"title": "季度报告", "source": "测试公告源"}],
         },
         "a_share_information": {
             "status": "available",
-            "announcements": [{"title": "季度报告"}],
+            "announcements": [
+                {"title": "季度报告", "source": "测试公告聚合源"}
+            ],
         },
         "evidence_debate": {
             "status": "available",
-            "bear_case": [{"claim": "利润承压"}],
-            "risk_committee": [{"risk": "现金流背离"}],
+            "bear_case": [
+                {
+                    "claim": "利润承压",
+                    "evidence": "净利润同比下降",
+                    "source": "structured_fundamentals",
+                }
+            ],
+            "risk_committee": [
+                {
+                    "risk": "现金流背离",
+                    "evidence": "经营现金流弱于利润",
+                    "source": "deterministic_financial_driver",
+                }
+            ],
         },
         "analysis_board": {
             "modules": [
@@ -192,7 +348,7 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
         symbol="000063.SZ",
         intent="stock_research",
         message="请完整分析并主动检查反方证据",
-        run={"id": None, "status": "completed"},
+        run=_completed_run(),
         evidence=evidence,
     )
     assert researched is not None
@@ -206,7 +362,7 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
         symbol="000063.SZ",
         intent="stock_research",
         message="请总结失效条件、下一步需要核验的证据和观察条件",
-        run={"id": None, "status": "completed"},
+        run=_completed_run(),
         evidence=evidence,
     )
     assert completed is not None
@@ -251,7 +407,7 @@ def test_guarded_runs_do_not_complete_stages_but_valid_evidence_does(app):
         symbol="000063.SZ",
         intent="stock_research",
         message="只刷新一个很薄的专项数据包",
-        run={"id": None, "status": "completed"},
+        run=_completed_run(),
         evidence={
             "business_structure": {"status": "available"},
             "analysis_board": {"modules": []},
@@ -312,7 +468,7 @@ def test_thin_packets_do_not_advance_research_stages(app):
         symbol="000063.SZ",
         intent="stock_research",
         message="请完整分析中兴通讯",
-        run={"id": None, "status": "completed"},
+        run=_completed_run(),
         evidence={
             "business_structure": {"status": "available"},
             "fundamentals": {"status": "available"},
@@ -324,9 +480,231 @@ def test_thin_packets_do_not_advance_research_stages(app):
 
     assert observed is not None
     assert observed["progress"]["completed"] == 1
-    assert _stage(observed, "company_industry")["status"] == "in_progress"
+    company_stage = _stage(observed, "company_industry")
+    assert company_stage["status"] == "needs_review"
+    assert "核心证据包" not in " ".join(company_stage["review_reasons"])
+    assert "证据覆盖尚未达到完成门槛" in " ".join(
+        company_stage["review_reasons"]
+    )
     coverage = {
         item["key"]: item for item in observed["evidence_coverage"]["dimensions"]
     }
     assert coverage["company_operating"]["coverage_status"] == "insufficient"
     assert coverage["financial_quality"]["coverage_status"] == "insufficient"
+
+
+def test_completed_run_requires_guard_pass_and_available_evidence(app):
+    client = TestClient(app)
+    user = _create_user(client, "Strict Stage Gate User")
+    app.state.database.upsert_watchlist(
+        user["id"],
+        "000063.SZ",
+        "中兴通讯",
+        "A股",
+        "验证主营结构证据",
+    )
+    session = client.post("/me/deep-stock", json={"symbol": "000063"}).json()
+    evidence = {
+        "status": "available",
+        "rows": [{"item_name": "运营商网络"}],
+        "sources": [{"name": "测试主营结构源"}],
+    }
+
+    missing_guard = app.state.deep_stock.observe_chat(
+        user_id=user["id"],
+        conversation_id=session["conversation_id"],
+        symbol="000063.SZ",
+        intent="business_structure",
+        message="中兴通讯靠什么赚钱？",
+        run={"id": None, "status": "completed"},
+        evidence=evidence,
+    )
+    assert missing_guard is not None
+    assert missing_guard["progress"]["completed"] == 1
+    assert _stage(missing_guard, "company_industry")["status"] == "in_progress"
+    assert any(
+        "缺少可验证的最终输出守卫通过记录" in item
+        for item in missing_guard["unresolved_items"]
+    )
+
+    failed_evidence = app.state.deep_stock.observe_chat(
+        user_id=user["id"],
+        conversation_id=session["conversation_id"],
+        symbol="000063.SZ",
+        intent="business_structure",
+        message="继续核验主营结构。",
+        run=_completed_run(),
+        evidence={**evidence, "status": "failed"},
+    )
+    assert failed_evidence is not None
+    assert failed_evidence["progress"]["completed"] == 1
+    assert any(
+        "核心证据包缺失或失败" in item
+        for item in failed_evidence["unresolved_items"]
+    )
+
+
+def test_sufficient_coverage_without_source_is_needs_review_and_restores(app):
+    client = TestClient(app)
+    user = _create_user(client, "Stage Source Gate User")
+    app.state.database.upsert_watchlist(
+        user["id"],
+        "000063.SZ",
+        "中兴通讯",
+        "A股",
+        "验证主营结构证据来源",
+    )
+    session = client.post("/me/deep-stock", json={"symbol": "000063"}).json()
+    evidence = {
+        "status": "available",
+        "rows": [{"item_name": "运营商网络"}],
+    }
+
+    needs_review = app.state.deep_stock.observe_chat(
+        user_id=user["id"],
+        conversation_id=session["conversation_id"],
+        symbol="000063.SZ",
+        intent="business_structure",
+        message="中兴通讯靠什么赚钱？",
+        run=_completed_run(),
+        evidence=evidence,
+    )
+    assert needs_review is not None
+    stage = _stage(needs_review, "company_industry")
+    assert stage["status"] == "needs_review"
+    assert stage["coverage_gate"] == {"company_operating": "sufficient"}
+    assert stage["source_refs"] == []
+    assert "可追溯来源" in " ".join(stage["review_reasons"])
+
+    restored = client.get("/me/deep-stock/000063").json()
+    restored_stage = _stage(restored, "company_industry")
+    assert restored_stage["status"] == "needs_review"
+    assert restored_stage["review_reasons"] == stage["review_reasons"]
+
+    completed = app.state.deep_stock.observe_chat(
+        user_id=user["id"],
+        conversation_id=session["conversation_id"],
+        symbol="000063.SZ",
+        intent="business_structure",
+        message="继续核验主营结构。",
+        run=_completed_run(),
+        evidence={
+            **evidence,
+            "sources": [
+                {
+                    "name": "测试主营结构源",
+                    "url": "https://example.invalid/business",
+                }
+            ],
+        },
+    )
+    assert completed is not None
+    completed_stage = _stage(completed, "company_industry")
+    assert completed_stage["status"] == "completed"
+    assert completed_stage["source_refs"] == [
+        "测试主营结构源",
+        "https://example.invalid/business",
+    ]
+
+
+def test_legacy_completed_stages_are_reconciled_from_their_original_run(app):
+    client = TestClient(app)
+    user = _create_user(client, "Legacy Stage Reconcile User")
+    app.state.database.upsert_watchlist(
+        user["id"],
+        "000063.SZ",
+        "中兴通讯",
+        "A股",
+        "验证历史阶段是否有真实完成证据",
+    )
+    created = client.post("/me/deep-stock", json={"symbol": "000063"}).json()
+    database = app.state.database
+    run = database.create_run(
+        user["id"],
+        "business_structure",
+        "economy",
+        {"message": "中兴通讯靠什么赚钱，主营结构如何？"},
+        app.state.settings.workspace_root,
+    )
+    evidence = {
+        "status": "available",
+        "rows": [{"item_name": "运营商网络"}],
+        "sources": [
+            {
+                "name": "测试主营结构源",
+                "url": "https://example.invalid/business",
+            }
+        ],
+    }
+    database.finish_run(
+        run["id"],
+        user["id"],
+        "completed",
+        evidence,
+        "主营结构研究已完成。",
+        {"output_guard": {"passed": True}},
+    )
+
+    raw = database.get_deep_stock_session(user["id"], "000063.SZ")
+    stages = list(raw["stages"])
+    company = next(item for item in stages if item["key"] == "company_industry")
+    company.update(
+        {
+            "status": "completed",
+            "completed_at": "2026-07-22T10:00:00+00:00",
+            "run_id": run["id"],
+            "evidence_modules": ["business_structure"],
+        }
+    )
+    financial = next(
+        item for item in stages if item["key"] == "financial_cashflow"
+    )
+    financial.update(
+        {
+            "status": "completed",
+            "completed_at": "2026-07-22T10:05:00+00:00",
+            "run_id": None,
+            "evidence_modules": ["fundamentals"],
+        }
+    )
+    database.save_deep_stock_session(
+        user_id=user["id"],
+        symbol="000063.SZ",
+        name="中兴通讯",
+        conversation_id=created["conversation_id"],
+        workflow_version=raw["workflow_version"],
+        status="active",
+        stages=stages,
+        evidence_modules=raw["evidence_modules"],
+        unresolved_items=raw["unresolved_items"],
+        next_question=raw["next_question"],
+        latest_run_id=run["id"],
+        latest_report_id=raw["latest_report_id"],
+        completed_at=None,
+    )
+
+    reconciled = client.get("/me/deep-stock/000063").json()
+    company = _stage(reconciled, "company_industry")
+    financial = _stage(reconciled, "financial_cashflow")
+    assert company["status"] == "completed"
+    assert company["completion_gate_version"] == "stage_completion_gate_v2"
+    assert company["source_refs"] == [
+        "测试主营结构源",
+        "https://example.invalid/business",
+    ]
+    assert financial["status"] == "needs_review"
+    assert "历史阶段缺少可回溯的完成 Run" in " ".join(
+        financial["review_reasons"]
+    )
+    assert reconciled["progress"]["completed"] == 2
+    assert reconciled["current_stage"]["key"] == "financial_cashflow"
+    assert reconciled["current_stage"]["status"] == "needs_review"
+    assert any(
+        "历史研究阶段已按更严格的证据门禁重新审计" in item
+        for item in reconciled["unresolved_items"]
+    )
+
+    repeated = client.get("/me/deep-stock/000063").json()
+    assert repeated["stages"] == reconciled["stages"]
+    assert repeated["unresolved_items"] == reconciled["unresolved_items"]
+    assert repeated["progress"] == reconciled["progress"]

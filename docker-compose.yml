@@ -11,6 +11,12 @@ services:
       BACKGROUND_INFO_REFRESH_SECONDS: "600"
       BACKGROUND_USE_HERMES: "false"
       HERMES_ENABLED: "false"
+      TUSHARE_ENABLED: "${TUSHARE_ENABLED:-false}"
+      TUSHARE_TOKEN: "${TUSHARE_TOKEN:-}"
+      TUSHARE_API_URL: "${TUSHARE_API_URL:-https://teajoin.com}"
+      SEC_USER_AGENT: "${SEC_USER_AGENT:-QingshuFinancialResearch/0.1 research@example.com}"
+      DEFAULT_A_SHARE_SYMBOLS: "${DEFAULT_A_SHARE_SYMBOLS:-000063.SZ,300308.SZ}"
+      DEFAULT_RESEARCH_SYMBOLS: "${DEFAULT_RESEARCH_SYMBOLS:-000063.SZ,300308.SZ,NVDA}"
     volumes:
       - qingshu-data:/data
     restart: unless-stopped

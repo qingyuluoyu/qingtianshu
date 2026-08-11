@@ -1,0 +1,17 @@
+.git
+.gitignore
+.env
+.venv
+*.egg-info
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+data
+.qa-*
+.qingshu-runtime
+.DS_Store
+*.db
+*.sqlite*
+report_render*
+.docx-product-report-assets

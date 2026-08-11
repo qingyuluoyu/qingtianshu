@@ -31,6 +31,128 @@ class _FakeStreamingProcess:
         self.terminated = True
 
 
+def test_hermes_text_routes_default_to_deepseek_v4_pro(monkeypatch):
+    for tier in ("ECONOMY", "DEEP"):
+        monkeypatch.delenv(f"HERMES_{tier}_PROVIDER", raising=False)
+        monkeypatch.delenv(f"HERMES_{tier}_MODEL", raising=False)
+
+    assert agent_module._resolve_hermes_route("economy") == (
+        "deepseek",
+        "deepseek-v4-pro",
+    )
+    assert agent_module._resolve_hermes_route("deep") == (
+        "deepseek",
+        "deepseek-v4-pro",
+    )
+
+
+def test_hermes_route_keeps_explicit_override_and_vision_route(monkeypatch):
+    monkeypatch.setenv("HERMES_ECONOMY_PROVIDER", "custom-provider")
+    monkeypatch.setenv("HERMES_ECONOMY_MODEL", "custom-model")
+    monkeypatch.delenv("HERMES_VISION_PROVIDER", raising=False)
+    monkeypatch.delenv("HERMES_VISION_MODEL", raising=False)
+
+    assert agent_module._resolve_hermes_route("economy") == (
+        "custom-provider",
+        "custom-model",
+    )
+    assert agent_module._resolve_hermes_route("vision") == (None, None)
+
+
+def test_hermes_oneshot_fallback_disables_all_tools(
+    tmp_path: Path, settings, monkeypatch
+):
+    hermes_bin = tmp_path / "hermes"
+    hermes_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    hermes_bin.chmod(0o755)
+    guarded_settings = replace(
+        settings,
+        database_path=tmp_path / "oneshot-no-tools.db",
+        workspace_root=tmp_path / "oneshot-no-tools-workspaces",
+        hermes_bin=hermes_bin,
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database.initialize()
+    service = AgentService(database, guarded_settings)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    captured = {}
+
+    class Result:
+        returncode = 0
+        stdout = "只返回研究文本"
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        return Result()
+
+    monkeypatch.setattr("app.services.agent.subprocess.run", fake_run)
+
+    answer, _ = service._execute_hermes(
+        prompt="整理待确认任务，不要执行写入。",
+        model_tier="economy",
+        run_dir=run_dir,
+        user_workspace=tmp_path,
+        image_path=None,
+    )
+
+    assert answer == "只返回研究文本"
+    toolsets_index = captured["command"].index("--toolsets")
+    assert captured["command"][toolsets_index + 1] == "context_engine"
+
+
+def test_market_brief_uses_compact_runtime_skill_without_removing_full_rules():
+    skill_dir = agent_module.PROJECT_ROOT / "app" / "skills" / "market-brief"
+    runtime_path = skill_dir / "PROMPT.md"
+    full_path = skill_dir / "SKILL.md"
+
+    assert runtime_path.exists()
+    assert full_path.exists()
+    assert AgentService._load_skill("market-brief") == runtime_path.read_text(
+        encoding="utf-8"
+    )
+    assert runtime_path.stat().st_size < full_path.stat().st_size * 0.6
+
+
+def test_market_knowledge_context_keeps_two_short_excerpts():
+    compact = AgentService._compact_market_knowledge_context(
+        {
+            "query": "美股为什么跌",
+            "coverage": {"count": 3},
+            "items": [
+                {
+                    "title": f"资料{i}",
+                    "excerpt": "证据" * 400,
+                    "scope": "common",
+                }
+                for i in range(3)
+            ],
+        }
+    )
+
+    assert len(compact["items"]) == 2
+    assert all(len(item["excerpt"]) <= 500 for item in compact["items"])
+
+
+def test_market_knowledge_context_prefers_specific_market_rules():
+    compact = AgentService._compact_market_knowledge_context(
+        {
+            "query": "那主要风险是什么",
+            "items": [
+                {"title": "清数智算证据层级", "excerpt": "通用"},
+                {"title": "市场涨跌原因的证据规则", "excerpt": "原因"},
+                {"title": "市场趋势与风险分析规则", "excerpt": "风险"},
+            ],
+        }
+    )
+
+    assert [item["title"] for item in compact["items"]] == [
+        "市场涨跌原因的证据规则",
+        "市场趋势与风险分析规则",
+    ]
+
+
 def test_numeric_guard_accepts_evidence_rounding_and_rejects_new_targets():
     evidence = {
         "type": "stock_research",
@@ -160,9 +282,7 @@ def test_numeric_guard_understands_english_direction_in_news_titles():
         },
     }
 
-    valid = AgentService._validate_model_output(
-        "资讯标题显示道指约 -0.59%。", evidence
-    )
+    valid = AgentService._validate_model_output("资讯标题显示道指约 -0.59%。", evidence)
     reversed_direction = AgentService._validate_model_output(
         "资讯标题显示道指约 +0.59%。", evidence
     )
@@ -175,17 +295,11 @@ def test_numeric_guard_understands_english_direction_in_news_titles():
 def test_numeric_guard_accepts_one_decimal_percentage_rounding():
     evidence = {
         "type": "market_brief",
-        "indices": [
-            {"name": "标普500", "metrics": {"return_60d_pct": 4.2783}}
-        ],
+        "indices": [{"name": "标普500", "metrics": {"return_60d_pct": 4.2783}}],
     }
 
-    valid = AgentService._validate_model_output(
-        "标普500近60日约 +4.3%。", evidence
-    )
-    invalid = AgentService._validate_model_output(
-        "标普500近60日约 +4.4%。", evidence
-    )
+    valid = AgentService._validate_model_output("标普500近60日约 +4.3%。", evidence)
+    invalid = AgentService._validate_model_output("标普500近60日约 +4.4%。", evidence)
 
     assert valid["passed"] is True
     assert invalid["passed"] is False
@@ -284,21 +398,63 @@ def test_numeric_only_guard_failure_keeps_question_specific_model_answer(
     assert (run_dir / "answer.repaired.md").is_file()
 
 
+def test_trade_review_json_drops_only_unsupported_numeric_clauses(
+    tmp_path: Path, settings, monkeypatch
+):
+    guarded_settings = replace(
+        settings,
+        database_path=tmp_path / "trade-review-guard-repair.db",
+        workspace_root=tmp_path / "workspaces-trade-review-guard-repair",
+        hermes_enabled=True,
+    )
+    database = Database(guarded_settings.database_path, guarded_settings.workspace_root)
+    database.initialize()
+    user = database.create_user("Trade Review Guard Repair User")
+    service = AgentService(database, guarded_settings)
+    model_answer = json.dumps(
+        {
+            "logic_result": (
+                "操作前一日振幅约6.3%，这一计算没有直接写入冻结证据。"
+                "关键经营证据在操作时仍待核验，后续价格变化不能单独证明逻辑正确。"
+            ),
+            "plan_deviation": "实际操作与计划方向一致，但证据核验步骤尚未完成。",
+            "bias_tags": ["行动偏差"],
+            "improvement_text": "下次先记录证据核验节点，再由用户确认复盘。",
+        },
+        ensure_ascii=False,
+    )
+    monkeypatch.setattr(
+        service,
+        "_execute_hermes",
+        lambda **kwargs: (model_answer, {"model": "fake"}),
+    )
+
+    run = service.run(
+        user=user,
+        intent="trade_review",
+        message="复盘这次操作",
+        evidence={"type": "trade_review"},
+        model_tier="economy",
+        execute_agent=True,
+    )
+
+    assert run["status"] == "completed"
+    assert "6.3%" not in run["answer"]
+    assert "关键经营证据" in run["answer"]
+    assert json.loads(run["answer"])["bias_tags"] == ["行动偏差"]
+    assert run["usage"]["output_guard"]["repair"]["method"] == (
+        "drop_unsupported_trade_review_clauses_v1"
+    )
+
+
 def test_output_guard_accepts_numbers_from_prior_guarded_assistant_answer():
     evidence = {
         "type": "market_brief",
         "generated_at": "2026-07-21T04:43:15+00:00",
-        "indices": [
-            {"name": "上证综指", "metrics": {"return_1d_pct": 0.62}}
-        ],
+        "indices": [{"name": "上证综指", "metrics": {"return_1d_pct": 0.62}}],
     }
-    answer = (
-        "上证综指当日上涨 0.62%。市场资讯沿用上一轮已核验时点："
-        "2026-07-21T04:41Z。"
-    )
-    prior_assistant_answer = (
-        "市场资讯截至 2026-07-21T04:41Z；以上只描述当前截面。"
-    )
+    answer = "上证综指当日上涨 0.62%。市场资讯沿用上一轮已核验时点：2026-07-21T04:41Z。"
+    prior_assistant_answer = "市场资讯截至 2026-07-21T04:41Z；以上只描述当前截面。"
 
     without_history = AgentService._validate_model_output(answer, evidence)
     with_history = AgentService._validate_model_output(
@@ -411,9 +567,7 @@ def test_output_guard_rejects_reversed_community_sentiment_direction():
     assert valid["passed"] is True
     assert valid["semantic_conflicts"] == []
     assert invalid["passed"] is False
-    assert invalid["semantic_conflicts"] == [
-        "社区情绪方向与证据不一致：证据为轻微偏多"
-    ]
+    assert invalid["semantic_conflicts"] == ["社区情绪方向与证据不一致：证据为轻微偏多"]
 
 
 def test_market_preview_hides_internal_degradation_language():
@@ -427,9 +581,7 @@ def test_market_preview_hides_internal_degradation_language():
                 "metrics": {"return_1d_pct": -1.23},
             }
         ],
-        "hot_sectors": {
-            "sectors": [{"name": "电力行业", "pct_change": 2.34}]
-        },
+        "hot_sectors": {"sectors": [{"name": "电力行业", "pct_change": 2.34}]},
         "warnings": ["主数据源请求失败，已切换备用源"],
     }
 
@@ -439,6 +591,243 @@ def test_market_preview_hides_internal_degradation_language():
     assert "数据正在更新" not in answer
     assert "数据源" not in answer
     assert "不构成下一交易日方向预测" in answer
+
+
+def test_li_zong_partial_preview_does_not_claim_full_market_has_no_candidates():
+    evidence = {
+        "type": "stock_screen",
+        "status": "partial",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "candidate_pool",
+        "items": [],
+        "data_meta": {
+            "latest_completed_trade_date": "2026-07-22",
+            "universe_count": 5530,
+            "evaluated_symbols": 4400,
+            "remaining_symbols": 1130,
+            "coverage_ratio": 4400 / 5530,
+            "full_market_coverage": False,
+            "deep_check_eligible_count": 1200,
+            "deep_processed_symbols": 70,
+            "deep_remaining_symbols": 1130,
+            "deep_processing_ratio": 70 / 1200,
+            "history_insufficient_count": 180,
+            "history_unknown_count": 20,
+            "deep_check_complete": False,
+            "actionable_candidate_count": 0,
+        },
+        "boundary": "只生成研究候选和人工复核触发，不构成买卖建议。",
+    }
+
+    answer = AgentService._render_preview(evidence)
+
+    assert "全市场名单为 5530 只" in answer
+    assert "4400/5530 只已形成市值预筛或规则状态" in answer
+    assert "不是深度规则完成率" in answer
+    assert "可深度核验 1200 只" in answer
+    assert "已深度处理 70/1200 只" in answer
+    assert "上市后量价历史不足" in answer
+    assert "财务历史已经完整" in answer
+    assert "当前已深度处理范围内尚无" in answer
+    assert "不能推断尚待深度处理" in answer
+    assert "这个0只只代表当前已深度处理范围" in answer
+    assert "不构成买卖建议" in answer
+    assert "全市场深度规则计算已经完成" not in answer
+
+
+def test_li_zong_guard_rejects_invented_review_cycle_and_rule_bottleneck():
+    evidence = {
+        "type": "stock_screen",
+        "status": "partial",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "candidate_pool",
+        "items": [],
+        "data_meta": {
+            "latest_completed_trade_date": "2026-07-22",
+            "universe_count": 5530,
+            "evaluated_symbols": 4464,
+            "remaining_symbols": 1066,
+            "coverage_ratio": 4464 / 5530,
+            "full_market_coverage": False,
+            "deep_check_eligible_count": 1200,
+            "deep_processed_symbols": 134,
+            "deep_remaining_symbols": 1066,
+            "deep_processing_ratio": 134 / 1200,
+            "history_insufficient_count": 180,
+            "history_unknown_count": 20,
+            "deep_check_complete": False,
+            "actionable_candidate_count": 0,
+        },
+    }
+    answer = (
+        "截至2026-07-22，当前已评估4464/5530只，仍有1066只待处理。"
+        "当前已评估范围内没有候选，未处理股票不能推断为通过或不通过。"
+        "该策略只生成研究候选和人工复核触发，不构成推荐、评级或交易建议。\n"
+        "尤其连续五年ROE与近十日涨停同时满足的股票极少。\n"
+        "下一步按T+3周期复核候选池。"
+    )
+    answer = AgentService._normalize_li_zong_scope_answer(answer, evidence)
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is False
+    assert (
+        agent_module._LI_ZONG_RULE_BOTTLENECK_LABEL
+        in guard["unsupported_market_inferences"]
+    )
+    assert (
+        agent_module._STOCK_OBSERVATION_WINDOW_LABEL
+        in guard["unsupported_market_inferences"]
+    )
+    repaired = AgentService._repair_guard_failure(answer, evidence, guard)
+    assert repaired is not None
+    repaired_answer, repaired_guard = repaired
+    assert repaired_guard["passed"] is True
+    assert "当前已评估范围内没有候选" in repaired_answer
+    assert "极少" not in repaired_answer
+    assert "T+3" not in repaired_answer
+
+
+def test_li_zong_scope_normalization_replaces_legacy_coverage_with_deep_progress():
+    evidence = {
+        "type": "stock_screen",
+        "status": "partial",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "candidate_pool",
+        "items": [],
+        "data_meta": {
+            "latest_completed_trade_date": "2026-07-22",
+            "universe_count": 5530,
+            "evaluated_symbols": 5090,
+            "remaining_symbols": 440,
+            "coverage_ratio": 5090 / 5530,
+            "full_market_coverage": False,
+            "deep_check_eligible_count": 1016,
+            "deep_processed_symbols": 576,
+            "deep_remaining_symbols": 440,
+            "deep_processing_ratio": 576 / 1016,
+            "history_insufficient_count": 200,
+            "history_unknown_count": 154,
+            "deep_check_complete": False,
+            "actionable_candidate_count": 0,
+        },
+    }
+    legacy = (
+        "李总策略数据交易日为 2026-07-22；当前已评估 5090/5530 只"
+        "（92.0%），仍有 440 只待处理。\n\n"
+        "当前已评估范围内尚无股票进入候选池或触发池。"
+    )
+
+    normalized = AgentService._normalize_li_zong_scope_answer(legacy, evidence)
+
+    assert "全市场名单为 5530 只" in normalized
+    assert "已深度处理 576/1016 只" in normalized
+    assert "上市后量价历史不足" in normalized
+    assert "154 只股票不能仅凭上市日期确认五年ROE是否可得" in normalized
+    assert "当前已评估 5090/5530" not in normalized
+    assert "不是深度规则完成率" in normalized
+    assert "这个0只只代表当前已深度处理范围" in normalized
+
+
+def test_li_zong_multi_symbol_normalization_hides_provider_quota_error():
+    evidence = {
+        "type": "stock_screen",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "symbol_comparison",
+        "requested_symbols": ["001391.SZ"],
+        "items": [
+            {
+                "name": "国货航",
+                "internal_symbol": "001391.SZ",
+                "status": "data_incomplete",
+                "as_of_date": "2026-07-22",
+                "rule_results": [
+                    {
+                        "rule_id": "LZ-C-01",
+                        "status": "data_incomplete",
+                        "limitations": ["最近一年完整交易日不足。"],
+                    }
+                ],
+                "limitations": ["上市后量价历史预判未达到策略最小窗口。"],
+            }
+        ],
+        "strategy": {
+            "version": {
+                "rules": [{"rule_id": "LZ-C-01", "label": "近一年至少6次收盘涨停"}]
+            }
+        },
+        "data_meta": {
+            "latest_completed_trade_date": "2026-07-22",
+            "universe_count": 5530,
+            "evaluated_symbols": 5300,
+            "coverage_ratio": 5300 / 5530,
+            "deep_check_eligible_count": 1169,
+            "deep_processed_symbols": 896,
+            "deep_remaining_symbols": 273,
+            "deep_processing_ratio": 896 / 1169,
+            "history_insufficient_count": 47,
+            "history_unknown_count": 153,
+            "actionable_candidate_count": 0,
+            "deep_check_complete": False,
+        },
+        "boundary": "不构成买卖建议。",
+    }
+    raw_error = (
+        "HTTP 403: You've reached your usage limit for this billing cycle. "
+        "Upgrade your plan: https://www.kimi.com/code/#pricing"
+    )
+
+    normalized = AgentService._normalize_li_zong_symbol_answer(raw_error, evidence)
+
+    assert "国货航（001391.SZ）" in normalized
+    assert "HTTP 403" not in normalized
+    assert "kimi.com" not in normalized
+
+
+def test_li_zong_multi_symbol_preview_hides_internal_status_and_cleans_punctuation():
+    evidence = {
+        "type": "stock_screen",
+        "profile": {"key": "li_zong", "label": "李总策略"},
+        "selection_mode": "symbol_comparison",
+        "requested_symbols": ["600777.SS"],
+        "items": [
+            {
+                "name": "新潮能源",
+                "internal_symbol": "600777.SS",
+                "status": "data_incomplete",
+                "rule_results": [],
+                "limitations": [
+                    "已存在明确不通过规则，同时仍有数据缺口；在关键缺口补齐前按数据不完整处理。",
+                    "关键数据集或规则窗口不完整，服务层强制保持 data_incomplete。",
+                ],
+            }
+        ],
+        "strategy": {"version": {"rules": []}},
+        "data_meta": {
+            "latest_completed_trade_date": "2026-07-22",
+            "universe_count": 5530,
+            "evaluated_symbols": 5350,
+            "coverage_ratio": 5350 / 5530,
+            "deep_check_eligible_count": 1169,
+            "deep_processed_symbols": 912,
+            "deep_remaining_symbols": 257,
+            "deep_processing_ratio": 912 / 1169,
+            "history_insufficient_count": 47,
+            "history_unknown_count": 153,
+            "actionable_candidate_count": 0,
+            "deep_check_complete": False,
+        },
+        "boundary": "不构成买卖建议。",
+    }
+
+    preview = AgentService._render_li_zong_preview(evidence)
+
+    assert "新潮能源（600777.SS）" in preview
+    assert "data_incomplete" not in preview
+    assert "not_qualified" not in preview
+    assert "服务层强制" not in preview
+    assert "。；" not in preview
+    assert preview.count("按数据不完整处理") == 1
 
 
 def test_prompt_evidence_and_output_guard_hide_provider_operations():
@@ -505,9 +894,7 @@ def test_failed_model_guard_falls_back_to_deterministic_preview(
     assert "目标价9999" not in run["answer"]
     assert "尚未进入长期记忆" in run["answer"]
     assert "确定性证据守卫" in run["error"]
-    guard_path = (
-        Path(run["workspace_path"]) / "runs" / run["id"] / "output_guard.json"
-    )
+    guard_path = Path(run["workspace_path"]) / "runs" / run["id"] / "output_guard.json"
     assert guard_path.is_file()
     assert (
         Path(run["workspace_path"]) / "runs" / run["id"] / "answer.rejected.md"
@@ -598,9 +985,7 @@ def test_economy_stock_prompt_compacts_large_event_and_fundamental_payloads():
             "operating_comparison": {
                 "status": "available",
                 "anchor_report_date": "2026-03-31",
-                "subject": {
-                    "business_profile": {"anchor_report_date": "2025-12-31"}
-                },
+                "subject": {"business_profile": {"anchor_report_date": "2025-12-31"}},
                 "metrics": {
                     "gross_margin_pct": {
                         "subject_value": 28.0,
@@ -613,9 +998,7 @@ def test_economy_stock_prompt_compacts_large_event_and_fundamental_payloads():
                         "symbol": "600498.SS",
                         "name": "烽火通信",
                         "status": "comparable",
-                        "business_profile": {
-                            "anchor_report_date": "2025-12-31"
-                        },
+                        "business_profile": {"anchor_report_date": "2025-12-31"},
                     }
                 ],
             },
@@ -631,16 +1014,23 @@ def test_economy_stock_prompt_compacts_large_event_and_fundamental_payloads():
     assert len(compact["a_share_information"]["announcements"]) == 4
     assert compact["a_share_information"]["sentiment"]["band"] == "轻微偏多"
     assert "financial_periods" not in compact["fundamentals"]
-    assert compact["fundamentals"]["summary"]["latest_report"][
-        "net_profit_yoy_pct"
-    ] == -46.58
+    assert (
+        compact["fundamentals"]["summary"]["latest_report"]["net_profit_yoy_pct"]
+        == -46.58
+    )
     assert compact["peer_comparison"]["group_label"] == "通信设备固定同行"
-    assert compact["peer_comparison"]["operating_comparison"]["metrics"][
-        "gross_margin_pct"
-    ]["peer_sample_size"] == 3
-    assert compact["peer_comparison"]["operating_comparison"]["peers"][0][
-        "business_profile"
-    ]["anchor_report_date"] == "2025-12-31"
+    assert (
+        compact["peer_comparison"]["operating_comparison"]["metrics"][
+            "gross_margin_pct"
+        ]["peer_sample_size"]
+        == 3
+    )
+    assert (
+        compact["peer_comparison"]["operating_comparison"]["peers"][0][
+            "business_profile"
+        ]["anchor_report_date"]
+        == "2025-12-31"
+    )
 
 
 def test_peer_operating_guard_rejects_rankings_and_false_business_period_claims():
@@ -666,41 +1056,35 @@ def test_peer_operating_guard_rejects_rankings_and_false_business_period_claims(
                     }
                 },
                 "peers": [
-                        {
+                    {
+                        "name": "烽火通信",
+                        "financial": {
                             "name": "烽火通信",
-                            "financial": {
-                                "name": "烽火通信",
-                                "net_profit_yoy_pct": -30.44,
-                                "parent_net_profit": 38_392_482.56,
-                                "notice_date": "2026-04-30",
-                            },
-                        "business_profile": {
-                            "anchor_report_date": "2025-12-31"
+                            "net_profit_yoy_pct": -30.44,
+                            "parent_net_profit": 38_392_482.56,
+                            "notice_date": "2026-04-30",
                         },
+                        "business_profile": {"anchor_report_date": "2025-12-31"},
                     },
-                        {
+                    {
+                        "name": "紫光股份",
+                        "financial": {
                             "name": "紫光股份",
-                            "financial": {
-                                "name": "紫光股份",
-                                "net_profit_yoy_pct": 126.06,
-                                "parent_net_profit": 787_908_617.19,
-                                "notice_date": "2026-04-29",
-                            },
-                        "business_profile": {
-                            "anchor_report_date": "2025-12-31"
+                            "net_profit_yoy_pct": 126.06,
+                            "parent_net_profit": 787_908_617.19,
+                            "notice_date": "2026-04-29",
                         },
+                        "business_profile": {"anchor_report_date": "2025-12-31"},
                     },
-                        {
+                    {
+                        "name": "锐捷网络",
+                        "financial": {
                             "name": "锐捷网络",
-                            "financial": {
-                                "name": "锐捷网络",
-                                "net_profit_yoy_pct": 14.59,
-                                "parent_net_profit": 122_924_259.41,
-                                "notice_date": "2026-04-21",
-                            },
-                        "business_profile": {
-                            "anchor_report_date": "2025-12-31"
+                            "net_profit_yoy_pct": 14.59,
+                            "parent_net_profit": 122_924_259.41,
+                            "notice_date": "2026-04-21",
                         },
+                        "business_profile": {"anchor_report_date": "2025-12-31"},
                     },
                 ],
             }
@@ -711,42 +1095,47 @@ def test_peer_operating_guard_rejects_rankings_and_false_business_period_claims(
         "中兴通讯在样本中最低，因此经营表现更差。", evidence
     )
     assert ranking["passed"] is False
-    assert "固定同行经营比较不得输出公司排名或优劣评级" in ranking[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "固定同行经营比较不得输出公司排名或优劣评级"
+        in ranking["unsupported_market_inferences"]
+    )
 
     wrong_period = AgentService._validate_model_output(
         "四家公司主营构成不是统一报告期，只能分别观察。", evidence
     )
     assert wrong_period["passed"] is False
-    assert "主营构成报告期必须与证据逐家公司一致" in wrong_period[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "主营构成报告期必须与证据逐家公司一致"
+        in wrong_period["unsupported_market_inferences"]
+    )
 
     unsupported_cause = AgentService._validate_model_output(
         "紫光股份的低毛利率主要受IT分销业务拖累。", evidence
     )
     assert unsupported_cause["passed"] is False
-    assert "同行业务结构差异不能自动改写为经营指标差异的原因" in unsupported_cause[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "同行业务结构差异不能自动改写为经营指标差异的原因"
+        in unsupported_cause["unsupported_market_inferences"]
+    )
 
     wrong_ratio_logic = AgentService._validate_model_output(
         "中兴和烽火负利润增速会放大经营现金流/净利润的比值负数。",
         evidence,
     )
     assert wrong_ratio_logic["passed"] is False
-    assert "净利润同比方向不能解释经营现金流比值" in wrong_ratio_logic[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "净利润同比方向不能解释经营现金流比值"
+        in wrong_ratio_logic["unsupported_market_inferences"]
+    )
 
     wrong_money_unit = AgentService._validate_model_output(
         "烽火通信本期净利润0.038亿元。", evidence
     )
     assert wrong_money_unit["passed"] is False
-    assert "同行净利润亿元换算必须与结构化财务一致" in wrong_money_unit[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "同行净利润亿元换算必须与结构化财务一致"
+        in wrong_money_unit["unsupported_market_inferences"]
+    )
     repaired_money = AgentService._repair_guard_failure(
         "烽火通信本期净利润0.038亿元。", evidence, wrong_money_unit
     )
@@ -774,25 +1163,28 @@ def test_peer_operating_guard_rejects_rankings_and_false_business_period_claims(
         "来源：财务数据均为2026一季报（2026-04-25公告）。", evidence
     )
     assert wrong_notice_date["passed"] is False
-    assert "同行公告日期不能用单一日期概括" in wrong_notice_date[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "同行公告日期不能用单一日期概括"
+        in wrong_notice_date["unsupported_market_inferences"]
+    )
 
     composition_math = AgentService._validate_model_output(
         "紫光股份应收账款加销售方和合并抵消后占比超过100%。", evidence
     )
     assert composition_math["passed"] is False
-    assert "主营构成不得自行加总或混入非分部字段" in composition_math[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "主营构成不得自行加总或混入非分部字段"
+        in composition_math["unsupported_market_inferences"]
+    )
 
     wrong_margin_source = AgentService._validate_model_output(
         "中兴通讯分部毛利率在三表中未披露。", evidence
     )
     assert wrong_margin_source["passed"] is False
-    assert "主营构成毛利率必须使用年报或中报口径" in wrong_margin_source[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "主营构成毛利率必须使用年报或中报口径"
+        in wrong_margin_source["unsupported_market_inferences"]
+    )
 
     answer = (
         "### 净利润同比\n\n"
@@ -863,14 +1255,17 @@ def test_market_prompt_keeps_only_the_requested_market_and_relevant_material():
             "market_label": "美股",
             "question_focus": "market_cause",
             "items": [
-                {"title": f"资讯{i}", "published_at": "2026-07-21"}
-                for i in range(10)
+                {"title": f"资讯{i}", "published_at": "2026-07-21"} for i in range(10)
             ],
         },
         "knowledge_context": {
             "query": "美股为什么跌",
             "items": [
-                {"title": "市场涨跌原因的证据规则", "scope": "common", "excerpt": "规则"},
+                {
+                    "title": "市场涨跌原因的证据规则",
+                    "scope": "common",
+                    "excerpt": "规则",
+                },
                 {"title": "用户的美股笔记", "scope": "user", "excerpt": "笔记"},
                 {"title": "多余资料", "scope": "common", "excerpt": "多余"},
                 {"title": "第四份资料", "scope": "common", "excerpt": "多余"},
@@ -1006,7 +1401,7 @@ def test_market_sector_prompt_keeps_breadth_evidence_but_drops_unrelated_metrics
                     "latest": 9999,
                 }
                 for i in range(10)
-            ]
+            ],
         },
         "market_breadth": {
             "status": "available",
@@ -1081,12 +1476,8 @@ def test_market_sector_prompt_keeps_breadth_evidence_but_drops_unrelated_metrics
     assert compact["market_state"]["advance_ratio"] == 1.0
     assert compact["market_state"]["breadth_scope"] == "china_representative_indices"
     assert compact["market_breadth"]["breadth"]["advancers"] == 3107
-    assert compact["market_breadth"]["turnover"]["total_amount_100m_cny"] == (
-        12_340.0
-    )
-    assert compact["market_breadth"]["distribution"]["median_pct_change"] == (
-        0.72
-    )
+    assert compact["market_breadth"]["turnover"]["total_amount_100m_cny"] == (12_340.0)
+    assert compact["market_breadth"]["distribution"]["median_pct_change"] == (0.72)
     assert compact["market_breadth"]["snapshot_local_time"] == "2026-07-21 15:00"
 
 
@@ -1256,9 +1647,7 @@ def test_market_guard_rejects_news_absorption_and_coverage_overclaims():
                 "metrics": {"return_1d_pct": 1.79},
             }
         ],
-        "market_drivers": {
-            "items": [{"title": "多家机构发布A股观点"}]
-        },
+        "market_drivers": {"items": [{"title": "多家机构发布A股观点"}]},
     }
     absorption = AgentService._validate_model_output(
         "上证综指上涨1.79%。机构唱多消息已被市场消化。",
@@ -1312,15 +1701,12 @@ def test_market_guard_requires_turnover_snapshot_date_when_user_asks_time(settin
         trusted_context=None,
     )
 
-    assert "全市场成交额时间必须引用市场快照日期" in missing_date[
-        "semantic_conflicts"
-    ]
-    assert "全市场成交额时间必须引用市场快照日期" not in safe[
-        "semantic_conflicts"
-    ]
-    assert "已有全市场快照日期时不能声称成交额日期缺失" in false_missing[
-        "unsupported_market_inferences"
-    ]
+    assert "全市场成交额时间必须引用市场快照日期" in missing_date["semantic_conflicts"]
+    assert "全市场成交额时间必须引用市场快照日期" not in safe["semantic_conflicts"]
+    assert (
+        "已有全市场快照日期时不能声称成交额日期缺失"
+        in false_missing["unsupported_market_inferences"]
+    )
 
 
 def test_market_guard_accepts_natural_turnover_time_and_negative_boundary(settings):
@@ -1507,10 +1893,7 @@ def test_numeric_guard_accepts_parenthesized_distribution_ratios():
             }
         },
     }
-    answer = (
-        "尾部下跌个股444家（8.0%），"
-        "温和下跌个股1856家（33.6%）。"
-    )
+    answer = "尾部下跌个股444家（8.0%），温和下跌个股1856家（33.6%）。"
 
     guard = AgentService._validate_model_output(answer, evidence)
 
@@ -1552,8 +1935,7 @@ def test_market_guard_rejects_turnover_double_count_explanation():
         },
     }
     answer = (
-        "全市场成交额为29734.49亿元。"
-        "同一笔交易同时计入买卖双方，所以成交额会翻倍。"
+        "全市场成交额为29734.49亿元。同一笔交易同时计入买卖双方，所以成交额会翻倍。"
     )
 
     guard = AgentService._validate_model_output(answer, evidence)
@@ -1799,8 +2181,7 @@ def test_market_guard_requires_fixed_breadth_classification_when_data_exists():
     }
 
     safe = AgentService._validate_model_output(
-        "上涨3107家、下跌2300家、平盘121家，固定分类为上涨家数占优，"
-        "未达到普涨阈值。",
+        "上涨3107家、下跌2300家、平盘121家，固定分类为上涨家数占优，未达到普涨阈值。",
         evidence,
     )
     overclaim = AgentService._validate_model_output(
@@ -1880,9 +2261,7 @@ def test_market_guard_accepts_evidenced_breadth_ratios_and_classification_rule()
         "当前上涨比例56.2%未达到65%门槛，因此固定分类是上涨家数占优，"
         "不是普涨。"
     )
-    detailed_guard = AgentService._validate_model_output(
-        detailed_rule_answer, evidence
-    )
+    detailed_guard = AgentService._validate_model_output(detailed_rule_answer, evidence)
 
     assert detailed_guard["passed"] is True
 
@@ -1965,9 +2344,9 @@ def test_market_guard_rejects_sector_ranking_as_concentration_proof():
     )
 
     assert guard["passed"] is False
-    assert "热门板块排序不能证明板块集中度较高" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "热门板块排序不能证明板块集中度较高" in guard["unsupported_market_inferences"]
+    )
 
 
 def test_market_guard_rejects_return_assigned_to_unavailable_index():
@@ -1998,9 +2377,10 @@ def test_market_guard_rejects_return_assigned_to_unavailable_index():
     )
 
     assert guard["passed"] is False
-    assert "缺失收益的指数不能引用其他指数的涨跌幅" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "缺失收益的指数不能引用其他指数的涨跌幅"
+        in guard["unsupported_market_inferences"]
+    )
     assert cautious["passed"] is True
 
 
@@ -2030,8 +2410,7 @@ def test_market_guard_uses_available_turnover_and_distribution_evidence():
         "全市场成交额12340亿元，说明机构资金净流入。", evidence
     )
     safe = AgentService._validate_model_output(
-        "全市场成交额12340亿元，个股涨跌幅中位数0.72%。"
-        "成交额不是资金净流入。",
+        "全市场成交额12340亿元，个股涨跌幅中位数0.72%。成交额不是资金净流入。",
         evidence,
     )
 
@@ -2041,9 +2420,10 @@ def test_market_guard_uses_available_turnover_and_distribution_evidence():
         "已有全市场成交额时不能声称该数据缺失",
     }
     assert false_flow["passed"] is False
-    assert "成交量或量比不能直接证明增量资金入场或资金流向" in false_flow[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "成交量或量比不能直接证明增量资金入场或资金流向"
+        in false_flow["unsupported_market_inferences"]
+    )
     assert safe["passed"] is True
 
 
@@ -2095,8 +2475,7 @@ def test_market_guard_rejects_unproven_first_repair_and_low_price_zone():
         ],
     }
     answer = (
-        "这是近5日内首次出现的明显修复。\n"
-        "20日累计下跌5.89%，说明指数处于低价区间。"
+        "这是近5日内首次出现的明显修复。\n20日累计下跌5.89%，说明指数处于低价区间。"
     )
 
     guard = AgentService._validate_model_output(answer, evidence)
@@ -2240,9 +2619,7 @@ def test_market_prompt_history_keeps_user_questions_but_drops_prior_answers():
 def test_market_guard_rejects_max_drawdown_position_and_loss_overclaims():
     evidence = {
         "type": "market_brief",
-        "indices": [
-            {"metrics": {"max_drawdown_60d_pct": -11.2766}}
-        ],
+        "indices": [{"metrics": {"max_drawdown_60d_pct": -11.2766}}],
     }
     answer = (
         "近60日最大回撤为-11.28%，当前处于60日低位区间。\n"
@@ -2269,9 +2646,7 @@ def test_model_language_cleanup_hides_internal_evidence_packet_wording():
 def test_market_guard_rejects_misreading_five_twenty_volume_ratio_as_today():
     evidence = {
         "type": "market_brief",
-        "indices": [
-            {"metrics": {"volume_ratio_5_20": 3.927}}
-        ],
+        "indices": [{"metrics": {"volume_ratio_5_20": 3.927}}],
     }
 
     valid = AgentService._validate_model_output(
@@ -2305,22 +2680,19 @@ def test_model_language_cleanup_translates_raw_market_field_names():
     )
 
     assert cleaned == (
-        "两者的技术状态均为动量转弱，5/20日均量比为3.9，"
-        "板块按涨跌幅排序。"
+        "两者的技术状态均为动量转弱，5/20日均量比为3.9，板块按涨跌幅排序。"
     )
 
 
 def test_model_language_cleanup_hides_internal_ingestion_wording():
     cleaned = AgentService._clean_user_facing_model_language(
-        "根据当前确定性证据包，当前已接入资料未披露全市场涨跌家数，"
-        "北向数据尚未接入。"
+        "根据当前确定性证据包，当前已接入资料未披露全市场涨跌家数，北向数据尚未接入。"
     )
 
     assert "当前当前" not in cleaned
     assert "接入" not in cleaned
     assert cleaned == (
-        "根据当前可验证证据，现有证据没有提供全市场涨跌家数，"
-        "北向数据当前证据未提供。"
+        "根据当前可验证证据，现有证据没有提供全市场涨跌家数，北向数据当前证据未提供。"
     )
 
 
@@ -2337,10 +2709,7 @@ def test_market_guard_hides_stale_utc_and_raw_field_status_from_users():
         "type": "market_brief",
         "generated_at": "2026-07-21T07:00:00+00:00",
     }
-    answer = (
-        "板块数据标记为已过时（06:57 UTC）。\n"
-        "technical_state字段显示动量转弱。"
-    )
+    answer = "板块数据标记为已过时（06:57 UTC）。\ntechnical_state字段显示动量转弱。"
 
     guard = AgentService._validate_model_output(answer, evidence)
 
@@ -2403,25 +2772,20 @@ def test_market_risk_prompt_keeps_focused_news_and_metric_meanings():
             "market_key": "china",
             "items": [{"title": "用于反方核验的市场资讯"}],
         },
-        "hot_sectors": {
-            "sectors": [{"name": "不应进入风险提示词的板块"}]
-        },
+        "hot_sectors": {"sectors": [{"name": "不应进入风险提示词的板块"}]},
     }
 
     compact = AgentService._compact_market_brief_evidence(evidence)
 
-    assert compact["market_drivers"]["items"] == [
-        {"title": "用于反方核验的市场资讯"}
-    ]
+    assert compact["market_drivers"]["items"] == [{"title": "用于反方核验的市场资讯"}]
     assert "hot_sectors" not in compact
     assert "最近5个交易日累计收益" in compact["metric_definitions"]["return_5d_pct"]
     assert compact["indices"][0]["metrics"]["return_60d_pct"] == 3.2
-    assert "最近60个交易日累计收益" in compact["metric_definitions"][
-        "return_60d_pct"
-    ]
-    assert "不能与路径最大回撤直接比较" in compact["metric_definitions"][
-        "volatility_20d_annualized_pct"
-    ]
+    assert "最近60个交易日累计收益" in compact["metric_definitions"]["return_60d_pct"]
+    assert (
+        "不能与路径最大回撤直接比较"
+        in compact["metric_definitions"]["volatility_20d_annualized_pct"]
+    )
     assert "不能乘以天数累积" in compact["metric_definitions"]["atr_14_pct"]
 
 
@@ -2448,9 +2812,7 @@ def test_market_overview_prompt_keeps_explicitly_requested_60d_return():
 
     assert compact["indices"][0]["metrics"]["return_20d_pct"] == -1.22
     assert compact["indices"][0]["metrics"]["return_60d_pct"] == 5.76
-    assert "最近60个交易日累计收益" in compact["metric_definitions"][
-        "return_60d_pct"
-    ]
+    assert "最近60个交易日累计收益" in compact["metric_definitions"]["return_60d_pct"]
 
 
 def test_market_guard_rejects_intraday_claim_from_annualized_volatility():
@@ -2592,9 +2954,9 @@ def test_market_guard_rejects_three_major_indices_heading_for_four_index_packet(
     guard = AgentService._validate_model_output(answer, evidence)
 
     assert guard["passed"] is False
-    assert "三大指数表述不能与四个代表性指数混用" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "三大指数表述不能与四个代表性指数混用" in guard["unsupported_market_inferences"]
+    )
 
 
 def test_market_guard_allows_news_title_three_indices_and_factual_atr_value():
@@ -2741,17 +3103,11 @@ def test_market_guard_rejects_index_trend_state_mismatch():
             }
         ],
     }
-    wrong = AgentService._validate_model_output(
-        "纳指的中期趋势状态为偏弱。", evidence
-    )
-    safe = AgentService._validate_model_output(
-        "纳指的趋势状态为趋势分化。", evidence
-    )
+    wrong = AgentService._validate_model_output("纳指的中期趋势状态为偏弱。", evidence)
+    safe = AgentService._validate_model_output("纳指的趋势状态为趋势分化。", evidence)
 
     assert wrong["passed"] is False
-    assert wrong["unsupported_market_inferences"] == [
-        "指数趋势状态必须与当前证据一致"
-    ]
+    assert wrong["unsupported_market_inferences"] == ["指数趋势状态必须与当前证据一致"]
     assert safe["passed"] is True
 
 
@@ -2866,9 +3222,7 @@ def test_stock_guard_rejects_invented_failure_thresholds_and_report_windows():
             "invalidation": "价格跨越关键参考位后必须重算。",
         },
         "analysis_board": {
-            "tracking_plan": [
-                {"horizon_sessions": 5, "checks": ["复核价格和公告证据"]}
-            ]
+            "tracking_plan": [{"horizon_sessions": 5, "checks": ["复核价格和公告证据"]}]
         },
     }
     answer = (
@@ -2881,9 +3235,10 @@ def test_stock_guard_rejects_invented_failure_thresholds_and_report_windows():
     guard = AgentService._validate_model_output(answer, evidence)
 
     assert guard["passed"] is False
-    assert "个股失效条件只能使用证据包已有阈值和观察周期" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "个股失效条件只能使用证据包已有阈值和观察周期"
+        in guard["unsupported_market_inferences"]
+    )
 
 
 def test_stock_guard_accepts_deterministic_failure_condition_from_outlook():
@@ -2914,6 +3269,38 @@ def test_stock_guard_accepts_deterministic_failure_condition_from_outlook():
     assert guard["passed"] is True
 
 
+def test_stock_guard_does_not_treat_inline_failure_condition_as_section_heading():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "今天的下跌是否改变原判断？",
+        "price_levels": {"ma20": 37.28, "ma60": 37.3},
+        "conditional_outlook": {
+            "horizon": "未来 5—20 个交易日",
+            "scenarios": [
+                {
+                    "name": "下行风险",
+                    "condition": "收盘跌破关键参考位37.3，同时20日收益继续恶化",
+                }
+            ],
+            "invalidation": "价格跨越关键参考位后必须重算。",
+        },
+        "analysis_board": {"tracking_plan": []},
+    }
+    answer = (
+        "**价格关系**\n"
+        "7月22日发布公告；7月23日需要核验实际影响。条件展望仍为震荡观察，"
+        "其下行失效条件是收盘跌破关键参考位37.3，"
+        "同时20日收益继续恶化。\n\n"
+        "**反方证据**\n"
+        "2026一季报净利润同比下降46.58%，需要继续复核盈利兑现。"
+    )
+
+    assert (
+        agent_module._has_unsupported_stock_failure_threshold(answer, evidence) is False
+    )
+
+
 def test_stock_guard_rejects_invented_observation_window_and_report_month():
     evidence = {
         "type": "stock_research",
@@ -2940,12 +3327,14 @@ def test_stock_guard_rejects_invented_observation_window_and_report_month():
     guard = AgentService._validate_model_output(answer, evidence)
 
     assert guard["passed"] is False
-    assert "个股观察周期只能使用研究计划已有交易日窗口" in guard[
-        "unsupported_market_inferences"
-    ]
-    assert "缺少披露日历证据时不能预测下一份报告日期" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "个股观察周期只能使用研究计划已有交易日窗口"
+        in guard["unsupported_market_inferences"]
+    )
+    assert (
+        "缺少披露日历证据时不能预测下一份报告日期"
+        in guard["unsupported_market_inferences"]
+    )
 
 
 def test_model_language_cleanup_repairs_wireless_access_typo():
@@ -2980,12 +3369,10 @@ def test_stock_guard_rejects_report_date_and_drawdown_window_conflicts():
     guard = AgentService._validate_model_output(answer, evidence)
 
     assert guard["passed"] is False
-    assert "财报公告日期必须与结构化报告一致" in guard[
-        "unsupported_market_inferences"
-    ]
-    assert "最大回撤观察窗口必须与确定性指标一致" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert "财报公告日期必须与结构化报告一致" in guard["unsupported_market_inferences"]
+    assert (
+        "最大回撤观察窗口必须与确定性指标一致" in guard["unsupported_market_inferences"]
+    )
 
 
 def test_stock_guard_does_not_treat_percentage_near_announcement_as_notice_date():
@@ -3011,9 +3398,9 @@ def test_stock_guard_does_not_treat_percentage_near_announcement_as_notice_date(
     )
 
     assert guard["passed"] is True
-    assert "财报公告日期必须与结构化报告一致" not in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "财报公告日期必须与结构化报告一致" not in guard["unsupported_market_inferences"]
+    )
 
 
 def test_stock_guard_rejects_relabeling_stale_daily_bar_as_today():
@@ -3036,12 +3423,13 @@ def test_stock_guard_rejects_relabeling_stale_daily_bar_as_today():
     )
 
     assert guard["passed"] is False
-    assert "今日涨跌方向必须与更新的当前报价一致" in guard[
-        "unsupported_market_inferences"
-    ]
-    assert "今日或当前价格必须优先使用更新的报价快照" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "今日涨跌方向必须与更新的当前报价一致" in guard["unsupported_market_inferences"]
+    )
+    assert (
+        "今日或当前价格必须优先使用更新的报价快照"
+        in guard["unsupported_market_inferences"]
+    )
 
 
 def test_stock_guard_accepts_current_quote_with_prior_daily_bar_distinction():
@@ -3094,9 +3482,7 @@ def test_stock_guard_rejects_current_quote_relabelled_as_today_close():
     guard = AgentService._validate_model_output(answer, evidence)
 
     assert guard["passed"] is False
-    assert "更新的报价快照不能写成当日收盘" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert "更新的报价快照不能写成当日收盘" in guard["unsupported_market_inferences"]
 
 
 def test_current_quote_semantics_normalizer_preserves_history_close():
@@ -3109,14 +3495,11 @@ def test_current_quote_semantics_normalizer_preserves_history_close():
             "pct_change": 8.54,
             "market_timestamp": "2026-07-22T11:10:15+08:00",
         },
-        "stock_market_context": {
-            "analysis_target": {"basis": "current_quote"}
-        },
+        "stock_market_context": {"analysis_target": {"basis": "current_quote"}},
     }
 
     normalized = agent_module._normalize_current_quote_semantics(
-        "中兴通讯今日以37.86元收盘，涨幅8.54%。\n"
-        "上一完整日线收盘34.88元。",
+        "中兴通讯今日以37.86元收盘，涨幅8.54%。\n上一完整日线收盘34.88元。",
         evidence,
     )
 
@@ -3135,9 +3518,7 @@ def test_current_quote_semantics_preserves_intraday_boundary_language():
             "pct_change": 10.01,
             "market_timestamp": "2026-07-22T13:00:06+08:00",
         },
-        "stock_market_context": {
-            "analysis_target": {"basis": "current_quote"}
-        },
+        "stock_market_context": {"analysis_target": {"basis": "current_quote"}},
     }
     answer = (
         "目前是盘中上涨，尚未收盘。"
@@ -3169,9 +3550,7 @@ def test_post_close_quote_semantics_remove_false_intraday_boundary():
             "quote_label": "收盘后最新报价",
             "complete_daily_bar_confirmed": False,
         },
-        "stock_market_context": {
-            "analysis_target": {"basis": "current_quote"}
-        },
+        "stock_market_context": {"analysis_target": {"basis": "current_quote"}},
     }
     answer = "该报价属于盘中报价，尚未收盘，收盘前仍可能变化。"
 
@@ -3184,9 +3563,10 @@ def test_post_close_quote_semantics_remove_false_intraday_boundary():
     assert "市场已经收盘" in normalized
     assert "当日交易已经结束" in normalized
     assert guard["passed"] is False
-    assert "收盘后报价不能继续描述为盘中或尚未收盘" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "收盘后报价不能继续描述为盘中或尚未收盘"
+        in guard["unsupported_market_inferences"]
+    )
 
 
 def test_current_quote_close_normalizer_preserves_market_status_and_repairs_price():
@@ -3200,9 +3580,7 @@ def test_current_quote_close_normalizer_preserves_market_status_and_repairs_pric
             "market_timestamp": "2026-07-22T15:06:30+08:00",
             "quote_basis": "post_close_snapshot",
         },
-        "stock_market_context": {
-            "analysis_target": {"basis": "current_quote"}
-        },
+        "stock_market_context": {"analysis_target": {"basis": "current_quote"}},
     }
 
     market_status = agent_module._normalize_current_quote_semantics(
@@ -3230,9 +3608,7 @@ def test_history_close_mislabeled_as_latest_quote_is_normalized():
             "pct_change": 7.51,
             "market_timestamp": "2026-07-22T15:06:30+08:00",
         },
-        "stock_market_context": {
-            "analysis_target": {"basis": "current_quote"}
-        },
+        "stock_market_context": {"analysis_target": {"basis": "current_quote"}},
     }
     answer = (
         "A股已收盘，当前为2026年7月22日收盘后最新报价。"
@@ -3265,9 +3641,7 @@ def test_current_quote_ma20_relation_is_normalized_and_guarded():
             "pct_change": 7.51,
             "market_timestamp": "2026-07-22T15:06:30+08:00",
         },
-        "stock_market_context": {
-            "analysis_target": {"basis": "current_quote"}
-        },
+        "stock_market_context": {"analysis_target": {"basis": "current_quote"}},
     }
     answer = "最新报价仍低于 MA20（37.28元）。"
 
@@ -3278,9 +3652,10 @@ def test_current_quote_ma20_relation_is_normalized_and_guarded():
 
     assert "最新报价已高于 MA20" in normalized
     assert guard["passed"] is False
-    assert "当前报价与MA20关系必须与确定性数据一致" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "当前报价与MA20关系必须与确定性数据一致"
+        in guard["unsupported_market_inferences"]
+    )
 
 
 def test_current_limit_status_is_rewritten_after_price_falls_off_limit():
@@ -3294,9 +3669,7 @@ def test_current_limit_status_is_rewritten_after_price_falls_off_limit():
             "pct_change": 9.52,
             "market_timestamp": "2026-07-22T13:20:03+08:00",
         },
-        "a_share_information": {
-            "news": [{"title": "中兴通讯盘中触及涨停后成交放大"}]
-        },
+        "a_share_information": {"news": [{"title": "中兴通讯盘中触及涨停后成交放大"}]},
     }
     answer = "最新报价38.2元，涨幅9.52%，盘中涨停。"
 
@@ -3305,9 +3678,10 @@ def test_current_limit_status_is_rewritten_after_price_falls_off_limit():
     accepted = AgentService._validate_model_output(normalized, evidence)
 
     assert rejected["passed"] is False
-    assert "当前涨跌停状态必须与最新报价涨跌幅一致" in rejected[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "当前涨跌停状态必须与最新报价涨跌幅一致"
+        in rejected["unsupported_market_inferences"]
+    )
     assert "盘中曾触及涨停后回落" in normalized
     assert "盘中涨停" not in normalized
     assert accepted["passed"] is True
@@ -3348,9 +3722,7 @@ def test_stock_move_preview_understands_why_up_wording_and_stays_concise():
                 "basis": "current_quote",
             },
             "stock_target": {"status": "current_quote"},
-            "market_state": {
-                "summary": "目标交易日的代表性指数对照仍待补证。"
-            },
+            "market_state": {"summary": "目标交易日的代表性指数对照仍待补证。"},
             "market_breadth": {"same_date_as_target": False},
             "company_industry": "通信设备",
             "exact_industry_match_available": False,
@@ -3465,9 +3837,32 @@ def test_stock_guard_requires_current_quote_when_user_asks_about_today():
     )
 
     assert guard["passed"] is False
-    assert "用户询问今日时必须给出更新报价并区分历史日线" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "用户询问今日时必须给出更新报价并区分历史日线"
+        in guard["unsupported_market_inferences"]
+    )
+
+
+def test_stock_guard_accepts_unsigned_quote_change_with_matching_direction():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "user_question": "中兴通讯今天为什么跌？",
+        "metrics": {"latest_close": 37.5, "return_1d_pct": 7.51},
+        "provenance": {"market_timestamp": "2026-07-22T01:30:00+00:00"},
+        "current_quote": {
+            "price": 35.91,
+            "pct_change": -4.24,
+            "market_timestamp": "2026-07-23T14:47:27+08:00",
+        },
+    }
+
+    guard = AgentService._validate_model_output(
+        "盘中最新报价35.91元，下跌4.24%；最近完整日线属于上一交易日。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
 
 
 def test_stock_guard_rejects_cross_date_breadth_as_systemic_explanation():
@@ -3495,9 +3890,10 @@ def test_stock_guard_rejects_cross_date_breadth_as_systemic_explanation():
     )
 
     assert guard["passed"] is False
-    assert "跨日期市场广度不能用于排除目标日的系统性拖累" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "跨日期市场广度不能用于排除目标日的系统性拖累"
+        in guard["unsupported_market_inferences"]
+    )
 
 
 def test_stock_guard_requires_component_breadth_for_industry_participation_claims():
@@ -3509,9 +3905,7 @@ def test_stock_guard_requires_component_breadth_for_industry_participation_claim
                 "status": "same_market_date",
                 "name": "通信设备",
                 "return_1d_pct": -1.42,
-                "component_breadth": {
-                    "status": "unavailable_for_target_date"
-                },
+                "component_breadth": {"status": "unavailable_for_target_date"},
             }
         },
     }
@@ -3548,15 +3942,17 @@ def test_stock_guard_requires_component_breadth_for_industry_participation_claim
     )
 
     assert unsafe["passed"] is False
-    assert "缺少行业成分涨跌家数时不能确认行业普涨普跌或参与面" in unsafe[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "缺少行业成分涨跌家数时不能确认行业普涨普跌或参与面"
+        in unsafe["unsupported_market_inferences"]
+    )
     assert cautious["passed"] is True
     assert supported["passed"] is True
     assert causal["passed"] is False
-    assert "行业成分广度只能描述同步性不能证明个股涨跌因果" in causal[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "行业成分广度只能描述同步性不能证明个股涨跌因果"
+        in causal["unsupported_market_inferences"]
+    )
 
 
 def test_stock_guard_does_not_let_indices_alone_exclude_systemic_drag():
@@ -3597,9 +3993,10 @@ def test_stock_guard_does_not_let_indices_alone_exclude_systemic_drag():
     )
 
     assert guard["passed"] is False
-    assert "跨日期市场广度不能用于排除目标日的系统性拖累" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "跨日期市场广度不能用于排除目标日的系统性拖累"
+        in guard["unsupported_market_inferences"]
+    )
 
     real_model_wording = (
         "7月20日中兴通讯收盘33.73元，跌幅6.31%。"
@@ -3619,8 +4016,9 @@ def test_stock_guard_does_not_let_indices_alone_exclude_systemic_drag():
     )
 
     assert real_wording_guard["passed"] is False
-    assert "跨日期市场广度不能用于排除目标日的系统性拖累" in (
-        real_wording_guard["unsupported_market_inferences"]
+    assert (
+        "跨日期市场广度不能用于排除目标日的系统性拖累"
+        in (real_wording_guard["unsupported_market_inferences"])
     )
     assert repaired is not None
     repaired_answer, repaired_guard = repaired
@@ -3638,12 +4036,14 @@ def test_stock_guard_does_not_let_indices_alone_exclude_systemic_drag():
         evidence,
     )
     assert independent_guard["passed"] is False
-    assert "跨日期市场广度不能用于排除目标日的系统性拖累" in (
-        independent_guard["unsupported_market_inferences"]
+    assert (
+        "跨日期市场广度不能用于排除目标日的系统性拖累"
+        in (independent_guard["unsupported_market_inferences"])
     )
     assert relative_index_guard["passed"] is False
-    assert "跨日期市场广度不能用于排除目标日的系统性拖累" in (
-        relative_index_guard["unsupported_market_inferences"]
+    assert (
+        "跨日期市场广度不能用于排除目标日的系统性拖累"
+        in (relative_index_guard["unsupported_market_inferences"])
     )
 
     mislabeled_breadth = AgentService._validate_model_output(
@@ -3657,8 +4057,9 @@ def test_stock_guard_does_not_let_indices_alone_exclude_systemic_drag():
         evidence,
     )
     assert mislabeled_breadth["passed"] is False
-    assert "跨日期市场广度不能用于排除目标日的系统性拖累" in (
-        mislabeled_breadth["unsupported_market_inferences"]
+    assert (
+        "跨日期市场广度不能用于排除目标日的系统性拖累"
+        in (mislabeled_breadth["unsupported_market_inferences"])
     )
     assert safely_labeled_breadth["passed"] is True
 
@@ -3668,8 +4069,9 @@ def test_stock_guard_does_not_let_indices_alone_exclude_systemic_drag():
         evidence,
     )
     assert flexible_turnover_wording["passed"] is False
-    assert "跨日期市场广度不能用于排除目标日的系统性拖累" in (
-        flexible_turnover_wording["unsupported_market_inferences"]
+    assert (
+        "跨日期市场广度不能用于排除目标日的系统性拖累"
+        in (flexible_turnover_wording["unsupported_market_inferences"])
     )
 
     section_answer = (
@@ -3720,8 +4122,9 @@ def test_stock_guard_does_not_let_indices_alone_exclude_systemic_drag():
         causal_hypothesis_guard,
     )
     assert causal_hypothesis_guard["passed"] is False
-    assert "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌" in (
-        causal_hypothesis_guard["unsupported_market_inferences"]
+    assert (
+        "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
+        in (causal_hypothesis_guard["unsupported_market_inferences"])
     )
     assert causal_hypothesis_repaired is not None
     assert "MA20" not in causal_hypothesis_repaired[0]
@@ -3763,8 +4166,9 @@ def test_stock_guard_does_not_let_indices_alone_exclude_systemic_drag():
     )
 
     assert absorption_guard["passed"] is False
-    assert "缺少事件研究证据时不能声称基本面已被市场消化或情绪驱动超跌" in (
-        absorption_guard["unsupported_market_inferences"]
+    assert (
+        "缺少事件研究证据时不能声称基本面已被市场消化或情绪驱动超跌"
+        in (absorption_guard["unsupported_market_inferences"])
     )
     assert absorption_repaired is not None
     assert "已在市场消化" not in absorption_repaired[0]
@@ -3784,8 +4188,9 @@ def test_stock_guard_does_not_let_indices_alone_exclude_systemic_drag():
         evidence,
     )
     assert event_sentiment_guard["passed"] is False
-    assert "公告或媒体线索不能在缺少事件研究时评为正面负面或催化" in (
-        event_sentiment_guard["unsupported_market_inferences"]
+    assert (
+        "公告或媒体线索不能在缺少事件研究时评为正面负面或催化"
+        in (event_sentiment_guard["unsupported_market_inferences"])
     )
 
 
@@ -3867,9 +4272,10 @@ def test_stock_guard_requires_public_boundary_for_unadjusted_component_fallback(
     )
 
     assert guard["passed"] is False
-    assert "行业成分使用未复权补充行情时必须说明证券来源和除权边界" in guard[
-        "semantic_conflicts"
-    ]
+    assert (
+        "行业成分使用未复权补充行情时必须说明证券来源和除权边界"
+        in guard["semantic_conflicts"]
+    )
     assert repaired is not None
     assert "成分行情口径补充" in repaired[0]
     assert "贝特瑞（920185.BJ）使用新浪公开未复权日线补充" in repaired[0]
@@ -3883,15 +4289,15 @@ def test_stock_guard_requires_public_boundary_for_unadjusted_component_fallback(
     assert unsafe_source_guard["private_operational_patterns"]
     assert unsafe_source_repaired is not None
     assert "当前数据源未返回" not in unsafe_source_repaired[0]
-    assert "贝特瑞（920185.BJ）使用新浪公开未复权日线补充" in (
-        unsafe_source_repaired[0]
+    assert (
+        "贝特瑞（920185.BJ）使用新浪公开未复权日线补充" in (unsafe_source_repaired[0])
     )
     assert unsafe_source_repaired[1]["passed"] is True
     assert combined_unsafe_guard["passed"] is False
     assert combined_unsafe_repaired is not None
     assert "当前行情源未返回" not in combined_unsafe_repaired[0]
-    assert "贝特瑞（920185.BJ）使用新浪公开未复权日线补充" in (
-        combined_unsafe_repaired[0]
+    assert (
+        "贝特瑞（920185.BJ）使用新浪公开未复权日线补充" in (combined_unsafe_repaired[0])
     )
     assert combined_unsafe_repaired[1]["passed"] is True
 
@@ -3942,14 +4348,16 @@ def test_stock_guard_requires_requested_subject_contribution_and_binds_60d_retur
     )
 
     assert missing["passed"] is False
-    assert "用户明确询问成分贡献时必须给出标的估算贡献和口径边界" in missing[
-        "semantic_conflicts"
-    ]
+    assert (
+        "用户明确询问成分贡献时必须给出标的估算贡献和口径边界"
+        in missing["semantic_conflicts"]
+    )
     assert complete["passed"] is True
     assert wrong_metric["passed"] is False
-    assert "60日累计收益不能误用最大回撤数值" in wrong_metric[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "60日累计收益不能误用最大回撤数值"
+        in wrong_metric["unsupported_market_inferences"]
+    )
 
 
 def test_stock_guard_requires_and_repairs_requested_industry_counts():
@@ -3989,8 +4397,7 @@ def test_stock_guard_requires_and_repairs_requested_industry_counts():
     guard = AgentService._validate_model_output(answer, evidence)
     repaired = AgentService._repair_guard_failure(answer, evidence, guard)
     ratio_guard = AgentService._validate_model_output(
-        "通信设备50只成分中，上涨16只（占32%）、"
-        "下跌34只（占68%）、平盘0只。",
+        "通信设备50只成分中，上涨16只（占32%）、下跌34只（占68%）、平盘0只。",
         evidence,
     )
     direction_ratio_guard = AgentService._validate_model_output(
@@ -4009,8 +4416,9 @@ def test_stock_guard_requires_and_repairs_requested_industry_counts():
     )
 
     assert guard["passed"] is False
-    assert "用户明确询问行业成分涨跌家数时必须给出上涨下跌平盘家数" in (
-        guard["semantic_conflicts"]
+    assert (
+        "用户明确询问行业成分涨跌家数时必须给出上涨下跌平盘家数"
+        in (guard["semantic_conflicts"])
     )
     assert repaired is not None
     repaired_answer, repaired_guard = repaired
@@ -4126,8 +4534,7 @@ def test_stock_contribution_guard_repair_preserves_model_answer_and_appends_evid
     assert (run_dir / "answer.repaired.md").is_file()
 
     mixed_answer = (
-        model_answer
-        + "\n无证据传闻称当日资金规模为9999亿元，这一行应被删除。"
+        model_answer + "\n无证据传闻称当日资金规模为9999亿元，这一行应被删除。"
     )
     mixed_guard = AgentService._validate_model_output(
         mixed_answer,
@@ -4139,8 +4546,9 @@ def test_stock_contribution_guard_repair_preserves_model_answer_and_appends_evid
         mixed_guard,
     )
     assert mixed_guard["unsupported_numbers"] == ["9999"]
-    assert "用户明确询问成分贡献时必须给出标的估算贡献和口径边界" in (
-        mixed_guard["semantic_conflicts"]
+    assert (
+        "用户明确询问成分贡献时必须给出标的估算贡献和口径边界"
+        in (mixed_guard["semantic_conflicts"])
     )
     assert mixed_repaired is not None
     assert "9999" not in mixed_repaired[0]
@@ -4158,9 +4566,7 @@ def test_stock_guard_does_not_treat_explicit_date_as_current_quote_claim():
             "price": 34.88,
             "pct_change": 3.41,
         },
-        "provenance": {
-            "market_timestamp": "2026-07-21T15:00:00+08:00"
-        },
+        "provenance": {"market_timestamp": "2026-07-21T15:00:00+08:00"},
         "stock_market_context": {
             "analysis_target": {
                 "market_date": "2026-07-20",
@@ -4231,20 +4637,124 @@ def test_model_language_cleanup_neutralizes_misleading_systemic_heading():
         '**二、能确认的"非系统性拖累"**\n\n全市场系统性拖累不能确认。'
     )
 
-    assert '**二、市场与行业对照**' in cleaned
+    assert "**二、市场与行业对照**" in cleaned
     assert '能确认的"非系统性拖累"' not in cleaned
 
 
 def test_model_language_cleanup_softens_absolute_causality_wording():
     cleaned = AgentService._clean_user_facing_model_language(
-        "全市场上涨家数占优，不存在系统性拖累。"
-        '这被称为"当前最可能的市场解释"。'
+        '全市场上涨家数占优，不存在系统性拖累。这被称为"当前最可能的市场解释"。'
     )
 
     assert "不存在系统性拖累" not in cleaned
     assert "当日事实不支持全市场普跌解释" in cleaned
     assert "当前最可能的市场解释" not in cleaned
     assert "市场资讯反复提及的解释" in cleaned
+
+
+def test_model_language_cleanup_keeps_relative_performance_out_of_causal_claims():
+    cleaned = AgentService._clean_user_facing_model_language(
+        "今日下跌属于独立于大市的个股回调，不能归结为系统性拖累。"
+    )
+
+    assert "独立于大市" not in cleaned
+    assert "不能归结为系统性拖累" not in cleaned
+    assert "相对大市表现明显分化" in cleaned
+    assert "当日事实不支持全市场普跌解释" in cleaned
+    assert "具体驱动仍未确认" in cleaned
+
+
+def test_model_language_cleanup_does_not_turn_market_comparison_into_causality():
+    cleaned = AgentService._clean_user_facing_model_language(
+        "7月23日全市场普涨，当日盘面不支持系统性普跌拖累个股。"
+    )
+
+    assert "系统性普跌拖累个股" not in cleaned
+    assert "当日事实不支持全市场普跌解释" in cleaned
+
+
+def test_model_language_cleanup_neutralizes_unverified_event_causality():
+    cleaned = AgentService._clean_user_facing_model_language(
+        "综合来看，今日大跌主要表现为除权除息公告引发的提前调整与前期急涨后的回吐，"
+        "但当日具体驱动尚未得到强确认。"
+    )
+
+    assert "公告引发" not in cleaned
+    assert "主要表现为" not in cleaned
+    assert "现有证据只能确认价格下跌与相对表现，具体驱动仍未确认" in cleaned
+
+
+def test_stock_guard_rejects_unverified_event_causality():
+    answer = "今日大跌主要表现为除权除息公告引发的提前调整与前期急涨后的回吐。"
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+        "guard_source_text": answer,
+    }
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is False
+    assert (
+        "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
+        in guard["unsupported_market_inferences"]
+    )
+
+
+def test_model_language_cleanup_neutralizes_self_factor_and_resonance_claims():
+    cleaned = AgentService._clean_user_facing_model_language(
+        "中兴通讯下跌主要来自个股自身因素，同日大盘普涨不支持系统性拖累。"
+        "今日下跌更多体现为高波动下的获利回吐和基本面隐忧共振。"
+        "20日年化波动率较高，回落不意外。"
+    )
+
+    assert "个股自身因素" not in cleaned
+    assert "获利回吐" not in cleaned
+    assert "基本面隐忧共振" not in cleaned
+    assert "回落不意外" not in cleaned
+    assert "具体驱动仍未确认" in cleaned
+    assert "同日市场事实不支持全市场普跌解释" in cleaned
+
+
+def test_model_language_cleanup_neutralizes_independent_performance_wording():
+    cleaned = AgentService._clean_user_facing_model_language(
+        "当日事实不支持全市场普跌解释解释；当日不支持全市场系统性拖累。"
+        "中兴通讯该日下跌属于与大盘方向不同的独立表现。"
+    )
+
+    assert "解释解释" not in cleaned
+    assert "系统性拖累" not in cleaned
+    assert "独立表现" not in cleaned
+    assert "当日事实不支持全市场普跌解释" in cleaned
+    assert "相对市场方向明显分化，但具体驱动仍未确认" in cleaned
+
+
+def test_stock_guard_rejects_self_factor_and_resonance_claims():
+    evidence = {
+        "type": "stock_research",
+        "symbol": "000063.SZ",
+    }
+
+    for answer in (
+        "中兴通讯下跌主要来自个股自身因素。",
+        "今日下跌更多体现为高波动下的获利回吐和基本面隐忧共振。",
+    ):
+        guard = AgentService._validate_model_output(answer, evidence)
+        assert guard["passed"] is False
+        assert (
+            "缺少事件或业务证据时不能用技术指标行业轮动或业务结构解释个股涨跌"
+            in guard["unsupported_market_inferences"]
+        )
+
+
+def test_model_language_cleanup_removes_duplicate_chinese_punctuation():
+    cleaned = AgentService._clean_user_facing_model_language(
+        "先核对下一次披露。；再等待完整日线；。"
+    )
+
+    assert "。；" not in cleaned
+    assert "；。" not in cleaned
+    assert cleaned == "先核对下一次披露；再等待完整日线。"
 
 
 def test_model_language_cleanup_converts_markdown_tables_to_readable_bullets():
@@ -4302,9 +4812,7 @@ def test_stock_move_preview_is_focused_and_keeps_both_price_time_anchors():
             "exact_industry_match_available": False,
         },
         "a_share_information": {
-            "announcements": [
-                {"published_at": "2026-07-20", "title": "回购结果公告"}
-            ],
+            "announcements": [{"published_at": "2026-07-20", "title": "回购结果公告"}],
             "news": [
                 {
                     "published_at": "2026-07-21T21:56:00+08:00",
@@ -4425,9 +4933,10 @@ def test_stock_guard_rejects_reversed_scenario_failure_direction():
     guard = AgentService._validate_model_output(answer, evidence)
 
     assert guard["passed"] is False
-    assert "个股情景触发与失效方向必须与确定性条件一致" in guard[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "个股情景触发与失效方向必须与确定性条件一致"
+        in guard["unsupported_market_inferences"]
+    )
 
 
 def test_model_language_cleanup_translates_confidence_status():
@@ -4553,10 +5062,7 @@ def test_market_guard_rejects_wrong_index_count_ma5_and_wave_label():
             },
         ],
     }
-    answer = (
-        "5个代表性指数全部上涨。\n"
-        "如果跌破5日均线，B浪反弹将失效。"
-    )
+    answer = "5个代表性指数全部上涨。\n如果跌破5日均线，B浪反弹将失效。"
 
     guard = AgentService._validate_model_output(answer, evidence)
 
@@ -4571,9 +5077,7 @@ def test_market_guard_rejects_wrong_index_count_ma5_and_wave_label():
 def test_numeric_guard_uses_structural_numbers_only_from_evidence_keys():
     evidence = {
         "type": "market_brief",
-        "indices": [
-            {"metrics": {"return_5d_pct": -4.43, "ma20": 15186.8}}
-        ],
+        "indices": [{"metrics": {"return_5d_pct": -4.43, "ma20": 15186.8}}],
     }
 
     valid = AgentService._validate_model_output(
@@ -4608,9 +5112,7 @@ def test_numeric_guard_accepts_market_ma_distance_derived_from_evidence():
     valid = AgentService._validate_model_output(
         "道指低于MA20约0.3%，高于MA60约2.4%。", evidence
     )
-    invented = AgentService._validate_model_output(
-        "道指高于MA60约9.9%。", evidence
-    )
+    invented = AgentService._validate_model_output("道指高于MA60约9.9%。", evidence)
 
     assert valid["passed"] is True
     assert invented["passed"] is False
@@ -4627,16 +5129,81 @@ def test_market_downtrend_guard_allows_explicit_negation():
         "中期偏弱不等于已确认下行趋势。",
         evidence,
     )
+    natural_safe = AgentService._validate_model_output(
+        "整体格局是轻微收跌，而非大幅下行。",
+        evidence,
+    )
     overclaim = AgentService._validate_model_output(
         "当前趋势依然向下。",
         evidence,
     )
 
     assert safe["passed"] is True
+    assert natural_safe["passed"] is True
     assert overclaim["passed"] is False
     assert overclaim["unsupported_market_inferences"] == [
         "中期偏弱不能直接改写为已确认的下行趋势"
     ]
+
+
+def test_market_guard_accepts_natural_unconfirmed_boundary_wording():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "说明反方证据和还不能确认的原因",
+        "indices": [],
+    }
+
+    guard = AgentService._validate_model_output(
+        "### 反方证据或未能确认之处\n当前缺少充分交叉验证，具体驱动仍有待核验。",
+        evidence,
+    )
+
+    assert guard["passed"] is True
+
+
+def test_market_cause_guard_accepts_natural_down_wording_and_major_index_scope():
+    evidence = {
+        "type": "market_brief",
+        "user_question": "美股为什么收盘跌了，请说明还不能确认的原因",
+        "question_focus": {"key": "market_cause"},
+        "analysis_target": {"market_date": "2026-07-22"},
+        "indices": [
+            {
+                "name": "标普500",
+                "symbol": "^GSPC",
+                "same_date_as_analysis_target": True,
+                "metrics": {"return_1d_pct": -0.1364},
+            },
+            {
+                "name": "纳斯达克综合",
+                "symbol": "^IXIC",
+                "same_date_as_analysis_target": True,
+                "metrics": {"return_1d_pct": -0.5663},
+            },
+            {
+                "name": "道琼斯工业指数",
+                "symbol": "^DJI",
+                "same_date_as_analysis_target": True,
+                "metrics": {"return_1d_pct": -0.0116},
+            },
+            {
+                "name": "罗素2000",
+                "symbol": "^RUT",
+                "same_date_as_analysis_target": True,
+                "metrics": {"return_1d_pct": -0.9192},
+            },
+        ],
+    }
+    answer = (
+        "2026年7月22日美股三大指数收跌：标普500跌0.14%，"
+        "纳斯达克综合跌0.57%，道琼斯工业指数跌0.01%。"
+        "纳斯达克综合在三大指数中跌幅最大；罗素2000下跌0.92%。"
+        "当前尚不能把收跌归因到单一原因。"
+    )
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is True
 
 
 def test_market_risk_prompt_precomputes_ma_distance_and_volatility_ratio():
@@ -4751,57 +5318,70 @@ def test_shareholder_guard_rejects_absorption_and_northbound_overclaims():
     )
 
     assert absorption["passed"] is False
-    assert "股东户数下降不能直接写成机构或主力吸筹" in absorption[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "股东户数下降不能直接写成机构或主力吸筹"
+        in absorption["unsupported_market_inferences"]
+    )
     assert northbound["passed"] is False
-    assert "香港中央结算代理人有限公司不能自动等同北向资金" in northbound[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "香港中央结算代理人有限公司不能自动等同北向资金"
+        in northbound["unsupported_market_inferences"]
+    )
     assert channel_label["passed"] is False
-    assert "香港中央结算有限公司不能在缺少身份口径时直接标注为北向通道" in channel_label[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "香港中央结算有限公司不能在缺少身份口径时直接标注为北向通道"
+        in channel_label["unsupported_market_inferences"]
+    )
     assert land_connect_label["passed"] is False
-    assert "香港中央结算有限公司不能在缺少身份口径时直接标注为北向通道" in land_connect_label[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "香港中央结算有限公司不能在缺少身份口径时直接标注为北向通道"
+        in land_connect_label["unsupported_market_inferences"]
+    )
     assert generic_channel_label["passed"] is False
-    assert "香港中央结算有限公司不能在缺少身份口径时直接标注为北向通道" in generic_channel_label[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "香港中央结算有限公司不能在缺少身份口径时直接标注为北向通道"
+        in generic_channel_label["unsupported_market_inferences"]
+    )
     assert etf_motive["passed"] is False
-    assert "十大股东名单变化不能直接归因为ETF主动或被动调仓" in etf_motive[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "十大股东名单变化不能直接归因为ETF主动或被动调仓"
+        in etf_motive["unsupported_market_inferences"]
+    )
     assert filing_deadline["passed"] is False
-    assert "缺少披露日历证据时不能补写下一份报告的预计截止时间" in filing_deadline[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "缺少披露日历证据时不能补写下一份报告的预计截止时间"
+        in filing_deadline["unsupported_market_inferences"]
+    )
     assert holder_count_deadline["passed"] is False
-    assert "缺少固定披露频率证据时不能补写下一次股东户数的预计天数" in holder_count_deadline[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "缺少固定披露频率证据时不能补写下一次股东户数的预计天数"
+        in holder_count_deadline["unsupported_market_inferences"]
+    )
     assert wrong_streak["passed"] is False
-    assert "股东户数连续变化次数或方向与确定性证据不一致" in wrong_streak[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "股东户数连续变化次数或方向与确定性证据不一致"
+        in wrong_streak["unsupported_market_inferences"]
+    )
     assert unsupported_top10_history["passed"] is False
-    assert "缺少历史十大股东合计序列时不能声称前十持股跨期持平或变化" in unsupported_top10_history[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "缺少历史十大股东合计序列时不能声称前十持股跨期持平或变化"
+        in unsupported_top10_history["unsupported_market_inferences"]
+    )
     assert inferred_controller["passed"] is False
-    assert "股东名单本身不能补写控股国资国家队等身份标签" in inferred_controller[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "股东名单本身不能补写控股国资国家队等身份标签"
+        in inferred_controller["unsupported_market_inferences"]
+    )
     assert etf_trading_label["passed"] is False
-    assert "十大股东名单变化不能直接归因为ETF主动或被动调仓" in etf_trading_label[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "十大股东名单变化不能直接归因为ETF主动或被动调仓"
+        in etf_trading_label["unsupported_market_inferences"]
+    )
     assert foreign_intent["passed"] is False
-    assert "香港中央结算持股不能直接证明外资配置意愿" in foreign_intent[
-        "unsupported_market_inferences"
-    ]
+    assert (
+        "香港中央结算持股不能直接证明外资配置意愿"
+        in foreign_intent["unsupported_market_inferences"]
+    )
 
 
 def test_shareholder_guard_accepts_bounded_concentration_clue():
@@ -4827,6 +5407,57 @@ def test_shareholder_guard_accepts_bounded_concentration_clue():
         evidence,
     )
     assert explicit_boundary["passed"] is True
+
+
+def test_shareholder_guard_accepts_real_answer_with_explicit_boundaries():
+    answer = (
+        "中兴通讯最新股东户数披露截至2026年7月20日（公告日7月21日），户数为"
+        "620,081户，较上次（2026年7月10日）的575,136户增加44,945户，上升"
+        "7.815%。\n\n"
+        "这说明持有人数量增加，持股呈现分散线索。同期（7月10日至7月20日）股价"
+        "下跌16.78%，但股东户数上升与股价下跌之间的因果关系尚未确认。\n\n"
+        "不能推断的内容：1）不能直接将股东户数上升预测为股价将继续下跌；2）不能"
+        "解读为机构出货或主力离场；3）股东户数下降才对应持股集中度上升线索，本次"
+        "为上升，属于分散，不能反向类推；4）最近一次变化方向为上升，仅一次，尚未"
+        "形成至少两次连续同向变化的趋势，不宜外推；5）十大股东数据报告期为2026年"
+        "3月31日，是报告期存量，不能当作当前实时持仓；前十名合计持股41.34%，前三"
+        "名36.96%，但不能与往期比较，无法判断集中度较上个报告期变化；6）“香港中央"
+        "结算代理人有限公司”对应H股登记代理口径，“香港中央结算有限公司”是A股流通"
+        "股东，其持股减少不能直接等同于北向资金当日流出；7）“新进”仅表示进入前十"
+        "名单，不能解释为主动建仓或机构增配。\n\n"
+        "下一次应核对的披露：等待下一次股东户数披露，确认分散方向是否持续；等待"
+        "下一份定期报告（如2026年半年报）更新十大股东，以对照持股变化。"
+    )
+    evidence = {
+        "type": "shareholder_structure",
+        "holder_count_streak_direction": "increase",
+        "holder_count_streak_count": 1,
+        "top10_historical_comparison_available": False,
+        "guard_source_text": answer,
+    }
+
+    guard = AgentService._validate_model_output(answer, evidence)
+
+    assert guard["passed"] is True
+    assert guard["unsupported_market_inferences"] == []
+
+
+def test_shareholder_guard_does_not_accept_a_reversed_boundary():
+    evidence = {
+        "type": "shareholder_structure",
+        "top10_historical_comparison_available": True,
+    }
+
+    guard = AgentService._validate_model_output(
+        "十大股东不是实时持仓，而是当日资金流。",
+        evidence,
+    )
+
+    assert guard["passed"] is False
+    assert (
+        "十大股东报告期存量不能写成实时持仓或当日资金流"
+        in guard["unsupported_market_inferences"]
+    )
 
 
 def test_shareholder_streak_guard_skips_migration_snapshot_without_streak_fields():
@@ -4894,34 +5525,38 @@ def test_private_operational_line_can_be_removed_without_losing_answer():
 
 
 def test_research_action_prompt_keeps_top_actions_per_status():
-    actions = [
-        {
-            "key": f"triggered-{index}",
-            "status": "triggered",
-            "title": f"触发{index}",
-            "current_evidence": "证据",
-            "next_step": "复核",
-        }
-        for index in range(4)
-    ] + [
-        {
-            "key": f"pending-{index}",
-            "status": "pending_data",
-            "title": f"补证{index}",
-            "current_evidence": "缺口",
-            "next_step": "补证",
-        }
-        for index in range(3)
-    ] + [
-        {
-            "key": f"watching-{index}",
-            "status": "watching",
-            "title": f"观察{index}",
-            "current_evidence": "未触发",
-            "next_step": "观察",
-        }
-        for index in range(2)
-    ]
+    actions = (
+        [
+            {
+                "key": f"triggered-{index}",
+                "status": "triggered",
+                "title": f"触发{index}",
+                "current_evidence": "证据",
+                "next_step": "复核",
+            }
+            for index in range(4)
+        ]
+        + [
+            {
+                "key": f"pending-{index}",
+                "status": "pending_data",
+                "title": f"补证{index}",
+                "current_evidence": "缺口",
+                "next_step": "补证",
+            }
+            for index in range(3)
+        ]
+        + [
+            {
+                "key": f"watching-{index}",
+                "status": "watching",
+                "title": f"观察{index}",
+                "current_evidence": "未触发",
+                "next_step": "观察",
+            }
+            for index in range(2)
+        ]
+    )
     evidence = {
         "type": "research_actions",
         "summary": {"symbols": 1},
@@ -5003,9 +5638,7 @@ def test_streaming_bridge_publishes_only_guarded_cumulative_sentences(
         user_workspace=tmp_path,
         evidence={
             "type": "market_brief",
-            "indices": [
-                {"name": "上证综指", "metrics": {"return_1d_pct": -1.23}}
-            ],
+            "indices": [{"name": "上证综指", "metrics": {"return_1d_pct": -1.23}}],
         },
         trusted_context=None,
         stream_callback=updates.append,
@@ -5311,9 +5944,7 @@ def test_streaming_bridge_waits_for_current_quote_then_keeps_growing(
                 "price": 34.88,
                 "pct_change": 3.41,
             },
-            "provenance": {
-                "market_timestamp": "2026-07-20T15:00:00+08:00"
-            },
+            "provenance": {"market_timestamp": "2026-07-20T15:00:00+08:00"},
             "technical": {
                 "latest_close": 33.73,
                 "return_1d_pct": -6.31,
@@ -5334,7 +5965,7 @@ def test_streaming_bridge_waits_for_current_quote_then_keeps_growing(
     assert usage["streaming"]["deferred_segments"] == 1
 
 
-def test_streamed_draft_is_replaced_by_final_guarded_answer(
+def test_streamed_unverified_draft_is_followed_by_final_guarded_answer(
     tmp_path: Path, settings, monkeypatch
 ):
     guarded_settings = replace(
@@ -5398,6 +6029,12 @@ def test_streamed_draft_is_replaced_by_final_guarded_answer(
     assert run["status"] == "completed"
     assert "短期修复" in run["answer"]
     assert "9999" not in run["answer"]
+    assert streamed[-1] == {
+        "type": "delta",
+        "draft": run["answer"],
+        "is_unverified": False,
+        "is_final": True,
+    }
     assert run["usage"]["output_guard"]["passed"] is True
     assert run["usage"]["timings"]["first_token_seconds"] == 0.25
     assert run["usage"]["timings"]["first_visible_seconds"] == 0.75
@@ -5454,7 +6091,13 @@ def test_streaming_bridge_failure_falls_back_to_oneshot_cli(
         {
             "type": "reset",
             "label": "实时生成连接已中断，正在恢复完整回答…",
-        }
+        },
+        {
+            "type": "delta",
+            "draft": "上证综指当日下跌1.23%。",
+            "is_unverified": False,
+            "is_final": True,
+        },
     ]
     assert run["usage"]["streaming"] == {
         "enabled": False,

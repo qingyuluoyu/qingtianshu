@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from app.catalog import INDEX_BY_SYMBOL
 from app.db import Database
 from app.providers.market import (
     CSIIndustryIndexProvider,
@@ -30,6 +31,15 @@ class FakeResponse:
 
     def json(self):
         return self.payload
+
+
+def test_star_50_is_a_first_class_china_index():
+    assert INDEX_BY_SYMBOL["000688.SS"]["name"] == "科创50"
+    assert TencentChinaIndexProvider.SYMBOLS["000688.SS"] == {
+        "quote_symbol": "sh000688",
+        "name": "科创50",
+        "exchange": "SSE",
+    }
 
 
 def test_yahoo_provider_parses_and_caches(tmp_path: Path):
@@ -319,6 +329,25 @@ def test_eastmoney_provider_parses_sector_fields(tmp_path: Path):
     assert result["coverage"]["total_available"] == 496
     assert result["sectors"][0]["name"] == "算力"
     assert result["sectors"][0]["main_net_inflow"] == 90000000
+
+
+def test_csi_industry_provider_accepts_alphanumeric_official_index_codes():
+    payload = {
+        "QuotationCodeTable": {
+            "Data": [
+                {
+                    "Code": "H30184",
+                    "Name": "半导体",
+                    "QuoteID": "2.H30184",
+                    "SecurityTypeName": "指数",
+                }
+            ]
+        }
+    }
+
+    result = CSIIndustryIndexProvider._select_index_candidate("半导体", payload)
+
+    assert result["Code"] == "H30184"
 
 
 def test_csi_industry_provider_builds_official_constituents_and_history(

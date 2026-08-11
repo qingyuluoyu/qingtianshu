@@ -18,16 +18,13 @@
 使用项目环境安装：
 
 ```bash
-cd /Users/chr/Documents/青树金融交易/qingshu-agent-demo
-uv sync
+uv sync --extra dev
 ```
 
-如果使用一键启动脚本，需要把依赖安装到脚本实际使用的 Hermes Python 环境：
+如果使用标准虚拟环境：
 
 ```bash
-uv pip install \
-  --python /Users/chr/.hermes/hermes-agent/venv/bin/python \
-  'tushare>=1.4' 'python-dotenv>=1.0'
+python -m pip install -e '.[dev]'
 ```
 
 ## 2. 配置 Token
@@ -45,7 +42,7 @@ TUSHARE_TIMEOUT_SECONDS=20
 
 - `TUSHARE_TOKEN` 填写兑换或申请得到的 API Key。
 - `TUSHARE_API_URL` 必须使用 `https://teajoin.com`，不要改成 Tushare 官方默认地址。
-- 项目会自动加载 `/Users/chr/Documents/青树金融交易/qingshu-agent-demo/.env`。
+- 项目会自动加载当前项目根目录中的 `.env`。
 - `.env` 已被 `.gitignore` 忽略，禁止提交到 Git、发到群聊或写入截图。
 - `.env.example` 只放变量名和占位符，不放真实密钥。
 
@@ -135,8 +132,7 @@ df = ts.pro_bar(
 项目已经提供只读验证脚本：
 
 ```bash
-cd /Users/chr/Documents/青树金融交易/qingshu-agent-demo
-PYTHONPATH=. /Users/chr/.hermes/hermes-agent/venv/bin/python scripts/verify_tushare.py
+uv run python scripts/verify_tushare.py
 ```
 
 成功时会输出类似：
@@ -255,9 +251,7 @@ TUSHARE_TOKEN=YOUR_API_KEY
 在当前实际运行环境安装依赖：
 
 ```bash
-uv pip install \
-  --python /Users/chr/.hermes/hermes-agent/venv/bin/python \
-  'tushare>=1.4'
+python -m pip install 'tushare>=1.4'
 ```
 
 ### 返回空数据

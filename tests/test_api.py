@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.main import (
+    ChatRequest,
     _build_stock_market_context,
     _build_visible_evidence_sources,
     _filter_knowledge_context,
@@ -27,6 +28,10 @@ def create_user(client, name: str):
     payload = response.json()
     assert "workspace_path" not in payload
     return payload
+
+
+def test_chat_requests_execute_live_agent_by_default():
+    assert ChatRequest(message="分析中兴通讯").execute_agent is True
 
 
 def test_stock_move_question_direction_understands_colloquial_why_up_or_down():
@@ -540,14 +545,14 @@ def test_time_sensitive_stock_question_excludes_stale_snapshot_documents():
 def test_demo_page_is_the_default_human_facing_entry(client):
     root = client.get("/", follow_redirects=False)
     assert root.status_code in {302, 307}
-    assert root.headers["location"] == "/demo"
+    assert root.headers["location"] == "/today"
     page = client.get("/demo")
     assert page.status_code == 200
     assert page.headers["cache-control"] == "no-store, max-age=0"
     assert page.headers["pragma"] == "no-cache"
     assert "清数智算" in page.text
     assert "金融研究 Agent" in page.text
-    assert "AI 深度解读" in page.text
+    assert 'id="useHermesLabel" class="model-toggle" hidden' in page.text
     assert "研究深度" in page.text
     assert "按时间从新到旧" in page.text
     assert "当前交易中" in page.text
@@ -559,32 +564,117 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "数据源不可用" not in page.text
     assert "盘中数据暂不可用" not in page.text
     assert "板块数据暂不可用" not in page.text
+    assert "暂时无法读取个人待处理事项" not in page.text
+    assert "暂时无法读取个人研究变化" not in page.text
+    assert "首批快照准备中" not in page.text
+    assert "系统正在准备可追溯策略快照" not in page.text
+    assert "系统正在为当前研究池建立可追溯数据快照" not in page.text
+    assert "完整市场截面正在准备" not in page.text
+    assert "完整市场数据仍在准备" not in page.text
+    assert "市场数据正在准备" not in page.text
+    assert 'id="todayOverviewGrid" class="today-overview-grid"' in page.text
+    assert page.text.index('id="liveSection"') < page.text.index(
+        'id="marketDashboard"'
+    ) < page.text.index('id="insightSection"') < page.text.index(
+        'id="insightAsk"'
+    ) < page.text.index('id="todayOverviewGrid"')
+    assert "我的研究待办" in page.text
+    assert "与我相关的重要变化" in page.text
+    assert "不会在这里伪装上线" not in page.text
+    assert "priority.ranking_method" not in page.text
+    assert "需要你处理的变化已经归入左侧待办" in page.text
+    assert 'id="liZongPanel" class="li-zong-panel"' in page.text
+    assert '$("todayOverviewGrid").hidden = true' in page.text
+    assert '$("liZongPanel").hidden = true' in page.text
     assert 'api("/session")' in page.text
     assert 'api("/me/watchlist/brief")' in page.text
     assert 'api("/me/chat"' in page.text
+    assert "void loadHealth().catch(() =>" in page.text
+    assert page.text.index('connectServerEvents();') < page.text.index(
+        'await Promise.all([loadHealth(), ensureUser()]);'
+    )
     assert 'api("/me/memories?status=candidate")' in page.text
     assert "memory-card" in page.text
     assert "确认保存" in page.text
     assert "暂不保存" in page.text
     assert "李总策略" in page.text
-    assert 'api("/v1/stock-strategies/li-zong/candidates?limit=200")' in page.text
+    assert (
+        "candidates?status=${encodeURIComponent(filter)}&limit=200"
+        in page.text
+    )
+    assert "const loadToken = ++state.liZongLoadToken" in page.text
     assert 'data-li-zong-filter="data_incomplete"' in page.text
+    assert "function enterScreenCandidateResearch(" in page.text
+    assert "entry_context: entryContext" in page.text
+    assert "保存线索并研究" in page.text
+    assert "本次研究入口" in page.text
+    assert "筛选线索待确认" in page.text
+    assert "error?.status === 503" in page.text
+    assert "服务器尚未配置选股数据" in page.text
     assert "⊕ 添加图片" in page.text
     assert "AI 图像研究" in page.text
     assert 'api("/me/uploads/images"' in page.text
     assert 'api("/me/conversations?limit=100")' in page.text
+    assert "function diagnosisResearchTargets(data)" in page.text
+    assert "多股比较" in page.text
     assert "function visibleConversationItems(items = [])" in page.text
     assert 'item.quality_scope !== "evaluation"' in page.text
     assert 'api("/me/knowledge")' in page.text
     assert 'conversation_id: state.conversationId' in page.text
-    assert "个股研究" in page.text
-    assert "原逻辑复核" in page.text
-    assert "新闻影响" in page.text
+    assert "研究类型" in page.text
+    assert "个股分析" in page.text
+    assert "行业研究" in page.text
+    assert "关注组合" in page.text
+    assert "公告财报" in page.text
     assert "操作前检查" in page.text
     assert "公司对比" in page.text
     assert "市场环境" in page.text
     assert 'aria-label="今日观察"' in page.text
     assert 'aria-label="AI研究"' in page.text
+    assert 'aria-label="我的关注"' in page.text
+    assert 'aria-label="个股研究"' in page.text
+    assert 'aria-label="复盘中心"' in page.text
+    assert 'aria-label="个人中心"' in page.text
+    assert 'id="todayOverviewGrid"' in page.text
+    assert "#todayOverviewGrid[hidden]" in page.text
+    assert 'api("/v1/today/overview")' in page.text
+    assert 'api("/v1/stock-workspaces")' in page.text
+    assert "function renderTodayOverview(data)" in page.text
+    assert '$("todayOverviewGrid").hidden = !insightsVisible' in page.text
+    open_stock = page.text[page.text.index("async function openDeepStockSymbol(symbol") :]
+    assert "state.pendingDeepStockSymbol = symbol" in open_stock
+    assert open_stock.index("select.value = symbol") < open_stock.index(
+        'activateWorkspace("deep_stock", {historyMode: "none"})'
+    )
+    assert 'const order = ["000001.SS", "399001.SZ", "399006.SZ", "000688.SS"]' in page.text
+    assert "error.status = response.status" in page.text
+    thesis_editor = page.text[
+        page.text.index('const editThesis = document.createElement("button")') :
+        page.text.index('const researchMap = document.createElement("section")')
+    ]
+    assert '/v1/stocks/${encodeURIComponent(symbol)}/theses' in thesis_editor
+    assert "base_version: editBaseVersion" in thesis_editor
+    assert "正式判断已在其他页面更新" in thesis_editor
+    assert page.text.count('class="nav-item') == 6
+    assert page.text.index('data-page="watchlist"') < page.text.index(
+        'data-page="deep_stock"'
+    ) < page.text.index('data-page="agent"')
+    assert 'data-page="screening" aria-label="选股研究"' not in page.text
+    assert 'data-open-page="screening"' in page.text
+    assert 'id="accountPanel"' in page.text
+    assert 'data-watchlist-filter="holding"' in page.text
+    assert 'data-watchlist-filter="watching"' in page.text
+    assert 'data-watchlist-filter="ended"' in page.text
+    assert 'id="watchlistSecondaryFilter"' in page.text
+    assert "async function updateStockAssetRelation(" in page.text
+    assert "base_version: item.version" in page.text
+    assert "结束跟踪不会删除判断和历史" in page.text
+    assert 'deleteButton.textContent = "删除"' not in page.text
+    assert "function renderAccountCenter()" in page.text
+    assert 'year: "numeric", month: "2-digit", day: "2-digit"' in page.text
+    assert "内部 MVP 暂未启用计费" in page.text
+    assert 'data.type === "stock_strategy_updated"' in page.text
+    assert "财务历史待实查" in page.text
     assert ".sidebar .nav-text { display: inline; }" in page.text
     assert 'data-page="knowledge"' in page.text
     assert 'aria-label="资料库"' in page.text
@@ -608,8 +698,14 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "event.keyCode !== 229" in page.text
     assert '$("chatForm").requestSubmit()' in page.text
     assert "function finalizeStreamingMessage(" in page.text
-    assert "AI 实时生成中（草稿） · 完成证据校验前内容可能调整" in page.text
-    assert "证据校验完成 · 草稿中的不确定内容已修正，以下为最终答案" in page.text
+    assert "function appendFinalMessageMetadata(" in page.text
+    assert "function renderStreamingProgress(" in page.text
+    assert "回答草稿已生成，正在核对行情、数字和证据" in page.text
+    assert 'data.is_unverified === false && data.is_final === true' in page.text
+    assert 'node.dataset.finalAnswerVisible === "true"' in page.text
+    assert "if (pending?.isConnected && data.label) renderStreamingProgress(pending, data.label);" in page.text
+    assert "renderStreamingDraft(" not in page.text
+    assert "AI 实时生成中（草稿）" not in page.text
     assert "return {source, ready, context};" in page.text
     assert "pending.remove();\n        state.conversationId" not in page.text
     assert "responseNode = finalizeStreamingMessage(pending, data.answer" in page.text
@@ -626,7 +722,8 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "stock-system-observation-list" in page.text
     assert 'stock-workspace-item${interactive ? " interactive" : ""}' in page.text
     assert "保存当前判断" in page.text
-    assert "保存后，这段判断会进入你的个人资料库" in page.text
+    assert "保存会创建正式判断版本" in page.text
+    assert "系统不会静默覆盖" in page.text
     assert 'data-stock-space-tab="overview"' in page.text
     assert 'data-stock-space-tab="ai"' in page.text
     assert 'data-stock-space-tab="evidence"' in page.text
@@ -642,7 +739,14 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "打开原始公告或信息源" in page.text
     assert 'api("/me/deep-stock?limit=50")' in page.text
     assert 'api("/me/deep-stock", {' in page.text
-    assert "七个研究阶段" in page.text
+    assert "deepStockLoaded: false" in page.text
+    assert "deepStockLoadPromise: null" in page.text
+    assert "正在恢复绑定对话" in page.text
+    assert "不会新建重复会话" in page.text
+    assert "if (state.deepStockLoadPromise)" in page.text
+    assert "if (!force && state.deepStockLoaded)" in page.text
+    assert "await loadDeepStock({force: true})" in page.text
+    assert "七阶段研究进度" in page.text
     assert 'data-page="watchlist"' in page.text
     assert 'id="watchlistAddForm"' in page.text
     assert 'api(`/stocks/${encodeURIComponent(item.symbol)}/intraday`)' in page.text
@@ -696,13 +800,14 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert "const marketKey = inferDiagnosisMarketKey(data, question)" in page.text
     assert 'const marketTerms = new Set(["A", "AI", "ETF"' in page.text
     assert 'activateWorkspace("agent")' in page.text
+    assert '$("chatInput").value = "";' in page.text
     assert "body.agent-page #agentSection" in page.text
     assert 'api("/research-method?limit=4")' in page.text
     assert 'api("/me/research-actions")' in page.text
     assert 'api("/me/chat/refine"' in page.text
-    assert 'const directHermes = wantsHermes && state.workspacePage === "agent"' in page.text
+    assert "const directHermes = Boolean(state.health?.hermes_enabled);" in page.text
     assert "execute_agent: attachedImage ? true : directHermes" in page.text
-    assert "prefer_precomputed: wantsHermes && !directHermes" in page.text
+    assert "prefer_precomputed: false" in page.text
     assert "AI 正在检索实时证据、资料库和金融研究工具" in page.text
     assert "function renderMarkdown(text)" in page.text
     assert "navigator.clipboard.writeText(text)" in page.text
@@ -721,9 +826,33 @@ def test_demo_page_is_the_default_human_facing_entry(client):
     assert 'new URLSearchParams(window.location.search).get("qa") === "1"' in page.text
     assert 'quality_scope: state.evaluationMode ? "evaluation" : "user"' in page.text
     send_chat = page.text[page.text.index("async function sendChat(message)") :]
+    assert "setAgentProcessExpanded(true)" not in send_chat
     assert send_chat.index('$("sendButton").disabled = true') < send_chat.index(
         "privateStream = connectPrivateAgentStream(requestId, pending)"
     )
+
+
+def test_today_overview_requires_session_and_returns_independent_components(client):
+    assert client.get("/v1/today/overview").status_code == 401
+    create_user(client, "Today Alice")
+
+    response = client.get("/v1/today/overview")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["contract_version"] == "today_overview_v1"
+    assert payload["session"]["key"] in {
+        "pre_market",
+        "intraday",
+        "post_market",
+        "non_trading_day",
+        "unknown",
+    }
+    assert len(payload["market"]["indices"]) == 4
+    assert payload["priority_items"]["total_visible"] <= 5
+    assert payload["personalized"]["coverage"]["event_whitelist_complete"] is False
+    assert payload["coverage"]["status"] in {"ready", "partial"}
+    assert "不构成买卖" in payload["boundary"]
 
 
 def test_conversation_quality_endpoint_is_user_isolated(app):
@@ -829,7 +958,7 @@ def test_research_method_explains_real_pipeline_without_internal_failures(client
         for item in payload["tools"]
     )
     assert any(item["name"] == "重要事件脉络分析器" for item in payload["tools"])
-    assert any("Hermes" in item["name"] for item in payload["tools"])
+    assert any("AI 引擎" in item["name"] for item in payload["tools"])
     assert any("不得由模型编造" in item for item in payload["boundaries"])
     serialized = str(payload)
     assert "API key" not in serialized
@@ -842,6 +971,8 @@ def test_background_status_is_exposed_without_starting_jobs_in_tests(client):
     payload = status.json()
     assert payload["enabled"] is False
     assert payload["running"] is False
+    assert payload["li_zong_worker_running"] is False
+    assert payload["li_zong_refresh_seconds"] == 30
     assert payload["latest_jobs"] == []
 
 
@@ -1052,6 +1183,48 @@ def test_chat_understands_default_company_names_and_price_move_questions(client,
     assert "中兴通讯" in payload["answer"]
 
 
+def test_chat_compares_two_to_five_named_stocks_and_preserves_context(client):
+    create_user(client, "Multi Stock Research User")
+
+    first = client.post(
+        "/me/chat",
+        json={
+            "message": "比较中兴通讯、中际旭创和英伟达的盈利质量、估值和主要风险",
+            "execute_agent": False,
+        },
+    )
+
+    assert first.status_code == 200
+    payload = first.json()
+    assert payload["intent"] == "stock_comparison"
+    assert payload["evidence"]["symbols"] == ["000063.SZ", "300308.SZ", "NVDA"]
+    assert payload["research_targets"] == [
+        {"symbol": "000063.SZ", "name": "中兴通讯"},
+        {"symbol": "300308.SZ", "name": "中际旭创"},
+        {"symbol": "NVDA", "name": "英伟达"},
+    ]
+    assert payload["evidence"]["comparison_basis"]["financial"]["status"] in {
+        "exact_common_period",
+        "partial_exact_groups",
+        "not_aligned",
+    }
+    assert "关键差异" in payload["answer"]
+
+    followup = client.post(
+        "/me/chat",
+        json={
+            "message": "再重点比较盈利质量，并说明哪些项目当前不可比",
+            "conversation_id": payload["conversation_id"],
+            "execute_agent": False,
+        },
+    )
+
+    assert followup.status_code == 200
+    followup_payload = followup.json()
+    assert followup_payload["intent"] == "stock_comparison"
+    assert followup_payload["evidence"]["symbols"] == payload["evidence"]["symbols"]
+
+
 def test_chat_returns_helpful_clarification_instead_of_http_error(client):
     create_user(client, "Natural Language User")
 
@@ -1080,6 +1253,56 @@ def test_chat_understands_natural_language_market_questions(client):
         assert payload["status"] != "clarification"
         assert payload["evidence"]["market_drivers"]["items"]
         assert payload["conversation_id"]
+
+
+def test_chat_routes_named_industry_to_live_market_research(client, app, monkeypatch):
+    create_user(client, "Industry Question User")
+    captured = {}
+
+    def fake_industry_snapshot(industry_name, market_date=None):
+        captured.update({"industry_name": industry_name, "market_date": market_date})
+        return {
+            "status": "available",
+            "industry_name": industry_name,
+            "index_code": "H30184",
+            "index_name": "半导体",
+            "metrics": {
+                "return_1d_pct": -1.17,
+                "return_5d_pct": 2.35,
+                "return_20d_pct": 5.42,
+                "trend_state": "中期偏强",
+            },
+            "points": [
+                {
+                    "market_date": "2026-07-20",
+                    "close": 14568.12,
+                    "pct_change": -1.17,
+                    "constituent_count": 87,
+                }
+            ],
+            "component_analysis": {
+                "status": "available",
+                "market_date": "2026-07-20",
+                "breadth": {"advancers": 22, "decliners": 63, "unchanged": 2},
+            },
+        }
+
+    monkeypatch.setattr(app.state.analysis, "industry_snapshot", fake_industry_snapshot)
+
+    response = client.post("/me/chat", json={"message": "半导体行业怎么样"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "market_brief"
+    assert payload["evidence"]["question_focus"]["key"] == "sector_rotation"
+    assert payload["evidence"]["industry_focus"] == {
+        "name": "半导体",
+        "market_scope": "A股",
+        "requested_by_user": True,
+    }
+    assert payload["evidence"]["industry_snapshot"]["index_code"] == "H30184"
+    assert captured["industry_name"] == "半导体"
+    assert captured["market_date"]
 
 
 def test_market_questions_have_distinct_focus_and_direct_hermes_answers(
@@ -1983,6 +2206,44 @@ def test_stock_chat_uses_latest_server_report_when_live_price_refresh_fails(
     assert "独立于大盘/行业" in prompt
 
 
+def test_stock_chat_uses_saved_report_only_as_evidence_for_live_hermes_answer(
+    client, app, monkeypatch
+):
+    create_user(client, "即时研究用户")
+    report = client.get("/research-reports/000063")
+    assert report.status_code == 200
+
+    def fail_live_build(*args, **kwargs):
+        raise ProviderError("temporary live failure")
+
+    calls = []
+
+    def fake_hermes(**kwargs):
+        calls.append(kwargs)
+        return (
+            "这是针对‘中兴通讯为什么大跌’本轮问题即时生成的回答；"
+            "历史报告只作为证据，不是直接返回的答案。",
+            {"backend": "test-live"},
+        )
+
+    object.__setattr__(app.state.settings, "hermes_enabled", True)
+    monkeypatch.setattr(app.state.research_evidence, "build", fail_live_build)
+    monkeypatch.setattr(app.state.agent, "_execute_hermes", fake_hermes)
+
+    response = client.post(
+        "/me/chat",
+        json={"message": "中兴通讯为什么大跌", "execute_agent": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "completed"
+    assert payload["evidence"]["precomputed_report"]["title"].startswith("中兴通讯")
+    assert "本轮问题即时生成" in payload["answer"]
+    assert calls
+    assert "中兴通讯为什么大跌" in calls[0]["prompt"]
+
+
 def test_memory_requires_confirmation_and_is_user_scoped(app):
     alice_client = TestClient(app)
     bob_client = TestClient(app)
@@ -2257,6 +2518,40 @@ def test_stock_claim_prompt_prioritizes_claims_and_blocks_raw_units(app, client)
     assert "结构化 Claim 使用要求" in prompt
     assert "不得从 fundamentals、financial_drivers 等深层结构拼接" in prompt
     assert "不得写成趋势反证已经" in prompt
+
+
+def test_focused_plan_request_uses_claim_ledger_and_forbids_invented_plan_levels(
+    app, client
+):
+    user = create_user(client, "Focused Plan Prompt User")
+    response = client.post(
+        "/me/chat",
+        json={
+            "message": (
+                "分析中兴通讯并生成操作计划，核验条件：如果下一期经营现金流继续恶化，"
+                "由我重新评估是否减仓；不要填写目标价、数量或仓位。"
+            ),
+            "symbol": "000063",
+            "model_tier": "deep",
+            "execute_agent": False,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "earnings_quality"
+    assert payload["evidence"]["research_claims"]["claims"]
+    prompt = (
+        Path(app.state.database.get_user(user["id"])["workspace_path"])
+        / "runs"
+        / payload["run_id"]
+        / "prompt.md"
+    ).read_text(encoding="utf-8")
+    compact_prompt = " ".join(prompt.split())
+    assert "用户确认式操作计划要求" in prompt
+    assert "用户在本轮消息里明确给出的核验条件" in compact_prompt
+    assert "不能改造成计划门槛" in compact_prompt
+    assert "触发条件”必须逐字保留用户原句" in compact_prompt
 
 
 def test_watchlist_can_be_managed_and_stock_intraday_is_available(client):

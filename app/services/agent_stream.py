@@ -19,6 +19,7 @@ class _RequestStream:
     subscribers: set[Queue[dict[str, Any]]] = field(default_factory=set)
     latest_draft: dict[str, Any] | None = None
     latest_status: dict[str, Any] | None = None
+    latest_structured: list[dict[str, Any]] = field(default_factory=list)
     terminal: bool = False
     updated_at: float = field(default_factory=time.monotonic)
 
@@ -56,6 +57,14 @@ class AgentStreamBroker:
             payload = {**event, "request_id": request_id, "time": utc_now()}
             if payload.get("type") == "agent_delta":
                 state.latest_draft = payload
+            elif payload.get("type") in {
+                "agent_citation",
+                "agent_writeback_candidate",
+                "agent_structured_partial",
+                "agent_structured_failed",
+            }:
+                state.latest_structured.append(payload)
+                state.latest_structured = state.latest_structured[-20:]
             else:
                 state.latest_status = payload
             if payload.get("type") in _TERMINAL_TYPES:
@@ -72,7 +81,11 @@ class AgentStreamBroker:
             if state is None or state.user_id != user_id:
                 raise PermissionError("Agent stream does not belong to this user")
             state.subscribers.add(subscriber)
-            snapshots = [state.latest_draft, state.latest_status]
+            snapshots = [
+                state.latest_draft,
+                *state.latest_structured,
+                state.latest_status,
+            ]
             terminal = state.terminal
         try:
             yield self._encode({"type": "agent_stream_connected", "time": utc_now()})

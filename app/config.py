@@ -4,11 +4,64 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(PROJECT_ROOT / ".env")
+DEFAULT_DATA_DIR = Path.home() / ".qingshu"
+
+
+_INITIAL_ENV_KEYS = frozenset(os.environ)
+_ENV_SOURCE_DIRS: dict[str, Path] = {}
+_LOADED_ENV_VALUES: dict[str, str] = {}
+
+
+def load_environment() -> tuple[Path, ...]:
+    """Load portable configuration files without overriding process variables."""
+
+    candidates: list[Path] = []
+    explicit = str(os.getenv("QINGSHU_ENV_FILE") or "").strip()
+    if explicit:
+        candidates.append(Path(explicit).expanduser().resolve())
+    candidates.extend(
+        [
+            (Path.cwd() / ".env").resolve(),
+            (PROJECT_ROOT / ".env").resolve(),
+        ]
+    )
+    loaded: list[Path] = []
+    for path in candidates:
+        if path in loaded:
+            continue
+        values = dotenv_values(path) if path.is_file() else {}
+        load_dotenv(path, override=False)
+        for key in values:
+            if key in _INITIAL_ENV_KEYS or key in _ENV_SOURCE_DIRS:
+                continue
+            _ENV_SOURCE_DIRS[key] = path.parent
+            if key in os.environ:
+                _LOADED_ENV_VALUES[key] = os.environ[key]
+        loaded.append(path)
+    return tuple(loaded)
+
+
+LOADED_ENV_FILES = load_environment()
+
+
+def _path_from_env(name: str, default: Path | str, *, command: bool = False) -> Path:
+    raw = str(os.getenv(name, default)).strip()
+    path = Path(raw).expanduser()
+    if command and not path.is_absolute() and path.parent == Path("."):
+        return path
+    if path.is_absolute():
+        return path.resolve()
+    loaded_value = _LOADED_ENV_VALUES.get(name)
+    base = (
+        _ENV_SOURCE_DIRS.get(name, Path.cwd())
+        if loaded_value is not None and raw == loaded_value
+        else Path.cwd()
+    )
+    return (base / path).resolve()
 
 
 @dataclass(frozen=True)
@@ -46,22 +99,20 @@ class Settings:
     tushare_api_url: str = "https://teajoin.com"
     tushare_enabled: bool = False
     tushare_timeout_seconds: int = 20
+    li_zong_universe_batch_size: int = 10
+    li_zong_refresh_seconds: int = 30
+    admin_api_token: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
-        data_dir = Path(os.getenv("QINGSHU_DATA_DIR", PROJECT_ROOT / "data")).expanduser().resolve()
+        data_dir = _path_from_env("QINGSHU_DATA_DIR", DEFAULT_DATA_DIR)
         return cls(
             data_dir=data_dir,
-            database_path=Path(os.getenv("QINGSHU_DB_PATH", data_dir / "qingshu.db")).expanduser().resolve(),
-            workspace_root=Path(
-                os.getenv("QINGSHU_WORKSPACE_ROOT", data_dir / "workspaces")
-            ).expanduser().resolve(),
-            hermes_bin=Path(
-                os.getenv(
-                    "HERMES_BIN",
-                    "/Users/chr/.hermes/hermes-agent/venv/bin/hermes",
-                )
-            ).expanduser(),
+            database_path=_path_from_env("QINGSHU_DB_PATH", data_dir / "qingshu.db"),
+            workspace_root=_path_from_env(
+                "QINGSHU_WORKSPACE_ROOT", data_dir / "workspaces"
+            ),
+            hermes_bin=_path_from_env("HERMES_BIN", "hermes", command=True),
             hermes_enabled=os.getenv("HERMES_ENABLED", "false").lower() in {"1", "true", "yes"},
             hermes_timeout_seconds=int(os.getenv("HERMES_TIMEOUT_SECONDS", "120")),
             market_cache_seconds=int(os.getenv("MARKET_CACHE_SECONDS", "300")),
@@ -133,6 +184,13 @@ class Settings:
             ).lower()
             in {"1", "true", "yes"},
             tushare_timeout_seconds=int(os.getenv("TUSHARE_TIMEOUT_SECONDS", "20")),
+            li_zong_universe_batch_size=max(
+                1, int(os.getenv("LI_ZONG_UNIVERSE_BATCH_SIZE", "10"))
+            ),
+            li_zong_refresh_seconds=max(
+                10, int(os.getenv("LI_ZONG_REFRESH_SECONDS", "30"))
+            ),
+            admin_api_token=os.getenv("QINGSHU_ADMIN_API_TOKEN", "").strip(),
         )
 
     def ensure_directories(self) -> None:
